@@ -18,6 +18,7 @@ mod log;
 mod memory;
 mod settings;
 mod settings_ui;
+mod slideshow;
 mod sort;
 mod state;
 mod theme;

@@ -10,9 +10,10 @@ use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
 use crate::layout::SlotLayout;
 use crate::settings::{
-    parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, Settings, ThemeChoice,
-    Tree, TreeMode, Viewer,
+    parse_hex_color, FolderAction, HeaderClick, Language, LoadInto, LoadModifier, OnLoadFolder,
+    Settings, ThemeChoice, Tree, TreeMode, Viewer,
 };
+use crate::slideshow::{EndMode, FPS_RANGE};
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +55,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 17] = [
+const ITEMS: [Item; 21] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -112,6 +113,20 @@ const ITEMS: [Item; 17] = [
         widget: custom_layout_widget,
     },
     Item {
+        section: Section::Viewer,
+        key: "viewer.slideshow_fps",
+        title: "Slideshow speed",
+        description: "Frames per second of the slideshow. The play bar of a maximized slot changes and remembers it.",
+        widget: fps_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.slideshow_end",
+        title: "Slideshow end",
+        description: "What happens after the last image: start over, stop, or play backwards.",
+        widget: end_mode_widget,
+    },
+    Item {
         section: Section::Tree,
         key: "tree.sort",
         title: "Sort order",
@@ -166,6 +181,20 @@ const ITEMS: [Item; 17] = [
         title: "Chunk size",
         description: "Number of images to load before asking again.",
         widget: chunk_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.load_into",
+        title: "Load folders into",
+        description: "Auto-load mode: put each image into its own slot, or each folder into one slot that steps through its images.",
+        widget: load_into_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.other_load_modifier",
+        title: "Key for the other way",
+        description: "Hold this key while loading a folder to load it the other way.",
+        widget: other_load_modifier_widget,
     },
     Item {
         section: Section::Behavior,
@@ -278,6 +307,56 @@ fn custom_layout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
         s.viewer.layout = s.viewer.custom_layout;
     }
     true
+}
+
+/// スライドショーの FPS の入力欄。再生バーと設定画面で同じものを使う。
+pub fn fps_input(fps: &mut f32) -> egui::DragValue<'_> {
+    egui::DragValue::new(fps)
+        .range(FPS_RANGE)
+        .speed(0.2)
+        .max_decimals(1)
+        .suffix(" fps")
+}
+
+fn fps_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    ui.add(fps_input(&mut s.viewer.slideshow_fps)).changed()
+}
+
+fn end_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.viewer.slideshow_end;
+    ui.horizontal(|ui| {
+        for mode in EndMode::ALL {
+            ui.radio_value(&mut s.viewer.slideshow_end, mode, tr(lang, mode.title()));
+        }
+    });
+    s.viewer.slideshow_end != before
+}
+
+fn load_into_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.load_into;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (LoadInto::Images, "One slot per image"),
+            (LoadInto::Folders, "One slot per folder"),
+        ] {
+            ui.radio_value(&mut s.tree.load_into, choice, tr(lang, label));
+        }
+    });
+    s.tree.load_into != before
+}
+
+fn other_load_modifier_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.other_load_modifier;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (LoadModifier::Alt, "Alt"),
+            (LoadModifier::Ctrl, "Ctrl"),
+            (LoadModifier::None, tr(lang, "None")),
+        ] {
+            ui.radio_value(&mut s.tree.other_load_modifier, choice, label);
+        }
+    });
+    s.tree.other_load_modifier != before
 }
 
 fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
