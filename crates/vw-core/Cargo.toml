@@ -1,0 +1,8 @@
+[package]
+name = "vw-core"
+description = "Core image model, plugin interface and display conversion for vw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
