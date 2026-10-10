@@ -9,9 +9,11 @@
 mod app;
 mod autoload;
 mod copy;
+mod export;
 mod fonts;
 mod i18n;
 mod keymap;
+mod labels;
 mod layout;
 mod loader;
 mod log;

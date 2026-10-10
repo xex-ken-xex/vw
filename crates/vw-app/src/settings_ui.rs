@@ -10,8 +10,8 @@ use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
 use crate::layout::SlotLayout;
 use crate::settings::{
-    parse_hex_color, FolderAction, HeaderClick, Language, LoadInto, LoadModifier, OnLoadFolder,
-    Settings, ThemeChoice, Tree, TreeMode, Viewer,
+    parse_hex_color, FolderAction, HeaderClick, Labels, Language, LoadInto, LoadModifier,
+    OnLoadFolder, Settings, ThemeChoice, Tree, TreeMode, Viewer,
 };
 use crate::slideshow::{EndMode, FPS_RANGE};
 use crate::sort::SortKey;
@@ -22,15 +22,17 @@ enum Section {
     Viewer,
     Tree,
     Behavior,
+    Labels,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 5] = [
+    const ALL: [Section; 6] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
         Section::Behavior,
+        Section::Labels,
         Section::Keys,
     ];
 
@@ -40,6 +42,7 @@ impl Section {
             Section::Viewer => "Viewer",
             Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
+            Section::Labels => "Flags and tags",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -55,7 +58,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 22] = [
+const ITEMS: [Item; 24] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -209,6 +212,20 @@ const ITEMS: [Item; 22] = [
         title: "Auto reload",
         description: "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
         widget: auto_reload_widget,
+    },
+    Item {
+        section: Section::Labels,
+        key: "labels.tags",
+        title: "Tags",
+        description: "Tags you can put on images, separated by commas. The first nine are put on with the keys 1 to 9 in tagging mode.",
+        widget: tags_widget,
+    },
+    Item {
+        section: Section::Labels,
+        key: "labels.advance",
+        title: "Next image after labeling",
+        description: "Move to the next image after putting a flag or tag on an image in tagging mode.",
+        widget: advance_widget,
     },
 ];
 
@@ -465,6 +482,50 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 
 fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.behavior.auto_reload, tr(lang, "Enabled"))
+        .changed()
+}
+
+/// タグの一覧をカンマ区切りで編集する。入力中の文字列は egui の一時データに持ち、
+/// 確定（Enter かフォーカスを外す）したときに正しい一覧なら反映する。1 文字ごとに反映すると、
+/// 「cat,」と打った途中で空のタグができて、そのたびに不正な値として扱うことになるため。
+fn tags_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("labels.tags.edit");
+    let joined = s.labels.tags.join(", ");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| joined.clone());
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text("cat, dog, bird")
+            .desired_width(320.0),
+    );
+    let parsed: Vec<String> = text
+        .split(',')
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let valid = Labels::valid_tags(&parsed);
+    if !valid {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            tr(lang, "Tag names must be unique."),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && valid && parsed != s.labels.tags {
+            s.labels.tags = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+fn advance_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.labels.advance, tr(lang, "Enabled"))
         .changed()
 }
 

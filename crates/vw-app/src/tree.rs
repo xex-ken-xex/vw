@@ -10,6 +10,7 @@ use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
 
 use crate::i18n::tr;
+use crate::labels::{self, Label, LabelStore};
 use crate::settings::{FolderAction, Language, TreeMode};
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 
@@ -26,9 +27,18 @@ pub struct Node {
     modified: Option<SystemTime>,
 }
 
+/// 項目に付ける印と、出すファイルの絞り込み。
+pub struct Marks<'a> {
+    pub labels: &'a LabelStore,
+    pub show_file: &'a dyn Fn(&Path) -> bool,
+}
+
 /// ツリーを描くときに全項目で共通の情報。
 struct View<'a> {
     registry: &'a Registry,
+    labels: &'a LabelStore,
+    /// 絞り込みでファイルを出すか。
+    show_file: &'a dyn Fn(&Path) -> bool,
     selected: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
@@ -51,8 +61,8 @@ pub enum TreeAction {
     Open(PathBuf),
     /// スロットを追加して表示する（Ctrl / Cmd + クリック）。
     Add(PathBuf),
-    /// フォルダを選んだ（クリック。開閉もする）。
-    Select(PathBuf),
+    /// フォルダの見出しをクリックした（ツリーを Ctrl+C の対象にするだけ）。
+    Select,
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
     /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
@@ -161,7 +171,7 @@ impl Node {
         let lang = view.lang;
         let is_selected = view.selected == Some(self.path.as_path());
         if !self.is_dir {
-            let r = ui.selectable_label(is_selected, &self.name);
+            let r = ui.selectable_label(is_selected, self.text(ui, view.labels.get(&self.path)));
             if r.clicked() {
                 out.action = Some(if ui.input(|i| i.modifiers.command) {
                     TreeAction::Add(self.path.clone())
@@ -178,7 +188,9 @@ impl Node {
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
         state.set_open(self.open);
         let (toggle, header, _) = state
-            .show_header(ui, |ui| ui.selectable_label(is_selected, &self.name))
+            .show_header(ui, |ui| {
+                ui.selectable_label(is_selected, self.name.as_str())
+            })
             .body(|ui| {
                 let children = self
                     .children
@@ -186,7 +198,9 @@ impl Node {
                 // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
                 // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
                 let mut shown = 0;
-                for child in children.iter_mut().filter(|c| c.is_dir || view.show_files) {
+                let shown_child =
+                    |c: &&mut Node| c.is_dir || (view.show_files && (view.show_file)(&c.path));
+                for child in children.iter_mut().filter(shown_child) {
                     child.ui(ui, view, out);
                     shown += 1;
                 }
@@ -206,10 +220,20 @@ impl Node {
             self.open = !self.open;
         }
         if label.clicked() {
-            out.action = Some(TreeAction::Select(self.path.clone()));
+            out.action = Some(TreeAction::Select);
             out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
         }
         copy_menu(&label, &self.path, lang, &mut out.action);
+    }
+
+    /// 表示する名前。フラグやタグがあれば一緒に出す。
+    fn text(&self, ui: &egui::Ui, label: Label) -> egui::WidgetText {
+        if label.is_empty() {
+            return self.name.as_str().into();
+        }
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let weak = ui.visuals().weak_text_color();
+        labels::labeled_name(&self.name, &label, egui::Color32::PLACEHOLDER, weak, font).into()
     }
 
     /// `path` の項目。読み込み済みの子だけを辿る。
@@ -392,6 +416,7 @@ impl FolderTree {
         &mut self,
         ui: &mut egui::Ui,
         registry: &Registry,
+        marks: Marks,
         selected: Option<&Path>,
         lang: Language,
         how: FolderClicks,
@@ -402,6 +427,8 @@ impl FolderTree {
         }
         let view = View {
             registry,
+            labels: marks.labels,
+            show_file: marks.show_file,
             selected,
             lang,
             order: self.order,
