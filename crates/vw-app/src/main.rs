@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod copy;
 mod fonts;
 mod i18n;
 mod keymap;

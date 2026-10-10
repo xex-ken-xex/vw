@@ -8,22 +8,29 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
-use crate::settings::{parse_hex_color, Language, Settings, ThemeChoice};
+use crate::settings::{parse_hex_color, HeaderClick, Language, Settings, ThemeChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Appearance,
     Viewer,
+    Behavior,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::Appearance, Section::Viewer, Section::Keys];
+    const ALL: [Section; 4] = [
+        Section::Appearance,
+        Section::Viewer,
+        Section::Behavior,
+        Section::Keys,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             Section::Appearance => "Appearance",
             Section::Viewer => "Viewer",
+            Section::Behavior => "Behavior",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -39,7 +46,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 5] = [
+const ITEMS: [Item; 6] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -74,6 +81,13 @@ const ITEMS: [Item; 5] = [
         title: "Background color",
         description: "Color behind images (#RRGGBB). Leave empty for the theme default.",
         widget: background_widget,
+    },
+    Item {
+        section: Section::Behavior,
+        key: "behavior.header_click",
+        title: "Group heading click",
+        description: "What clicking a group heading (such as File in the metadata panel) does. The arrow always expands or collapses.",
+        widget: header_click_widget,
     },
 ];
 
@@ -118,6 +132,19 @@ fn scale_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
 fn compact_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.appearance.compact, tr(lang, "Enabled"))
         .changed()
+}
+
+fn header_click_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.behavior.header_click;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (HeaderClick::Select, "Select only"),
+            (HeaderClick::SelectAndToggle, "Select and expand/collapse"),
+        ] {
+            ui.radio_value(&mut s.behavior.header_click, choice, tr(lang, label));
+        }
+    });
+    s.behavior.header_click != before
 }
 
 fn background_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
