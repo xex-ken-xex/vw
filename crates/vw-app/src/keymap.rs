@@ -56,11 +56,16 @@ pub enum Action {
     Tag7,
     Tag8,
     Tag9,
+    FilterAll,
+    FilterGood,
+    FilterBad,
+    FilterUnflagged,
+    ExportImages,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 41] = [
+    pub const ALL: [Action; 46] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -93,6 +98,11 @@ impl Action {
         Action::Tag7,
         Action::Tag8,
         Action::Tag9,
+        Action::FilterAll,
+        Action::FilterGood,
+        Action::FilterBad,
+        Action::FilterUnflagged,
+        Action::ExportImages,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -148,6 +158,11 @@ impl Action {
             Action::Tag7 => "tag_7",
             Action::Tag8 => "tag_8",
             Action::Tag9 => "tag_9",
+            Action::FilterAll => "filter_all",
+            Action::FilterGood => "filter_good",
+            Action::FilterBad => "filter_bad",
+            Action::FilterUnflagged => "filter_unflagged",
+            Action::ExportImages => "export_images",
         }
     }
 
@@ -199,6 +214,11 @@ impl Action {
             Action::Tag7 => "Tag 7",
             Action::Tag8 => "Tag 8",
             Action::Tag9 => "Tag 9",
+            Action::FilterAll => "Show all images",
+            Action::FilterGood => "Show only good images",
+            Action::FilterBad => "Show only bad images",
+            Action::FilterUnflagged => "Show only unflagged images",
+            Action::ExportImages => "Export images...",
         }
     }
 
@@ -317,6 +337,11 @@ impl Action {
             Action::Tag7 => vec![KeyCombo::plain(Num7)],
             Action::Tag8 => vec![KeyCombo::plain(Num8)],
             Action::Tag9 => vec![KeyCombo::plain(Num9)],
+            Action::FilterAll => vec![KeyCombo::ctrl(Num0).with(true, true, false)],
+            Action::FilterGood => vec![KeyCombo::ctrl(ArrowUp).with(true, true, false)],
+            Action::FilterBad => vec![KeyCombo::ctrl(ArrowDown).with(true, true, false)],
+            Action::FilterUnflagged => vec![KeyCombo::ctrl(U).with(true, true, false)],
+            Action::ExportImages => vec![KeyCombo::ctrl(E)],
         }
     }
 }

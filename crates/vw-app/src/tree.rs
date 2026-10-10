@@ -27,10 +27,18 @@ pub struct Node {
     modified: Option<SystemTime>,
 }
 
+/// 項目に付ける印と、出すファイルの絞り込み。
+pub struct Marks<'a> {
+    pub labels: &'a LabelStore,
+    pub show_file: &'a dyn Fn(&Path) -> bool,
+}
+
 /// ツリーを描くときに全項目で共通の情報。
 struct View<'a> {
     registry: &'a Registry,
     labels: &'a LabelStore,
+    /// 絞り込みでファイルを出すか。
+    show_file: &'a dyn Fn(&Path) -> bool,
     selected: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
@@ -191,7 +199,9 @@ impl Node {
                 // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
                 // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
                 let mut shown = 0;
-                for child in children.iter_mut().filter(|c| c.is_dir || view.show_files) {
+                let shown_child =
+                    |c: &&mut Node| c.is_dir || (view.show_files && (view.show_file)(&c.path));
+                for child in children.iter_mut().filter(shown_child) {
                     child.ui(ui, view, out);
                     shown += 1;
                 }
@@ -407,7 +417,7 @@ impl FolderTree {
         &mut self,
         ui: &mut egui::Ui,
         registry: &Registry,
-        labels: &LabelStore,
+        marks: Marks,
         selected: Option<&Path>,
         lang: Language,
         how: FolderClicks,
@@ -418,7 +428,8 @@ impl FolderTree {
         }
         let view = View {
             registry,
-            labels,
+            labels: marks.labels,
+            show_file: marks.show_file,
             selected,
             lang,
             order: self.order,

@@ -17,6 +17,7 @@ use vw_core::{ColorModel, Registry};
 
 use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
+use crate::export::{self, CopyJob, Filter, ListFormat, Matcher};
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
 use crate::labels::{Flag, LabelStore};
@@ -151,12 +152,36 @@ pub struct VwApp {
     labels: LabelStore,
     /// タグ付けモード。↑ ↓ と数字キーでフラグとタグを付ける。
     tagging: bool,
+    /// ツリー・画像送り・フォルダの読み込み・スライドショーで対象にする画像。
+    filter: Filter,
+    /// 絞り込みで、フォルダのフラグを中の画像にも付いているものとして扱う。
+    filter_folders: bool,
+    export: Option<ExportDialog>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
 
 /// 再生バーの高さ。タグ付けモードのバーも同じ高さにする。
 const PLAY_BAR: f32 = 30.0;
+
+/// 書き出しの種類。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExportKind {
+    Copy,
+    List(ListFormat),
+}
+
+/// 画像の書き出しの画面の状態。
+struct ExportDialog {
+    root: PathBuf,
+    recursive: bool,
+    kind: ExportKind,
+    dest: String,
+    keep_structure: bool,
+    list_path: String,
+    /// 実行中・実行後のコピー。
+    job: Option<CopyJob>,
+}
 
 /// タグ付けモードのバーで押されたもの。
 enum TagClick {
@@ -334,6 +359,9 @@ impl VwApp {
             loaded_folders: Vec::new(),
             labels: LabelStore::new(label_fallback),
             tagging: false,
+            filter: Filter::All,
+            filter_folders: false,
+            export: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -461,6 +489,12 @@ impl VwApp {
         };
         let paths = load.take_ready();
         let finished = load.finished();
+        let matcher = Matcher {
+            filter: &self.filter,
+            with_folder_flag: self.filter_folders,
+            labels: &self.labels,
+        };
+        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| matcher.matches(p)).collect();
         if !paths.is_empty() {
             // 先にスロットを全部足してから枠の大きさを見積もる。1 枚ずつ見積もると、
             // スロットが少ない最初のうちだけフル解像度を読んでしまうため。
@@ -611,6 +645,16 @@ impl VwApp {
                 (files, start)
             }
         };
+        let current = frames.get(start).cloned();
+        let matcher = self.matcher();
+        let frames: Vec<PathBuf> = frames
+            .into_iter()
+            .filter(|p| Some(p) == current.as_ref() || matcher.matches(p))
+            .collect();
+        let start = frames
+            .iter()
+            .position(|p| Some(p) == current.as_ref())
+            .unwrap_or(0);
         if frames.len() < 2 {
             self.log.warn("Slideshow: there is only one image to show");
             return;
@@ -898,25 +942,32 @@ impl VwApp {
     ///
     /// 毎回フォルダを読み直す。一覧をキャッシュしないのは、表示中にファイルが
     /// 追加・削除されることがあり、数千件程度なら読み直しても体感できる遅れにならないため。
+    ///
+    /// 絞り込み中は条件に合う画像だけを辿る。今の画像が条件に合わなくても、そこから前後に送れる。
     fn step_active(&mut self, delta: isize) {
-        if let Some(seq) = &self.slots[self.active].sequence {
-            let next = wrap_step(seq.index, seq.paths.len(), delta);
-            if next != seq.index {
-                self.open_in_active(seq.paths[next].clone());
+        let slot = &self.slots[self.active];
+        let Some(path) = slot.path.clone() else {
+            return;
+        };
+        let files = match &slot.sequence {
+            Some(seq) => seq.paths.clone(),
+            None => {
+                let order = self.settings.settings.tree.order();
+                tree::sibling_images(&path, self.loader.registry(), order)
             }
-            return;
-        }
-        let Some(path) = self.slots[self.active].path.clone() else {
+        };
+        let matcher = self.matcher();
+        let shown: Vec<&PathBuf> = files
+            .iter()
+            .filter(|p| **p == path || matcher.matches(p))
+            .collect();
+        let Some(pos) = shown.iter().position(|p| **p == path) else {
             return;
         };
-        let order = self.settings.settings.tree.order();
-        let files = tree::sibling_images(&path, self.loader.registry(), order);
-        let Some(pos) = files.iter().position(|p| p == &path) else {
-            return;
-        };
-        let next = wrap_step(pos, files.len(), delta);
+        let next = wrap_step(pos, shown.len(), delta);
         if next != pos {
-            self.open_in_active(files[next].clone());
+            let target = shown[next].clone();
+            self.open_in_active(target);
         }
     }
 
@@ -1013,6 +1064,8 @@ impl VwApp {
         if self.folder_load.is_some() {
             return;
         }
+        let matcher = self.matcher();
+        created.retain(|p| matcher.matches(p));
         let order = self.settings.settings.tree.order();
         for dir in &dirs {
             self.sync_loaded_folder(dir, &created, &removed, &registry);
@@ -1181,6 +1234,257 @@ impl VwApp {
         }
         let full = self.cell_needs_full();
         self.start_load(index, newest, full);
+    }
+
+    /// 絞り込みの条件。
+    fn matcher(&self) -> Matcher<'_> {
+        Matcher {
+            filter: &self.filter,
+            with_folder_flag: self.filter_folders,
+            labels: &self.labels,
+        }
+    }
+
+    fn set_filter(&mut self, filter: Filter) {
+        self.log.info(format!(
+            "Filter: {}",
+            filter_name(&filter, Language::English)
+        ));
+        self.filter = filter;
+    }
+
+    /// ツリーで選んだフォルダ（ファイルならそのフォルダ）を対象に、書き出しの画面を開く。
+    fn open_export(&mut self) {
+        let root = self
+            .tree_selected
+            .clone()
+            .or_else(|| self.slots[self.active].path.clone())
+            .and_then(|p| {
+                if p.is_dir() {
+                    Some(p)
+                } else {
+                    p.parent().map(Path::to_path_buf)
+                }
+            });
+        let Some(root) = root else {
+            self.log
+                .warn(tr(self.lang(), "Select a folder in the tree first."));
+            return;
+        };
+        let name = root
+            .file_name()
+            .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned());
+        let suffix = match &self.filter {
+            Filter::All => "export".to_owned(),
+            Filter::Flag(Some(Flag::Good)) => "good".to_owned(),
+            Filter::Flag(Some(Flag::Bad)) => "bad".to_owned(),
+            Filter::Flag(None) => "unflagged".to_owned(),
+            Filter::Tag(t) => t.clone(),
+        };
+        let beside = root.parent().unwrap_or(&root);
+        self.export = Some(ExportDialog {
+            dest: beside
+                .join(format!("{name}-{suffix}"))
+                .display()
+                .to_string(),
+            list_path: beside
+                .join(format!("{name}-{suffix}.csv"))
+                .display()
+                .to_string(),
+            root,
+            recursive: true,
+            kind: ExportKind::Copy,
+            keep_structure: true,
+            job: None,
+        });
+    }
+
+    /// 書き出しの画面。
+    fn export_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.export else {
+            return;
+        };
+        let lang = self.settings.settings.appearance.language;
+        let filter_text = filter_name(&self.filter, lang);
+        let mut open = true;
+        let mut run = false;
+        let mut cancel_job = false;
+        egui::Window::new(tr(lang, "Export images"))
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("export-grid")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label(tr(lang, "Folder"));
+                        ui.label(dialog.root.display().to_string());
+                        ui.end_row();
+                        ui.label("");
+                        ui.checkbox(&mut dialog.recursive, tr(lang, "Include subfolders"));
+                        ui.end_row();
+                        ui.label(tr(lang, "Images shown"));
+                        ui.label(format!("{}: {filter_text}", tr(lang, "Filter")));
+                        ui.end_row();
+                    });
+                ui.separator();
+                for (kind, title) in [
+                    (ExportKind::Copy, "Copy files to a folder"),
+                    (ExportKind::List(ListFormat::Csv), "CSV list"),
+                    (ExportKind::List(ListFormat::Jsonl), "JSONL list"),
+                ] {
+                    if ui
+                        .radio_value(&mut dialog.kind, kind, tr(lang, title))
+                        .changed()
+                    {
+                        let ext = match kind {
+                            ExportKind::List(ListFormat::Jsonl) => "jsonl",
+                            _ => "csv",
+                        };
+                        dialog.list_path = Path::new(&dialog.list_path)
+                            .with_extension(ext)
+                            .display()
+                            .to_string();
+                    }
+                }
+                // ファイル選択ダイアログを使わず文字で入力させるのは、Linux で OS のダイアログを
+                // 出すには GTK などへの依存が増え、起動の速さと配布の手軽さを損なうため。
+                match dialog.kind {
+                    ExportKind::Copy => {
+                        ui.label(tr(lang, "Destination folder"));
+                        ui.add(egui::TextEdit::singleline(&mut dialog.dest).desired_width(420.0));
+                        ui.checkbox(
+                            &mut dialog.keep_structure,
+                            tr(lang, "Keep folder structure"),
+                        );
+                    }
+                    ExportKind::List(_) => {
+                        ui.label(tr(lang, "Output file"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut dialog.list_path).desired_width(420.0),
+                        );
+                    }
+                }
+                ui.separator();
+                match &dialog.job {
+                    Some(job) if !job.finished.load(std::sync::atomic::Ordering::Relaxed) => {
+                        let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::ProgressBar::new(done as f32 / job.total.max(1) as f32)
+                                    .text(format!("{done} / {}", job.total))
+                                    .desired_width(300.0),
+                            );
+                            cancel_job = ui.button(tr(lang, "Cancel")).clicked();
+                        });
+                    }
+                    _ => {
+                        run = ui.button(tr(lang, "Export")).clicked();
+                    }
+                }
+            });
+        if cancel_job {
+            if let Some(job) = &dialog.job {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        if !open {
+            if let Some(job) = &dialog.job {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.export = None;
+            return;
+        }
+        if run {
+            self.run_export(ctx);
+        }
+        self.finish_copy_job();
+    }
+
+    /// 書き出しを始める。一覧はその場で書き、コピーは別スレッドで行う。
+    fn run_export(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &self.export else {
+            return;
+        };
+        let order = self.settings.settings.tree.order();
+        let files = export::collect(
+            &dialog.root,
+            dialog.recursive,
+            self.loader.registry(),
+            order,
+            &self.matcher(),
+        );
+        let dialog = self.export.as_mut().expect("checked above");
+        match dialog.kind {
+            ExportKind::List(format) => {
+                let items: Vec<_> = files
+                    .into_iter()
+                    .map(|f| {
+                        let label = self.labels.get(&f);
+                        (f, label)
+                    })
+                    .collect();
+                let out = PathBuf::from(dialog.list_path.trim());
+                match export::write_list(&out, format, &items) {
+                    Ok(()) => self.log.info(format!(
+                        "Export: wrote {} images to {}",
+                        items.len(),
+                        out.display()
+                    )),
+                    Err(e) => self.log.error(format!("Export: {e}")),
+                }
+            }
+            ExportKind::Copy => {
+                let dest = PathBuf::from(dialog.dest.trim());
+                let mut taken = HashSet::new();
+                let pairs: Vec<_> = files
+                    .into_iter()
+                    .map(|f| {
+                        let to = export::copy_target(
+                            &dialog.root,
+                            &f,
+                            &dest,
+                            dialog.keep_structure,
+                            &mut taken,
+                        );
+                        (f, to)
+                    })
+                    .collect();
+                self.log.info(format!(
+                    "Export: copying {} images to {}",
+                    pairs.len(),
+                    dest.display()
+                ));
+                let ctx = ctx.clone();
+                dialog.job = Some(CopyJob::start(pairs, move || ctx.request_repaint()));
+            }
+        }
+    }
+
+    /// 終わったコピーの結果をログに出す。
+    fn finish_copy_job(&mut self) {
+        let Some(dialog) = &mut self.export else {
+            return;
+        };
+        let Some(job) = &dialog.job else {
+            return;
+        };
+        if !job.finished.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let failed = std::mem::take(&mut *job.failed.lock().unwrap());
+        let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
+        dialog.job = None;
+        self.log.info(format!(
+            "Export: copied {} of {} images",
+            done - failed.len(),
+            done
+        ));
+        for e in failed {
+            self.log.error(format!("Export: {e}"));
+        }
     }
 
     /// ラベルを付ける先。ツリーで選んだ項目（`from_tree`）か、アクティブなスロットの画像。
@@ -1369,6 +1673,11 @@ impl VwApp {
                 self.step_active(1);
             }
             Action::ToggleTagging => self.tagging ^= true,
+            Action::FilterAll => self.set_filter(Filter::All),
+            Action::FilterGood => self.set_filter(Filter::Flag(Some(Flag::Good))),
+            Action::FilterBad => self.set_filter(Filter::Flag(Some(Flag::Bad))),
+            Action::FilterUnflagged => self.set_filter(Filter::Flag(None)),
+            Action::ExportImages => self.open_export(),
             Action::FlagGood => self.flag(Flag::Good, self.focus == Focus::Tree),
             Action::FlagBad => self.flag(Flag::Bad, self.focus == Focus::Tree),
             Action::Tag1
@@ -1874,6 +2183,11 @@ impl VwApp {
                     chosen = Some(Action::ToggleSettings);
                 }
             });
+            ui.menu_button(tr(lang, "Labels"), |ui| {
+                if let Some(action) = self.labels_menu(ui) {
+                    chosen = Some(action);
+                }
+            });
             ui.menu_button(tr(lang, "Image"), |ui| {
                 let groups: [&[Action]; 4] = [
                     &[Action::PreviousImage, Action::NextImage],
@@ -1901,6 +2215,62 @@ impl VwApp {
         if let Some(action) = chosen {
             self.run(&ctx, action);
         }
+    }
+
+    /// Labels メニュー。タグでの絞り込みはタグの数だけ並ぶので、キーを割り当てる操作にはせず
+    /// ここで直接切り替える。
+    fn labels_menu(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        let lang = self.lang();
+        let mut chosen = None;
+        if self.menu_item(ui, Action::ToggleTagging, Some(self.tagging)) {
+            chosen = Some(Action::ToggleTagging);
+        }
+        for action in [Action::FlagGood, Action::FlagBad] {
+            if self.menu_item(ui, action, None) {
+                chosen = Some(action);
+            }
+        }
+        ui.separator();
+        let filters = [
+            (Action::FilterAll, Filter::All),
+            (Action::FilterGood, Filter::Flag(Some(Flag::Good))),
+            (Action::FilterBad, Filter::Flag(Some(Flag::Bad))),
+            (Action::FilterUnflagged, Filter::Flag(None)),
+        ];
+        for (action, filter) in filters {
+            if self.menu_item(ui, action, Some(self.filter == filter)) {
+                chosen = Some(action);
+            }
+        }
+        let tags = self.settings.settings.labels.tags.clone();
+        if !tags.is_empty() {
+            ui.menu_button(tr(lang, "Show only tag"), |ui| {
+                for tag in tags {
+                    let filter = Filter::Tag(tag.clone());
+                    if ui
+                        .add(egui::Button::selectable(self.filter == filter, &tag))
+                        .clicked()
+                    {
+                        self.set_filter(filter);
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if ui
+            .checkbox(
+                &mut self.filter_folders,
+                tr(lang, "Count folder flags for their images"),
+            )
+            .clicked()
+        {
+            ui.close();
+        }
+        ui.separator();
+        if self.menu_item(ui, Action::ExportImages, None) {
+            chosen = Some(Action::ExportImages);
+        }
+        chosen
     }
 
     /// View > Layout の項目。今のレイアウトに印を付ける。
@@ -2477,7 +2847,18 @@ impl eframe::App for VwApp {
             egui::Panel::left("tree")
                 .default_size(260.0)
                 .show(ui, |ui| {
-                    panel_header(ui, tr(lang, "Folders"));
+                    // 絞り込み中は、ファイルが隠れていることに気づけるよう見出しに条件を出す。
+                    if self.filter.is_all() {
+                        panel_header(ui, tr(lang, "Folders"));
+                    } else {
+                        let text = format!(
+                            "{}  ({}: {})",
+                            tr(lang, "Folders"),
+                            tr(lang, "Filter"),
+                            filter_name(&self.filter, lang)
+                        );
+                        panel_header(ui, &text);
+                    }
                     let selected = self.tree_selected.clone();
                     let t = &self.settings.settings.tree;
                     let how = FolderClicks {
@@ -2488,10 +2869,18 @@ impl eframe::App for VwApp {
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
+                            let matcher = Matcher {
+                                filter: &self.filter,
+                                with_folder_flag: self.filter_folders,
+                                labels: &self.labels,
+                            };
                             self.tree.ui(
                                 ui,
                                 self.loader.registry(),
-                                &self.labels,
+                                tree::Marks {
+                                    labels: &self.labels,
+                                    show_file: &|p| matcher.matches(p),
+                                },
                                 selected.as_deref(),
                                 lang,
                                 how,
@@ -2547,9 +2936,22 @@ impl eframe::App for VwApp {
             }
         });
         self.copy_selection(&ctx);
+        self.export_window(&ctx);
         self.toast_ui(&ctx);
         self.folder_load_dialog(&ctx);
     }
+}
+
+/// 絞り込みの名前。タグはそのまま（翻訳しない）。
+fn filter_name(filter: &Filter, lang: Language) -> String {
+    let name = match filter {
+        Filter::All => "all",
+        Filter::Flag(Some(Flag::Good)) => "good",
+        Filter::Flag(Some(Flag::Bad)) => "bad",
+        Filter::Flag(None) => "unflagged",
+        Filter::Tag(tag) => return format!("#{tag}"),
+    };
+    tr(lang, name).to_owned()
 }
 
 /// メニューでの操作の名前。表示切り替えはメニューの中では対象の名前だけで分かるので短くする。
