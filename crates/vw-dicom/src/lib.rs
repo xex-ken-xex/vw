@@ -33,7 +33,7 @@ impl DecoderPlugin for DicomPlugin {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["dcm", "dicom", "dic"]
+        &["dcm", "dicom", "dic", "ima"]
     }
 
     fn probe(&self, header: &[u8]) -> bool {

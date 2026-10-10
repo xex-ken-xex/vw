@@ -1100,10 +1100,11 @@ impl VwApp {
                 }
                 continue;
             }
-            // 消えたファイルは中身を読めないので、拡張子のないものは画像だったとみなす。
+            // 消えたファイルは中身を読めないので、拡張子で決まらないものは画像だったとみなす。
+            // 画像でないファイルが消えても、フォルダを読み直して件数をログに出すだけで済む。
             let image = match c.kind {
                 ChangeKind::Removed => {
-                    registry.supports_path(&c.path) || c.path.extension().is_none()
+                    registry.supports_path(&c.path) || registry.needs_probe(&c.path)
                 }
                 _ => registry.supports_file(&c.path),
             };

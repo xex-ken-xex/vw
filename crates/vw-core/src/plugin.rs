@@ -108,17 +108,23 @@ impl Registry {
         self.by_extension(path).is_some()
     }
 
-    /// [`Self::supports_path`] に加えて、拡張子のないファイルは先頭を読んで中身で判定する。
-    /// DICOM は `IM0001` のような拡張子のない名前で保存されることが多いため。拡張子のある
-    /// ファイルは開かないので、大きなフォルダでも遅くならない。
+    /// [`Self::supports_path`] に加えて、どのプラグインの拡張子でもないファイルは先頭を読んで
+    /// 中身で判定する。DICOM は `IM0001` や `*.IMA`、装置ごとの連番など、拡張子が当てに
+    /// ならない名前で保存されるため。拡張子で分かるファイルは開かないので、画像の多い
+    /// フォルダでは遅くならない。
     pub fn supports_file(&self, path: &Path) -> bool {
-        if path.extension().is_some() {
-            return self.supports_path(path);
+        if !self.needs_probe(path) {
+            return true;
         }
         let mut header = Vec::with_capacity(PROBE_BYTES);
         let read = std::fs::File::open(path)
             .and_then(|f| std::io::Read::take(f, PROBE_BYTES as u64).read_to_end(&mut header));
         read.is_ok() && self.plugins.iter().any(|p| p.probe(&header))
+    }
+
+    /// 拡張子ではどのプラグインか分からず、中身を見ないと対応しているか決まらないか。
+    pub fn needs_probe(&self, path: &Path) -> bool {
+        self.by_extension(path).is_none()
     }
 
     fn by_extension(&self, path: &Path) -> Option<&Arc<dyn DecoderPlugin>> {
@@ -269,18 +275,21 @@ mod tests {
     }
 
     #[test]
-    fn extensionless_files_are_recognised_by_their_content() {
+    fn files_with_unknown_or_no_extension_are_recognised_by_their_content() {
         let dir = std::env::temp_dir().join(format!("vw-core-probe-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let known = dir.join("IM0001");
+        let odd_extension = dir.join("scan.0314.IMA");
         let unknown = dir.join("README");
         std::fs::write(&known, b"BBB...").unwrap();
+        std::fs::write(&odd_extension, b"BBB...").unwrap();
         std::fs::write(&unknown, b"hello").unwrap();
         let r = registry();
         assert!(r.supports_file(&known));
+        assert!(r.supports_file(&odd_extension));
         assert!(!r.supports_file(&unknown));
-        // 拡張子があれば中身は見ない。
-        assert!(!r.supports_file(&dir.join("missing.ccc")));
+        // プラグインの拡張子なら中身は見ない。
+        assert!(r.supports_file(&dir.join("missing.aaa")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

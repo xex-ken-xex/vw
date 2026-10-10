@@ -47,19 +47,20 @@ struct View<'a> {
     /// ファイルも出すか（ノーマルモード）。
     show_files: bool,
     series: &'a SeriesIndex,
-    /// DICOM の拡張子。拡張子のないファイルと、これらのファイルがあるフォルダだけヘッダを読む。
+    /// DICOM の拡張子。
     dicom_extensions: &'a [&'a str],
 }
 
 impl View<'_> {
+    /// DICOM かもしれないファイル。拡張子が他のプラグインのもの（PNG など）でなければ、
+    /// ヘッダを読んで確かめる。
     fn may_be_dicom(&self, path: &Path) -> bool {
-        match path.extension().and_then(|e| e.to_str()) {
-            None => true,
-            Some(e) => self
-                .dicom_extensions
+        let dicom_extension = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            self.dicom_extensions
                 .iter()
-                .any(|d| d.eq_ignore_ascii_case(e)),
-        }
+                .any(|d| d.eq_ignore_ascii_case(e))
+        });
+        dicom_extension || self.registry.needs_probe(path)
     }
 }
 
