@@ -25,6 +25,7 @@ mod theme;
 mod toml_reader;
 mod tree;
 mod viewer;
+mod watch;
 
 #[cfg(test)]
 mod test_util;

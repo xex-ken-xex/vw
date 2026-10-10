@@ -55,7 +55,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 21] = [
+const ITEMS: [Item; 22] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -202,6 +202,13 @@ const ITEMS: [Item; 21] = [
         title: "Group heading click",
         description: "What clicking a group heading (such as File in the metadata panel) does. The arrow always expands or collapses.",
         widget: header_click_widget,
+    },
+    Item {
+        section: Section::Behavior,
+        key: "behavior.auto_reload",
+        title: "Auto reload",
+        description: "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
+        widget: auto_reload_widget,
     },
 ];
 
@@ -454,6 +461,11 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
             .suffix(tr(lang, " images")),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.behavior.auto_reload, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn header_click_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

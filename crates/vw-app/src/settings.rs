@@ -128,9 +128,20 @@ pub enum HeaderClick {
     SelectAndToggle,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Behavior {
     pub header_click: HeaderClick,
+    /// 開いているフォルダを監視し、新しい画像や書き換えられた画像をすぐ表示に反映する。
+    pub auto_reload: bool,
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Self {
+            header_click: HeaderClick::default(),
+            auto_reload: true,
+        }
+    }
 }
 
 /// 画像自動展開モードで、フォルダの画像をスロットにどう入れるか。
@@ -373,6 +384,9 @@ impl Settings {
             header_click: r
                 .get("behavior", "header_click")
                 .unwrap_or(d.behavior.header_click),
+            auto_reload: r
+                .get("behavior", "auto_reload")
+                .unwrap_or(d.behavior.auto_reload),
         };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
@@ -680,6 +694,7 @@ mod tests {
         s.appearance.ui_scale = 1.25;
         s.viewer.background = "#202020".into();
         s.behavior.header_click = HeaderClick::SelectAndToggle;
+        s.behavior.auto_reload = false;
         s.viewer.full_image_limit_mb = 8192;
         s.viewer.layout = SlotLayout::grid(1, 2);
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
@@ -887,6 +902,13 @@ mod tests {
     fn header_click_selects_only_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
         assert_eq!(s.behavior.header_click, HeaderClick::Select);
+    }
+
+    #[test]
+    fn auto_reload_is_on_unless_turned_off() {
+        assert!(Settings::default().behavior.auto_reload);
+        let (s, _) = Settings::from_toml("[behavior]\nauto_reload = false\n").unwrap();
+        assert!(!s.behavior.auto_reload);
     }
 
     #[test]
