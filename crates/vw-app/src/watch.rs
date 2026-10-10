@@ -14,6 +14,8 @@ use eframe::egui;
 use notify::event::{AccessKind, AccessMode, EventKind, ModifyKind, RenameMode};
 use notify::{RecursiveMode, Watcher as _};
 
+use crate::sort::{self, SortItem, SortOrder};
+
 /// 最後の変化からこれだけ経ってから知らせる。書き込み途中のファイルを読まないため。
 pub const QUIET: Duration = Duration::from_millis(300);
 
@@ -112,6 +114,35 @@ pub fn follow_newest(
     let after = &paths[pos + 1..];
     let only_new_after = !after.is_empty() && after.iter().all(|p| created.contains(p));
     only_new_after.then(|| paths.len() - 1)
+}
+
+/// 消えた画像 `removed` を表示していたスロットが、代わりに表示する位置。消えた画像があった場所の
+/// 次の画像（最後だったなら新しい最後の画像）。`paths` は空でないこと。
+pub fn position_of_removed(paths: &[PathBuf], removed: &Path, order: SortOrder) -> usize {
+    let item = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let name = item(removed);
+    let before = paths
+        .iter()
+        .filter(|p| {
+            let other = item(p);
+            let a = SortItem {
+                name: &other,
+                is_dir: false,
+                modified: None,
+            };
+            let b = SortItem {
+                name: &name,
+                is_dir: false,
+                modified: None,
+            };
+            sort::compare(order, &a, &b) == std::cmp::Ordering::Less
+        })
+        .count();
+    before.min(paths.len() - 1)
 }
 
 /// フォルダの監視。監視するフォルダは [`Self::set_dirs`] で毎回まるごと渡す。
@@ -252,6 +283,24 @@ mod tests {
         let paths = [p("0.png"), p("1.png")];
         let created = [p("0.png")].into();
         assert_eq!(follow_newest(&paths, &p("1.png"), &created), None);
+    }
+
+    #[test]
+    fn slot_on_a_removed_image_shows_the_next_one() {
+        let paths = [p("d/1.png"), p("d/3.png")];
+        assert_eq!(
+            position_of_removed(&paths, &p("d/2.png"), SortOrder::default()),
+            1
+        );
+    }
+
+    #[test]
+    fn slot_on_a_removed_last_image_shows_the_new_last_one() {
+        let paths = [p("d/1.png"), p("d/2.png")];
+        assert_eq!(
+            position_of_removed(&paths, &p("d/3.png"), SortOrder::default()),
+            1
+        );
     }
 
     fn event(kind: EventKind, paths: &[&str]) -> notify::Event {

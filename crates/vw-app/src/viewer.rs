@@ -69,6 +69,9 @@ pub struct Slot {
     /// フォルダスロットなら、そのフォルダの画像の並び。普通のスロットは `None` で、
     /// 前後の画像はその都度同じフォルダから探す。
     pub sequence: Option<Sequence>,
+    /// フォルダの読み込みで 1 枚 1 スロットに並べたスロット。フォルダの画像が増減したら、
+    /// 中身を差し替えずにスロットを足したり閉じたりする。
+    pub from_folder: bool,
     /// 最後に出した読み込み要求の番号。これと違う番号の結果は古いので捨てる。
     /// 前後の画像へ素早く送ったとき、遅れて届いた前の画像で上書きされるのを防ぐ。
     pub request: u64,
@@ -201,6 +204,7 @@ impl Slot {
             id,
             path: None,
             sequence: None,
+            from_folder: false,
             request: 0,
             loading: false,
             shown: None,

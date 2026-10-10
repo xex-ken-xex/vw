@@ -4,7 +4,7 @@
 //! egui は即時モード GUI で、毎フレーム `ui()` が呼ばれて画面全体を組み立て直す。
 //! 状態はすべて [`VwApp`] が持ち、ウィジェット側には持たせない。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -369,6 +369,8 @@ impl VwApp {
         self.tree_selected = Some(path.clone());
         // フォルダスロットに並びの外の画像を開いたら、普通のスロットに戻す。
         let slot = &mut self.slots[self.active];
+        // 読み込みで並べたスロットも、別の画像を開いたらそのフォルダの 1 枚ではなくなる。
+        slot.from_folder = false;
         if let Some(seq) = &mut slot.sequence {
             match seq.paths.iter().position(|p| *p == path) {
                 Some(i) => seq.index = i,
@@ -458,6 +460,7 @@ impl VwApp {
                     self.next_id += 1;
                 }
                 let index = self.slots.len() - 1;
+                self.slots[index].from_folder = self.load_into == LoadInto::Images;
                 if self.load_into == LoadInto::Folders {
                     let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
                     self.slots[index].sequence = Some(Sequence::new(folder, path.clone()));
@@ -937,6 +940,7 @@ impl VwApp {
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut created = HashSet::new();
         let mut modified = HashSet::new();
+        let mut removed = HashSet::new();
         for c in changes {
             if let Some(dir) = c.path.parent().filter(|d| !dirs.iter().any(|x| x == d)) {
                 dirs.push(dir.to_path_buf());
@@ -945,21 +949,19 @@ impl VwApp {
                 continue;
             }
             match c.kind {
-                ChangeKind::Created => {
-                    created.insert(c.path);
-                }
-                ChangeKind::Modified => {
-                    modified.insert(c.path);
-                }
-                ChangeKind::Removed => {}
-            }
+                ChangeKind::Created => created.insert(c.path),
+                ChangeKind::Modified => modified.insert(c.path),
+                ChangeKind::Removed => removed.insert(c.path),
+            };
         }
         for dir in &dirs {
             self.tree.refresh(dir, &registry);
-            let new = created.iter().filter(|p| p.parent() == Some(dir)).count();
-            if new > 0 {
+            let count =
+                |set: &HashSet<PathBuf>| set.iter().filter(|p| p.parent() == Some(dir)).count();
+            let (new, gone) = (count(&created), count(&removed));
+            if new + gone > 0 {
                 self.log.info(format!(
-                    "Auto reload: {new} new image(s) in {}",
+                    "Auto reload: {new} new / {gone} removed image(s) in {}",
                     dir.display()
                 ));
             }
@@ -970,42 +972,37 @@ impl VwApp {
             return;
         }
         let order = self.settings.settings.tree.order();
+        for dir in &dirs {
+            self.sync_loaded_folder(dir, &created, &removed, &registry);
+        }
         let playing = self.playback.as_ref().map(|pb| pb.slot);
+        let mut siblings: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         let mut loads = Vec::new();
         for (index, slot) in self.slots.iter_mut().enumerate() {
-            if playing == Some(slot.id) {
+            if playing == Some(slot.id) || slot.from_folder {
                 continue;
             }
             let Some(current) = slot.path.clone() else {
                 continue;
             };
-            if !current
-                .parent()
-                .is_some_and(|d| dirs.iter().any(|x| x == d))
-            {
+            let Some(dir) = current.parent().filter(|d| dirs.iter().any(|x| x == d)) else {
+                continue;
+            };
+            // 同じフォルダの画像を出しているスロットが多くても、フォルダは 1 回だけ読む。
+            let paths = siblings
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| tree::list_folder(dir, &registry, order).1);
+            if paths.is_empty() {
                 continue;
             }
-            let target = match &mut slot.sequence {
-                Some(seq) => {
-                    let (_, paths) = tree::list_folder(&seq.folder, &registry, order);
-                    if paths.is_empty() {
-                        continue;
-                    }
-                    let target = watch::follow_newest(&paths, &current, &created)
-                        .or_else(|| paths.iter().position(|p| *p == current))
-                        .unwrap_or_else(|| seq.index.min(paths.len() - 1));
-                    seq.paths = paths;
-                    seq.index = target;
-                    seq.paths[target].clone()
-                }
-                None => {
-                    let paths = tree::sibling_images(&current, &registry, order);
-                    match watch::follow_newest(&paths, &current, &created) {
-                        Some(i) => paths[i].clone(),
-                        None => current.clone(),
-                    }
-                }
-            };
+            let at = watch::follow_newest(paths, &current, &created)
+                .or_else(|| paths.iter().position(|p| *p == current))
+                .unwrap_or_else(|| watch::position_of_removed(paths, &current, order));
+            if let Some(seq) = &mut slot.sequence {
+                seq.paths = paths.clone();
+                seq.index = at;
+            }
+            let target = paths[at].clone();
             if target != current || modified.contains(&current) {
                 loads.push((index, target));
             }
@@ -1016,6 +1013,59 @@ impl VwApp {
                 self.tree_selected = Some(path.clone());
             }
             self.start_load(index, path, full);
+        }
+    }
+
+    /// フォルダの読み込み（1 枚 1 スロット）で並べたスロットを、フォルダの今の中身に合わせる。
+    /// 消えた画像のスロットは閉じ、新しい画像はそのフォルダの最後のスロットの後ろに足す。
+    /// 1 つのスロットの中身を差し替えないのは、並べて見ている他の画像が入れ替わってしまうため。
+    fn sync_loaded_folder(
+        &mut self,
+        dir: &Path,
+        created: &HashSet<PathBuf>,
+        removed: &HashSet<PathBuf>,
+        registry: &Registry,
+    ) {
+        let in_dir =
+            |s: &Slot| s.from_folder && s.path.as_deref().and_then(Path::parent) == Some(dir);
+        for index in (0..self.slots.len()).rev() {
+            let slot = &self.slots[index];
+            if in_dir(slot) && slot.path.as_ref().is_some_and(|p| removed.contains(p)) {
+                self.close_slot(index);
+            }
+        }
+        let Some(last) = self.slots.iter().rposition(in_dir) else {
+            return;
+        };
+        let order = self.settings.settings.tree.order();
+        let new: Vec<PathBuf> = tree::list_folder(dir, registry, order)
+            .1
+            .into_iter()
+            .filter(|p| created.contains(p))
+            .collect();
+        if new.is_empty() {
+            return;
+        }
+        let follow = self.active == last;
+        let last_id = self.slots[last].id;
+        let full = self.cell_needs_full();
+        for (i, path) in new.into_iter().enumerate() {
+            let index = last + 1 + i;
+            let mut slot = Slot::new(self.next_id);
+            self.next_id += 1;
+            slot.from_folder = true;
+            self.slots.insert(index, slot);
+            if self.active >= index {
+                self.active += 1;
+            }
+            self.start_load(index, path, full);
+        }
+        if follow {
+            self.active = self.slots.iter().rposition(in_dir).unwrap_or(self.active);
+            if self.maximized == Some(last_id) {
+                self.maximized = Some(self.slots[self.active].id);
+            }
+            self.tree_selected = self.slots[self.active].path.clone();
         }
     }
 
