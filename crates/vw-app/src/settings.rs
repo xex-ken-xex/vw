@@ -270,12 +270,40 @@ impl Tree {
     }
 }
 
+/// フラグとタグ（[`crate::labels`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Labels {
+    /// 付けられるタグ。先頭から 9 個が数字キー 1〜9 に対応する。
+    pub tags: Vec<String>,
+    /// フラグやタグを付けたら次の画像へ進む。
+    pub advance: bool,
+}
+
+impl Default for Labels {
+    fn default() -> Self {
+        Self {
+            tags: Vec::new(),
+            advance: true,
+        }
+    }
+}
+
+impl Labels {
+    /// タグの一覧として使えるか。空の名前や重なった名前があると、キーとタグの対応が分からなくなる。
+    pub fn valid_tags(tags: &[String]) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        tags.iter()
+            .all(|t| !t.trim().is_empty() && t.trim() == t && seen.insert(t.as_str()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
     pub viewer: Viewer,
     pub tree: Tree,
     pub behavior: Behavior,
+    pub labels: Labels,
     pub keys: Keymap,
 }
 
@@ -388,6 +416,17 @@ impl Settings {
                 .get("behavior", "auto_reload")
                 .unwrap_or(d.behavior.auto_reload),
         };
+        let labels = Labels {
+            tags: r
+                .get_valid(
+                    "labels",
+                    "tags",
+                    |t: &Vec<String>| Labels::valid_tags(t),
+                    "tag names must be non-empty and unique",
+                )
+                .unwrap_or_else(|| d.labels.tags.clone()),
+            advance: r.get("labels", "advance").unwrap_or(d.labels.advance),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -404,6 +443,7 @@ impl Settings {
                 viewer,
                 tree,
                 behavior,
+                labels,
                 keys,
             },
             problems,
@@ -695,6 +735,8 @@ mod tests {
         s.viewer.background = "#202020".into();
         s.behavior.header_click = HeaderClick::SelectAndToggle;
         s.behavior.auto_reload = false;
+        s.labels.tags = vec!["cat".into(), "dog".into()];
+        s.labels.advance = false;
         s.viewer.full_image_limit_mb = 8192;
         s.viewer.layout = SlotLayout::grid(1, 2);
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
@@ -902,6 +944,13 @@ mod tests {
     fn header_click_selects_only_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
         assert_eq!(s.behavior.header_click, HeaderClick::Select);
+    }
+
+    #[test]
+    fn duplicate_tag_names_fall_back_to_the_default_list() {
+        let (s, problems) = Settings::from_toml("[labels]\ntags = [\"cat\", \"cat\"]\n").unwrap();
+        assert!(s.labels.tags.is_empty());
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

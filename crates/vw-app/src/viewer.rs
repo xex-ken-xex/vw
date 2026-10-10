@@ -13,6 +13,7 @@ use eframe::egui::{
 use vw_core::VwImage;
 
 use crate::i18n::tr;
+use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
 use crate::settings::Language;
 
@@ -93,6 +94,17 @@ pub struct Slot {
     wheel: f32,
     /// 直前に描いた画像部分の大きさ。キー操作で倍率を変えるときに使う。
     last_body: Option<Vec2>,
+}
+
+/// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
+pub struct SlotLook<'a> {
+    /// 画像の背後の色。
+    pub background: Color32,
+    pub lang: Language,
+    /// 空のスロットに出す案内。
+    pub empty_hint: &'static str,
+    /// 表示中の画像のフラグとタグ。
+    pub label: &'a Label,
 }
 
 /// 1 フレーム分の操作結果。
@@ -252,16 +264,20 @@ impl Slot {
         fit_scale(body.size(), vec2(s.info.width as f32, s.info.height as f32))
     }
 
-    /// `rect` の範囲にスロットを描き、操作を処理する。`background` は画像の背後の色。
+    /// `rect` の範囲にスロットを描き、操作を処理する。
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
         active: bool,
-        background: Color32,
-        lang: Language,
-        empty_hint: &'static str,
+        look: SlotLook,
     ) -> SlotResponse {
+        let SlotLook {
+            background,
+            lang,
+            empty_hint,
+            label: image_label,
+        } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
@@ -406,6 +422,28 @@ impl Slot {
             close_color,
         );
         out.close = close.on_hover_text(tr(lang, "Close slot")).clicked();
+
+        // フラグとタグはヘッダの右端に出し、フラグはヘッダの下端の色の線でも示す。
+        // 縮小したマス目でも、どの画像にフラグが付いているか一目で分かるように。
+        if !image_label.is_empty() {
+            let job = labels::labeled_name(
+                "",
+                image_label,
+                text_color,
+                visuals.weak_text_color(),
+                egui::FontId::proportional(13.0),
+            );
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            let pos = pos2(
+                close_rect.left() - 6.0 - galley.size().x,
+                header.center().y - galley.size().y / 2.0,
+            );
+            painter.galley(pos, galley, text_color);
+        }
+        if let Some(flag) = image_label.flag {
+            let strip = Rect::from_min_max(pos2(header.min.x, header.max.y - 2.0), header.max);
+            painter.rect_filled(strip, 0.0, crate::theme::flag_color(flag));
+        }
 
         let border = if active {
             visuals.selection.stroke.color

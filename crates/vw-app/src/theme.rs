@@ -57,6 +57,14 @@ fn palette(theme: Theme) -> &'static Palette {
     }
 }
 
+/// フラグの色。灰色基調の画面の中で、ダーク・ライトのどちらでも見分けやすい彩度にする。
+pub fn flag_color(flag: crate::labels::Flag) -> Color32 {
+    match flag {
+        crate::labels::Flag::Good => Color32::from_rgb(76, 175, 80),
+        crate::labels::Flag::Bad => Color32::from_rgb(229, 83, 75),
+    }
+}
+
 /// テーマの既定の画像背景色。
 pub fn canvas_color(theme: Theme) -> Color32 {
     palette(theme).canvas

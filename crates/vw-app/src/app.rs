@@ -19,6 +19,7 @@ use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
+use crate::labels::{Flag, LabelStore};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
@@ -32,7 +33,7 @@ use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
-use crate::viewer::{Full, Sequence, Shown, Slot, KEY_ZOOM_FACTOR};
+use crate::viewer::{Full, Sequence, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR};
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
@@ -147,12 +148,21 @@ pub struct VwApp {
     /// 画像自動展開モードで読み込んだフォルダと入れ方。画像がなかったフォルダも監視して、
     /// 後から来た画像をスロットに足すために覚えておく。
     loaded_folders: Vec<(PathBuf, LoadInto)>,
+    labels: LabelStore,
+    /// タグ付けモード。↑ ↓ と数字キーでフラグとタグを付ける。
+    tagging: bool,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
 
-/// 再生バーの高さ。
+/// 再生バーの高さ。タグ付けモードのバーも同じ高さにする。
 const PLAY_BAR: f32 = 30.0;
+
+/// タグ付けモードのバーで押されたもの。
+enum TagClick {
+    Flag(Flag),
+    Tag(usize),
+}
 
 /// 再生バーで行われた操作。
 enum BarAction {
@@ -278,6 +288,12 @@ impl VwApp {
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 
+        // 書き込めないフォルダのラベルは、設定ファイルの隣の labels フォルダに置く。
+        let label_fallback = settings
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|p| p.join("labels"));
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
@@ -316,6 +332,8 @@ impl VwApp {
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
+            labels: LabelStore::new(label_fallback),
+            tagging: false,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -959,6 +977,16 @@ impl VwApp {
             if let Some(dir) = c.path.parent().filter(|d| !dirs.iter().any(|x| x == d)) {
                 dirs.push(dir.to_path_buf());
             }
+            // ラベルファイルが外で書き換えられたら（別の PC との同期など）、次に使うときに読み直す。
+            if c.path
+                .file_name()
+                .is_some_and(|n| n == crate::labels::FILE_NAME)
+            {
+                if let Some(dir) = c.path.parent() {
+                    self.labels.forget(dir);
+                }
+                continue;
+            }
             if !registry.supports_path(&c.path) {
                 continue;
             }
@@ -1155,6 +1183,147 @@ impl VwApp {
         self.start_load(index, newest, full);
     }
 
+    /// ラベルを付ける先。ツリーで選んだ項目（`from_tree`）か、アクティブなスロットの画像。
+    fn label_target(&self, from_tree: bool) -> Option<PathBuf> {
+        if from_tree {
+            return self.tree_selected.clone();
+        }
+        self.slots[self.active].path.clone()
+    }
+
+    /// フラグを付ける・外す。フォルダならフォルダ自身に付ける。
+    fn flag(&mut self, flag: Flag, from_tree: bool) {
+        let Some(path) = self.label_target(from_tree) else {
+            return;
+        };
+        let result = if path.is_dir() {
+            self.labels.toggle_folder_flag(&path, flag)
+        } else {
+            self.labels.toggle_flag(&path, flag)
+        };
+        match result {
+            Ok(now) => {
+                let what = match now {
+                    Some(Flag::Good) => "flagged good",
+                    Some(Flag::Bad) => "flagged bad",
+                    None => "flag removed",
+                };
+                self.log.info(format!("{}: {what}", path.display()));
+                if now.is_some() && !from_tree {
+                    self.advance_after_label();
+                }
+            }
+            Err(e) => self.log.error(e),
+        }
+    }
+
+    /// 設定の `index` 番目のタグを付ける・外す。
+    fn tag(&mut self, index: usize, from_tree: bool) {
+        let Some(tag) = self.settings.settings.labels.tags.get(index).cloned() else {
+            self.log.warn(format!(
+                "No tag for key {} (add tags in Settings > Flags and tags)",
+                index + 1
+            ));
+            return;
+        };
+        let Some(path) = self.label_target(from_tree).filter(|p| !p.is_dir()) else {
+            return;
+        };
+        match self.labels.toggle_tag(&path, &tag) {
+            Ok(added) => {
+                let what = if added { "tagged" } else { "untagged" };
+                self.log.info(format!("{}: {what} {tag}", path.display()));
+                if added && !from_tree {
+                    self.advance_after_label();
+                }
+            }
+            Err(e) => self.log.error(e),
+        }
+    }
+
+    /// ラベルを付けた後に次の画像へ進む（設定で止められる）。1 枚 1 スロットに並べているときは
+    /// 次のスロットへ、そうでなければスロットの中で次の画像へ。最後まで来たら先頭に戻らずに止まる。
+    /// 戻ると、付け終わったことに気づかずに最初の画像のラベルを付け替えてしまうため。
+    fn advance_after_label(&mut self) {
+        if !self.settings.settings.labels.advance {
+            return;
+        }
+        let slot = &self.slots[self.active];
+        if slot.sequence.is_none() && self.slots.len() > 1 {
+            if self.active + 1 < self.slots.len() {
+                self.step_slot(1);
+            }
+            return;
+        }
+        let at_end = match &slot.sequence {
+            Some(seq) => seq.index + 1 >= seq.paths.len(),
+            None => slot.path.as_ref().is_none_or(|p| {
+                let order = self.settings.settings.tree.order();
+                let files = tree::sibling_images(p, self.loader.registry(), order);
+                files.last() == Some(p)
+            }),
+        };
+        if !at_end {
+            self.step_active(1);
+        }
+    }
+
+    /// タグ付けモードの間、画像の下に出すバー。アクティブなスロットの画像のフラグとタグを示し、
+    /// クリックでも付け外しできる。
+    fn tag_bar(&self, ui: &mut egui::Ui) -> Option<TagClick> {
+        let lang = self.lang();
+        let label = self.slots[self.active]
+            .path
+            .as_deref()
+            .map(|p| self.labels.get(p))
+            .unwrap_or_default();
+        let mut clicked = None;
+        let frame = egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .inner_margin(egui::Margin::symmetric(6, 3));
+        frame.show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            ui.horizontal_centered(|ui| {
+                for (flag, action, title) in [
+                    (Flag::Good, Action::FlagGood, "Good"),
+                    (Flag::Bad, Action::FlagBad, "Bad"),
+                ] {
+                    let text = egui::RichText::new(format!(
+                        "{} {}",
+                        crate::labels::flag_icon(flag),
+                        tr(lang, title)
+                    ))
+                    .color(theme::flag_color(flag));
+                    let tip = self.with_key(tr(lang, action.title()), action);
+                    if ui
+                        .add(egui::Button::selectable(label.flag == Some(flag), text))
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        clicked = Some(TagClick::Flag(flag));
+                    }
+                }
+                ui.separator();
+                let tags = &self.settings.settings.labels.tags;
+                if tags.is_empty() {
+                    ui.weak(tr(lang, "Add tags in Settings > Flags and tags"));
+                }
+                for (i, tag) in tags.iter().enumerate() {
+                    let key = Action::ALL.into_iter().find(|a| a.tag_index() == Some(i));
+                    let text = match key {
+                        Some(_) => format!("{} {tag}", i + 1),
+                        None => tag.clone(),
+                    };
+                    let on = label.tags.contains(tag);
+                    if ui.add(egui::Button::selectable(on, text)).clicked() {
+                        clicked = Some(TagClick::Tag(i));
+                    }
+                }
+            });
+        });
+        clicked
+    }
+
     fn lang(&self) -> Language {
         self.settings.settings.appearance.language
     }
@@ -1198,6 +1367,22 @@ impl VwApp {
             Action::NextImage => {
                 self.stop_playback();
                 self.step_active(1);
+            }
+            Action::ToggleTagging => self.tagging ^= true,
+            Action::FlagGood => self.flag(Flag::Good, self.focus == Focus::Tree),
+            Action::FlagBad => self.flag(Flag::Bad, self.focus == Focus::Tree),
+            Action::Tag1
+            | Action::Tag2
+            | Action::Tag3
+            | Action::Tag4
+            | Action::Tag5
+            | Action::Tag6
+            | Action::Tag7
+            | Action::Tag8
+            | Action::Tag9 => {
+                if let Some(i) = action.tag_index() {
+                    self.tag(i, self.focus == Focus::Tree);
+                }
             }
             Action::TogglePlay => {
                 if self.playback.is_some() {
@@ -1267,6 +1452,9 @@ impl VwApp {
         for action in keys.actions_in(&events) {
             // 設定画面の間は画像やパネルの操作をしない。見えていない画面が変わるのを避けるため。
             if self.show_settings && action != Action::ToggleSettings {
+                continue;
+            }
+            if action.needs_tagging_mode() && !self.tagging {
                 continue;
             }
             self.run(ctx, action);
@@ -1412,6 +1600,11 @@ impl VwApp {
                 if r.clicked() {
                     self.tool = tool;
                 }
+            }
+            let tip = self.with_key(tr(lang, "Tagging mode"), Action::ToggleTagging);
+            let button = egui::Button::selectable(self.tagging, big(icon::TAG)).min_size(size);
+            if ui.add(button).on_hover_text(tip).clicked() {
+                self.tagging ^= true;
             }
             ui.separator();
             let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);
@@ -2081,18 +2274,29 @@ impl VwApp {
         self.frame += 1;
         let view = self.view();
         let maximized = self.maximized.is_some() && view.range.len() == 1;
-        let area = if maximized {
-            let (area, bar) = whole.split_top_bottom_at_y(whole.max.y - PLAY_BAR);
+        let mut area = whole;
+        if maximized {
+            let (rest, bar) = area.split_top_bottom_at_y(area.max.y - PLAY_BAR);
+            area = rest;
             let action = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.play_bar(ui))
                 .inner;
             if let Some(action) = action {
                 self.apply_bar_action(ui.ctx(), action);
             }
-            area
-        } else {
-            whole
-        };
+        }
+        if self.tagging {
+            let (rest, bar) = area.split_top_bottom_at_y(area.max.y - PLAY_BAR);
+            area = rest;
+            let click = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.tag_bar(ui))
+                .inner;
+            match click {
+                Some(TagClick::Flag(flag)) => self.flag(flag, false),
+                Some(TagClick::Tag(i)) => self.tag(i, false),
+                None => {}
+            }
+        }
         self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
         let (cols, rows) = (view.cols, view.rows);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
@@ -2117,13 +2321,21 @@ impl VwApp {
                 ),
                 cell,
             );
+            let label = self.slots[i]
+                .path
+                .as_deref()
+                .map(|p| self.labels.get(p))
+                .unwrap_or_default();
             let resp = self.slots[i].ui(
                 ui,
                 rect.shrink(1.0),
                 i == self.active,
-                background,
-                lang,
-                hint,
+                SlotLook {
+                    background,
+                    lang,
+                    empty_hint: hint,
+                    label: &label,
+                },
             );
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full;
@@ -2202,6 +2414,9 @@ impl eframe::App for VwApp {
         self.receive(&ctx);
         self.pump_folder_load();
         self.watch_folders(&ctx);
+        for problem in self.labels.take_problems() {
+            self.log.error(problem);
+        }
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
 
@@ -2273,8 +2488,14 @@ impl eframe::App for VwApp {
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                            self.tree
-                                .ui(ui, self.loader.registry(), selected.as_deref(), lang, how)
+                            self.tree.ui(
+                                ui,
+                                self.loader.registry(),
+                                &self.labels,
+                                selected.as_deref(),
+                                lang,
+                                how,
+                            )
                         })
                         .inner;
                     let Some(action) = action else {

@@ -12,6 +12,7 @@ mod copy;
 mod fonts;
 mod i18n;
 mod keymap;
+mod labels;
 mod layout;
 mod loader;
 mod log;

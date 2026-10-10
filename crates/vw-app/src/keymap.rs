@@ -44,11 +44,23 @@ pub enum Action {
     Layout4x4,
     LayoutCustom,
     TogglePlay,
+    ToggleTagging,
+    FlagGood,
+    FlagBad,
+    Tag1,
+    Tag2,
+    Tag3,
+    Tag4,
+    Tag5,
+    Tag6,
+    Tag7,
+    Tag8,
+    Tag9,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 29] = [
+    pub const ALL: [Action; 41] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -69,6 +81,18 @@ impl Action {
         Action::Layout3x3,
         Action::Layout4x4,
         Action::LayoutCustom,
+        Action::ToggleTagging,
+        Action::FlagGood,
+        Action::FlagBad,
+        Action::Tag1,
+        Action::Tag2,
+        Action::Tag3,
+        Action::Tag4,
+        Action::Tag5,
+        Action::Tag6,
+        Action::Tag7,
+        Action::Tag8,
+        Action::Tag9,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -112,6 +136,18 @@ impl Action {
             Action::Layout4x4 => "layout_4x4",
             Action::LayoutCustom => "layout_custom",
             Action::TogglePlay => "toggle_play",
+            Action::ToggleTagging => "toggle_tagging",
+            Action::FlagGood => "flag_good",
+            Action::FlagBad => "flag_bad",
+            Action::Tag1 => "tag_1",
+            Action::Tag2 => "tag_2",
+            Action::Tag3 => "tag_3",
+            Action::Tag4 => "tag_4",
+            Action::Tag5 => "tag_5",
+            Action::Tag6 => "tag_6",
+            Action::Tag7 => "tag_7",
+            Action::Tag8 => "tag_8",
+            Action::Tag9 => "tag_9",
         }
     }
 
@@ -151,6 +187,18 @@ impl Action {
             Action::Layout4x4 => "Layout: 4 x 4",
             Action::LayoutCustom => "Layout: custom",
             Action::TogglePlay => "Play/pause slideshow",
+            Action::ToggleTagging => "Tagging mode on/off",
+            Action::FlagGood => "Flag as good",
+            Action::FlagBad => "Flag as bad",
+            Action::Tag1 => "Tag 1",
+            Action::Tag2 => "Tag 2",
+            Action::Tag3 => "Tag 3",
+            Action::Tag4 => "Tag 4",
+            Action::Tag5 => "Tag 5",
+            Action::Tag6 => "Tag 6",
+            Action::Tag7 => "Tag 7",
+            Action::Tag8 => "Tag 8",
+            Action::Tag9 => "Tag 9",
         }
     }
 
@@ -168,6 +216,28 @@ impl Action {
                 | Action::ZoomIn
                 | Action::ZoomOut
         )
+    }
+
+    /// タグのキーなら、タグの一覧での位置（0 から）。
+    pub fn tag_index(self) -> Option<usize> {
+        const TAGS: [Action; 9] = [
+            Action::Tag1,
+            Action::Tag2,
+            Action::Tag3,
+            Action::Tag4,
+            Action::Tag5,
+            Action::Tag6,
+            Action::Tag7,
+            Action::Tag8,
+            Action::Tag9,
+        ];
+        TAGS.iter().position(|a| *a == self)
+    }
+
+    /// タグ付けモードの間だけ働く操作。普段は ↑ ↓ や数字キーを押しても何も起きないようにして、
+    /// 見ているだけのときにうっかりラベルを付けないため。
+    pub fn needs_tagging_mode(self) -> bool {
+        matches!(self, Action::FlagGood | Action::FlagBad) || self.tag_index().is_some()
     }
 
     /// メニューのレイアウト項目が選ぶマス目。`LayoutCustom` は設定の値を使うのでここにはない。
@@ -235,6 +305,18 @@ impl Action {
             Action::Layout4x4 => vec![KeyCombo::alt(Num6)],
             Action::LayoutCustom => vec![KeyCombo::alt(Num7)],
             Action::TogglePlay => vec![KeyCombo::plain(P)],
+            Action::ToggleTagging => vec![KeyCombo::plain(T)],
+            Action::FlagGood => vec![KeyCombo::plain(ArrowUp)],
+            Action::FlagBad => vec![KeyCombo::plain(ArrowDown)],
+            Action::Tag1 => vec![KeyCombo::plain(Num1)],
+            Action::Tag2 => vec![KeyCombo::plain(Num2)],
+            Action::Tag3 => vec![KeyCombo::plain(Num3)],
+            Action::Tag4 => vec![KeyCombo::plain(Num4)],
+            Action::Tag5 => vec![KeyCombo::plain(Num5)],
+            Action::Tag6 => vec![KeyCombo::plain(Num6)],
+            Action::Tag7 => vec![KeyCombo::plain(Num7)],
+            Action::Tag8 => vec![KeyCombo::plain(Num8)],
+            Action::Tag9 => vec![KeyCombo::plain(Num9)],
         }
     }
 }

@@ -10,6 +10,7 @@ use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
 
 use crate::i18n::tr;
+use crate::labels::{self, Label, LabelStore};
 use crate::settings::{FolderAction, Language, TreeMode};
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 
@@ -29,6 +30,7 @@ pub struct Node {
 /// ツリーを描くときに全項目で共通の情報。
 struct View<'a> {
     registry: &'a Registry,
+    labels: &'a LabelStore,
     selected: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
@@ -161,7 +163,7 @@ impl Node {
         let lang = view.lang;
         let is_selected = view.selected == Some(self.path.as_path());
         if !self.is_dir {
-            let r = ui.selectable_label(is_selected, &self.name);
+            let r = ui.selectable_label(is_selected, self.text(ui, view.labels.get(&self.path)));
             if r.clicked() {
                 out.action = Some(if ui.input(|i| i.modifiers.command) {
                     TreeAction::Add(self.path.clone())
@@ -178,7 +180,10 @@ impl Node {
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
         state.set_open(self.open);
         let (toggle, header, _) = state
-            .show_header(ui, |ui| ui.selectable_label(is_selected, &self.name))
+            .show_header(ui, |ui| {
+                let text = self.text(ui, view.labels.folder(&self.path));
+                ui.selectable_label(is_selected, text)
+            })
             .body(|ui| {
                 let children = self
                     .children
@@ -210,6 +215,16 @@ impl Node {
             out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
         }
         copy_menu(&label, &self.path, lang, &mut out.action);
+    }
+
+    /// 表示する名前。フラグやタグがあれば一緒に出す。
+    fn text(&self, ui: &egui::Ui, label: Label) -> egui::WidgetText {
+        if label.is_empty() {
+            return self.name.as_str().into();
+        }
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let weak = ui.visuals().weak_text_color();
+        labels::labeled_name(&self.name, &label, egui::Color32::PLACEHOLDER, weak, font).into()
     }
 
     /// `path` の項目。読み込み済みの子だけを辿る。
@@ -392,6 +407,7 @@ impl FolderTree {
         &mut self,
         ui: &mut egui::Ui,
         registry: &Registry,
+        labels: &LabelStore,
         selected: Option<&Path>,
         lang: Language,
         how: FolderClicks,
@@ -402,6 +418,7 @@ impl FolderTree {
         }
         let view = View {
             registry,
+            labels,
             selected,
             lang,
             order: self.order,
