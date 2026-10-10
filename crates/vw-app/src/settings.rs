@@ -297,6 +297,27 @@ impl Labels {
     }
 }
 
+/// DICOM（[`vw_dicom`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Dicom {
+    /// 先頭を読んで DICOM か確かめる拡張子の正規表現（[`vw_core::ProbeExtensions`]）。
+    pub probe_extensions: String,
+}
+
+impl Default for Dicom {
+    fn default() -> Self {
+        Self {
+            probe_extensions: vw_core::ProbeExtensions::DEFAULT.into(),
+        }
+    }
+}
+
+impl Dicom {
+    pub fn probe(&self) -> vw_core::ProbeExtensions {
+        vw_core::ProbeExtensions::new(&self.probe_extensions).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -304,6 +325,7 @@ pub struct Settings {
     pub tree: Tree,
     pub behavior: Behavior,
     pub labels: Labels,
+    pub dicom: Dicom,
     pub keys: Keymap,
 }
 
@@ -427,6 +449,16 @@ impl Settings {
                 .unwrap_or_else(|| d.labels.tags.clone()),
             advance: r.get("labels", "advance").unwrap_or(d.labels.advance),
         };
+        let dicom = Dicom {
+            probe_extensions: r
+                .get_valid(
+                    "dicom",
+                    "probe_extensions",
+                    |e: &String| vw_core::ProbeExtensions::new(e).is_ok(),
+                    "not a valid regular expression",
+                )
+                .unwrap_or_else(|| d.dicom.probe_extensions.clone()),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -444,6 +476,7 @@ impl Settings {
                 tree,
                 behavior,
                 labels,
+                dicom,
                 keys,
             },
             problems,
@@ -737,6 +770,7 @@ mod tests {
         s.behavior.auto_reload = false;
         s.labels.tags = vec!["cat".into(), "dog".into()];
         s.labels.advance = false;
+        s.dicom.probe_extensions = "^(|raw)$".into();
         s.viewer.full_image_limit_mb = 8192;
         s.viewer.layout = SlotLayout::grid(1, 2);
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
@@ -950,6 +984,21 @@ mod tests {
     fn duplicate_tag_names_fall_back_to_the_default_list() {
         let (s, problems) = Settings::from_toml("[labels]\ntags = [\"cat\", \"cat\"]\n").unwrap();
         assert!(s.labels.tags.is_empty());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn dicom_probes_files_without_extension_or_with_digits_dcm_dicom_or_ima_by_default() {
+        assert_eq!(
+            Settings::default().dicom.probe_extensions,
+            "^(|[0-9]+|dcm|dicom|ima)$"
+        );
+    }
+
+    #[test]
+    fn invalid_dicom_extension_pattern_falls_back_to_the_default() {
+        let (s, problems) = Settings::from_toml("[dicom]\nprobe_extensions = \"(\"\n").unwrap();
+        assert_eq!(s.dicom, Dicom::default());
         assert_eq!(problems.len(), 1);
     }
 

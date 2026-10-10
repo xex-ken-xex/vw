@@ -98,6 +98,8 @@ struct Fields {
 pub struct VwApp {
     loader: Loader,
     tree: FolderTree,
+    /// レジストリに渡した、DICOM か調べる拡張子の式。変わったときだけフォルダを読み直すため。
+    probe_extensions: String,
     /// 画像フィールドの枠。常に 1 つ以上ある。
     slots: Vec<Slot>,
     /// 操作対象のスロットの添字。メタデータ表示とツリーのクリックはこのスロットに対して働く。
@@ -343,6 +345,7 @@ impl VwApp {
                 .and_then(|f| f.parent().map(Path::to_path_buf))
         });
 
+        registry.set_probe_extensions(settings.settings.dicom.probe());
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 
@@ -355,6 +358,7 @@ impl VwApp {
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
+            probe_extensions: settings.settings.dicom.probe_extensions.clone(),
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
@@ -1991,6 +1995,7 @@ impl VwApp {
     fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings.settings.appearance);
         self.tree.set_order(self.settings.settings.tree.order());
+        self.apply_probe_extensions();
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -1998,6 +2003,20 @@ impl VwApp {
             )),
             Ok(None) => {}
             Err(e) => self.log.error(format!("Settings: {e}")),
+        }
+    }
+
+    /// DICOM か調べる拡張子が変わったら、開いているフォルダを読み直してツリーにすぐ反映する。
+    fn apply_probe_extensions(&mut self) {
+        let dicom = &self.settings.settings.dicom;
+        if dicom.probe_extensions == self.probe_extensions {
+            return;
+        }
+        self.probe_extensions = dicom.probe_extensions.clone();
+        let registry = self.loader.registry().clone();
+        registry.set_probe_extensions(dicom.probe());
+        for dir in self.tree.open_paths() {
+            self.tree.refresh(&dir, &registry);
         }
     }
 
@@ -2012,6 +2031,7 @@ impl VwApp {
                 }
                 theme::apply(ctx, &self.settings.settings.appearance);
                 self.tree.set_order(self.settings.settings.tree.order());
+                self.apply_probe_extensions();
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }

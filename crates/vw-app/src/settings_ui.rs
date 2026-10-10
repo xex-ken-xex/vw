@@ -23,16 +23,18 @@ enum Section {
     Tree,
     Behavior,
     Labels,
+    Dicom,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 6] = [
+    const ALL: [Section; 7] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
         Section::Behavior,
         Section::Labels,
+        Section::Dicom,
         Section::Keys,
     ];
 
@@ -43,6 +45,7 @@ impl Section {
             Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
             Section::Labels => "Flags and tags",
+            Section::Dicom => "Medical images (DICOM)",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -58,7 +61,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 24] = [
+const ITEMS: [Item; 25] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -226,6 +229,13 @@ const ITEMS: [Item; 24] = [
         title: "Next image after labeling",
         description: "Move to the next image after putting a flag or tag on an image in tagging mode.",
         widget: advance_widget,
+    },
+    Item {
+        section: Section::Dicom,
+        key: "dicom.probe_extensions",
+        title: "Extensions to check for DICOM",
+        description: "Regular expression for the extensions (without the dot, empty for no extension, case-insensitive) of files whose first bytes are read to see if they are DICOM. .dcm, .dicom and .dic files are always shown as DICOM. The default checks files with no extension, only digits, dcm, dicom or ima.",
+        widget: probe_extensions_widget,
     },
 ];
 
@@ -517,6 +527,39 @@ fn tags_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     } else {
         if r.lost_focus() && valid && parsed != s.labels.tags {
             s.labels.tags = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+/// 拡張子の正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、
+/// 打っている途中の正しくない式のたびにフォルダを読み直すことになるため。
+fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("dicom.probe_extensions.edit");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.dicom.probe_extensions.clone());
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .font(egui::TextStyle::Monospace)
+            .desired_width(320.0),
+    );
+    let error = vw_core::ProbeExtensions::new(&text).err();
+    if let Some(e) = &error {
+        let first = e.lines().last().unwrap_or_default();
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            format!("{}: {first}", tr(lang, "Not a valid regular expression")),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && error.is_none() && text != s.dicom.probe_extensions {
+            s.dicom.probe_extensions = text;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));
