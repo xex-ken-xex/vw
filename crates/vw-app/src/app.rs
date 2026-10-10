@@ -65,8 +65,10 @@ impl Tool {
     }
 }
 
-/// ツール列の幅。アイコン 1 つ分の固定幅。
-const TOOL_COLUMN_WIDTH: f32 = 34.0;
+/// ツール列のボタン 1 つの大きさ（正方形の一辺）。
+const TOOL_BUTTON: f32 = 26.0;
+/// ツール列の左右の余白。
+const TOOL_PADDING: i8 = 1;
 
 /// 4 つのフィールドそれぞれの表示・非表示（View メニュー）。
 struct Fields {
@@ -347,7 +349,7 @@ impl VwApp {
     fn tool_column(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let big = |s: &str| egui::RichText::new(s).size(17.0);
-        let size = vec2(26.0, 26.0);
+        let size = vec2(TOOL_BUTTON, TOOL_BUTTON);
         ui.vertical_centered(|ui| {
             ui.add_space(4.0);
             for tool in Tool::ALL {
@@ -640,8 +642,14 @@ impl eframe::App for VwApp {
         self.run_hotkeys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
+        // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
+        let tool_frame = egui::Frame::side_top_panel(ui.style())
+            .inner_margin(egui::Margin::symmetric(TOOL_PADDING, 2));
         egui::Panel::left("tools")
-            .exact_size(TOOL_COLUMN_WIDTH)
+            .frame(tool_frame)
+            // 右端の 1px はパネルの区切り線が使うので、その分を足す。
+            .exact_size(TOOL_BUTTON + 2.0 * f32::from(TOOL_PADDING) + 1.0)
             .resizable(false)
             .show(ui, |ui| self.tool_column(ui));
 
