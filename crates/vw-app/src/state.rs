@@ -1,0 +1,436 @@
+//! 終了時の状態（ウインドウの位置と大きさ、フォルダツリーの開閉）の保存と、起動時の復元。
+//!
+//! 設定（settings.toml）とは別のファイル（state.toml）にする。設定は利用者が書くもの、
+//! 状態はアプリが毎回書き換えるもので、混ぜると利用者が編集中の設定ファイルを
+//! 終了のたびに書き換えてしまうため。
+//!
+//! 位置と大きさは物理ピクセルで持つ。論理ピクセル（DPI で割った値）で持つと、
+//! 拡大率の違うモニタをまたいだときに、どのモニタの拡大率で割った値か曖昧になるため。
+
+use std::path::{Path, PathBuf};
+
+use crate::toml_reader::Reader;
+
+/// モニタ 1 台の範囲（物理ピクセル）と拡大率（%）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Monitor {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub scale_percent: i32,
+}
+
+/// 最小化・最大化していないときのウインドウ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowState {
+    /// 外枠の左上（物理ピクセル）。Wayland のように位置を取得できない環境では `None`。
+    pub position: Option<[i32; 2]>,
+    /// 内側（描画領域）の大きさ（物理ピクセル）。
+    pub size: [u32; 2],
+    /// 保存時にウインドウがあったモニタの拡大率。物理ピクセルの大きさを論理に戻すのに使う。
+    pub scale: f32,
+    pub maximized: bool,
+    /// 保存時のモニタ構成。起動時と違えば位置を復元しない。
+    pub monitors: Vec<Monitor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AppState {
+    pub window: Option<WindowState>,
+    /// 開いていたフォルダ。
+    pub open_folders: Vec<PathBuf>,
+}
+
+/// 起動時にウインドウをどう置くか。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Placement {
+    /// OS に任せる。
+    Default,
+    Restore(WindowState),
+}
+
+/// 保存されたウインドウを今のモニタ構成で復元してよいかを決める。
+/// モニタの数・配置・解像度・拡大率のどれかが変わっていれば OS に任せる。
+/// 前回の位置が今は画面外になっていることがあり、それを確かめるより確実なため。
+pub fn placement(saved: Option<&WindowState>, current: &[Monitor]) -> Placement {
+    let Some(saved) = saved else {
+        return Placement::Default;
+    };
+    let mut a = saved.monitors.clone();
+    let mut b = current.to_vec();
+    a.sort();
+    b.sort();
+    if a != b {
+        return Placement::Default;
+    }
+    Placement::Restore(saved.clone())
+}
+
+/// 小さすぎるウインドウは操作できないので、これ未満は保存も復元もしない。
+const MIN_SIZE: u32 = 200;
+
+impl AppState {
+    /// 読めない部分は既定（ウインドウは OS 任せ、ツリーは全部閉じる）にして、その説明を返す。
+    /// ウインドウの項目は組で意味を持つので、1 つでも読めなければウインドウ全体を既定にする。
+    pub fn from_toml(text: &str) -> (Self, Vec<String>) {
+        let table: toml::Table = match text.parse() {
+            Ok(t) => t,
+            Err(e) => return (Self::default(), vec![format!("{e} (using defaults)")]),
+        };
+        let mut r = Reader::new(&table);
+        let window = read_window(&mut r);
+        let open_folders = r.get::<Vec<PathBuf>>("tree", "open").unwrap_or_default();
+        (
+            Self {
+                window,
+                open_folders,
+            },
+            r.problems,
+        )
+    }
+
+    pub fn to_toml(&self) -> String {
+        let mut root = toml::Table::new();
+        if let Some(w) = &self.window {
+            let mut t = toml::Table::new();
+            if let Some([x, y]) = w.position {
+                t.insert("position".into(), toml::Value::try_from([x, y]).unwrap());
+            }
+            t.insert("size".into(), toml::Value::try_from(w.size).unwrap());
+            t.insert("scale".into(), toml::Value::try_from(w.scale).unwrap());
+            t.insert("maximized".into(), w.maximized.into());
+            let monitors: Vec<[i32; 5]> = w
+                .monitors
+                .iter()
+                .map(|m| [m.x, m.y, m.width, m.height, m.scale_percent])
+                .collect();
+            t.insert("monitors".into(), toml::Value::try_from(monitors).unwrap());
+            root.insert("window".into(), t.into());
+        }
+        let mut tree = toml::Table::new();
+        let open: Vec<String> = self
+            .open_folders
+            .iter()
+            .filter_map(|p| p.to_str().map(str::to_owned))
+            .collect();
+        tree.insert("open".into(), toml::Value::try_from(open).unwrap());
+        root.insert("tree".into(), tree.into());
+        toml::to_string(&root).expect("state is always representable in TOML")
+    }
+
+    /// `path` から読む。ファイルがなければ既定（初回起動）。
+    pub fn load(path: &Path) -> (Self, Vec<String>) {
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                let (state, problems) = Self::from_toml(&text);
+                let problems = problems
+                    .into_iter()
+                    .map(|p| format!("{}: {p}", path.display()))
+                    .collect();
+                (state, problems)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Self::default(), Vec::new()),
+            Err(e) => (Self::default(), vec![format!("{}: {e}", path.display())]),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, self.to_toml())
+    }
+}
+
+fn read_window(r: &mut Reader<'_>) -> Option<WindowState> {
+    r.section("window")?;
+    let before = r.problems.len();
+    let position = r.get::<[i32; 2]>("window", "position");
+    let size = r.get_valid::<[u32; 2]>(
+        "window",
+        "size",
+        |[w, h]| *w >= MIN_SIZE && *h >= MIN_SIZE,
+        "must be at least 200 x 200",
+    );
+    let scale = r.get_valid::<f32>(
+        "window",
+        "scale",
+        |s| s.is_finite() && *s > 0.0,
+        "must be positive",
+    );
+    let maximized = r.get::<bool>("window", "maximized");
+    let monitors = r.get::<Vec<[i32; 5]>>("window", "monitors");
+    if r.problems.len() > before {
+        r.problems
+            .push("window: position and size are not restored".into());
+        return None;
+    }
+    Some(WindowState {
+        position,
+        size: size?,
+        scale: scale?,
+        maximized: maximized.unwrap_or(false),
+        monitors: monitors?
+            .into_iter()
+            .map(|[x, y, width, height, scale_percent]| Monitor {
+                x,
+                y,
+                width,
+                height,
+                scale_percent,
+            })
+            .collect(),
+    })
+}
+
+/// 状態ファイルの場所。設定ファイルと同じフォルダ。
+pub fn state_path(settings_path: &Path) -> PathBuf {
+    settings_path.with_file_name("state.toml")
+}
+
+/// 今のモニタ構成。取得できなければ空（Wayland だけの環境など）。
+/// 前回も空なら構成は同じとみなし、大きさだけを復元する（位置は Wayland では決められない）。
+///
+/// winit もモニタの一覧を持っているが、eframe 経由では取り出せないので OS に直接問い合わせる。
+pub fn current_monitors() -> Vec<Monitor> {
+    let mut list = platform::monitors();
+    list.sort();
+    list
+}
+
+#[cfg(windows)]
+mod platform {
+    use super::Monitor;
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+    };
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+
+    unsafe extern "system" fn collect(
+        monitor: HMONITOR,
+        _dc: HDC,
+        _clip: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        // SAFETY: data は monitors() が渡した Vec へのポインタで、列挙の間だけ使う。
+        let out = unsafe { &mut *(data as *mut Vec<Monitor>) };
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+            let r = info.rcMonitor;
+            let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+            unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+            out.push(Monitor {
+                x: r.left,
+                y: r.top,
+                width: r.right - r.left,
+                height: r.bottom - r.top,
+                scale_percent: (dpi_x * 100 / 96) as i32,
+            });
+        }
+        1
+    }
+
+    /// winit がプロセスを DPI 対応にした後（ウインドウ作成後）に呼ぶこと。
+    /// それより前だと Windows が拡大率で割った座標を返し、保存時の値と比べられない。
+    pub fn monitors() -> Vec<Monitor> {
+        let mut out: Vec<Monitor> = Vec::new();
+        unsafe {
+            EnumDisplayMonitors(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                Some(collect),
+                &mut out as *mut Vec<Monitor> as LPARAM,
+            );
+        }
+        out
+    }
+}
+
+#[cfg(not(windows))]
+mod platform {
+    use super::Monitor;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::randr::ConnectionExt;
+
+    /// X11 では拡大率がモニタごとでなく画面全体で 1 つなので、100 として持つ。
+    pub fn monitors() -> Vec<Monitor> {
+        let Ok((conn, screen)) = x11rb::connect(None) else {
+            return Vec::new();
+        };
+        let root = conn.setup().roots[screen].root;
+        let Ok(reply) = conn
+            .randr_get_monitors(root, true)
+            .map_err(drop)
+            .and_then(|c| c.reply().map_err(drop))
+        else {
+            return Vec::new();
+        };
+        reply
+            .monitors
+            .iter()
+            .map(|m| Monitor {
+                x: m.x.into(),
+                y: m.y.into(),
+                width: m.width.into(),
+                height: m.height.into(),
+                scale_percent: 100,
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::TempDir;
+
+    fn monitor(x: i32, width: i32) -> Monitor {
+        Monitor {
+            x,
+            y: 0,
+            width,
+            height: 1080,
+            scale_percent: 100,
+        }
+    }
+
+    fn window(monitors: Vec<Monitor>) -> WindowState {
+        WindowState {
+            position: Some([2000, 100]),
+            size: [1280, 800],
+            scale: 1.5,
+            maximized: true,
+            monitors,
+        }
+    }
+
+    #[test]
+    fn first_launch_uses_os_placement() {
+        assert_eq!(placement(None, &[monitor(0, 1920)]), Placement::Default);
+    }
+
+    #[test]
+    fn same_monitors_restore_the_window() {
+        let saved = window(vec![monitor(0, 1920), monitor(1920, 2560)]);
+        // 列挙の順は OS 次第なので、順番が違っても同じ構成とみなす。
+        let now = [monitor(1920, 2560), monitor(0, 1920)];
+        assert_eq!(
+            placement(Some(&saved), &now),
+            Placement::Restore(saved.clone())
+        );
+    }
+
+    #[test]
+    fn removed_monitor_falls_back_to_os_placement() {
+        let saved = window(vec![monitor(0, 1920), monitor(1920, 2560)]);
+        assert_eq!(
+            placement(Some(&saved), &[monitor(0, 1920)]),
+            Placement::Default
+        );
+    }
+
+    #[test]
+    fn changed_resolution_or_scale_falls_back_to_os_placement() {
+        let saved = window(vec![monitor(0, 1920)]);
+        assert_eq!(
+            placement(Some(&saved), &[monitor(0, 2560)]),
+            Placement::Default
+        );
+        let mut scaled = monitor(0, 1920);
+        scaled.scale_percent = 150;
+        assert_eq!(placement(Some(&saved), &[scaled]), Placement::Default);
+    }
+
+    #[test]
+    fn state_round_trips_through_toml() {
+        let state = AppState {
+            window: Some(window(vec![monitor(0, 1920), monitor(1920, 2560)])),
+            open_folders: vec![PathBuf::from("/home/ken"), PathBuf::from("/home/ken/写真")],
+        };
+        assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
+    }
+
+    #[test]
+    fn window_without_position_round_trips() {
+        let mut w = window(vec![]);
+        w.position = None;
+        let state = AppState {
+            window: Some(w),
+            open_folders: vec![],
+        };
+        assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
+    }
+
+    #[test]
+    fn empty_file_means_defaults() {
+        assert_eq!(AppState::from_toml(""), (AppState::default(), vec![]));
+    }
+
+    #[test]
+    fn broken_window_entry_drops_the_whole_window_but_keeps_the_tree() {
+        let text = "[window]\nsize = [\"wide\", 800]\nscale = 1.0\nmonitors = []\n[tree]\nopen = [\"/a\"]\n";
+        let (state, problems) = AppState::from_toml(text);
+        assert_eq!(state.window, None);
+        assert_eq!(state.open_folders, [PathBuf::from("/a")]);
+        assert!(!problems.is_empty());
+    }
+
+    #[test]
+    fn tiny_window_is_not_restored() {
+        let text = "[window]\nsize = [10, 10]\nscale = 1.0\nmonitors = []\n";
+        let (state, problems) = AppState::from_toml(text);
+        assert_eq!(state.window, None);
+        assert!(!problems.is_empty());
+    }
+
+    #[test]
+    fn incomplete_window_entry_is_not_restored() {
+        let (state, _) = AppState::from_toml("[window]\nsize = [800, 600]\n");
+        assert_eq!(state.window, None);
+    }
+
+    #[test]
+    fn broken_tree_entry_starts_with_everything_closed() {
+        let (state, problems) = AppState::from_toml("[tree]\nopen = \"/a\"\n");
+        assert!(state.open_folders.is_empty());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn unparsable_file_means_defaults_with_a_note() {
+        let (state, problems) = AppState::from_toml("[window");
+        assert_eq!(state, AppState::default());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn saved_state_is_loaded_next_time() {
+        let dir = TempDir::new();
+        let path = dir.path().join("vw").join("state.toml");
+        let state = AppState {
+            window: None,
+            open_folders: vec![dir.path().to_path_buf()],
+        };
+        state.save(&path).unwrap();
+        assert_eq!(AppState::load(&path), (state, vec![]));
+    }
+
+    #[test]
+    fn missing_file_is_a_silent_first_launch() {
+        let dir = TempDir::new();
+        assert_eq!(
+            AppState::load(&dir.path().join("state.toml")),
+            (AppState::default(), vec![])
+        );
+    }
+
+    #[test]
+    fn state_file_sits_next_to_settings() {
+        let p = state_path(Path::new("/cfg/vw/settings.toml"));
+        assert_eq!(p, Path::new("/cfg/vw/state.toml"));
+    }
+}

@@ -8,6 +8,15 @@ edition.workspace = true
 vw-core.workspace = true
 vw-png.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+egui-phosphor = "0.14"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 
 [dev-dependencies]
 png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi"] }
+
+[target.'cfg(not(windows))'.dependencies]
+x11rb = { version = "0.13", features = ["randr"] }

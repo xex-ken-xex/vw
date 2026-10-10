@@ -1,5 +1,5 @@
-//! アプリ本体。4 つのフィールド（フォルダツリー・メタデータ・画像・ログ）の配置と、
-//! スロットの管理、読み込み結果の受け取りを行う。
+//! アプリ本体。ツール列と 4 つのフィールド（フォルダツリー・メタデータ・画像・ログ）の配置、
+//! 設定画面への切り替え、ホットキーの実行、スロットの管理、読み込み結果の受け取りを行う。
 //!
 //! egui は即時モード GUI で、毎フレーム `ui()` が呼ばれて画面全体を組み立て直す。
 //! 状態はすべて [`VwApp`] が持ち、ウィジェット側には持たせない。
@@ -7,13 +7,69 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, pos2, vec2, Color32, Key, Rect, TextureFilter, TextureOptions};
+use eframe::egui::{self, pos2, vec2, Color32, Rect, TextureFilter, TextureOptions};
+use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
+use crate::i18n::tr;
+use crate::keymap::{Action, KeyCombo};
 use crate::loader::{LoadResult, Loader};
 use crate::log::{Level, Log};
+use crate::settings::{parse_hex_color, Language, SettingsStore};
+use crate::settings_ui::SettingsUi;
+use crate::state::{self, AppState, Monitor, Placement, WindowState};
+use crate::theme;
 use crate::tree::{self, FolderTree, TreeAction};
 use crate::viewer::{Shown, Slot};
+
+/// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    Browse,
+    Pan,
+    Zoom,
+    PixelProbe,
+    Measure,
+}
+
+impl Tool {
+    const ALL: [Tool; 5] = [
+        Tool::Browse,
+        Tool::Pan,
+        Tool::Zoom,
+        Tool::PixelProbe,
+        Tool::Measure,
+    ];
+
+    fn icon(self) -> &'static str {
+        match self {
+            Tool::Browse => icon::CURSOR,
+            Tool::Pan => icon::HAND_GRABBING,
+            Tool::Zoom => icon::MAGNIFYING_GLASS_PLUS,
+            Tool::PixelProbe => icon::EYEDROPPER,
+            Tool::Measure => icon::RULER,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Tool::Browse => "Browse",
+            Tool::Pan => "Pan",
+            Tool::Zoom => "Zoom",
+            Tool::PixelProbe => "Pixel probe",
+            Tool::Measure => "Measure",
+        }
+    }
+
+    fn available(self) -> bool {
+        self == Tool::Browse
+    }
+}
+
+/// ツール列のボタン 1 つの大きさ（正方形の一辺）。
+const TOOL_BUTTON: f32 = 26.0;
+/// ツール列の左右の余白。
+const TOOL_PADDING: i8 = 1;
 
 /// 4 つのフィールドそれぞれの表示・非表示（View メニュー）。
 struct Fields {
@@ -33,11 +89,35 @@ pub struct VwApp {
     /// スロット番号と読み込み要求番号の両方に使う連番。
     next_id: u64,
     fields: Fields,
+    tool: Tool,
+    settings: SettingsStore,
+    settings_ui: SettingsUi,
+    /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
+    show_settings: bool,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
     first_frame: bool,
+    /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
+    state_path: Option<PathBuf>,
+    /// 起動時に戻すウインドウ。戻し終えたら `None`。
+    restoring: Option<Restore>,
+    /// 最小化・最大化していないときの最新の位置と大きさ。終了時に保存する。
+    window: Option<WindowState>,
+    /// メタデータ欄に出しているスロットの番号。
+    metadata_from: Option<u64>,
 }
+
+/// 起動時のウインドウの復元の進み具合。
+struct Restore {
+    saved: WindowState,
+    /// 位置を送ってから経過したフレーム数。
+    frames: u32,
+}
+
+/// 位置を送った後、移動先のモニタの拡大率が届くのを待つ最大フレーム数。
+/// 届かない環境（拡大率が変わらない移動、X11 など）でも大きさの復元を止めないための上限。
+const RESTORE_WAIT_FRAMES: u32 = 10;
 
 /// `n` 枚のスロットを並べるグリッドの (列数, 行数)。正方形に近く、横長を優先する。
 pub fn grid_dims(n: usize) -> (usize, usize) {
@@ -61,6 +141,26 @@ pub fn active_after_close(active: usize, removed: usize, remaining: usize) -> us
     active.min(remaining.saturating_sub(1))
 }
 
+/// メタデータ欄の出し先を決めるのに要る、スロットの様子。
+pub struct SlotView {
+    pub id: u64,
+    pub shown: bool,
+    pub loading: bool,
+}
+
+/// メタデータ欄に出すスロットの添字。`previous` は直前に出していたスロットの番号。
+/// アクティブなスロットに画像があればそれ、読み込み中なら直前のもの、どちらでもなければなし。
+pub fn metadata_source(slots: &[SlotView], active: usize, previous: Option<u64>) -> Option<usize> {
+    let a = &slots[active];
+    if a.shown {
+        return Some(active);
+    }
+    if !a.loading {
+        return None;
+    }
+    slots.iter().position(|s| Some(s.id) == previous && s.shown)
+}
+
 /// プラグインのメタデータをグループごとにまとめる。グループの順は最初に現れた順。
 pub fn group_metadata(entries: &[(String, String, String)]) -> Vec<(&str, Vec<(&str, &str)>)> {
     let mut groups: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
@@ -80,8 +180,27 @@ impl VwApp {
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
+        crate::fonts::install_icons(&cc.egui_ctx);
         crate::fonts::load_cjk_in_background(&cc.egui_ctx);
         let mut log = Log::new(started);
+        let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
+        for n in notes {
+            log.error(format!("Settings: {n}"));
+        }
+        let state_path = settings.path.as_deref().map(state::state_path);
+        let (saved, notes) = match &state_path {
+            Some(p) => AppState::load(p),
+            None => (AppState::default(), Vec::new()),
+        };
+        for n in notes {
+            log.error(format!("State: {n}"));
+        }
+        // ウインドウ作成後の今なら、Windows でも拡大率を反映した座標で取れる。
+        let restoring = match state::placement(saved.window.as_ref(), &state::current_monitors()) {
+            Placement::Default => None,
+            Placement::Restore(saved) => Some(Restore { saved, frames: 0 }),
+        };
+        theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
             registry
@@ -102,9 +221,12 @@ impl VwApp {
                 .and_then(|f| f.parent().map(Path::to_path_buf))
         });
 
+        let mut tree = FolderTree::new(root);
+        tree.restore_open(&saved.open_folders, &registry);
+
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
-            tree: FolderTree::new(root),
+            tree,
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
@@ -114,9 +236,17 @@ impl VwApp {
                 images: true,
                 log: true,
             },
+            tool: Tool::Browse,
+            settings,
+            settings_ui: SettingsUi::default(),
+            show_settings: false,
             log,
             started,
             first_frame: true,
+            state_path,
+            restoring,
+            window: None,
+            metadata_from: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -132,6 +262,12 @@ impl VwApp {
         self.slots.push(Slot::new(self.next_id));
         self.next_id += 1;
         self.active = self.slots.len() - 1;
+    }
+
+    /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
+    fn close_all_slots(&mut self) {
+        self.slots.clear();
+        self.add_slot();
     }
 
     /// スロットを閉じる。最後の 1 つを閉じたときは空のスロットを残す。
@@ -173,6 +309,238 @@ impl VwApp {
         if next != pos {
             self.open_in_active(files[next].clone());
         }
+    }
+
+    fn lang(&self) -> Language {
+        self.settings.settings.appearance.language
+    }
+
+    /// 画像の背景色。設定が空か読めない形式ならテーマの既定色。
+    fn canvas_color(&self, ctx: &egui::Context) -> Color32 {
+        parse_hex_color(&self.settings.settings.viewer.background)
+            .unwrap_or_else(|| theme::canvas_color(ctx.theme()))
+    }
+
+    /// 操作の最初のキーをツールチップ用に「名前 (キー)」の形にする。
+    fn with_key(&self, title: &str, action: Action) -> String {
+        match self.shortcut(action) {
+            Some(k) => format!("{title} ({k})"),
+            None => title.to_owned(),
+        }
+    }
+
+    fn shortcut(&self, action: Action) -> Option<String> {
+        self.settings
+            .settings
+            .keys
+            .keys(action)
+            .first()
+            .map(KeyCombo::to_string)
+    }
+
+    fn toggle_settings(&mut self) {
+        self.show_settings = !self.show_settings;
+        if self.show_settings {
+            self.settings_ui.opened();
+        }
+    }
+
+    fn run(&mut self, ctx: &egui::Context, action: Action) {
+        match action {
+            Action::PreviousImage => self.step_active(-1),
+            Action::NextImage => self.step_active(1),
+            Action::NewSlot => self.add_slot(),
+            Action::CloseSlot => self.close_slot(self.active),
+            Action::CloseAllSlots => self.close_all_slots(),
+            Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::ToggleFolderTree => self.fields.tree ^= true,
+            Action::ToggleMetadata => self.fields.metadata ^= true,
+            Action::ToggleImages => self.fields.images ^= true,
+            Action::ToggleLog => self.fields.log ^= true,
+            Action::ToggleSettings => self.toggle_settings(),
+        }
+    }
+
+    /// このフレームのキー入力に割り当てられた操作を実行する。
+    fn run_hotkeys(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|i| i.events.clone());
+        let keys = &self.settings.settings.keys;
+        // テキスト入力中は、文字入力と区別できる Ctrl / Alt 付きのキーだけを実行する。
+        // 全部止めると、設定画面の検索欄にいるときに Ctrl+, で設定を閉じられない。
+        let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() {
+            events
+                .into_iter()
+                .filter(|e| matches!(e, egui::Event::Key { modifiers, .. } if modifiers.ctrl || modifiers.alt))
+                .collect()
+        } else {
+            events
+        };
+        for action in keys.actions_in(&events) {
+            // 設定画面の間は画像やパネルの操作をしない。見えていない画面が変わるのを避けるため。
+            if self.show_settings && action != Action::ToggleSettings {
+                continue;
+            }
+            self.run(ctx, action);
+        }
+    }
+
+    /// 設定画面で値が変わったときに、反映して保存する。
+    fn settings_changed(&mut self, ctx: &egui::Context) {
+        theme::apply(ctx, &self.settings.settings.appearance);
+        match self.settings.save() {
+            Ok(Some(backup)) => self.log.info(format!(
+                "Settings: the previous file had errors and was kept as {}",
+                backup.display()
+            )),
+            Ok(None) => {}
+            Err(e) => self.log.error(format!("Settings: {e}")),
+        }
+    }
+
+    /// 設定ファイルが外部のエディタで書き換えられていたら読み直して反映する。
+    fn reload_settings(&mut self, ctx: &egui::Context) {
+        match self.settings.reload_if_changed() {
+            None => {}
+            Some(Ok(problems)) => {
+                self.log.info("Settings reloaded from file");
+                for p in problems {
+                    self.log.error(format!("Settings: {p}"));
+                }
+                theme::apply(ctx, &self.settings.settings.appearance);
+            }
+            Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
+        }
+    }
+
+    /// 前回のウインドウの位置と大きさに戻す。
+    ///
+    /// 位置を送った後、移動先のモニタの拡大率がウインドウに反映されるのを待ってから大きさを送る。
+    /// 同じフレームで送ると、移動前のモニタの拡大率で大きさが換算され、拡大率の違うモニタに
+    /// 戻すときに大きさがずれるため。
+    fn restore_window(&mut self, ctx: &egui::Context) {
+        let Some(r) = &mut self.restoring else {
+            return;
+        };
+        let native = ctx.input(|i| i.viewport().native_pixels_per_point);
+        let zoom = ctx.zoom_factor();
+        if r.frames == 0 {
+            if let Some([x, y]) = r.saved.position {
+                let ppp = zoom * native.unwrap_or(1.0);
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
+                    x as f32 / ppp,
+                    y as f32 / ppp,
+                )));
+            }
+        }
+        r.frames += 1;
+        let arrived = native.is_some_and(|n| (n - r.saved.scale).abs() < 0.01);
+        if !arrived && r.frames < RESTORE_WAIT_FRAMES {
+            ctx.request_repaint();
+            return;
+        }
+        let ppp = zoom * native.unwrap_or(r.saved.scale);
+        let [w, h] = r.saved.size;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(
+            w as f32 / ppp,
+            h as f32 / ppp,
+        )));
+        if r.saved.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        self.window = Some(r.saved.clone());
+        self.restoring = None;
+    }
+
+    /// 最小化・最大化していないときのウインドウの位置と大きさを覚えておく。
+    /// 最大化中は最大化していることだけを覚え、戻したときの大きさは最大化前のものを残す。
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if self.restoring.is_some() {
+            return;
+        }
+        let (info, content) = ctx.input(|i| (i.viewport().clone(), i.content_rect()));
+        if info.minimized == Some(true) {
+            return;
+        }
+        let Some(native) = info.native_pixels_per_point else {
+            return;
+        };
+        if info.maximized == Some(true) {
+            if let Some(w) = &mut self.window {
+                w.maximized = true;
+            }
+            return;
+        }
+        let ppp = native * ctx.zoom_factor();
+        let px = |v: f32| (v * ppp).round() as i32;
+        // Wayland では位置が取れず内側の範囲も届かないので、描画領域の大きさで代える。
+        let inner = info.inner_rect.unwrap_or(content);
+        self.window = Some(WindowState {
+            position: info.outer_rect.map(|r| [px(r.min.x), px(r.min.y)]),
+            size: [px(inner.width()) as u32, px(inner.height()) as u32],
+            scale: native,
+            maximized: false,
+            monitors: Vec::new(),
+        });
+    }
+
+    /// 終了時の状態を保存する。モニタ構成は起動中に変わることがあるので、ここで取り直す。
+    fn save_state(&mut self) {
+        let Some(path) = &self.state_path else {
+            return;
+        };
+        let monitors: Vec<Monitor> = state::current_monitors();
+        let window = self.window.clone().map(|w| WindowState { monitors, ..w });
+        let state = AppState {
+            window,
+            open_folders: self.tree.open_paths(),
+        };
+        // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
+        if let Err(e) = state.save(path) {
+            eprintln!("vw: cannot save {}: {e}", path.display());
+        }
+    }
+
+    /// 左端の、アイコンが縦に並ぶ固定幅の列。
+    fn tool_column(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let big = |s: &str| egui::RichText::new(s).size(17.0);
+        let size = vec2(TOOL_BUTTON, TOOL_BUTTON);
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            for tool in Tool::ALL {
+                let button =
+                    egui::Button::selectable(self.tool == tool, big(tool.icon())).min_size(size);
+                let r = ui
+                    .add_enabled(tool.available(), button)
+                    .on_hover_text(tr(lang, tool.title()))
+                    .on_disabled_hover_text(format!(
+                        "{}\n{}",
+                        tr(lang, tool.title()),
+                        tr(lang, "Not available yet")
+                    ));
+                if r.clicked() {
+                    self.tool = tool;
+                }
+            }
+            ui.separator();
+            let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);
+            if ui
+                .add(egui::Button::new(big(icon::PLUS_SQUARE)).min_size(size))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                self.add_slot();
+            }
+        });
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+            ui.add_space(4.0);
+            let tip = self.with_key(tr(lang, "Settings"), Action::ToggleSettings);
+            let button =
+                egui::Button::selectable(self.show_settings, big(icon::GEAR_SIX)).min_size(size);
+            if ui.add(button).on_hover_text(tip).clicked() {
+                self.toggle_settings();
+            }
+        });
     }
 
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
@@ -229,6 +597,7 @@ impl VwApp {
                         ));
                     }
                     s.shown = Some(Shown {
+                        path: path.clone(),
                         texture,
                         info: loaded.info,
                     });
@@ -245,52 +614,103 @@ impl VwApp {
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let ctx = ui.ctx().clone();
+        let mut chosen = None;
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New slot").clicked() {
-                    self.add_slot();
-                }
-                if ui.button("Close all slots").clicked() {
-                    self.slots.clear();
-                    self.add_slot();
+            ui.menu_button(tr(lang, "File"), |ui| {
+                for action in [Action::NewSlot, Action::CloseSlot, Action::CloseAllSlots] {
+                    if self.menu_item(ui, action, None) {
+                        chosen = Some(action);
+                    }
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                if self.menu_item(ui, Action::Quit, None) {
+                    chosen = Some(Action::Quit);
                 }
             });
-            ui.menu_button("View", |ui| {
-                ui.checkbox(&mut self.fields.tree, "Folder tree");
-                ui.checkbox(&mut self.fields.metadata, "Metadata");
-                ui.checkbox(&mut self.fields.images, "Images");
-                ui.checkbox(&mut self.fields.log, "Log");
+            ui.menu_button(tr(lang, "View"), |ui| {
+                let toggles = [
+                    (Action::ToggleFolderTree, self.fields.tree),
+                    (Action::ToggleMetadata, self.fields.metadata),
+                    (Action::ToggleImages, self.fields.images),
+                    (Action::ToggleLog, self.fields.log),
+                ];
+                for (action, shown) in toggles {
+                    if self.menu_item(ui, action, Some(shown)) {
+                        chosen = Some(action);
+                    }
+                }
+                ui.separator();
+                if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
+                    chosen = Some(Action::ToggleSettings);
+                }
             });
         });
+        if let Some(action) = chosen {
+            self.run(&ctx, action);
+        }
     }
 
-    /// アクティブなスロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
-    fn metadata_ui(&self, ui: &mut egui::Ui) {
-        let slot = &self.slots[self.active];
-        let Some(shown) = &slot.shown else {
-            ui.weak("No image");
+    /// メニューの 1 項目。右側に操作の最初のキーを出す。`checked` があれば左にチェック欄を付ける。
+    ///
+    /// 表示切り替えに egui のチェックボックスを使わないのは、チェックボックスには
+    /// ショートカットの表示欄がなく、他の項目とキーの列がそろわないため。
+    fn menu_item(&self, ui: &mut egui::Ui, action: Action, checked: Option<bool>) -> bool {
+        let title = tr(self.lang(), menu_title(action));
+        let text = match checked {
+            Some(true) => format!("{} {title}", icon::CHECK_SQUARE),
+            Some(false) => format!("{} {title}", icon::SQUARE),
+            None => title.to_owned(),
+        };
+        let button =
+            egui::Button::new(text).shortcut_text(self.shortcut(action).unwrap_or_default());
+        ui.add(button).clicked()
+    }
+
+    /// メタデータ欄に出すスロット。アクティブなスロットが読み込み中でまだ画像がないときは、
+    /// 直前に出していたスロットのまま変えない。
+    ///
+    /// 読み込み中に「画像なし」を出すと、スロットを足して画像を開くたびに表が消えては現れ、
+    /// フォルダの画像をまとめて開くときに点滅して見えるため。
+    fn metadata_slot(&mut self) -> Option<usize> {
+        let slots: Vec<SlotView> = self
+            .slots
+            .iter()
+            .map(|s| SlotView {
+                id: s.id,
+                shown: s.shown.is_some(),
+                loading: s.loading,
+            })
+            .collect();
+        let index = metadata_source(&slots, self.active, self.metadata_from);
+        self.metadata_from = index.map(|i| slots[i].id);
+        index
+    }
+
+    /// スロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
+    fn metadata_ui(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let Some(index) = self.metadata_slot() else {
+            ui.weak(tr(lang, "No image"));
+            return;
+        };
+        let Some(shown) = &self.slots[index].shown else {
             return;
         };
         let info = &shown.info;
         let img = &info.image;
         let file_rows: Vec<(String, String)> = vec![
+            (tr(lang, "Path").into(), shown.path.display().to_string()),
+            (tr(lang, "Size").into(), format!("{} bytes", info.file_size)),
+            (tr(lang, "Plugin").into(), info.plugin.clone()),
             (
-                "Path".into(),
-                slot.path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
+                tr(lang, "Pixels").into(),
+                format!("{} x {}", img.width, img.height),
             ),
-            ("Size".into(), format!("{} bytes", info.file_size)),
-            ("Plugin".into(), info.plugin.clone()),
-            ("Pixels".into(), format!("{} x {}", img.width, img.height)),
-            ("Color".into(), color_name(img.color).into()),
+            (tr(lang, "Color").into(), color_name(img.color).into()),
             (
-                "Sample".into(),
+                tr(lang, "Sample").into(),
                 format!(
                     "{} bit ({} significant)",
                     img.data.bits_per_sample(),
@@ -298,12 +718,12 @@ impl VwApp {
                 ),
             ),
             (
-                "Texture".into(),
+                tr(lang, "Texture").into(),
                 format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
             ),
         ];
         let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![(
-            "File",
+            tr(lang, "File"),
             file_rows
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -363,6 +783,8 @@ impl VwApp {
         let (cols, rows) = grid_dims(n);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
+        let background = self.canvas_color(ui.ctx());
+        let lang = self.lang();
         for i in 0..n {
             let (c, r) = (i % cols, i / cols);
             let rect = Rect::from_min_size(
@@ -372,7 +794,7 @@ impl VwApp {
                 ),
                 cell,
             );
-            let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active);
+            let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active, background, lang);
             if resp.clicked {
                 self.active = i;
             }
@@ -389,8 +811,13 @@ impl VwApp {
 }
 
 impl eframe::App for VwApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_state();
+    }
+
     /// 毎フレーム呼ばれる。パネルは外側から順に追加する必要があるので、
-    /// メニュー → ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
+    /// メニュー → ツール列（左端）→ ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
+    /// 設定画面を開いているときは、ツール列より内側をすべて設定画面にする。
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.first_frame {
@@ -400,33 +827,61 @@ impl eframe::App for VwApp {
                 ms(self.started.elapsed())
             ));
         }
+        self.restore_window(&ctx);
+        self.track_window(&ctx);
         self.receive(&ctx);
+        self.reload_settings(&ctx);
 
-        // テキスト入力中などに矢印キーを奪わないよう、egui がキーボードを使っていないときだけ処理する。
-        if !ctx.egui_wants_keyboard_input() {
-            let (prev, next) = ctx.input(|i| {
-                (
-                    i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::PageUp),
-                    i.key_pressed(Key::ArrowRight)
-                        || i.key_pressed(Key::PageDown)
-                        || i.key_pressed(Key::Space),
-                )
-            });
-            if prev {
-                self.step_active(-1);
-            } else if next {
-                self.step_active(1);
-            }
+        // キー入力待ちのときは、押されたキーを割り当てに使い切る（ホットキーとして実行しない）。
+        if self
+            .settings_ui
+            .capture_keys(&ctx, &mut self.settings.settings.keys)
+        {
+            self.settings_changed(&ctx);
         }
+        self.run_hotkeys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
+        // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
+        let tool_frame = egui::Frame::side_top_panel(ui.style())
+            .inner_margin(egui::Margin::symmetric(TOOL_PADDING, 2));
+        egui::Panel::left("tools")
+            .frame(tool_frame)
+            // 右端の 1px はパネルの区切り線が使うので、その分を足す。
+            .exact_size(TOOL_BUTTON + 2.0 * f32::from(TOOL_PADDING) + 1.0)
+            .resizable(false)
+            .show(ui, |ui| self.tool_column(ui));
 
+        if self.show_settings {
+            let path = self.settings.path.as_ref().map(|p| p.display().to_string());
+            let exists = self.settings.path.as_ref().is_some_and(|p| p.exists());
+            let r = self
+                .settings_ui
+                .ui(ui, &mut self.settings.settings, path.as_deref(), exists);
+            if r.changed {
+                self.settings_changed(&ctx);
+            }
+            if r.open_file {
+                if let Err(e) = self.settings.open_in_editor() {
+                    self.log.error(format!("Settings: cannot open file: {e}"));
+                }
+            }
+            if r.close {
+                self.toggle_settings();
+            }
+            // 外部のエディタでの書き換えを、ウィンドウに触れなくても拾えるようにする。
+            ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+
+        let lang = self.lang();
         if self.fields.log {
             egui::Panel::bottom("log")
                 .resizable(true)
                 .default_size(140.0)
                 .show(ui, |ui| {
-                    ui.strong("Log");
+                    panel_header(ui, tr(lang, "Log"));
                     self.log_ui(ui);
                 });
         }
@@ -434,7 +889,7 @@ impl eframe::App for VwApp {
             egui::Panel::left("tree")
                 .default_size(260.0)
                 .show(ui, |ui| {
-                    ui.strong("Folders");
+                    panel_header(ui, tr(lang, "Folders"));
                     let selected = self.slots[self.active].path.clone();
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
@@ -458,7 +913,7 @@ impl eframe::App for VwApp {
                 .default_size(300.0)
                 .min_size(220.0)
                 .show(ui, |ui| {
-                    ui.strong("Metadata");
+                    panel_header(ui, tr(lang, "Metadata"));
                     self.metadata_ui(ui);
                 });
         }
@@ -466,11 +921,28 @@ impl eframe::App for VwApp {
             if self.fields.images {
                 self.images_ui(ui);
             } else {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, Color32::from_gray(24));
+                let background = self.canvas_color(ui.ctx());
+                ui.painter().rect_filled(ui.max_rect(), 0.0, background);
             }
         });
     }
+}
+
+/// メニューでの操作の名前。表示切り替えはメニューの中では対象の名前だけで分かるので短くする。
+fn menu_title(action: Action) -> &'static str {
+    match action {
+        Action::ToggleFolderTree => "Folder tree",
+        Action::ToggleMetadata => "Metadata",
+        Action::ToggleImages => "Images",
+        Action::ToggleLog => "Log",
+        Action::ToggleSettings => "Settings",
+        other => other.title(),
+    }
+}
+
+/// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
+fn panel_header(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text.to_uppercase()).small().weak());
 }
 
 /// ログ用のミリ秒表記。
@@ -539,6 +1011,34 @@ mod tests {
     #[test]
     fn closing_slot_after_active_keeps_index() {
         assert_eq!(active_after_close(0, 2, 2), 0);
+    }
+
+    fn view(id: u64, shown: bool, loading: bool) -> SlotView {
+        SlotView { id, shown, loading }
+    }
+
+    #[test]
+    fn metadata_follows_the_active_slot_with_an_image() {
+        let slots = [view(0, true, false), view(1, true, false)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), Some(1));
+    }
+
+    #[test]
+    fn metadata_stays_on_previous_slot_while_new_slot_loads() {
+        let slots = [view(0, true, false), view(1, false, true)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), Some(0));
+    }
+
+    #[test]
+    fn empty_slot_that_is_not_loading_has_no_metadata() {
+        let slots = [view(0, true, false), view(1, false, false)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), None);
+    }
+
+    #[test]
+    fn closed_previous_slot_leaves_metadata_empty_while_loading() {
+        let slots = [view(1, false, true)];
+        assert_eq!(metadata_source(&slots, 0, Some(0)), None);
     }
 
     #[test]

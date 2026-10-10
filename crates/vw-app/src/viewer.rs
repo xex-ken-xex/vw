@@ -7,10 +7,14 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, TextureHandle, Vec2};
 
+use crate::i18n::tr;
 use crate::loader::ImageInfo;
+use crate::settings::Language;
 
 /// 表示中の画像。テクスチャと、ログ・メタデータ表示用の情報を持つ。
 pub struct Shown {
+    /// 表示中の画像のファイル。次の画像を読み込み中は [`Slot::path`] と食い違う。
+    pub path: PathBuf,
     pub texture: TextureHandle,
     pub info: ImageInfo,
 }
@@ -100,15 +104,22 @@ impl Slot {
         )
     }
 
-    /// `rect` の範囲にスロットを描き、操作を処理する。
-    pub fn ui(&mut self, ui: &mut egui::Ui, rect: Rect, active: bool) -> SlotResponse {
+    /// `rect` の範囲にスロットを描き、操作を処理する。`background` は画像の背後の色。
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        active: bool,
+        background: Color32,
+        lang: Language,
+    ) -> SlotResponse {
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
         let body = Rect::from_min_max(pos2(rect.min.x, rect.min.y + HEADER), rect.max);
         let painter = ui.painter_at(rect);
 
-        painter.rect_filled(body, 0.0, Color32::from_gray(24));
+        painter.rect_filled(body, 0.0, background);
         painter.rect_filled(header, 0.0, visuals.faint_bg_color);
 
         let response = ui.interact(
@@ -164,6 +175,7 @@ impl Slot {
             } else {
                 "Select an image in the folder tree (Ctrl+click adds a slot)"
             };
+            let msg = tr(lang, msg);
             painter.text(
                 body.center(),
                 egui::Align2::CENTER_CENTER,
@@ -181,7 +193,7 @@ impl Slot {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "(empty)".into());
+            .unwrap_or_else(|| tr(lang, "(empty)").into());
         let label = if self.shown.is_some() {
             format!("{name}   {:.0}%", base * self.zoom * 100.0)
         } else {
@@ -222,7 +234,7 @@ impl Slot {
             egui::FontId::proportional(14.0),
             close_color,
         );
-        out.close = close.on_hover_text("Close slot").clicked();
+        out.close = close.on_hover_text(tr(lang, "Close slot")).clicked();
 
         let border = if active {
             visuals.selection.stroke.color
