@@ -8,11 +8,10 @@ use std::fmt;
 use std::str::FromStr;
 
 use eframe::egui::{Event, Key, Modifiers};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// ホットキーを割り当てられる操作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
     PreviousImage,
     NextImage,
@@ -23,15 +22,19 @@ pub enum Action {
     ToggleImages,
     ToggleLog,
     ToggleSettings,
+    CloseAllSlots,
+    Quit,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 9] = [
+    pub const ALL: [Action; 11] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::NewSlot,
         Action::CloseSlot,
+        Action::CloseAllSlots,
+        Action::Quit,
         Action::ToggleFolderTree,
         Action::ToggleMetadata,
         Action::ToggleImages,
@@ -51,6 +54,8 @@ impl Action {
             Action::ToggleImages => "toggle_images",
             Action::ToggleLog => "toggle_log",
             Action::ToggleSettings => "toggle_settings",
+            Action::CloseAllSlots => "close_all_slots",
+            Action::Quit => "quit",
         }
     }
 
@@ -70,6 +75,8 @@ impl Action {
             Action::ToggleImages => "Show/hide images",
             Action::ToggleLog => "Show/hide log",
             Action::ToggleSettings => "Open/close settings",
+            Action::CloseAllSlots => "Close all slots",
+            Action::Quit => "Quit",
         }
     }
 
@@ -95,6 +102,8 @@ impl Action {
             Action::ToggleImages => vec![KeyCombo::ctrl(Num3)],
             Action::ToggleLog => vec![KeyCombo::ctrl(Num4)],
             Action::ToggleSettings => vec![KeyCombo::ctrl(Comma)],
+            Action::CloseAllSlots => vec![KeyCombo::ctrl(W).with(true, true, false)],
+            Action::Quit => vec![KeyCombo::ctrl(Q)],
         }
     }
 }
@@ -222,45 +231,78 @@ pub enum Refusal {
 }
 
 /// 操作ごとのキーの一覧。設定ファイルにない操作は既定のキーになる。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    from = "BTreeMap<String, Vec<String>>",
-    into = "BTreeMap<String, Vec<String>>"
-)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(into = "BTreeMap<String, Vec<String>>")]
 pub struct Keymap {
     bindings: BTreeMap<Action, Vec<KeyCombo>>,
-    /// 設定ファイルの読めなかった項目。ログに出すために残す（保存はしない）。
-    pub problems: Vec<String>,
 }
 
 impl Default for Keymap {
     fn default() -> Self {
         Self {
             bindings: Action::ALL.iter().map(|a| (*a, a.default_keys())).collect(),
-            problems: Vec::new(),
         }
     }
 }
 
-impl From<BTreeMap<String, Vec<String>>> for Keymap {
-    fn from(raw: BTreeMap<String, Vec<String>>) -> Self {
+/// 設定ファイルの 1 操作分（キー名の配列）を読む。1 つでも読めなければ全体を不正とする。
+/// 読めたキーだけを残さないのは、残りの割り当てが利用者の意図と違う形で効いてしまうため。
+fn parse_keys(value: &toml::Value) -> Result<Vec<KeyCombo>, String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| format!("expected a list of keys, found {value}"))?;
+    let mut combos = Vec::new();
+    for item in items {
+        let text = item
+            .as_str()
+            .ok_or_else(|| format!("expected a key name, found {item}"))?;
+        let combo = text.parse::<KeyCombo>()?;
+        if !combos.contains(&combo) {
+            combos.push(combo);
+        }
+    }
+    Ok(combos)
+}
+
+impl Keymap {
+    /// 設定ファイルの `[keys]` を読む。書かれていない操作は既定のキー。
+    /// 読めない操作と、他の操作とキーが重なった操作は既定のキーに戻し、その旨を返す。
+    pub fn from_table(table: &toml::Table) -> (Self, Vec<String>) {
         let mut map = Keymap::default();
-        for (id, keys) in raw {
-            let Some(action) = Action::from_id(&id) else {
-                map.problems.push(format!("keys.{id}: unknown action"));
+        let mut problems = Vec::new();
+        for (id, value) in table {
+            let Some(action) = Action::from_id(id) else {
+                problems.push(format!("keys.{id}: unknown action (ignored)"));
                 continue;
             };
-            let mut combos = Vec::new();
-            for k in keys {
-                match k.parse::<KeyCombo>() {
-                    Ok(c) if !combos.contains(&c) => combos.push(c),
-                    Ok(_) => {}
-                    Err(e) => map.problems.push(format!("keys.{id}: {e}")),
+            match parse_keys(value) {
+                Ok(keys) => {
+                    map.bindings.insert(action, keys);
                 }
+                Err(e) => problems.push(format!("keys.{id}: {e} (using default keys)")),
             }
-            map.bindings.insert(action, combos);
         }
-        map
+        // 既定に戻した操作のキーが、別の操作に書かれたキーと新たに重なることがあるので、
+        // 重なりがなくなるまで繰り返す。既定のキー同士は重ならないので必ず終わる。
+        while let Some((combo, actions)) = map.duplicates().into_iter().next() {
+            let custom: Vec<Action> = actions
+                .iter()
+                .copied()
+                .filter(|a| !map.is_default(*a))
+                .collect();
+            if custom.is_empty() {
+                break;
+            }
+            for a in &custom {
+                map.bindings.insert(*a, a.default_keys());
+            }
+            let ids: Vec<&str> = custom.iter().map(|a| a.id()).collect();
+            problems.push(format!(
+                "keys: {combo} is assigned to several actions; using default keys for {}",
+                ids.join(", ")
+            ));
+        }
+        (map, problems)
     }
 }
 
@@ -577,43 +619,73 @@ mod tests {
         assert_eq!(map.action_for(combo("Space")), Some(Action::NewSlot));
     }
 
+    fn load(text: &str) -> (Keymap, Vec<String>) {
+        Keymap::from_table(&text.parse::<toml::Table>().unwrap())
+    }
+
     #[test]
     fn file_entries_override_only_the_listed_actions() {
-        let raw = BTreeMap::from([("new_slot".to_string(), vec!["Insert".to_string()])]);
-        let map = Keymap::from(raw);
+        let (map, problems) = load("new_slot = [\"Insert\"]");
         assert_eq!(map.keys(Action::NewSlot), [combo("Insert")]);
         assert_eq!(map.keys(Action::CloseSlot), [combo("Ctrl+W")]);
-        assert!(map.problems.is_empty());
+        assert!(problems.is_empty());
     }
 
     #[test]
     fn empty_list_in_file_leaves_action_unbound() {
-        let raw = BTreeMap::from([("new_slot".to_string(), vec![])]);
-        assert!(Keymap::from(raw).keys(Action::NewSlot).is_empty());
+        let (map, problems) = load("new_slot = []");
+        assert!(map.keys(Action::NewSlot).is_empty());
+        assert!(problems.is_empty());
     }
 
     #[test]
-    fn bad_file_entries_are_reported_and_skipped() {
-        let raw = BTreeMap::from([
-            ("fly".to_string(), vec!["F".to_string()]),
-            (
-                "new_slot".to_string(),
-                vec!["Ctrl+Nope".to_string(), "Insert".to_string()],
-            ),
-        ]);
-        let map = Keymap::from(raw);
-        assert_eq!(map.keys(Action::NewSlot), [combo("Insert")]);
-        assert_eq!(map.problems.len(), 2);
+    fn unknown_action_is_reported_and_ignored() {
+        let (map, problems) = load("fly = [\"F\"]");
+        assert_eq!(map, Keymap::default());
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]
-    fn duplicates_from_hand_edited_file_are_found() {
-        let raw = BTreeMap::from([("new_slot".to_string(), vec!["Right".to_string()])]);
-        let dups = Keymap::from(raw).duplicates();
-        assert_eq!(
-            dups,
-            vec![(combo("Right"), vec![Action::NextImage, Action::NewSlot])]
-        );
+    fn action_with_any_bad_key_falls_back_to_its_defaults() {
+        let (map, problems) = load("new_slot = [\"Ctrl+Nope\", \"Insert\"]");
+        assert_eq!(map.keys(Action::NewSlot), [combo("Ctrl+N")]);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn action_with_wrong_value_type_falls_back_to_its_defaults() {
+        for text in [
+            "new_slot = \"Insert\"",
+            "new_slot = [1]",
+            "new_slot = { a = 1 }",
+        ] {
+            let (map, problems) = load(text);
+            assert_eq!(map.keys(Action::NewSlot), [combo("Ctrl+N")], "{text}");
+            assert_eq!(problems.len(), 1, "{text}");
+        }
+    }
+
+    #[test]
+    fn hand_written_duplicate_reverts_the_customized_action() {
+        let (map, problems) = load("new_slot = [\"Right\"]");
+        assert_eq!(map, Keymap::default());
+        assert!(map.duplicates().is_empty());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_between_two_customized_actions_reverts_both() {
+        let (map, problems) = load("new_slot = [\"F2\"]\nclose_slot = [\"F2\"]");
+        assert_eq!(map, Keymap::default());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn reverting_does_not_leave_a_new_duplicate() {
+        // next_image が壊れて既定（Right など）に戻ると、Right を書いた new_slot と重なる。
+        let (map, _) = load("next_image = [\"Nope\"]\nnew_slot = [\"Right\"]");
+        assert!(map.duplicates().is_empty());
+        assert_eq!(map, Keymap::default());
     }
 
     #[test]
@@ -622,7 +694,8 @@ mod tests {
         map.assign(Action::CloseSlot, combo("Ctrl+Shift+F4"))
             .unwrap();
         let raw: BTreeMap<String, Vec<String>> = map.clone().into();
-        assert_eq!(Keymap::from(raw), map);
+        let table = toml::Table::try_from(raw).unwrap();
+        assert_eq!(Keymap::from_table(&table), (map, vec![]));
     }
 
     #[test]

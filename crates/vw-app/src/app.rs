@@ -17,6 +17,7 @@ use crate::loader::{LoadResult, Loader};
 use crate::log::{Level, Log};
 use crate::settings::{parse_hex_color, Language, SettingsStore};
 use crate::settings_ui::SettingsUi;
+use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderTree, TreeAction};
 use crate::viewer::{Shown, Slot};
@@ -97,7 +98,26 @@ pub struct VwApp {
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
     first_frame: bool,
+    /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
+    state_path: Option<PathBuf>,
+    /// 起動時に戻すウインドウ。戻し終えたら `None`。
+    restoring: Option<Restore>,
+    /// 最小化・最大化していないときの最新の位置と大きさ。終了時に保存する。
+    window: Option<WindowState>,
+    /// メタデータ欄に出しているスロットの番号。
+    metadata_from: Option<u64>,
 }
+
+/// 起動時のウインドウの復元の進み具合。
+struct Restore {
+    saved: WindowState,
+    /// 位置を送ってから経過したフレーム数。
+    frames: u32,
+}
+
+/// 位置を送った後、移動先のモニタの拡大率が届くのを待つ最大フレーム数。
+/// 届かない環境（拡大率が変わらない移動、X11 など）でも大きさの復元を止めないための上限。
+const RESTORE_WAIT_FRAMES: u32 = 10;
 
 /// `n` 枚のスロットを並べるグリッドの (列数, 行数)。正方形に近く、横長を優先する。
 pub fn grid_dims(n: usize) -> (usize, usize) {
@@ -119,6 +139,26 @@ pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
 pub fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
     let active = if removed < active { active - 1 } else { active };
     active.min(remaining.saturating_sub(1))
+}
+
+/// メタデータ欄の出し先を決めるのに要る、スロットの様子。
+pub struct SlotView {
+    pub id: u64,
+    pub shown: bool,
+    pub loading: bool,
+}
+
+/// メタデータ欄に出すスロットの添字。`previous` は直前に出していたスロットの番号。
+/// アクティブなスロットに画像があればそれ、読み込み中なら直前のもの、どちらでもなければなし。
+pub fn metadata_source(slots: &[SlotView], active: usize, previous: Option<u64>) -> Option<usize> {
+    let a = &slots[active];
+    if a.shown {
+        return Some(active);
+    }
+    if !a.loading {
+        return None;
+    }
+    slots.iter().position(|s| Some(s.id) == previous && s.shown)
 }
 
 /// プラグインのメタデータをグループごとにまとめる。グループの順は最初に現れた順。
@@ -145,14 +185,21 @@ impl VwApp {
         let mut log = Log::new(started);
         let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
         for n in notes {
-            log.warn(format!("Settings: {n}"));
+            log.error(format!("Settings: {n}"));
         }
-        for (k, actions) in settings.settings.keys.duplicates() {
-            log.warn(format!(
-                "Settings: {k} is assigned to several actions; using {}",
-                actions[0].id()
-            ));
+        let state_path = settings.path.as_deref().map(state::state_path);
+        let (saved, notes) = match &state_path {
+            Some(p) => AppState::load(p),
+            None => (AppState::default(), Vec::new()),
+        };
+        for n in notes {
+            log.error(format!("State: {n}"));
         }
+        // ウインドウ作成後の今なら、Windows でも拡大率を反映した座標で取れる。
+        let restoring = match state::placement(saved.window.as_ref(), &state::current_monitors()) {
+            Placement::Default => None,
+            Placement::Restore(saved) => Some(Restore { saved, frames: 0 }),
+        };
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
@@ -174,9 +221,12 @@ impl VwApp {
                 .and_then(|f| f.parent().map(Path::to_path_buf))
         });
 
+        let mut tree = FolderTree::new(root);
+        tree.restore_open(&saved.open_folders, &registry);
+
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
-            tree: FolderTree::new(root),
+            tree,
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
@@ -193,6 +243,10 @@ impl VwApp {
             log,
             started,
             first_frame: true,
+            state_path,
+            restoring,
+            window: None,
+            metadata_from: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -208,6 +262,12 @@ impl VwApp {
         self.slots.push(Slot::new(self.next_id));
         self.next_id += 1;
         self.active = self.slots.len() - 1;
+    }
+
+    /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
+    fn close_all_slots(&mut self) {
+        self.slots.clear();
+        self.add_slot();
     }
 
     /// スロットを閉じる。最後の 1 つを閉じたときは空のスロットを残す。
@@ -285,12 +345,14 @@ impl VwApp {
         }
     }
 
-    fn run(&mut self, action: Action) {
+    fn run(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::PreviousImage => self.step_active(-1),
             Action::NextImage => self.step_active(1),
             Action::NewSlot => self.add_slot(),
             Action::CloseSlot => self.close_slot(self.active),
+            Action::CloseAllSlots => self.close_all_slots(),
+            Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::ToggleFolderTree => self.fields.tree ^= true,
             Action::ToggleMetadata => self.fields.metadata ^= true,
             Action::ToggleImages => self.fields.images ^= true,
@@ -318,15 +380,20 @@ impl VwApp {
             if self.show_settings && action != Action::ToggleSettings {
                 continue;
             }
-            self.run(action);
+            self.run(ctx, action);
         }
     }
 
     /// 設定画面で値が変わったときに、反映して保存する。
     fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings.settings.appearance);
-        if let Err(e) = self.settings.save() {
-            self.log.error(format!("Settings: {e}"));
+        match self.settings.save() {
+            Ok(Some(backup)) => self.log.info(format!(
+                "Settings: the previous file had errors and was kept as {}",
+                backup.display()
+            )),
+            Ok(None) => {}
+            Err(e) => self.log.error(format!("Settings: {e}")),
         }
     }
 
@@ -337,11 +404,99 @@ impl VwApp {
             Some(Ok(problems)) => {
                 self.log.info("Settings reloaded from file");
                 for p in problems {
-                    self.log.warn(format!("Settings: {p}"));
+                    self.log.error(format!("Settings: {p}"));
                 }
                 theme::apply(ctx, &self.settings.settings.appearance);
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
+        }
+    }
+
+    /// 前回のウインドウの位置と大きさに戻す。
+    ///
+    /// 位置を送った後、移動先のモニタの拡大率がウインドウに反映されるのを待ってから大きさを送る。
+    /// 同じフレームで送ると、移動前のモニタの拡大率で大きさが換算され、拡大率の違うモニタに
+    /// 戻すときに大きさがずれるため。
+    fn restore_window(&mut self, ctx: &egui::Context) {
+        let Some(r) = &mut self.restoring else {
+            return;
+        };
+        let native = ctx.input(|i| i.viewport().native_pixels_per_point);
+        let zoom = ctx.zoom_factor();
+        if r.frames == 0 {
+            if let Some([x, y]) = r.saved.position {
+                let ppp = zoom * native.unwrap_or(1.0);
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
+                    x as f32 / ppp,
+                    y as f32 / ppp,
+                )));
+            }
+        }
+        r.frames += 1;
+        let arrived = native.is_some_and(|n| (n - r.saved.scale).abs() < 0.01);
+        if !arrived && r.frames < RESTORE_WAIT_FRAMES {
+            ctx.request_repaint();
+            return;
+        }
+        let ppp = zoom * native.unwrap_or(r.saved.scale);
+        let [w, h] = r.saved.size;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(
+            w as f32 / ppp,
+            h as f32 / ppp,
+        )));
+        if r.saved.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        self.window = Some(r.saved.clone());
+        self.restoring = None;
+    }
+
+    /// 最小化・最大化していないときのウインドウの位置と大きさを覚えておく。
+    /// 最大化中は最大化していることだけを覚え、戻したときの大きさは最大化前のものを残す。
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if self.restoring.is_some() {
+            return;
+        }
+        let (info, content) = ctx.input(|i| (i.viewport().clone(), i.content_rect()));
+        if info.minimized == Some(true) {
+            return;
+        }
+        let Some(native) = info.native_pixels_per_point else {
+            return;
+        };
+        if info.maximized == Some(true) {
+            if let Some(w) = &mut self.window {
+                w.maximized = true;
+            }
+            return;
+        }
+        let ppp = native * ctx.zoom_factor();
+        let px = |v: f32| (v * ppp).round() as i32;
+        // Wayland では位置が取れず内側の範囲も届かないので、描画領域の大きさで代える。
+        let inner = info.inner_rect.unwrap_or(content);
+        self.window = Some(WindowState {
+            position: info.outer_rect.map(|r| [px(r.min.x), px(r.min.y)]),
+            size: [px(inner.width()) as u32, px(inner.height()) as u32],
+            scale: native,
+            maximized: false,
+            monitors: Vec::new(),
+        });
+    }
+
+    /// 終了時の状態を保存する。モニタ構成は起動中に変わることがあるので、ここで取り直す。
+    fn save_state(&mut self) {
+        let Some(path) = &self.state_path else {
+            return;
+        };
+        let monitors: Vec<Monitor> = state::current_monitors();
+        let window = self.window.clone().map(|w| WindowState { monitors, ..w });
+        let state = AppState {
+            window,
+            open_folders: self.tree.open_paths(),
+        };
+        // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
+        if let Err(e) = state.save(path) {
+            eprintln!("vw: cannot save {}: {e}", path.display());
         }
     }
 
@@ -442,6 +597,7 @@ impl VwApp {
                         ));
                     }
                     s.shown = Some(Shown {
+                        path: path.clone(),
                         texture,
                         info: loaded.info,
                     });
@@ -459,55 +615,93 @@ impl VwApp {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
+        let ctx = ui.ctx().clone();
+        let mut chosen = None;
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(tr(lang, "File"), |ui| {
-                let new_slot = egui::Button::new(tr(lang, "New slot"))
-                    .shortcut_text(self.shortcut(Action::NewSlot).unwrap_or_default());
-                if ui.add(new_slot).clicked() {
-                    self.add_slot();
-                }
-                if ui.button(tr(lang, "Close all slots")).clicked() {
-                    self.slots.clear();
-                    self.add_slot();
+                for action in [Action::NewSlot, Action::CloseSlot, Action::CloseAllSlots] {
+                    if self.menu_item(ui, action, None) {
+                        chosen = Some(action);
+                    }
                 }
                 ui.separator();
-                if ui.button(tr(lang, "Quit")).clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                if self.menu_item(ui, Action::Quit, None) {
+                    chosen = Some(Action::Quit);
                 }
             });
             ui.menu_button(tr(lang, "View"), |ui| {
-                ui.checkbox(&mut self.fields.tree, tr(lang, "Folder tree"));
-                ui.checkbox(&mut self.fields.metadata, tr(lang, "Metadata"));
-                ui.checkbox(&mut self.fields.images, tr(lang, "Images"));
-                ui.checkbox(&mut self.fields.log, tr(lang, "Log"));
+                let toggles = [
+                    (Action::ToggleFolderTree, self.fields.tree),
+                    (Action::ToggleMetadata, self.fields.metadata),
+                    (Action::ToggleImages, self.fields.images),
+                    (Action::ToggleLog, self.fields.log),
+                ];
+                for (action, shown) in toggles {
+                    if self.menu_item(ui, action, Some(shown)) {
+                        chosen = Some(action);
+                    }
+                }
                 ui.separator();
-                let settings = egui::Button::new(tr(lang, "Settings"))
-                    .shortcut_text(self.shortcut(Action::ToggleSettings).unwrap_or_default());
-                if ui.add(settings).clicked() {
-                    self.toggle_settings();
+                if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
+                    chosen = Some(Action::ToggleSettings);
                 }
             });
         });
+        if let Some(action) = chosen {
+            self.run(&ctx, action);
+        }
     }
 
-    /// アクティブなスロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
-    fn metadata_ui(&self, ui: &mut egui::Ui) {
+    /// メニューの 1 項目。右側に操作の最初のキーを出す。`checked` があれば左にチェック欄を付ける。
+    ///
+    /// 表示切り替えに egui のチェックボックスを使わないのは、チェックボックスには
+    /// ショートカットの表示欄がなく、他の項目とキーの列がそろわないため。
+    fn menu_item(&self, ui: &mut egui::Ui, action: Action, checked: Option<bool>) -> bool {
+        let title = tr(self.lang(), menu_title(action));
+        let text = match checked {
+            Some(true) => format!("{} {title}", icon::CHECK_SQUARE),
+            Some(false) => format!("{} {title}", icon::SQUARE),
+            None => title.to_owned(),
+        };
+        let button =
+            egui::Button::new(text).shortcut_text(self.shortcut(action).unwrap_or_default());
+        ui.add(button).clicked()
+    }
+
+    /// メタデータ欄に出すスロット。アクティブなスロットが読み込み中でまだ画像がないときは、
+    /// 直前に出していたスロットのまま変えない。
+    ///
+    /// 読み込み中に「画像なし」を出すと、スロットを足して画像を開くたびに表が消えては現れ、
+    /// フォルダの画像をまとめて開くときに点滅して見えるため。
+    fn metadata_slot(&mut self) -> Option<usize> {
+        let slots: Vec<SlotView> = self
+            .slots
+            .iter()
+            .map(|s| SlotView {
+                id: s.id,
+                shown: s.shown.is_some(),
+                loading: s.loading,
+            })
+            .collect();
+        let index = metadata_source(&slots, self.active, self.metadata_from);
+        self.metadata_from = index.map(|i| slots[i].id);
+        index
+    }
+
+    /// スロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
+    fn metadata_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let slot = &self.slots[self.active];
-        let Some(shown) = &slot.shown else {
+        let Some(index) = self.metadata_slot() else {
             ui.weak(tr(lang, "No image"));
+            return;
+        };
+        let Some(shown) = &self.slots[index].shown else {
             return;
         };
         let info = &shown.info;
         let img = &info.image;
         let file_rows: Vec<(String, String)> = vec![
-            (
-                tr(lang, "Path").into(),
-                slot.path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-            ),
+            (tr(lang, "Path").into(), shown.path.display().to_string()),
             (tr(lang, "Size").into(), format!("{} bytes", info.file_size)),
             (tr(lang, "Plugin").into(), info.plugin.clone()),
             (
@@ -617,6 +811,10 @@ impl VwApp {
 }
 
 impl eframe::App for VwApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_state();
+    }
+
     /// 毎フレーム呼ばれる。パネルは外側から順に追加する必要があるので、
     /// メニュー → ツール列（左端）→ ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
     /// 設定画面を開いているときは、ツール列より内側をすべて設定画面にする。
@@ -629,6 +827,8 @@ impl eframe::App for VwApp {
                 ms(self.started.elapsed())
             ));
         }
+        self.restore_window(&ctx);
+        self.track_window(&ctx);
         self.receive(&ctx);
         self.reload_settings(&ctx);
 
@@ -728,6 +928,18 @@ impl eframe::App for VwApp {
     }
 }
 
+/// メニューでの操作の名前。表示切り替えはメニューの中では対象の名前だけで分かるので短くする。
+fn menu_title(action: Action) -> &'static str {
+    match action {
+        Action::ToggleFolderTree => "Folder tree",
+        Action::ToggleMetadata => "Metadata",
+        Action::ToggleImages => "Images",
+        Action::ToggleLog => "Log",
+        Action::ToggleSettings => "Settings",
+        other => other.title(),
+    }
+}
+
 /// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
 fn panel_header(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text.to_uppercase()).small().weak());
@@ -799,6 +1011,34 @@ mod tests {
     #[test]
     fn closing_slot_after_active_keeps_index() {
         assert_eq!(active_after_close(0, 2, 2), 0);
+    }
+
+    fn view(id: u64, shown: bool, loading: bool) -> SlotView {
+        SlotView { id, shown, loading }
+    }
+
+    #[test]
+    fn metadata_follows_the_active_slot_with_an_image() {
+        let slots = [view(0, true, false), view(1, true, false)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), Some(1));
+    }
+
+    #[test]
+    fn metadata_stays_on_previous_slot_while_new_slot_loads() {
+        let slots = [view(0, true, false), view(1, false, true)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), Some(0));
+    }
+
+    #[test]
+    fn empty_slot_that_is_not_loading_has_no_metadata() {
+        let slots = [view(0, true, false), view(1, false, false)];
+        assert_eq!(metadata_source(&slots, 1, Some(0)), None);
+    }
+
+    #[test]
+    fn closed_previous_slot_leaves_metadata_empty_while_loading() {
+        let slots = [view(1, false, true)];
+        assert_eq!(metadata_source(&slots, 0, Some(0)), None);
     }
 
     #[test]

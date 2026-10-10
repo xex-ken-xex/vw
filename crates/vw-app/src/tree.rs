@@ -15,7 +15,8 @@ pub struct Node {
     is_dir: bool,
     /// フォルダを初めて開くまでは `None`。一度読んだら閉じても保持する。
     children: Option<Vec<Node>>,
-    default_open: bool,
+    /// 開いているか。egui の内部状態に任せず自分で持つのは、終了時に保存して次回復元するため。
+    open: bool,
 }
 
 /// ツリーでファイルがクリックされたときの要求。
@@ -28,14 +29,14 @@ pub enum TreeAction {
 
 impl Node {
     /// フォルダの項目を作る。`name` を省くとパスの末尾を表示名にする。
-    pub fn dir(path: PathBuf, name: Option<String>, default_open: bool) -> Self {
+    pub fn dir(path: PathBuf, name: Option<String>, open: bool) -> Self {
         let name = name.unwrap_or_else(|| display_name(&path));
         Self {
             path,
             name,
             is_dir: true,
             children: None,
-            default_open,
+            open,
         }
     }
 
@@ -58,9 +59,9 @@ impl Node {
             }
             return;
         }
-        egui::CollapsingHeader::new(&self.name)
+        let r = egui::CollapsingHeader::new(&self.name)
             .id_salt(&self.path)
-            .default_open(self.default_open)
+            .open(Some(self.open))
             .show(ui, |ui| {
                 let children = self
                     .children
@@ -72,6 +73,34 @@ impl Node {
                     child.ui(ui, registry, selected, out);
                 }
             });
+        if r.header_response.clicked() {
+            self.open = !self.open;
+        }
+    }
+
+    fn collect_open(&self, out: &mut Vec<PathBuf>) {
+        if !self.open {
+            return;
+        }
+        out.push(self.path.clone());
+        for child in self.children.iter().flatten() {
+            child.collect_open(out);
+        }
+    }
+
+    /// `paths` に含まれるフォルダを開き、その中身を読んで子にも同じことをする。
+    /// 含まれないフォルダは読まないので、復元にかかる時間は開いていたフォルダの数で決まる。
+    fn restore_open(&mut self, paths: &[PathBuf], registry: &Registry) {
+        if !self.is_dir || !paths.contains(&self.path) {
+            return;
+        }
+        self.open = true;
+        let children = self
+            .children
+            .get_or_insert_with(|| list_dir(&self.path, registry));
+        for child in children {
+            child.restore_open(paths, registry);
+        }
     }
 }
 
@@ -103,6 +132,22 @@ impl FolderTree {
         #[cfg(not(windows))]
         roots.push(Node::dir(PathBuf::from("/"), Some("/".into()), false));
         Self { roots }
+    }
+
+    /// 開いているフォルダのパス（親が開いているものだけ）。
+    pub fn open_paths(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for root in &self.roots {
+            root.collect_open(&mut out);
+        }
+        out
+    }
+
+    /// 前回開いていたフォルダを開き直す。もうないフォルダは閉じたままになる。
+    pub fn restore_open(&mut self, paths: &[PathBuf], registry: &Registry) {
+        for root in &mut self.roots {
+            root.restore_open(paths, registry);
+        }
     }
 
     pub fn ui(
@@ -146,7 +191,7 @@ fn list_dir(path: &Path, registry: &Registry) -> Vec<Node> {
                 name,
                 is_dir,
                 children: None,
-                default_open: false,
+                open: false,
             })
         })
         .collect();
@@ -252,7 +297,59 @@ mod tests {
         let dir = TempDir::new();
         let tree = FolderTree::new(Some(dir.path().to_path_buf()));
         assert_eq!(tree.roots[0].path, dir.path());
-        assert!(tree.roots[0].default_open);
+        assert!(tree.roots[0].open);
         assert!(tree.roots.len() >= 2, "home or filesystem roots follow");
+    }
+
+    fn tree_at(root: &Path) -> FolderTree {
+        FolderTree {
+            roots: vec![Node::dir(root.to_path_buf(), None, false)],
+        }
+    }
+
+    #[test]
+    fn closed_tree_has_no_open_paths() {
+        let dir = TempDir::new();
+        assert!(tree_at(dir.path()).open_paths().is_empty());
+    }
+
+    #[test]
+    fn open_folders_are_restored_with_their_contents() {
+        let dir = TempDir::new();
+        let a = dir.mkdir("a");
+        let b = dir.mkdir("a/b");
+        dir.touch("a/b/pic.png");
+        let mut tree = tree_at(dir.path());
+        let paths = vec![dir.path().to_path_buf(), a.clone(), b.clone()];
+        tree.restore_open(&paths, &png_registry());
+        assert_eq!(tree.open_paths(), paths);
+        let b_node = &tree.roots[0].children.as_ref().unwrap()[0]
+            .children
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(names(b_node.children.as_ref().unwrap()), ["pic.png"]);
+    }
+
+    #[test]
+    fn folder_inside_a_closed_parent_is_not_restored() {
+        let dir = TempDir::new();
+        let a = dir.mkdir("a");
+        dir.mkdir("a/b");
+        let mut tree = tree_at(dir.path());
+        tree.restore_open(&[a.join("b")], &png_registry());
+        assert!(tree.open_paths().is_empty());
+        assert!(
+            tree.roots[0].children.is_none(),
+            "closed folders are not read"
+        );
+    }
+
+    #[test]
+    fn vanished_folders_are_skipped() {
+        let dir = TempDir::new();
+        let mut tree = tree_at(dir.path());
+        let gone = dir.path().join("gone");
+        tree.restore_open(&[dir.path().to_path_buf(), gone], &png_registry());
+        assert_eq!(tree.open_paths(), [dir.path().to_path_buf()]);
     }
 }

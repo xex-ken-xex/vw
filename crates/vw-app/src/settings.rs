@@ -11,6 +11,7 @@ use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
+use crate::toml_reader::Reader;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -43,8 +44,7 @@ impl Language {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Appearance {
     pub theme: ThemeChoice,
     pub language: Language,
@@ -78,15 +78,13 @@ impl Appearance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Viewer {
     /// 画像の背景色（`#RRGGBB`）。空ならテーマの既定色。
     pub background: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
     pub viewer: Viewer,
@@ -94,12 +92,60 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// TOML を読む。書かれていない項目は既定値になる。
-    /// 戻り値の 2 つ目は、読み飛ばした項目の説明（ログ用）。
+    /// TOML を読む。書かれていない項目は既定値になる。読めない項目は、その項目
+    /// （キー割り当ては関係する操作も）だけを既定値にして、残りは生かす。
+    /// 戻り値の 2 つ目は、既定値にした項目の説明（ログ用）。
+    /// TOML として読めない（構文の誤り）ときだけ `Err` を返す。
     pub fn from_toml(text: &str) -> Result<(Self, Vec<String>), String> {
-        let mut settings: Settings = toml::from_str(text).map_err(|e| e.to_string())?;
-        let problems = std::mem::take(&mut settings.keys.problems);
-        Ok((settings, problems))
+        let table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
+        let d = Settings::default();
+        let mut r = Reader::new(&table);
+        let scale_range = Appearance::MIN_SCALE..=Appearance::MAX_SCALE;
+        let appearance = Appearance {
+            theme: r.get("appearance", "theme").unwrap_or(d.appearance.theme),
+            language: r
+                .get("appearance", "language")
+                .unwrap_or(d.appearance.language),
+            ui_scale: r
+                .get_valid(
+                    "appearance",
+                    "ui_scale",
+                    |v: &f32| scale_range.contains(v),
+                    "must be 0.75 to 2.0",
+                )
+                .unwrap_or(d.appearance.ui_scale),
+            compact: r
+                .get("appearance", "compact")
+                .unwrap_or(d.appearance.compact),
+        };
+        let viewer = Viewer {
+            background: r
+                .get_valid(
+                    "viewer",
+                    "background",
+                    |v: &String| v.trim().is_empty() || parse_hex_color(v).is_some(),
+                    "must be #RRGGBB or empty",
+                )
+                .unwrap_or(d.viewer.background),
+        };
+        let mut problems = std::mem::take(&mut r.problems);
+        let keys = match r.section("keys") {
+            Some(t) => {
+                let (keys, p) = Keymap::from_table(t);
+                problems.extend(p);
+                keys
+            }
+            None => d.keys,
+        };
+        problems.append(&mut r.problems);
+        Ok((
+            Settings {
+                appearance,
+                viewer,
+                keys,
+            },
+            problems,
+        ))
     }
 
     pub fn to_toml(&self) -> String {
@@ -139,6 +185,9 @@ pub struct SettingsStore {
     /// 最後に読み書きしたときのファイルの更新時刻。これと違えば外部で書き換えられた。
     known_mtime: Option<SystemTime>,
     last_poll: Instant,
+    /// ファイルに読めない項目があった。次に保存するとその内容は既定値で上書きされるので、
+    /// 上書きする前に元のファイルを `.bak` に残す。
+    needs_backup: bool,
 }
 
 impl SettingsStore {
@@ -152,6 +201,7 @@ impl SettingsStore {
         let mut notes = Vec::new();
         let mut settings = Settings::default();
         let mut known_mtime = None;
+        let mut needs_backup = false;
         if let Some(p) = &path {
             match std::fs::read_to_string(p) {
                 Ok(text) => {
@@ -159,13 +209,17 @@ impl SettingsStore {
                     match Settings::from_toml(&text) {
                         Ok((s, problems)) => {
                             settings = s;
+                            needs_backup = !problems.is_empty();
                             notes.extend(
                                 problems
                                     .into_iter()
                                     .map(|e| format!("{}: {e}", p.display())),
                             );
                         }
-                        Err(e) => notes.push(format!("{}: {e} (using defaults)", p.display())),
+                        Err(e) => {
+                            needs_backup = true;
+                            notes.push(format!("{}: {e} (using defaults)", p.display()));
+                        }
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -177,23 +231,32 @@ impl SettingsStore {
             settings,
             known_mtime,
             last_poll: Instant::now(),
+            needs_backup,
         };
         (store, notes)
     }
 
-    pub fn save(&mut self) -> Result<(), String> {
+    /// 設定ファイルに書き出す。読めない項目があったファイルを上書きするときは、
+    /// 先に元のファイルを残し、その場所を `Some` で返す。
+    pub fn save(&mut self) -> Result<Option<PathBuf>, String> {
         let Some(path) = &self.path else {
             return Err("no settings directory (HOME / APPDATA is not set)".into());
         };
+        let backup = backup_path(path);
+        let keep_original = self.needs_backup && path.exists();
         let write = || -> std::io::Result<()> {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
+            }
+            if keep_original {
+                std::fs::copy(path, &backup)?;
             }
             std::fs::write(path, self.settings.to_toml())
         };
         write().map_err(|e| format!("{}: {e}", path.display()))?;
         self.known_mtime = mtime(path);
-        Ok(())
+        self.needs_backup = false;
+        Ok(keep_original.then_some(backup))
     }
 
     /// ファイルが外部で書き換えられていたら読み直す。
@@ -216,9 +279,13 @@ impl SettingsStore {
         Some(match result {
             Ok((s, problems)) => {
                 self.settings = s;
+                self.needs_backup = !problems.is_empty();
                 Ok(problems)
             }
-            Err(e) => Err(format!("{}: {e}", path.display())),
+            Err(e) => {
+                self.needs_backup = true;
+                Err(format!("{}: {e}", path.display()))
+            }
         })
     }
 
@@ -239,6 +306,12 @@ impl SettingsStore {
     fn poll_now(&mut self) {
         self.last_poll = Instant::now() - POLL_INTERVAL;
     }
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -389,6 +462,56 @@ mod tests {
     }
 
     #[test]
+    fn broken_value_falls_back_to_its_default_only() {
+        let text = "[appearance]\ntheme = \"purple\"\nlanguage = \"ja\"\ncompact = false\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.appearance.theme, ThemeChoice::System);
+        assert_eq!(s.appearance.language, Language::Japanese);
+        assert!(!s.appearance.compact);
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].starts_with("appearance.theme"),
+            "{}",
+            problems[0]
+        );
+    }
+
+    #[test]
+    fn wrong_type_falls_back_to_default() {
+        let (s, problems) = Settings::from_toml("[appearance]\ncompact = \"yes\"\n").unwrap();
+        assert!(s.appearance.compact);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn out_of_range_scale_falls_back_to_default() {
+        let (s, problems) = Settings::from_toml("[appearance]\nui_scale = 9.0\n").unwrap();
+        assert_eq!(s.appearance.ui_scale, 1.0);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn integer_scale_is_accepted() {
+        let (s, problems) = Settings::from_toml("[appearance]\nui_scale = 2\n").unwrap();
+        assert_eq!(s.appearance.ui_scale, 2.0);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn malformed_background_falls_back_to_theme_default() {
+        let (s, problems) = Settings::from_toml("[viewer]\nbackground = \"#12\"\n").unwrap();
+        assert_eq!(s.viewer.background, "");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn section_that_is_not_a_table_falls_back_entirely() {
+        let (s, problems) = Settings::from_toml("appearance = 3\nkeys = 1\n").unwrap();
+        assert_eq!(s, Settings::default());
+        assert_eq!(problems.len(), 2);
+    }
+
+    #[test]
     fn hex_colors_parse_with_or_without_hash() {
         assert_eq!(
             parse_hex_color("#102030"),
@@ -446,6 +569,31 @@ mod tests {
         let (store, notes) = SettingsStore::open(Some(path));
         assert_eq!(store.settings, Settings::default());
         assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn overwriting_a_broken_file_keeps_the_original_as_backup() {
+        let dir = TempDir::new();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "[appearance]\ntheme = \"purple\"\n").unwrap();
+        let (mut store, notes) = SettingsStore::open(Some(path.clone()));
+        assert_eq!(notes.len(), 1);
+        let backup = store.save().unwrap().expect("backup made");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "[appearance]\ntheme = \"purple\"\n"
+        );
+        assert_eq!(store.save().unwrap(), None, "only the first save backs up");
+    }
+
+    #[test]
+    fn saving_a_healthy_file_makes_no_backup() {
+        let dir = TempDir::new();
+        let path = dir.path().join("settings.toml");
+        let (mut store, _) = SettingsStore::open(Some(path.clone()));
+        assert_eq!(store.save().unwrap(), None);
+        assert_eq!(store.save().unwrap(), None);
+        assert!(!dir.path().join("settings.toml.bak").exists());
     }
 
     #[test]

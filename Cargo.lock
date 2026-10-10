@@ -2316,6 +2316,8 @@ dependencies = [
  "toml",
  "vw-core",
  "vw-png",
+ "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

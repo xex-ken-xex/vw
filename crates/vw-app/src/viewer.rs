@@ -13,6 +13,8 @@ use crate::settings::Language;
 
 /// 表示中の画像。テクスチャと、ログ・メタデータ表示用の情報を持つ。
 pub struct Shown {
+    /// 表示中の画像のファイル。次の画像を読み込み中は [`Slot::path`] と食い違う。
+    pub path: PathBuf,
     pub texture: TextureHandle,
     pub info: ImageInfo,
 }
