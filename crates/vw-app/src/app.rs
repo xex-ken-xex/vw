@@ -7,15 +7,19 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, pos2, vec2, Color32, Rect, TextureFilter, TextureOptions};
+use eframe::egui::{
+    self, collapsing_header::CollapsingState, pos2, text_selection::LabelSelectionState, vec2,
+    Color32, Rect, TextureFilter, TextureOptions,
+};
 use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
+use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::i18n::tr;
 use crate::keymap::{Action, KeyCombo};
 use crate::loader::{LoadResult, Loader};
 use crate::log::{Level, Log};
-use crate::settings::{parse_hex_color, Language, SettingsStore};
+use crate::settings::{parse_hex_color, HeaderClick, Language, SettingsStore};
 use crate::settings_ui::SettingsUi;
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
@@ -106,7 +110,22 @@ pub struct VwApp {
     window: Option<WindowState>,
     /// メタデータ欄に出しているスロットの番号。
     metadata_from: Option<u64>,
+    /// Ctrl+C でコピーする欄。
+    focus: Focus,
+    /// ツリーで選んでいる項目。アクティブなスロットで画像を開いたときもその画像に移す。
+    tree_selected: Option<PathBuf>,
+    meta_selected: Option<MetaSelection>,
+    /// コピーしたことを知らせる表示。
+    toast: Option<Toast>,
 }
+
+/// コピーしたときにカーソルの近くに出す短い表示。
+struct Toast {
+    pos: egui::Pos2,
+    until: Instant,
+}
+
+const TOAST_DURATION: Duration = Duration::from_millis(900);
 
 /// 起動時のウインドウの復元の進み具合。
 struct Restore {
@@ -247,6 +266,10 @@ impl VwApp {
             restoring,
             window: None,
             metadata_from: None,
+            focus: Focus::Images,
+            tree_selected: None,
+            meta_selected: None,
+            toast: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -285,6 +308,7 @@ impl VwApp {
     fn open_in_active(&mut self, path: PathBuf) {
         let request = self.next_id;
         self.next_id += 1;
+        self.tree_selected = Some(path.clone());
         let slot = &mut self.slots[self.active];
         slot.path = Some(path.clone());
         slot.request = request;
@@ -688,68 +712,148 @@ impl VwApp {
         index
     }
 
-    /// スロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
-    fn metadata_ui(&mut self, ui: &mut egui::Ui) {
+    /// メタデータ欄に出す表。ファイル情報のグループの後に、プラグインのメタデータのグループが続く。
+    /// 画像がなければ `None`。
+    fn metadata_groups(&mut self) -> Option<Vec<MetaGroup>> {
         let lang = self.lang();
-        let Some(index) = self.metadata_slot() else {
-            ui.weak(tr(lang, "No image"));
-            return;
-        };
-        let Some(shown) = &self.slots[index].shown else {
-            return;
-        };
+        let index = self.metadata_slot()?;
+        let shown = self.slots[index].shown.as_ref()?;
         let info = &shown.info;
         let img = &info.image;
-        let file_rows: Vec<(String, String)> = vec![
-            (tr(lang, "Path").into(), shown.path.display().to_string()),
-            (tr(lang, "Size").into(), format!("{} bytes", info.file_size)),
-            (tr(lang, "Plugin").into(), info.plugin.clone()),
-            (
-                tr(lang, "Pixels").into(),
-                format!("{} x {}", img.width, img.height),
-            ),
-            (tr(lang, "Color").into(), color_name(img.color).into()),
-            (
-                tr(lang, "Sample").into(),
+        let row = |k: &'static str, v: String| (tr(lang, k).to_owned(), v);
+        let file_rows = vec![
+            row("Path", shown.path.display().to_string()),
+            row("Size", format!("{} bytes", info.file_size)),
+            row("Plugin", info.plugin.clone()),
+            row("Pixels", format!("{} x {}", img.width, img.height)),
+            row("Color", color_name(img.color).into()),
+            row(
+                "Sample",
                 format!(
                     "{} bit ({} significant)",
                     img.data.bits_per_sample(),
                     img.significant_bits
                 ),
             ),
-            (
-                tr(lang, "Texture").into(),
+            row(
+                "Texture",
                 format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
             ),
         ];
-        let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![(
-            tr(lang, "File"),
-            file_rows
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect(),
-        )];
-        groups.extend(group_metadata(&img.metadata.entries));
+        let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
+        groups.extend(
+            group_metadata(&img.metadata.entries)
+                .into_iter()
+                .map(|(g, rows)| {
+                    let rows = rows
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect();
+                    (g.to_owned(), rows)
+                }),
+        );
+        Some(groups)
+    }
+
+    /// スロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
+    /// 見出しと行はクリックで選んでコピーでき、値の文字列はドラッグで範囲選択できる。
+    fn metadata_ui(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let Some(groups) = self.metadata_groups() else {
+            ui.weak(tr(lang, "No image"));
+            return;
+        };
+        let header_click = self.settings.settings.behavior.header_click;
+        let mut picked: Option<MetaSelection> = None;
+        let mut copy: Option<MetaSelection> = None;
+        let mut text_drag = false;
+        let selected = self.meta_selected.clone();
+        let highlight = ui.visuals().selection.bg_fill;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (group, rows) in groups {
-                    egui::CollapsingHeader::new(group)
-                        .default_open(true)
-                        .show(ui, |ui| {
+                for (group, rows) in &groups {
+                    let id = ui.make_persistent_id(("metadata", group));
+                    let state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
+                    let group_sel = MetaSelection::Group(group.clone());
+                    let is_selected = selected.as_ref() == Some(&group_sel);
+                    let (_, head, _) = state
+                        .show_header(ui, |ui| ui.selectable_label(is_selected, group.as_str()))
+                        .body(|ui| {
+                            let row_of = |i: usize| MetaSelection::Row(group.clone(), i);
+                            let selected_row = match &selected {
+                                Some(MetaSelection::Row(g, i)) if g == group => Some(*i),
+                                _ => None,
+                            };
                             egui::Grid::new(group)
                                 .num_columns(2)
-                                .striped(true)
+                                // striped(true) と併用できないので、縞も自分で塗る。
+                                .with_row_color(move |r, style| {
+                                    if Some(r) == selected_row {
+                                        Some(highlight)
+                                    } else {
+                                        (r % 2 == 1).then_some(style.visuals.faint_bg_color)
+                                    }
+                                })
                                 .show(ui, |ui| {
-                                    for (k, v) in rows {
-                                        ui.label(k);
-                                        ui.add(egui::Label::new(v).wrap());
+                                    for (i, (k, v)) in rows.iter().enumerate() {
+                                        let key = ui.add(
+                                            egui::Label::new(k)
+                                                .selectable(false)
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        let value = ui.add(egui::Label::new(v).wrap());
                                         ui.end_row();
+                                        if key.clicked() || value.clicked() {
+                                            picked = Some(row_of(i));
+                                        }
+                                        if value.drag_started() {
+                                            text_drag = true;
+                                        }
+                                        for r in [&key, &value] {
+                                            r.context_menu(|ui| {
+                                                if ui.button(tr(lang, "Copy")).clicked() {
+                                                    copy = Some(row_of(i));
+                                                    ui.close();
+                                                }
+                                            });
+                                        }
                                     }
                                 });
                         });
+                    let label = head.inner;
+                    if label.clicked() {
+                        picked = Some(group_sel.clone());
+                        // ▶ を押したときと同じく、保存された開閉状態を反転して次のフレームから効かせる。
+                        if header_click == HeaderClick::SelectAndToggle {
+                            let mut state =
+                                CollapsingState::load_with_default_open(ui.ctx(), id, true);
+                            state.toggle(ui);
+                            state.store(ui.ctx());
+                        }
+                    }
+                    label.context_menu(|ui| {
+                        if ui.button(tr(lang, "Copy")).clicked() {
+                            copy = Some(group_sel.clone());
+                            ui.close();
+                        }
+                    });
                 }
             });
+        let ctx = ui.ctx().clone();
+        if text_drag {
+            self.set_focus(&ctx, Focus::MetadataText);
+        }
+        if let Some(p) = picked {
+            self.meta_selected = Some(p);
+            self.set_focus(&ctx, Focus::Metadata);
+        }
+        if let Some(c) = copy {
+            if let Some(text) = copy::metadata_text(&groups, &c) {
+                let what = selection_name(&c);
+                self.copy_text(&ctx, text, &format!("metadata {what}"));
+            }
+        }
     }
 
     /// ログを新しいものが下に来る順で出し、末尾に自動で追従する。
@@ -771,6 +875,103 @@ impl VwApp {
                     );
                 }
             });
+    }
+
+    /// Ctrl+C の対象の欄を変える。メタデータの文字列の範囲選択以外に移るときは、
+    /// その範囲選択を解く。残しておくと、egui がフレームの終わりに範囲の文字列をコピーし、
+    /// こちらでコピーした内容を上書きしてしまうため。
+    fn set_focus(&mut self, ctx: &egui::Context, focus: Focus) {
+        self.focus = focus;
+        if focus != Focus::MetadataText {
+            ctx.with_plugin(|s: &mut LabelSelectionState| s.clear_selection());
+        }
+    }
+
+    fn copy_text(&mut self, ctx: &egui::Context, text: String, what: &str) {
+        ctx.copy_text(text);
+        self.copied(ctx, what);
+    }
+
+    /// スロットの画像を元の解像度でコピーする。
+    fn copy_image(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(shown) = &self.slots[index].shown else {
+            return;
+        };
+        let image = copy::full_resolution(&shown.info.image);
+        let what = format!(
+            "image {} ({}x{})",
+            shown.path.display(),
+            image.size[0],
+            image.size[1]
+        );
+        ctx.copy_image(image);
+        self.copied(ctx, &what);
+    }
+
+    /// コピーしたことをログとカーソル付近の表示で知らせる。
+    fn copied(&mut self, ctx: &egui::Context, what: &str) {
+        self.log.info(format!("Copied {what}"));
+        let pos = ctx
+            .input(|i| i.pointer.latest_pos())
+            .unwrap_or_else(|| ctx.content_rect().center());
+        self.toast = Some(Toast {
+            pos,
+            until: Instant::now() + TOAST_DURATION,
+        });
+    }
+
+    /// Ctrl+C（egui はこれを `Event::Copy` として届ける）で、対象の欄で選んでいるものをコピーする。
+    fn copy_selection(&mut self, ctx: &egui::Context) {
+        let pressed = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        // 文字入力欄にいるときは、その欄のコピーに任せる。
+        if !pressed || self.show_settings || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        match self.focus {
+            Focus::MetadataText => {}
+            Focus::Tree => {
+                if let Some(p) = self.tree_selected.clone() {
+                    self.copy_text(
+                        ctx,
+                        p.display().to_string(),
+                        &format!("path {}", p.display()),
+                    );
+                }
+            }
+            Focus::Metadata => {
+                let Some(sel) = self.meta_selected.clone() else {
+                    return;
+                };
+                let text = self
+                    .metadata_groups()
+                    .and_then(|g| copy::metadata_text(&g, &sel));
+                if let Some(text) = text {
+                    self.copy_text(ctx, text, &format!("metadata {}", selection_name(&sel)));
+                }
+            }
+            Focus::Images => self.copy_image(ctx, self.active),
+        }
+    }
+
+    fn toast_ui(&mut self, ctx: &egui::Context) {
+        let Some(toast) = &self.toast else {
+            return;
+        };
+        let now = Instant::now();
+        if now >= toast.until {
+            self.toast = None;
+            return;
+        }
+        egui::Area::new(egui::Id::new("copied_toast"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(toast.pos + vec2(12.0, 12.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(tr(self.lang(), "Copied"));
+                });
+            });
+        ctx.request_repaint_after(toast.until - now);
     }
 
     /// スロットをグリッドに並べて描く。
@@ -797,6 +998,11 @@ impl VwApp {
             let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active, background, lang);
             if resp.clicked {
                 self.active = i;
+                self.tree_selected = self.slots[i].path.clone();
+                self.set_focus(ui.ctx(), Focus::Images);
+            }
+            if resp.copy {
+                self.copy_image(ui.ctx(), i);
             }
             if resp.close {
                 close = Some(i);
@@ -890,22 +1096,32 @@ impl eframe::App for VwApp {
                 .default_size(260.0)
                 .show(ui, |ui| {
                     panel_header(ui, tr(lang, "Folders"));
-                    let selected = self.slots[self.active].path.clone();
+                    let selected = self.tree_selected.clone();
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
                             self.tree
-                                .ui(ui, self.loader.registry(), selected.as_deref())
+                                .ui(ui, self.loader.registry(), selected.as_deref(), lang)
                         })
                         .inner;
+                    let Some(action) = action else {
+                        return;
+                    };
+                    let ctx = ui.ctx().clone();
                     match action {
-                        Some(TreeAction::Open(p)) => self.open_in_active(p),
-                        Some(TreeAction::Add(p)) => {
+                        TreeAction::Open(p) => self.open_in_active(p),
+                        TreeAction::Add(p) => {
                             self.add_slot();
                             self.open_in_active(p);
                         }
-                        None => {}
+                        TreeAction::Select(p) => self.tree_selected = Some(p),
+                        TreeAction::Copy(p) => {
+                            let what = format!("path {}", p.display());
+                            self.copy_text(&ctx, p.display().to_string(), &what);
+                            return;
+                        }
                     }
+                    self.set_focus(&ctx, Focus::Tree);
                 });
         }
         if self.fields.metadata {
@@ -925,6 +1141,8 @@ impl eframe::App for VwApp {
                 ui.painter().rect_filled(ui.max_rect(), 0.0, background);
             }
         });
+        self.copy_selection(&ctx);
+        self.toast_ui(&ctx);
     }
 }
 
@@ -943,6 +1161,14 @@ fn menu_title(action: Action) -> &'static str {
 /// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
 fn panel_header(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text.to_uppercase()).small().weak());
+}
+
+/// ログに出す、メタデータ欄で選んだものの名前。
+fn selection_name(sel: &MetaSelection) -> String {
+    match sel {
+        MetaSelection::Group(g) => g.clone(),
+        MetaSelection::Row(g, i) => format!("{g} row {}", i + 1),
+    }
 }
 
 /// ログ用のミリ秒表記。

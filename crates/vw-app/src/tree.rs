@@ -5,8 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui;
+use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
+
+use crate::i18n::tr;
+use crate::settings::Language;
 
 /// ツリーの 1 項目（フォルダまたはファイル）。
 pub struct Node {
@@ -25,6 +28,10 @@ pub enum TreeAction {
     Open(PathBuf),
     /// スロットを追加して表示する（Ctrl / Cmd + クリック）。
     Add(PathBuf),
+    /// フォルダを選んだ（クリック。開閉もする）。
+    Select(PathBuf),
+    /// フルパスをコピーする（右クリックメニュー）。
+    Copy(PathBuf),
 }
 
 impl Node {
@@ -45,10 +52,11 @@ impl Node {
         ui: &mut egui::Ui,
         registry: &Registry,
         selected: Option<&Path>,
+        lang: Language,
         out: &mut Option<TreeAction>,
     ) {
+        let is_selected = selected == Some(self.path.as_path());
         if !self.is_dir {
-            let is_selected = selected == Some(self.path.as_path());
             let r = ui.selectable_label(is_selected, &self.name);
             if r.clicked() {
                 *out = Some(if ui.input(|i| i.modifiers.command) {
@@ -57,12 +65,17 @@ impl Node {
                     TreeAction::Open(self.path.clone())
                 });
             }
+            copy_menu(&r, &self.path, lang, out);
             return;
         }
-        let r = egui::CollapsingHeader::new(&self.name)
-            .id_salt(&self.path)
-            .open(Some(self.open))
-            .show(ui, |ui| {
+        // CollapsingHeader を使わないのは、見出しに選択状態を出せず、右クリックメニューも
+        // 付けられないため。開閉の ▶ と見出しの文字を別の部品にして組み立てる。
+        let id = ui.make_persistent_id(&self.path);
+        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
+        state.set_open(self.open);
+        let (toggle, header, _) = state
+            .show_header(ui, |ui| ui.selectable_label(is_selected, &self.name))
+            .body(|ui| {
                 let children = self
                     .children
                     .get_or_insert_with(|| list_dir(&self.path, registry));
@@ -70,12 +83,17 @@ impl Node {
                     ui.weak("(empty)");
                 }
                 for child in children {
-                    child.ui(ui, registry, selected, out);
+                    child.ui(ui, registry, selected, lang, out);
                 }
             });
-        if r.header_response.clicked() {
+        let label = header.inner;
+        if toggle.clicked() || label.clicked() {
             self.open = !self.open;
         }
+        if label.clicked() {
+            *out = Some(TreeAction::Select(self.path.clone()));
+        }
+        copy_menu(&label, &self.path, lang, out);
     }
 
     fn collect_open(&self, out: &mut Vec<PathBuf>) {
@@ -102,6 +120,16 @@ impl Node {
             child.restore_open(paths, registry);
         }
     }
+}
+
+/// 右クリックメニュー。選んだ項目のフルパスをコピーする。
+fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
+    r.context_menu(|ui| {
+        if ui.button(tr(lang, "Copy")).clicked() {
+            *out = Some(TreeAction::Copy(path.to_owned()));
+            ui.close();
+        }
+    });
 }
 
 /// ツリー全体。ルートは、起動時に渡されたフォルダ、ホーム、ドライブ（Windows）または / の順。
@@ -155,10 +183,11 @@ impl FolderTree {
         ui: &mut egui::Ui,
         registry: &Registry,
         selected: Option<&Path>,
+        lang: Language,
     ) -> Option<TreeAction> {
         let mut out = None;
         for root in &mut self.roots {
-            root.ui(ui, registry, selected, &mut out);
+            root.ui(ui, registry, selected, lang, &mut out);
         }
         out
     }

@@ -55,6 +55,9 @@ const JA: &[(&str, &str)] = &[
     ),
     ("(empty)", "（空）"),
     ("Close slot", "スロットを閉じる"),
+    // コピー
+    ("Copy", "コピー"),
+    ("Copied", "コピーしました"),
     // ツール列
     ("Browse", "ブラウズ"),
     ("Pan", "移動"),
@@ -99,6 +102,14 @@ const JA: &[(&str, &str)] = &[
         "#RRGGBB の形式で入力してください。",
     ),
     ("Theme default", "テーマの既定色"),
+    ("Behavior", "動作"),
+    ("Group heading click", "グループ見出しのクリック"),
+    (
+        "What clicking a group heading (such as File in the metadata panel) does. The arrow always expands or collapses.",
+        "グループの見出し（メタデータ欄の「ファイル」など）をクリックしたときの動作。▶ は常に開閉します。",
+    ),
+    ("Select only", "選択のみ"),
+    ("Select and expand/collapse", "選択して開閉"),
     ("Add key", "キーを追加"),
     (
         "Press a key... (Esc to cancel)",

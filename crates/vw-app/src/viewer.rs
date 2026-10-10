@@ -43,6 +43,8 @@ pub struct Slot {
 pub struct SlotResponse {
     pub clicked: bool,
     pub close: bool,
+    /// 右クリックメニューで「コピー」が選ばれた。
+    pub copy: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -127,8 +129,16 @@ impl Slot {
             ui.id().with(("slot", self.id)),
             Sense::click_and_drag(),
         );
-        if response.clicked() || response.drag_started() {
+        if response.clicked() || response.drag_started() || response.secondary_clicked() {
             out.clicked = true;
+        }
+        if self.shown.is_some() {
+            response.context_menu(|ui| {
+                if ui.button(tr(lang, "Copy")).clicked() {
+                    out.copy = true;
+                    ui.close();
+                }
+            });
         }
         if response.double_clicked() {
             self.reset_view();

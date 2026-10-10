@@ -84,10 +84,27 @@ pub struct Viewer {
     pub background: String,
 }
 
+/// グループの見出し（メタデータ欄の File など）をクリックしたときの動作。
+/// 開閉の ▶ はどちらでも開閉する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderClick {
+    /// 選ぶだけで開閉しない。コピーしようとして選ぶたびに閉じてしまわないようにする。
+    #[default]
+    Select,
+    SelectAndToggle,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Behavior {
+    pub header_click: HeaderClick,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
     pub viewer: Viewer,
+    pub behavior: Behavior,
     pub keys: Keymap,
 }
 
@@ -128,6 +145,11 @@ impl Settings {
                 )
                 .unwrap_or(d.viewer.background),
         };
+        let behavior = Behavior {
+            header_click: r
+                .get("behavior", "header_click")
+                .unwrap_or(d.behavior.header_click),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -142,6 +164,7 @@ impl Settings {
             Settings {
                 appearance,
                 viewer,
+                behavior,
                 keys,
             },
             problems,
@@ -431,6 +454,7 @@ mod tests {
         s.appearance.language = Language::Japanese;
         s.appearance.ui_scale = 1.25;
         s.viewer.background = "#202020".into();
+        s.behavior.header_click = HeaderClick::SelectAndToggle;
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -501,6 +525,27 @@ mod tests {
     fn malformed_background_falls_back_to_theme_default() {
         let (s, problems) = Settings::from_toml("[viewer]\nbackground = \"#12\"\n").unwrap();
         assert_eq!(s.viewer.background, "");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn header_click_selects_only_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.behavior.header_click, HeaderClick::Select);
+    }
+
+    #[test]
+    fn header_click_can_also_toggle() {
+        let (s, problems) =
+            Settings::from_toml("[behavior]\nheader_click = \"select_and_toggle\"\n").unwrap();
+        assert_eq!(s.behavior.header_click, HeaderClick::SelectAndToggle);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn unknown_header_click_falls_back_to_select() {
+        let (s, problems) = Settings::from_toml("[behavior]\nheader_click = \"toggle\"\n").unwrap();
+        assert_eq!(s.behavior.header_click, HeaderClick::Select);
         assert_eq!(problems.len(), 1);
     }
 
