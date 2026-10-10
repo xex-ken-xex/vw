@@ -9,19 +9,22 @@ use egui_phosphor::regular as icon;
 use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
 use crate::settings::{parse_hex_color, HeaderClick, Language, Settings, ThemeChoice};
+use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Appearance,
     Viewer,
+    Tree,
     Behavior,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 4] = [
+    const ALL: [Section; 5] = [
         Section::Appearance,
         Section::Viewer,
+        Section::Tree,
         Section::Behavior,
         Section::Keys,
     ];
@@ -30,6 +33,7 @@ impl Section {
         match self {
             Section::Appearance => "Appearance",
             Section::Viewer => "Viewer",
+            Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
             Section::Keys => "Keyboard shortcuts",
         }
@@ -46,7 +50,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 6] = [
+const ITEMS: [Item; 8] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -81,6 +85,20 @@ const ITEMS: [Item; 6] = [
         title: "Background color",
         description: "Color behind images (#RRGGBB). Leave empty for the theme default.",
         widget: background_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.sort",
+        title: "Sort order",
+        description: "Order of files and folders in the tree, also used for previous/next image. Folders always come first.",
+        widget: sort_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.sort_descending",
+        title: "Descending",
+        description: "Reverse the sort order (Z to A, newest first).",
+        widget: descending_widget,
     },
     Item {
         section: Section::Behavior,
@@ -131,6 +149,23 @@ fn scale_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
 
 fn compact_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.appearance.compact, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.sort;
+    egui::ComboBox::from_id_salt("tree_sort")
+        .selected_text(tr(lang, before.title()))
+        .show_ui(ui, |ui| {
+            for key in SortKey::ALL {
+                ui.selectable_value(&mut s.tree.sort, key, tr(lang, key.title()));
+            }
+        });
+    s.tree.sort != before
+}
+
+fn descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.tree.sort_descending, tr(lang, "Enabled"))
         .changed()
 }
 

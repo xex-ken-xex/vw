@@ -240,7 +240,7 @@ impl VwApp {
                 .and_then(|f| f.parent().map(Path::to_path_buf))
         });
 
-        let mut tree = FolderTree::new(root);
+        let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 
         let mut app = Self {
@@ -325,7 +325,8 @@ impl VwApp {
         let Some(path) = self.slots[self.active].path.clone() else {
             return;
         };
-        let files = tree::sibling_images(&path, self.loader.registry());
+        let order = self.settings.settings.tree.order();
+        let files = tree::sibling_images(&path, self.loader.registry(), order);
         let Some(pos) = files.iter().position(|p| p == &path) else {
             return;
         };
@@ -411,6 +412,7 @@ impl VwApp {
     /// 設定画面で値が変わったときに、反映して保存する。
     fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings.settings.appearance);
+        self.tree.set_order(self.settings.settings.tree.order());
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -431,6 +433,7 @@ impl VwApp {
                     self.log.error(format!("Settings: {p}"));
                 }
                 theme::apply(ctx, &self.settings.settings.appearance);
+                self.tree.set_order(self.settings.settings.tree.order());
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }

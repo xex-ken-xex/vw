@@ -15,6 +15,7 @@ mod loader;
 mod log;
 mod settings;
 mod settings_ui;
+mod sort;
 mod state;
 mod theme;
 mod toml_reader;
