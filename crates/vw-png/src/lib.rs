@@ -47,8 +47,10 @@ impl DecoderPlugin for PngPlugin {
         };
         let pixels = match frame.bit_depth {
             BitDepth::Sixteen => PixelData::U16(
-                buf.chunks_exact(2)
-                    .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                buf.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&b| u16::from_be_bytes(b))
                     .collect(),
             ),
             _ => PixelData::U8(buf),
