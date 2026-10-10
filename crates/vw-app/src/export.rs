@@ -23,16 +23,11 @@ pub enum Filter {
 }
 
 impl Filter {
-    /// `label` の画像が条件に合うか。`folder` は画像のあるフォルダ自身のラベルで、
-    /// `with_folder_flag` のときはフォルダのフラグを中の画像すべてに付いているものとして扱う。
-    pub fn matches(&self, label: &Label, folder: &Label, with_folder_flag: bool) -> bool {
-        let flag = match (label.flag, with_folder_flag) {
-            (None, true) => folder.flag,
-            (flag, _) => flag,
-        };
+    /// `label` の画像が条件に合うか。
+    pub fn matches(&self, label: &Label) -> bool {
         match self {
             Filter::All => true,
-            Filter::Flag(want) => flag == *want,
+            Filter::Flag(want) => label.flag == *want,
             Filter::Tag(tag) => label.tags.contains(tag),
         }
     }
@@ -40,26 +35,33 @@ impl Filter {
     pub fn is_all(&self) -> bool {
         *self == Filter::All
     }
+
+    /// サイドバーのボタンを押したときの次の条件。すべて → 良い → 悪い → フラグなし →
+    /// 各タグ → すべて の順に回る。設定から消えたタグで絞り込んでいたら、すべてに戻す。
+    pub fn next(&self, tags: &[String]) -> Filter {
+        let mut cycle = vec![
+            Filter::All,
+            Filter::Flag(Some(Flag::Good)),
+            Filter::Flag(Some(Flag::Bad)),
+            Filter::Flag(None),
+        ];
+        cycle.extend(tags.iter().cloned().map(Filter::Tag));
+        cycle
+            .iter()
+            .position(|f| f == self)
+            .map_or(Filter::All, |i| cycle[(i + 1) % cycle.len()].clone())
+    }
 }
 
 /// 絞り込みの条件と、ラベルの読み先をまとめたもの。
 pub struct Matcher<'a> {
     pub filter: &'a Filter,
-    pub with_folder_flag: bool,
     pub labels: &'a LabelStore,
 }
 
 impl Matcher<'_> {
     pub fn matches(&self, path: &Path) -> bool {
-        if self.filter.is_all() {
-            return true;
-        }
-        let folder = path
-            .parent()
-            .map(|d| self.labels.folder(d))
-            .unwrap_or_default();
-        self.filter
-            .matches(&self.labels.get(path), &folder, self.with_folder_flag)
+        self.filter.is_all() || self.filter.matches(&self.labels.get(path))
     }
 }
 
@@ -249,25 +251,42 @@ mod tests {
         let good = label(Some(Flag::Good), &[]);
         let none = Label::default();
         let f = Filter::Flag(Some(Flag::Good));
-        assert!(f.matches(&good, &none, false));
-        assert!(!f.matches(&none, &none, false));
-        assert!(Filter::Flag(None).matches(&none, &none, false));
-    }
-
-    #[test]
-    fn folder_flag_counts_for_unflagged_images_when_asked() {
-        let folder = label(Some(Flag::Good), &[]);
-        let f = Filter::Flag(Some(Flag::Good));
-        assert!(f.matches(&Label::default(), &folder, true));
-        assert!(!f.matches(&Label::default(), &folder, false));
-        assert!(!f.matches(&label(Some(Flag::Bad), &[]), &folder, true));
+        assert!(f.matches(&good));
+        assert!(!f.matches(&none));
+        assert!(Filter::Flag(None).matches(&none));
     }
 
     #[test]
     fn tag_filter_matches_images_with_that_tag() {
         let f = Filter::Tag("cat".into());
-        assert!(f.matches(&label(None, &["cat", "dog"]), &Label::default(), false));
-        assert!(!f.matches(&label(None, &["dog"]), &Label::default(), false));
+        assert!(f.matches(&label(None, &["cat", "dog"])));
+        assert!(!f.matches(&label(None, &["dog"])));
+    }
+
+    #[test]
+    fn filter_button_cycles_through_flags_then_tags_and_back_to_all() {
+        let tags = ["cat".to_string(), "dog".to_string()];
+        let mut seen = vec![Filter::All];
+        for _ in 0..6 {
+            seen.push(seen.last().unwrap().next(&tags));
+        }
+        assert_eq!(
+            seen,
+            [
+                Filter::All,
+                Filter::Flag(Some(Flag::Good)),
+                Filter::Flag(Some(Flag::Bad)),
+                Filter::Flag(None),
+                Filter::Tag("cat".into()),
+                Filter::Tag("dog".into()),
+                Filter::All,
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_on_a_removed_tag_cycles_back_to_all() {
+        assert_eq!(Filter::Tag("gone".into()).next(&[]), Filter::All);
     }
 
     #[test]
@@ -343,7 +362,6 @@ mod tests {
         let filter = Filter::Flag(Some(Flag::Good));
         let matcher = Matcher {
             filter: &filter,
-            with_folder_flag: false,
             labels: &labels,
         };
         let order = SortOrder::default();

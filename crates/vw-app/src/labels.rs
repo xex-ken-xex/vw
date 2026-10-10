@@ -1,6 +1,8 @@
-//! 画像とフォルダのラベル（良い / 悪いのフラグと、タグ）。
+//! 画像のラベル（良い / 悪いのフラグと、タグ）。
 //!
-//! フォルダごとに 1 つのファイル（[`FILE_NAME`]）に、そのフォルダの画像とフォルダ自身のラベルを持つ。
+//! フォルダごとに 1 つのファイル（[`FILE_NAME`]）に、そのフォルダの画像のラベルを持つ。
+//! フォルダ自身にはラベルを付けない。フォルダのフラグと中の画像のフラグが食い違うと、
+//! どの画像が絞り込みに残るのか分かりにくくなるため。
 //! 画像ファイルには書き込まない。DICOM や RAW を書き換えたくないため。
 //! 設定フォルダの 1 つのデータベースにしないのは、フォルダを移動・コピーしたときにラベルを
 //! 一緒に持っていけるようにするため。書き込めないフォルダ（読み取り専用のメディアなど）の
@@ -43,15 +45,13 @@ impl Label {
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct LabelFile {
     version: u32,
-    #[serde(default, skip_serializing_if = "Label::is_empty")]
-    folder: Label,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     files: BTreeMap<String, Label>,
 }
 
 impl LabelFile {
     fn is_empty(&self) -> bool {
-        self.folder.is_empty() && self.files.is_empty()
+        self.files.is_empty()
     }
 }
 
@@ -92,11 +92,6 @@ impl LabelStore {
         })
     }
 
-    /// フォルダ自身のラベル。
-    pub fn folder(&self, dir: &Path) -> Label {
-        self.with_dir(dir, |d| d.file.folder.clone())
-    }
-
     /// 画像のフラグを `flag` にする。同じフラグがもう付いていたら外す。
     /// 付いたフラグを返す。
     pub fn toggle_flag(&mut self, path: &Path, flag: Flag) -> Result<Option<Flag>, String> {
@@ -115,19 +110,6 @@ impl LabelStore {
             }
             added
         })
-    }
-
-    /// フォルダ自身のフラグを付ける・外す。
-    pub fn toggle_folder_flag(&mut self, dir: &Path, flag: Flag) -> Result<Option<Flag>, String> {
-        self.with_dir(dir, |_| ());
-        let result = {
-            let mut dirs = self.dirs.borrow_mut();
-            let label = &mut dirs.get_mut(dir).expect("loaded above").file.folder;
-            label.flag = (label.flag != Some(flag)).then_some(flag);
-            label.flag
-        };
-        self.save(dir)?;
-        Ok(result)
     }
 
     /// フォルダのラベルファイルが外で書き換えられたときに、次に使うときに読み直させる。
@@ -333,16 +315,6 @@ mod tests {
         assert_eq!(store.toggle_tag(&img, "cat"), Ok(false));
         let tags: Vec<_> = store.get(&img).tags.into_iter().collect();
         assert_eq!(tags, ["dog"]);
-    }
-
-    #[test]
-    fn folder_flag_is_kept_in_the_folders_own_file() {
-        let dir = TempDir::new();
-        let sub = dir.mkdir("sub");
-        let mut store = LabelStore::new(None);
-        store.toggle_folder_flag(&sub, Flag::Good).unwrap();
-        assert!(sub.join(FILE_NAME).exists());
-        assert_eq!(LabelStore::new(None).folder(&sub).flag, Some(Flag::Good));
     }
 
     #[test]

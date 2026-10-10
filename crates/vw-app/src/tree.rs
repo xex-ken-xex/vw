@@ -61,8 +61,8 @@ pub enum TreeAction {
     Open(PathBuf),
     /// スロットを追加して表示する（Ctrl / Cmd + クリック）。
     Add(PathBuf),
-    /// フォルダを選んだ（クリック。開閉もする）。
-    Select(PathBuf),
+    /// フォルダの見出しをクリックした（ツリーを Ctrl+C の対象にするだけ）。
+    Select,
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
     /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
@@ -189,8 +189,7 @@ impl Node {
         state.set_open(self.open);
         let (toggle, header, _) = state
             .show_header(ui, |ui| {
-                let text = self.text(ui, view.labels.folder(&self.path));
-                ui.selectable_label(is_selected, text)
+                ui.selectable_label(is_selected, self.name.as_str())
             })
             .body(|ui| {
                 let children = self
@@ -221,7 +220,7 @@ impl Node {
             self.open = !self.open;
         }
         if label.clicked() {
-            out.action = Some(TreeAction::Select(self.path.clone()));
+            out.action = Some(TreeAction::Select);
             out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
         }
         copy_menu(&label, &self.path, lang, &mut out.action);

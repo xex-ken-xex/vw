@@ -123,8 +123,6 @@ pub struct VwApp {
     metadata_from: Option<u64>,
     /// Ctrl+C でコピーする欄。
     focus: Focus,
-    /// ツリーで選んでいる項目。アクティブなスロットで画像を開いたときもその画像に移す。
-    tree_selected: Option<PathBuf>,
     meta_selected: Option<MetaSelection>,
     /// コピーしたことを知らせる表示。
     toast: Option<Toast>,
@@ -154,8 +152,6 @@ pub struct VwApp {
     tagging: bool,
     /// ツリー・画像送り・フォルダの読み込み・スライドショーで対象にする画像。
     filter: Filter,
-    /// 絞り込みで、フォルダのフラグを中の画像にも付いているものとして扱う。
-    filter_folders: bool,
     export: Option<ExportDialog>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
@@ -214,6 +210,40 @@ struct Restore {
 /// 位置を送った後、移動先のモニタの拡大率が届くのを待つ最大フレーム数。
 /// 届かない環境（拡大率が変わらない移動、X11 など）でも大きさの復元を止めないための上限。
 const RESTORE_WAIT_FRAMES: u32 = 10;
+
+/// スロットの上でホイールを回したときに送るもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelStep {
+    /// スロットの中の画像を送る。
+    Image,
+    /// アクティブなスロットを送る。
+    Slot,
+    Nothing,
+}
+
+/// ホイールで何を送るか。塊（フォルダごと）のスロットは中の画像を送る。単体のスロットは
+/// 1 枚だけ見ているとき（1x1 か最大化）に限って送る。並べて見ているときに送ると、手元の
+/// スロットだけ知らないうちに別の画像に変わってしまうため。1 枚だけ見ていてスロットが
+/// ほかにもあれば、隣のスロットへ移る。
+pub fn wheel_step(chunk: bool, one_up: bool, slots: usize) -> WheelStep {
+    match (chunk, one_up) {
+        (true, _) => WheelStep::Image,
+        (false, true) if slots > 1 => WheelStep::Slot,
+        (false, true) => WheelStep::Image,
+        (false, false) => WheelStep::Nothing,
+    }
+}
+
+/// `paths` のうち `index` から一番近い、条件に合う位置。同じ距離なら後ろを選ぶ。
+pub fn nearest_match(
+    paths: &[PathBuf],
+    index: usize,
+    matches: impl Fn(&Path) -> bool,
+) -> Option<usize> {
+    (0..paths.len())
+        .filter(|&i| matches(&paths[i]))
+        .min_by_key(|&i| (i.abs_diff(index), i < index))
+}
 
 /// `len` 件の中で `pos` から `delta` 進んだ位置。端まで行ったら反対側に回り込む。
 pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
@@ -343,7 +373,6 @@ impl VwApp {
             window: None,
             metadata_from: None,
             focus: Focus::Images,
-            tree_selected: None,
             meta_selected: None,
             toast: None,
             frame: 0,
@@ -360,7 +389,6 @@ impl VwApp {
             labels: LabelStore::new(label_fallback),
             tagging: false,
             filter: Filter::All,
-            filter_folders: false,
             export: None,
         };
         for (i, f) in files.into_iter().enumerate() {
@@ -417,7 +445,6 @@ impl VwApp {
     /// アクティブなスロットで `path` を読み込み始める。結果は [`Self::receive`] で受け取る。
     /// 前の画像は新しい画像が届くまで表示したままにして、切り替え時のちらつきを避ける。
     fn open_in_active(&mut self, path: PathBuf) {
-        self.tree_selected = Some(path.clone());
         // フォルダスロットに並びの外の画像を開いたら、普通のスロットに戻す。
         let slot = &mut self.slots[self.active];
         // 読み込みで並べたスロットも、別の画像を開いたらそのフォルダの 1 枚ではなくなる。
@@ -491,7 +518,6 @@ impl VwApp {
         let finished = load.finished();
         let matcher = Matcher {
             filter: &self.filter,
-            with_folder_flag: self.filter_folders,
             labels: &self.labels,
         };
         let paths: Vec<PathBuf> = paths.into_iter().filter(|p| matcher.matches(p)).collect();
@@ -501,10 +527,15 @@ impl VwApp {
             let last = &self.slots[self.slots.len() - 1];
             let mut reuse_last = last.path.is_none() && !last.loading;
             let mut targets = Vec::with_capacity(paths.len());
+            let root = load.root.clone();
             for path in paths {
-                if self.load_into == LoadInto::Folders {
+                let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+                // 1 枚 1 スロットで読むときも、サブフォルダの画像はフォルダごとに 1 つのスロット
+                // （塊）にまとめる。全部をばらばらに並べると、どの画像がどのフォルダのものか
+                // 分からなくなるため。
+                let chunk = self.load_into == LoadInto::Folders || folder != root;
+                if chunk {
                     let last = self.slots.last_mut().expect("there is always a slot");
-                    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
                     if let Some(seq) = last
                         .sequence
                         .as_mut()
@@ -519,9 +550,8 @@ impl VwApp {
                     self.next_id += 1;
                 }
                 let index = self.slots.len() - 1;
-                self.slots[index].from_folder = self.load_into == LoadInto::Images;
-                if self.load_into == LoadInto::Folders {
-                    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+                self.slots[index].from_folder = !chunk;
+                if chunk {
                     self.slots[index].sequence = Some(Sequence::new(folder, path.clone()));
                 }
                 targets.push((index, path));
@@ -915,7 +945,6 @@ impl VwApp {
         if self.maximized.is_some() {
             self.maximized = Some(self.slots[self.active].id);
         }
-        self.tree_selected = self.slots[self.active].path.clone();
     }
 
     /// `index` 番目のスロットの最大化を切り替える。
@@ -1112,9 +1141,6 @@ impl VwApp {
         }
         let full = self.cell_needs_full();
         for (index, path) in loads {
-            if index == self.active {
-                self.tree_selected = Some(path.clone());
-            }
             self.start_load(index, path, full);
         }
     }
@@ -1194,7 +1220,6 @@ impl VwApp {
             if self.maximized == Some(followed_id) {
                 self.maximized = Some(self.slots[index].id);
             }
-            self.tree_selected = self.slots[index].path.clone();
         }
     }
 
@@ -1240,32 +1265,168 @@ impl VwApp {
     fn matcher(&self) -> Matcher<'_> {
         Matcher {
             filter: &self.filter,
-            with_folder_flag: self.filter_folders,
             labels: &self.labels,
         }
     }
 
-    fn set_filter(&mut self, filter: Filter) {
+    /// 絞り込みを変え、読み込んだフォルダのスロットにもすぐ効かせる。
+    fn set_filter(&mut self, ctx: &egui::Context, filter: Filter) {
         self.log.info(format!(
             "Filter: {}",
             filter_name(&filter, Language::English)
         ));
         self.filter = filter;
+        self.apply_filter_to_slots();
+        ctx.request_repaint();
+    }
+
+    /// 絞り込みを変えたときに、フォルダの読み込みで並べたスロットを条件に合わせる。
+    /// 自分で開いた画像のスロットはそのままにする。
+    fn apply_filter_to_slots(&mut self) {
+        let registry = self.loader.registry().clone();
+        let order = self.settings.settings.tree.order();
+        let roots: Vec<PathBuf> = self
+            .loaded_folders
+            .iter()
+            .filter(|(_, into)| *into == LoadInto::Images)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for root in roots {
+            let matcher = self.matcher();
+            let wanted: Vec<PathBuf> = tree::list_folder(&root, &registry, order)
+                .1
+                .into_iter()
+                .filter(|p| matcher.matches(p))
+                .collect();
+            self.rearrange_folder_slots(&root, wanted);
+        }
+        let full = self.cell_needs_full();
+        for index in 0..self.slots.len() {
+            let Some(seq) = &self.slots[index].sequence else {
+                continue;
+            };
+            let matcher = self.matcher();
+            let target = nearest_match(&seq.paths, seq.index, |p| matcher.matches(p));
+            let Some(target) = target else {
+                // 合う画像がなければ空にする。条件に合わない画像を出したままにすると、
+                // 絞り込みが効いていないように見えるため。並びは残して、条件を戻したら出し直す。
+                self.cancel_requests(&self.slots[index]);
+                let slot = &mut self.slots[index];
+                slot.path = None;
+                slot.shown = None;
+                slot.loading = false;
+                slot.full_request = None;
+                continue;
+            };
+            let path = seq.paths[target].clone();
+            if self.slots[index].path.as_ref() == Some(&path) {
+                continue;
+            }
+            if let Some(seq) = &mut self.slots[index].sequence {
+                seq.index = target;
+            }
+            self.start_load(index, path, full);
+        }
+    }
+
+    /// `root` の画像を 1 枚 1 スロットに並べたスロットを、`wanted` の画像に並べ直す。
+    /// 残る画像のスロットは読み直さずにそのまま使う。
+    fn rearrange_folder_slots(&mut self, root: &Path, wanted: Vec<PathBuf>) {
+        let in_root =
+            |s: &Slot| s.from_folder && s.path.as_deref().and_then(Path::parent) == Some(root);
+        let active_id = self.slots[self.active].id;
+        let mut at = self.slots.iter().position(in_root);
+        let mut kept = HashMap::new();
+        let mut rest = Vec::with_capacity(self.slots.len());
+        for slot in std::mem::take(&mut self.slots) {
+            if in_root(&slot) {
+                kept.insert(slot.path.clone().expect("checked by in_root"), slot);
+            } else {
+                rest.push(slot);
+            }
+        }
+        // 前に全部隠れていたフォルダは、読み込みのときと同じくサブフォルダの塊より前に並べる。
+        // 塊もなければ末尾の空のスロットから並べる。
+        let at = *at.get_or_insert_with(|| {
+            let chunk = rest.iter().position(|s| {
+                s.sequence
+                    .as_ref()
+                    .is_some_and(|q| q.folder.starts_with(root))
+            });
+            if let Some(chunk) = chunk {
+                return chunk;
+            }
+            let empty = rest
+                .last()
+                .is_some_and(|s| s.path.is_none() && !s.loading && s.sequence.is_none());
+            if empty && !wanted.is_empty() {
+                rest.pop();
+            }
+            rest.len()
+        });
+        let mut new = Vec::with_capacity(wanted.len());
+        let mut loads = Vec::new();
+        for path in wanted {
+            match kept.remove(&path) {
+                Some(slot) => new.push(slot),
+                None => {
+                    let mut slot = Slot::new(self.next_id);
+                    self.next_id += 1;
+                    slot.from_folder = true;
+                    loads.push((slot.id, path));
+                    new.push(slot);
+                }
+            }
+        }
+        let first_id = new.first().map(|s| s.id);
+        rest.splice(at..at, new);
+        self.slots = rest;
+        for slot in kept.into_values() {
+            self.cancel_requests(&slot);
+        }
+        if self.slots.is_empty() {
+            self.slots.push(Slot::new(self.next_id));
+            self.next_id += 1;
+        }
+        let find = |id| self.slots.iter().position(|s| s.id == id);
+        self.active = find(active_id)
+            .or_else(|| first_id.and_then(find))
+            .unwrap_or(at.min(self.slots.len() - 1));
+        if let Some(id) = self.maximized {
+            if find(id).is_none() {
+                self.maximized = Some(self.slots[self.active].id);
+            }
+        }
+        let full = self.cell_needs_full();
+        for (id, path) in loads {
+            if let Some(index) = self.slots.iter().position(|s| s.id == id) {
+                self.start_load(index, path, full);
+            }
+        }
+    }
+
+    /// サイドバーの絞り込みボタンの色。絞り込んでいなければ `None`（普段の色）。
+    fn filter_color(&self) -> Option<Color32> {
+        match &self.filter {
+            Filter::All => None,
+            Filter::Flag(Some(flag)) => Some(theme::flag_color(*flag)),
+            Filter::Flag(None) => Some(theme::UNFLAGGED),
+            Filter::Tag(tag) => {
+                let tags = &self.settings.settings.labels.tags;
+                tags.iter().position(|t| t == tag).map(theme::tag_color)
+            }
+        }
     }
 
     /// ツリーで選んだフォルダ（ファイルならそのフォルダ）を対象に、書き出しの画面を開く。
     fn open_export(&mut self) {
-        let root = self
-            .tree_selected
-            .clone()
-            .or_else(|| self.slots[self.active].path.clone())
-            .and_then(|p| {
-                if p.is_dir() {
-                    Some(p)
-                } else {
-                    p.parent().map(Path::to_path_buf)
-                }
-            });
+        let root = self.tree_selected().and_then(|p| {
+            if p.is_dir() {
+                Some(p)
+            } else {
+                p.parent().map(Path::to_path_buf)
+            }
+        });
         let Some(root) = root else {
             self.log
                 .warn(tr(self.lang(), "Select a folder in the tree first."));
@@ -1487,25 +1648,20 @@ impl VwApp {
         }
     }
 
-    /// ラベルを付ける先。ツリーで選んだ項目（`from_tree`）か、アクティブなスロットの画像。
-    fn label_target(&self, from_tree: bool) -> Option<PathBuf> {
-        if from_tree {
-            return self.tree_selected.clone();
-        }
+    /// ツリーで選んでいる項目。アクティブなスロットの画像にする。
+    ///
+    /// ツリーでクリックしたフォルダを選択にしないのは、開閉のたびに選択がフォルダへ移り、
+    /// ツリーの選択とスロットの画像が食い違ってしまうため。フォルダのパスは右クリックでコピーできる。
+    fn tree_selected(&self) -> Option<PathBuf> {
         self.slots[self.active].path.clone()
     }
 
-    /// フラグを付ける・外す。フォルダならフォルダ自身に付ける。
-    fn flag(&mut self, flag: Flag, from_tree: bool) {
-        let Some(path) = self.label_target(from_tree) else {
+    /// フラグを付ける・外す。
+    fn flag(&mut self, flag: Flag) {
+        let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
             return;
         };
-        let result = if path.is_dir() {
-            self.labels.toggle_folder_flag(&path, flag)
-        } else {
-            self.labels.toggle_flag(&path, flag)
-        };
-        match result {
+        match self.labels.toggle_flag(&path, flag) {
             Ok(now) => {
                 let what = match now {
                     Some(Flag::Good) => "flagged good",
@@ -1513,7 +1669,7 @@ impl VwApp {
                     None => "flag removed",
                 };
                 self.log.info(format!("{}: {what}", path.display()));
-                if now.is_some() && !from_tree {
+                if now.is_some() {
                     self.advance_after_label();
                 }
             }
@@ -1522,7 +1678,7 @@ impl VwApp {
     }
 
     /// 設定の `index` 番目のタグを付ける・外す。
-    fn tag(&mut self, index: usize, from_tree: bool) {
+    fn tag(&mut self, index: usize) {
         let Some(tag) = self.settings.settings.labels.tags.get(index).cloned() else {
             self.log.warn(format!(
                 "No tag for key {} (add tags in Settings > Flags and tags)",
@@ -1530,14 +1686,14 @@ impl VwApp {
             ));
             return;
         };
-        let Some(path) = self.label_target(from_tree).filter(|p| !p.is_dir()) else {
+        let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
             return;
         };
         match self.labels.toggle_tag(&path, &tag) {
             Ok(added) => {
                 let what = if added { "tagged" } else { "untagged" };
                 self.log.info(format!("{}: {what} {tag}", path.display()));
-                if added && !from_tree {
+                if added {
                     self.advance_after_label();
                 }
             }
@@ -1618,6 +1774,7 @@ impl VwApp {
                         Some(_) => format!("{} {tag}", i + 1),
                         None => tag.clone(),
                     };
+                    let text = egui::RichText::new(text).color(theme::tag_color(i));
                     let on = label.tags.contains(tag);
                     if ui.add(egui::Button::selectable(on, text)).clicked() {
                         clicked = Some(TagClick::Tag(i));
@@ -1673,13 +1830,13 @@ impl VwApp {
                 self.step_active(1);
             }
             Action::ToggleTagging => self.tagging ^= true,
-            Action::FilterAll => self.set_filter(Filter::All),
-            Action::FilterGood => self.set_filter(Filter::Flag(Some(Flag::Good))),
-            Action::FilterBad => self.set_filter(Filter::Flag(Some(Flag::Bad))),
-            Action::FilterUnflagged => self.set_filter(Filter::Flag(None)),
+            Action::FilterAll => self.set_filter(ctx, Filter::All),
+            Action::FilterGood => self.set_filter(ctx, Filter::Flag(Some(Flag::Good))),
+            Action::FilterBad => self.set_filter(ctx, Filter::Flag(Some(Flag::Bad))),
+            Action::FilterUnflagged => self.set_filter(ctx, Filter::Flag(None)),
             Action::ExportImages => self.open_export(),
-            Action::FlagGood => self.flag(Flag::Good, self.focus == Focus::Tree),
-            Action::FlagBad => self.flag(Flag::Bad, self.focus == Focus::Tree),
+            Action::FlagGood => self.flag(Flag::Good),
+            Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
             | Action::Tag2
             | Action::Tag3
@@ -1690,7 +1847,7 @@ impl VwApp {
             | Action::Tag8
             | Action::Tag9 => {
                 if let Some(i) = action.tag_index() {
-                    self.tag(i, self.focus == Focus::Tree);
+                    self.tag(i);
                 }
             }
             Action::TogglePlay => {
@@ -1914,6 +2071,21 @@ impl VwApp {
             let button = egui::Button::selectable(self.tagging, big(icon::TAG)).min_size(size);
             if ui.add(button).on_hover_text(tip).clicked() {
                 self.tagging ^= true;
+            }
+            let mut text = big(icon::FUNNEL);
+            if let Some(color) = self.filter_color() {
+                text = text.color(color);
+            }
+            let tip = format!(
+                "{}: {}\n{}",
+                tr(lang, "Filter"),
+                filter_name(&self.filter, lang),
+                tr(lang, "Click to change")
+            );
+            let button = egui::Button::selectable(!self.filter.is_all(), text).min_size(size);
+            if ui.add(button).on_hover_text(tip).clicked() {
+                let next = self.filter.next(&self.settings.settings.labels.tags);
+                self.set_filter(ui.ctx(), next);
             }
             ui.separator();
             let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);
@@ -2251,20 +2423,11 @@ impl VwApp {
                         .add(egui::Button::selectable(self.filter == filter, &tag))
                         .clicked()
                     {
-                        self.set_filter(filter);
+                        self.set_filter(ui.ctx(), filter);
                         ui.close();
                     }
                 }
             });
-        }
-        if ui
-            .checkbox(
-                &mut self.filter_folders,
-                tr(lang, "Count folder flags for their images"),
-            )
-            .clicked()
-        {
-            ui.close();
         }
         ui.separator();
         if self.menu_item(ui, Action::ExportImages, None) {
@@ -2591,7 +2754,7 @@ impl VwApp {
         match self.focus {
             Focus::MetadataText => {}
             Focus::Tree => {
-                if let Some(p) = self.tree_selected.clone() {
+                if let Some(p) = self.tree_selected() {
                     self.copy_text(
                         ctx,
                         p.display().to_string(),
@@ -2662,8 +2825,8 @@ impl VwApp {
                 .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.tag_bar(ui))
                 .inner;
             match click {
-                Some(TagClick::Flag(flag)) => self.flag(flag, false),
-                Some(TagClick::Tag(i)) => self.tag(i, false),
+                Some(TagClick::Flag(flag)) => self.flag(flag),
+                Some(TagClick::Tag(i)) => self.tag(i),
                 None => {}
             }
         }
@@ -2691,6 +2854,11 @@ impl VwApp {
                 ),
                 cell,
             );
+            let empty_hint = if self.slots[i].sequence.is_some() {
+                "No images match the filter"
+            } else {
+                hint
+            };
             let label = self.slots[i]
                 .path
                 .as_deref()
@@ -2703,7 +2871,7 @@ impl VwApp {
                 SlotLook {
                     background,
                     lang,
-                    empty_hint: hint,
+                    empty_hint,
                     label: &label,
                 },
             );
@@ -2716,7 +2884,6 @@ impl VwApp {
             }
             if resp.clicked {
                 self.active = i;
-                self.tree_selected = self.slots[i].path.clone();
                 self.set_focus(ui.ctx(), Focus::Images);
             }
             if resp.copy {
@@ -2748,13 +2915,15 @@ impl VwApp {
         } else if let Some(i) = maximize {
             self.toggle_maximize(i);
         } else if let Some((i, delta)) = step {
-            // 最大化中はスロットを順に送る。スロットが 1 つしかなければ、送る先がないので
-            // そのスロットのフォルダの画像を送る。
-            if self.maximized.is_some() && self.slots.len() > 1 {
-                self.step_slot(delta);
-            } else {
-                self.active = i;
-                self.step_active(delta);
+            let chunk = self.slots[i].sequence.is_some();
+            let one_up = self.maximized.is_some() || self.shows_one_slot();
+            match wheel_step(chunk, one_up, self.slots.len()) {
+                WheelStep::Image => {
+                    self.active = i;
+                    self.step_active(delta);
+                }
+                WheelStep::Slot => self.step_slot(delta),
+                WheelStep::Nothing => {}
             }
         }
         self.manage_full_images();
@@ -2859,7 +3028,7 @@ impl eframe::App for VwApp {
                         );
                         panel_header(ui, &text);
                     }
-                    let selected = self.tree_selected.clone();
+                    let selected = self.tree_selected();
                     let t = &self.settings.settings.tree;
                     let how = FolderClicks {
                         mode: t.mode,
@@ -2871,7 +3040,6 @@ impl eframe::App for VwApp {
                         .show(ui, |ui| {
                             let matcher = Matcher {
                                 filter: &self.filter,
-                                with_folder_flag: self.filter_folders,
                                 labels: &self.labels,
                             };
                             self.tree.ui(
@@ -2897,9 +3065,8 @@ impl eframe::App for VwApp {
                             self.add_slot();
                             self.open_in_active(p);
                         }
-                        TreeAction::Select(p) => self.tree_selected = Some(p),
+                        TreeAction::Select => {}
                         TreeAction::Load(p) => {
-                            self.tree_selected = Some(p.clone());
                             let tree = &self.settings.settings.tree;
                             let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
                             let into = if other {
@@ -3019,6 +3186,32 @@ fn color_name(c: ColorModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_steps_images_in_a_chunk_slot_even_when_slots_are_tiled() {
+        assert_eq!(wheel_step(true, false, 4), WheelStep::Image);
+    }
+
+    #[test]
+    fn wheel_does_nothing_on_a_single_image_slot_when_slots_are_tiled() {
+        assert_eq!(wheel_step(false, false, 4), WheelStep::Nothing);
+    }
+
+    #[test]
+    fn wheel_moves_to_the_next_slot_when_one_of_several_is_shown() {
+        assert_eq!(wheel_step(false, true, 4), WheelStep::Slot);
+        assert_eq!(wheel_step(false, true, 1), WheelStep::Image);
+    }
+
+    #[test]
+    fn nearest_match_prefers_the_closest_image_and_then_the_later_one() {
+        let paths: Vec<PathBuf> = ["a", "b", "c", "d", "e"].map(PathBuf::from).into();
+        let only = |names: &'static [&str]| move |p: &Path| names.iter().any(|n| p == Path::new(n));
+        assert_eq!(nearest_match(&paths, 2, only(&["c"])), Some(2));
+        assert_eq!(nearest_match(&paths, 2, only(&["b", "d"])), Some(3));
+        assert_eq!(nearest_match(&paths, 2, only(&["a", "e"])), Some(4));
+        assert_eq!(nearest_match(&paths, 2, only(&[])), None);
+    }
 
     #[test]
     fn step_wraps_around_both_ends() {

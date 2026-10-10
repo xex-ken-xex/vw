@@ -65,6 +65,24 @@ pub fn flag_color(flag: crate::labels::Flag) -> Color32 {
     }
 }
 
+/// フラグのない画像で絞り込んでいるときの色。
+pub const UNFLAGGED: Color32 = Color32::from_rgb(158, 158, 158);
+
+/// 設定の `index` 番目のタグの色。フラグの緑・赤と見分けやすい色から順に使い、足りなければ繰り返す。
+pub fn tag_color(index: usize) -> Color32 {
+    const COLORS: [Color32; 8] = [
+        Color32::from_rgb(66, 165, 245),
+        Color32::from_rgb(255, 193, 7),
+        Color32::from_rgb(171, 71, 188),
+        Color32::from_rgb(38, 198, 218),
+        Color32::from_rgb(255, 112, 67),
+        Color32::from_rgb(236, 64, 122),
+        Color32::from_rgb(156, 204, 101),
+        Color32::from_rgb(121, 134, 203),
+    ];
+    COLORS[index % COLORS.len()]
+}
+
 /// テーマの既定の画像背景色。
 pub fn canvas_color(theme: Theme) -> Color32 {
     palette(theme).canvas
