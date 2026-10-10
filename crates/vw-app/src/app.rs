@@ -144,6 +144,9 @@ pub struct VwApp {
     last_dropped: u64,
     /// フォルダの監視。自動リロードが無効なら `None`。
     watcher: Option<FolderWatcher>,
+    /// 画像自動展開モードで読み込んだフォルダと入れ方。画像がなかったフォルダも監視して、
+    /// 後から来た画像をスロットに足すために覚えておく。
+    loaded_folders: Vec<(PathBuf, LoadInto)>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
@@ -312,6 +315,7 @@ impl VwApp {
             last_dropped: 0,
             watcher: None,
             watcher_failed: false,
+            loaded_folders: Vec::new(),
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -332,6 +336,7 @@ impl VwApp {
     /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
     fn close_all_slots(&mut self) {
         self.maximized = None;
+        self.loaded_folders.clear();
         for s in std::mem::take(&mut self.slots) {
             self.cancel_requests(&s);
         }
@@ -410,6 +415,8 @@ impl VwApp {
             self.close_all_slots();
         }
         self.load_into = into;
+        self.loaded_folders.retain(|(p, _)| *p != path);
+        self.loaded_folders.push((path.clone(), into));
         // 末尾の空のスロットは読み込みで使い回すので、この読み込みのスロットに含める。
         let last = &self.slots[self.slots.len() - 1];
         self.load_slots_from = if last.path.is_none() && !last.loading {
@@ -892,6 +899,7 @@ impl VwApp {
     /// 監視するフォルダ。ツリーで開いているフォルダと、スロットに出している画像のフォルダ。
     fn watched_dirs(&self) -> HashSet<PathBuf> {
         let mut dirs: HashSet<PathBuf> = self.tree.open_paths().into_iter().collect();
+        dirs.extend(self.loaded_folders.iter().map(|(p, _)| p.clone()));
         for slot in &self.slots {
             if let Some(seq) = &slot.sequence {
                 dirs.insert(seq.folder.clone());
@@ -1034,9 +1042,16 @@ impl VwApp {
                 self.close_slot(index);
             }
         }
-        let Some(last) = self.slots.iter().rposition(in_dir) else {
+        let last = self.slots.iter().rposition(in_dir);
+        let root = self
+            .loaded_folders
+            .iter()
+            .find(|(p, _)| p == dir)
+            .map(|(_, into)| *into);
+        // 読み込んだ時点で画像がなかったフォルダには、まだこのフォルダのスロットがない。
+        if last.is_none() && root.is_none() {
             return;
-        };
+        }
         let order = self.settings.settings.tree.order();
         let new: Vec<PathBuf> = tree::list_folder(dir, registry, order)
             .1
@@ -1046,27 +1061,84 @@ impl VwApp {
         if new.is_empty() {
             return;
         }
-        let follow = self.active == last;
-        let last_id = self.slots[last].id;
+        if last.is_none() && root == Some(LoadInto::Folders) {
+            let has_slot = self
+                .slots
+                .iter()
+                .any(|s| s.sequence.as_ref().is_some_and(|q| q.folder == dir));
+            if !has_slot {
+                self.add_folder_slot(dir, registry);
+            }
+            return;
+        }
+        let empty = |s: &Slot| s.path.is_none() && !s.loading;
+        // 最後の画像か、まだ何も出していないスロットを見ていたなら、新しい画像に移る。
+        let follow = match last {
+            Some(last) => self.active == last,
+            None => empty(&self.slots[self.active]),
+        };
+        let followed_id = self.slots[self.active].id;
+        let mut index = last.map_or(self.slots.len(), |l| l + 1);
+        // 読み込みで使い回すのと同じく、末尾の空のスロットは新しい画像に使う。
+        if last.is_none() && empty(&self.slots[self.slots.len() - 1]) {
+            index -= 1;
+            self.slots[index].from_folder = true;
+        } else {
+            self.insert_folder_slot(index);
+        }
         let full = self.cell_needs_full();
         for (i, path) in new.into_iter().enumerate() {
-            let index = last + 1 + i;
-            let mut slot = Slot::new(self.next_id);
-            self.next_id += 1;
-            slot.from_folder = true;
-            self.slots.insert(index, slot);
-            if self.active >= index {
-                self.active += 1;
+            if i > 0 {
+                index += 1;
+                self.insert_folder_slot(index);
             }
             self.start_load(index, path, full);
         }
         if follow {
-            self.active = self.slots.iter().rposition(in_dir).unwrap_or(self.active);
-            if self.maximized == Some(last_id) {
-                self.maximized = Some(self.slots[self.active].id);
+            self.active = index;
+            if self.maximized == Some(followed_id) {
+                self.maximized = Some(self.slots[index].id);
             }
-            self.tree_selected = self.slots[self.active].path.clone();
+            self.tree_selected = self.slots[index].path.clone();
         }
+    }
+
+    /// 1 枚 1 スロットの読み込みのスロットを `index` に挟む。
+    fn insert_folder_slot(&mut self, index: usize) {
+        let mut slot = Slot::new(self.next_id);
+        self.next_id += 1;
+        slot.from_folder = true;
+        self.slots.insert(index, slot);
+        if self.active >= index && self.active + 1 < self.slots.len() {
+            self.active += 1;
+        }
+    }
+
+    /// 読み込んだ時点で空だったフォルダに画像が来たら、フォルダスロットを作って最新の画像を出す。
+    fn add_folder_slot(&mut self, dir: &Path, registry: &Registry) {
+        let order = self.settings.settings.tree.order();
+        let paths = tree::list_folder(dir, registry, order).1;
+        let Some(newest) = paths.last().cloned() else {
+            return;
+        };
+        let last = self.slots.len() - 1;
+        let reuse = self.slots[last].path.is_none() && !self.slots[last].loading;
+        let follow = self.slots[self.active].path.is_none();
+        if !reuse {
+            self.slots.push(Slot::new(self.next_id));
+            self.next_id += 1;
+        }
+        let index = self.slots.len() - 1;
+        self.slots[index].sequence = Some(Sequence {
+            folder: dir.to_path_buf(),
+            index: paths.len() - 1,
+            paths,
+        });
+        if follow {
+            self.active = index;
+        }
+        let full = self.cell_needs_full();
+        self.start_load(index, newest, full);
     }
 
     fn lang(&self) -> Language {
