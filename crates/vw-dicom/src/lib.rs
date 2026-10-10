@@ -235,7 +235,7 @@ fn color_image(px: &DecodedPixelData, raw: &[u8], pixels: usize) -> Result<VwIma
 
 /// YCbCr（JPEG と同じ式）を RGB に直す。
 fn ybr_to_rgb(px: &mut [u8]) {
-    for p in px.chunks_exact_mut(3) {
+    for p in px.as_chunks_mut::<3>().0 {
         let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
         p[0] = (y + 1.402 * cr).round().clamp(0.0, 255.0) as u8;
         p[1] = (y - 0.344136 * cb - 0.714136 * cr)
