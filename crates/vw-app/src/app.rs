@@ -124,6 +124,8 @@ pub struct VwApp {
     /// Ctrl+C でコピーする欄。
     focus: Focus,
     meta_selected: Option<MetaSelection>,
+    /// ログ欄で選んでいる行。
+    log_selected: Option<usize>,
     /// コピーしたことを知らせる表示。
     toast: Option<Toast>,
     /// 描いたフレームの番号。フル解像度の画像を最後に使った時期の比較に使う。
@@ -374,6 +376,7 @@ impl VwApp {
             metadata_from: None,
             focus: Focus::Images,
             meta_selected: None,
+            log_selected: None,
             toast: None,
             frame: 0,
             images_area: None,
@@ -2663,24 +2666,77 @@ impl VwApp {
     }
 
     /// ログを新しいものが下に来る順で出し、末尾に自動で追従する。
-    fn log_ui(&self, ui: &mut egui::Ui) {
+    /// ログ欄。行をクリックで選び（Ctrl+C でコピー）、右クリックで 1 行かすべてをコピーする。
+    ///
+    /// 文字のドラッグでの範囲選択にしないのは、行が増えるたびに下へ流れて選択がずれるのと、
+    /// 他の欄と同じ「選んでコピー」の操作に揃えるため。
+    fn log_ui(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let mut picked = None;
+        let mut copy = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for (t, level, msg) in &self.log.lines {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, (_, level, _)) in self.log.lines.iter().enumerate() {
                     let color = match level {
                         Level::Info => ui.visuals().text_color(),
                         Level::Warn => ui.visuals().warn_fg_color,
                         Level::Error => ui.visuals().error_fg_color,
                     };
-                    ui.label(
-                        egui::RichText::new(format!("[{t:8.3}] {msg}"))
-                            .monospace()
-                            .color(color),
-                    );
+                    let text = self.log.line_text(i).unwrap_or_default();
+                    let fill = if self.log_selected == Some(i) {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    let r = egui::Frame::new()
+                        .fill(fill)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(text).monospace().color(color),
+                                )
+                                .wrap()
+                                .selectable(false)
+                                .sense(egui::Sense::click()),
+                            )
+                        })
+                        .inner;
+                    if r.clicked() || r.secondary_clicked() {
+                        picked = Some(i);
+                    }
+                    r.context_menu(|ui| {
+                        if ui.button(tr(lang, "Copy")).clicked() {
+                            copy = Some(Some(i));
+                            ui.close();
+                        }
+                        if ui.button(tr(lang, "Copy all")).clicked() {
+                            copy = Some(None);
+                            ui.close();
+                        }
+                    });
                 }
             });
+        let ctx = ui.ctx().clone();
+        if let Some(i) = picked {
+            self.log_selected = Some(i);
+            self.set_focus(&ctx, Focus::Log);
+        }
+        match copy {
+            Some(Some(i)) => {
+                if let Some(text) = self.log.line_text(i) {
+                    self.copy_text(&ctx, text, "log line");
+                }
+            }
+            Some(None) => {
+                let text = self.log.all_text();
+                self.copy_text(&ctx, text, "log");
+            }
+            None => {}
+        }
     }
 
     /// Ctrl+C の対象の欄を変える。メタデータの文字列の範囲選択以外に移るときは、
@@ -2774,6 +2830,11 @@ impl VwApp {
                 }
             }
             Focus::Images => self.copy_image(ctx, self.active),
+            Focus::Log => {
+                if let Some(text) = self.log_selected.and_then(|i| self.log.line_text(i)) {
+                    self.copy_text(ctx, text, "log line");
+                }
+            }
         }
     }
 

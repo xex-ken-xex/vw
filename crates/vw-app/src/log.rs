@@ -42,6 +42,20 @@ impl Log {
     pub fn error(&mut self, msg: impl Into<String>) {
         self.push(Level::Error, msg);
     }
+
+    /// `index` 行目を、画面に出しているのと同じ形の文字列にする。
+    pub fn line_text(&self, index: usize) -> Option<String> {
+        let (t, _, msg) = self.lines.get(index)?;
+        Some(format!("[{t:8.3}] {msg}"))
+    }
+
+    /// すべての行。1 行ずつ改行で区切る。
+    pub fn all_text(&self) -> String {
+        (0..self.lines.len())
+            .filter_map(|i| self.line_text(i))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -58,5 +72,17 @@ mod tests {
         assert!(levels == [(Level::Info, "a"), (Level::Warn, "b"), (Level::Error, "c")]);
         assert!(log.lines.windows(2).all(|w| w[0].0 <= w[1].0));
         assert!(log.lines[0].0 >= 0.0);
+    }
+
+    #[test]
+    fn copied_lines_look_like_the_log_field() {
+        let mut log = Log::new(Instant::now());
+        log.info("first");
+        log.error("second");
+        assert!(log.line_text(1).unwrap().ends_with("] second"));
+        assert!(log.line_text(2).is_none());
+        let all = log.all_text();
+        assert_eq!(all.lines().count(), 2);
+        assert!(all.starts_with('[') && all.contains("] first\n["));
     }
 }
