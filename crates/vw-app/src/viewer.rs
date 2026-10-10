@@ -4,19 +4,38 @@
 //! テストではそちらを確かめる。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, TextureHandle, Vec2};
+use vw_core::VwImage;
 
 use crate::i18n::tr;
 use crate::loader::ImageInfo;
 use crate::settings::Language;
 
-/// 表示中の画像。テクスチャと、ログ・メタデータ表示用の情報を持つ。
+/// 表示中の画像。縮小画像のテクスチャと、ログ・メタデータ表示用の情報を持つ。
 pub struct Shown {
     /// 表示中の画像のファイル。次の画像を読み込み中は [`Slot::path`] と食い違う。
     pub path: PathBuf,
-    pub texture: TextureHandle,
+    pub thumb: TextureHandle,
     pub info: ImageInfo,
+    /// フル解像度の画像。縮小画像では足りない大きさで表示するときだけ持つ（[`crate::memory`]）。
+    pub full: Option<Full>,
+}
+
+pub struct Full {
+    pub image: Arc<VwImage>,
+    pub texture: TextureHandle,
+    pub bytes: usize,
+    /// 最後に必要とされたフレーム番号。
+    pub last_used: u64,
+}
+
+impl Shown {
+    /// 描画に使うテクスチャ。フル解像度があればそれ、なければ縮小画像。
+    pub fn texture(&self) -> &TextureHandle {
+        self.full.as_ref().map_or(&self.thumb, |f| &f.texture)
+    }
 }
 
 /// 画像フィールドの 1 枠。
@@ -31,6 +50,12 @@ pub struct Slot {
     pub loading: bool,
     pub shown: Option<Shown>,
     pub error: Option<String>,
+    /// 読み込み中のフル解像度の画像の要求番号と、見込みバイト数。
+    pub full_request: Option<(u64, usize)>,
+    /// フル解像度の画像が届いたらコピーする（コピーしようとしたときに捨ててあった）。
+    pub copy_when_full: bool,
+    /// 直前のフレームで、縮小画像では足りない大きさで表示した。
+    pub wants_full_now: bool,
     /// 「枠に収まる倍率」に掛ける倍率。1.0 で全体表示。
     /// 画像の実寸に対する倍率で持たないのは、枠の大きさが変わったときに全体表示を保つため。
     zoom: f32,
@@ -45,6 +70,8 @@ pub struct SlotResponse {
     pub close: bool,
     /// 右クリックメニューで「コピー」が選ばれた。
     pub copy: bool,
+    /// 縮小画像では足りない大きさで表示している。
+    pub wants_full: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -76,6 +103,13 @@ pub fn zoom_at(zoom: f32, pan: Vec2, factor: f32, base: f32, cursor: Option<Vec2
     (new_zoom, pan)
 }
 
+/// 長辺 `shown_side`（物理ピクセル）で表示するのに、長辺 `thumb_side` の縮小画像では
+/// 画素が足りないか。元画像（長辺 `image_side`）が縮小されていない小さな画像なら、
+/// 縮小画像がそのまま元の画素なので要らない。
+pub fn needs_full(shown_side: f32, thumb_side: usize, image_side: u32) -> bool {
+    image_side as usize > thumb_side && shown_side > thumb_side as f32
+}
+
 impl Slot {
     pub fn new(id: u64) -> Self {
         Self {
@@ -85,6 +119,9 @@ impl Slot {
             loading: false,
             shown: None,
             error: None,
+            full_request: None,
+            copy_when_full: false,
+            wants_full_now: false,
             zoom: 1.0,
             pan: Vec2::ZERO,
         }
@@ -100,10 +137,7 @@ impl Slot {
         let Some(s) = &self.shown else { return 1.0 };
         // テクスチャの大きさではなく元画像の大きさを使う。テクスチャは上限に合わせて
         // 縮小されていることがあり、それで計算すると表示倍率が実寸とずれるため。
-        fit_scale(
-            body.size(),
-            vec2(s.info.image.width as f32, s.info.image.height as f32),
-        )
+        fit_scale(body.size(), vec2(s.info.width as f32, s.info.height as f32))
     }
 
     /// `rect` の範囲にスロットを描き、操作を処理する。`background` は画像の背後の色。
@@ -166,13 +200,16 @@ impl Slot {
                 }
             }
             let scale = base * self.zoom;
-            let size = vec2(
-                shown.info.image.width as f32,
-                shown.info.image.height as f32,
-            ) * scale;
+            let size = vec2(shown.info.width as f32, shown.info.height as f32) * scale;
             let img_rect = Rect::from_center_size(body.center() + self.pan, size);
+            let [tw, th] = shown.thumb.size();
+            out.wants_full = needs_full(
+                size.max_elem() * ui.ctx().pixels_per_point(),
+                tw.max(th),
+                shown.info.width.max(shown.info.height),
+            );
             ui.painter_at(body).image(
-                shown.texture.id(),
+                shown.texture().id(),
                 img_rect,
                 Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
                 Color32::WHITE,
@@ -304,6 +341,25 @@ mod tests {
         assert_eq!(zoom_at(1.0, Vec2::ZERO, 1e-6, 1.0, None).0, MIN_ZOOM);
         // 全体表示が 50% なら、実寸 200 倍は全体表示の 400 倍。
         assert_eq!(zoom_at(1.0, Vec2::ZERO, 1e6, 0.5, None).0, 400.0);
+    }
+
+    #[test]
+    fn full_resolution_is_needed_only_when_shown_larger_than_the_thumbnail() {
+        assert!(!needs_full(400.0, 512, 4000));
+        assert!(!needs_full(512.0, 512, 4000));
+        assert!(needs_full(513.0, 512, 4000));
+    }
+
+    #[test]
+    fn images_smaller_than_the_thumbnail_never_need_full_resolution() {
+        // 元が 300 x 200 なら縮小画像は元の画素そのもの。拡大表示しても読み直さない。
+        assert!(!needs_full(3000.0, 300, 300));
+    }
+
+    #[test]
+    fn image_just_over_the_thumbnail_size_needs_full_resolution() {
+        // 513 px は半分の 257 px に縮小されるので、それより大きく出すなら元が要る。
+        assert!(needs_full(300.0, 257, 513));
     }
 
     #[test]

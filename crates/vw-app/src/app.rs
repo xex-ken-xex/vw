@@ -17,14 +17,15 @@ use vw_core::{ColorModel, Registry};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::i18n::tr;
 use crate::keymap::{Action, KeyCombo};
-use crate::loader::{LoadResult, Loader};
+use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
+use crate::memory;
 use crate::settings::{parse_hex_color, HeaderClick, Language, SettingsStore};
 use crate::settings_ui::SettingsUi;
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderTree, TreeAction};
-use crate::viewer::{Shown, Slot};
+use crate::viewer::{Full, Shown, Slot};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -117,6 +118,10 @@ pub struct VwApp {
     meta_selected: Option<MetaSelection>,
     /// コピーしたことを知らせる表示。
     toast: Option<Toast>,
+    /// 描いたフレームの番号。フル解像度の画像を最後に使った時期の比較に使う。
+    frame: u64,
+    /// 画像フィールドの大きさ（物理ピクセル）。読み込むときにフル解像度が要りそうかの見積もりに使う。
+    images_area: Option<egui::Vec2>,
 }
 
 /// コピーしたときにカーソルの近くに出す短い表示。
@@ -270,6 +275,8 @@ impl VwApp {
             tree_selected: None,
             meta_selected: None,
             toast: None,
+            frame: 0,
+            images_area: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -289,13 +296,27 @@ impl VwApp {
 
     /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
     fn close_all_slots(&mut self) {
-        self.slots.clear();
+        for s in std::mem::take(&mut self.slots) {
+            self.cancel_requests(&s);
+        }
         self.add_slot();
+    }
+
+    /// スロットの読み込み中の要求を取り消す。待ち行列に残ったまま、閉じたスロットのために
+    /// デコードするのを避けるため。
+    fn cancel_requests(&self, slot: &Slot) {
+        if slot.loading {
+            self.loader.cancel(slot.request);
+        }
+        if let Some((request, _)) = slot.full_request {
+            self.loader.cancel(request);
+        }
     }
 
     /// スロットを閉じる。最後の 1 つを閉じたときは空のスロットを残す。
     fn close_slot(&mut self, index: usize) {
-        self.slots.remove(index);
+        let slot = self.slots.remove(index);
+        self.cancel_requests(&slot);
         if self.slots.is_empty() {
             self.add_slot();
             return;
@@ -309,12 +330,37 @@ impl VwApp {
         let request = self.next_id;
         self.next_id += 1;
         self.tree_selected = Some(path.clone());
+        let full = self.cell_needs_full();
+        let slot = &self.slots[self.active];
+        self.cancel_requests(slot);
         let slot = &mut self.slots[self.active];
         slot.path = Some(path.clone());
         slot.request = request;
         slot.loading = true;
         slot.error = None;
-        self.loader.request(slot.id, request, path);
+        slot.full_request = None;
+        slot.copy_when_full = false;
+        self.loader.request(Job {
+            slot: slot.id,
+            request,
+            path,
+            thumb: true,
+            full,
+        });
+    }
+
+    /// 今のスロット数で並べたとき、1 枠が縮小画像より大きいか。
+    ///
+    /// 大きければ、最初の読み込みでフル解像度も一緒に作る。縮小画像だけ先に読んで
+    /// 後からフル解像度を読み直すと、1 枚を大きく見る普段の使い方でデコードが 2 回になるため。
+    /// 画像の大きさは読むまで分からないので、枠の大きさだけで決める。
+    fn cell_needs_full(&self) -> bool {
+        let Some(area) = self.images_area else {
+            return true;
+        };
+        let (cols, rows) = grid_dims(self.slots.len());
+        let cell = (area.x / cols as f32).max(area.y / rows as f32);
+        cell > memory::THUMB_SIDE as f32
     }
 
     /// アクティブなスロットの画像と同じフォルダにある、前後の対応画像に切り替える。
@@ -572,70 +618,169 @@ impl VwApp {
 
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
-        while let Ok(LoadResult {
-            slot,
-            request,
-            path,
-            result,
-        }) = self.loader.rx.try_recv()
-        {
+        while let Ok(r) = self.loader.rx.try_recv() {
             // 読み込み中にスロットが閉じられた、または別の画像に切り替えられた場合は捨てる。
-            let Some(s) = self
-                .slots
-                .iter_mut()
-                .find(|s| s.id == slot && s.request == request)
-            else {
+            let Some(index) = self.slots.iter().position(|s| {
+                s.id == r.slot
+                    && (s.request == r.request
+                        || s.full_request.is_some_and(|(q, _)| q == r.request))
+            }) else {
                 continue;
             };
-            s.loading = false;
-            match result {
-                Ok(loaded) => {
-                    let t = Instant::now();
-                    // 拡大時は最近傍（画素の境界をそのまま見せる）、縮小時は線形＋ミップマップ。
-                    // 拡大まで線形にすると、画素単位で確認したい医用画像などがぼやけるため。
-                    let texture = ctx.load_texture(
-                        path.to_string_lossy(),
-                        loaded.display,
-                        TextureOptions {
-                            magnification: TextureFilter::Nearest,
-                            minification: TextureFilter::Linear,
-                            mipmap_mode: Some(TextureFilter::Linear),
-                            ..TextureOptions::LINEAR
-                        },
-                    );
-                    let i = &loaded.info;
-                    self.log.info(format!(
-                        "{}: {}x{} {} | read {} / decode {} / convert {} / texture {}",
-                        path.display(),
-                        i.image.width,
-                        i.image.height,
-                        i.plugin,
-                        ms(i.read),
-                        ms(i.decode),
-                        ms(i.convert),
-                        ms(t.elapsed()),
-                    ));
-                    if texture.size()[0] < i.image.width as usize {
-                        self.log.warn(format!(
-                            "{}: shown downsampled to {}x{} (texture size limit)",
-                            path.display(),
-                            texture.size()[0],
-                            texture.size()[1]
-                        ));
+            if self.slots[index].request == r.request {
+                self.receive_image(ctx, index, r.path, r.result);
+            } else {
+                self.slots[index].full_request = None;
+                match r.result {
+                    Ok(loaded) => {
+                        if let Some(full) = loaded.full {
+                            self.attach_full(ctx, index, full);
+                        }
                     }
-                    s.shown = Some(Shown {
-                        path: path.clone(),
-                        texture,
-                        info: loaded.info,
-                    });
-                    s.error = None;
-                    s.reset_view();
+                    Err(e) => self.log.error(format!("{}: {e}", r.path.display())),
                 }
-                Err(e) => {
-                    self.log.error(format!("{}: {e}", path.display()));
-                    s.shown = None;
-                    s.error = Some(e);
-                }
+            }
+        }
+    }
+
+    /// スロットで開いた画像の読み込み結果を受け取る。
+    fn receive_image(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        path: PathBuf,
+        result: Result<Loaded, String>,
+    ) {
+        let s = &mut self.slots[index];
+        s.loading = false;
+        let loaded = match result {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                self.log.error(format!("{}: {e}", path.display()));
+                s.shown = None;
+                s.error = Some(e);
+                return;
+            }
+        };
+        let t = Instant::now();
+        let thumb = loaded
+            .thumb
+            .expect("the first load always asks for a thumbnail");
+        let thumb = ctx.load_texture(
+            format!("{}#thumb", path.display()),
+            thumb,
+            texture_options(),
+        );
+        let i = &loaded.info;
+        self.log.info(format!(
+            "{}: {}x{} {} | read {} / decode {} / convert {} / texture {}",
+            path.display(),
+            i.width,
+            i.height,
+            i.plugin,
+            ms(i.read),
+            ms(i.decode),
+            ms(i.convert),
+            ms(t.elapsed()),
+        ));
+        s.shown = Some(Shown {
+            path,
+            thumb,
+            info: loaded.info,
+            full: None,
+        });
+        s.error = None;
+        s.reset_view();
+        if let Some(full) = loaded.full {
+            self.attach_full(ctx, index, full);
+        }
+    }
+
+    /// フル解像度の画像をスロットに持たせる。上限を超えるときは持たずに縮小画像のままにする
+    /// （コピー待ちならコピーだけ済ませる）。
+    fn attach_full(&mut self, ctx: &egui::Context, index: usize, full: FullImage) {
+        let s = &mut self.slots[index];
+        let Some(shown) = &mut s.shown else {
+            return;
+        };
+        if std::mem::take(&mut s.copy_when_full) {
+            let image = copy::full_resolution(&full.image);
+            let what = format!(
+                "image {} ({}x{})",
+                shown.path.display(),
+                image.size[0],
+                image.size[1]
+            );
+            ctx.copy_image(image);
+            self.copied(ctx, &what);
+        }
+        let bytes = full.bytes();
+        let limit = self.settings.settings.viewer.full_image_limit_bytes();
+        if !memory::fits(&self.full_states(), bytes, limit) {
+            return;
+        }
+        let s = &mut self.slots[index];
+        let Some(shown) = &mut s.shown else {
+            return;
+        };
+        let path = &shown.path;
+        let texture = ctx.load_texture(path.to_string_lossy(), full.display, texture_options());
+        if texture.size()[0] < shown.info.width as usize {
+            self.log.warn(format!(
+                "{}: shown downsampled to {}x{} (texture size limit)",
+                path.display(),
+                texture.size()[0],
+                texture.size()[1]
+            ));
+        }
+        shown.full = Some(Full {
+            image: full.image,
+            texture,
+            bytes,
+            last_used: self.frame,
+        });
+    }
+
+    /// 各スロットのフル解像度の画像の状態（[`memory::plan`] の入力）。
+    fn full_states(&self) -> Vec<memory::FullState> {
+        self.slots
+            .iter()
+            .filter_map(|s| {
+                let shown = s.shown.as_ref()?;
+                Some(memory::FullState {
+                    id: s.id,
+                    wanted: s.wants_full_now,
+                    resident: shown.full.as_ref().map(|f| f.bytes),
+                    pending: s.full_request.map(|(_, bytes)| bytes),
+                    last_used: shown.full.as_ref().map_or(0, |f| f.last_used),
+                    estimate: shown.info.full_bytes(),
+                })
+            })
+            .collect()
+    }
+
+    /// このフレームで必要になったフル解像度の画像を読み込み、上限を超える分を捨てる。
+    fn manage_full_images(&mut self) {
+        let limit = self.settings.settings.viewer.full_image_limit_bytes();
+        let plan = memory::plan(&self.full_states(), limit);
+        for s in &mut self.slots {
+            let Some(shown) = &mut s.shown else {
+                continue;
+            };
+            if plan.evict.contains(&s.id) {
+                shown.full = None;
+            }
+            if plan.request.contains(&s.id) {
+                let request = self.next_id;
+                self.next_id += 1;
+                s.full_request = Some((request, shown.info.full_bytes()));
+                self.loader.request(Job {
+                    slot: s.id,
+                    request,
+                    path: shown.path.clone(),
+                    thumb: false,
+                    full: true,
+                });
             }
         }
     }
@@ -722,30 +867,33 @@ impl VwApp {
         let index = self.metadata_slot()?;
         let shown = self.slots[index].shown.as_ref()?;
         let info = &shown.info;
-        let img = &info.image;
         let row = |k: &'static str, v: String| (tr(lang, k).to_owned(), v);
         let file_rows = vec![
             row("Path", shown.path.display().to_string()),
             row("Size", format!("{} bytes", info.file_size)),
             row("Plugin", info.plugin.clone()),
-            row("Pixels", format!("{} x {}", img.width, img.height)),
-            row("Color", color_name(img.color).into()),
+            row("Pixels", format!("{} x {}", info.width, info.height)),
+            row("Color", color_name(info.color).into()),
             row(
                 "Sample",
                 format!(
                     "{} bit ({} significant)",
-                    img.data.bits_per_sample(),
-                    img.significant_bits
+                    info.bits_per_sample, info.significant_bits
                 ),
             ),
-            row(
-                "Texture",
-                format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
-            ),
+            row("Texture", {
+                let [w, h] = shown.texture().size();
+                let kind = if shown.full.is_some() {
+                    ""
+                } else {
+                    " (thumbnail)"
+                };
+                format!("{w} x {h}{kind}")
+            }),
         ];
         let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
         groups.extend(
-            group_metadata(&img.metadata.entries)
+            group_metadata(&info.metadata.entries)
                 .into_iter()
                 .map(|(g, rows)| {
                     let rows = rows
@@ -896,11 +1044,29 @@ impl VwApp {
     }
 
     /// スロットの画像を元の解像度でコピーする。
+    /// フル解像度の画像を捨ててあったときは読み直し、届いたときにコピーする。
     fn copy_image(&mut self, ctx: &egui::Context, index: usize) {
-        let Some(shown) = &self.slots[index].shown else {
+        let s = &mut self.slots[index];
+        let Some(shown) = &s.shown else {
             return;
         };
-        let image = copy::full_resolution(&shown.info.image);
+        let Some(full) = &shown.full else {
+            s.copy_when_full = true;
+            if s.full_request.is_none() {
+                let request = self.next_id;
+                self.next_id += 1;
+                s.full_request = Some((request, shown.info.full_bytes()));
+                self.loader.request(Job {
+                    slot: s.id,
+                    request,
+                    path: shown.path.clone(),
+                    thumb: false,
+                    full: true,
+                });
+            }
+            return;
+        };
+        let image = copy::full_resolution(&full.image);
         let what = format!(
             "image {} ({}x{})",
             shown.path.display(),
@@ -983,6 +1149,8 @@ impl VwApp {
     /// 合わせて伸び縮みするため。画像の大きさに関係なく枠を等分したい。
     fn images_ui(&mut self, ui: &mut egui::Ui) {
         let area = ui.available_rect_before_wrap();
+        self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
+        self.frame += 1;
         let n = self.slots.len();
         let (cols, rows) = grid_dims(n);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
@@ -999,6 +1167,13 @@ impl VwApp {
                 cell,
             );
             let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active, background, lang);
+            let slot = &mut self.slots[i];
+            slot.wants_full_now = resp.wants_full;
+            if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
+                if resp.wants_full {
+                    full.last_used = self.frame;
+                }
+            }
             if resp.clicked {
                 self.active = i;
                 self.tree_selected = self.slots[i].path.clone();
@@ -1015,6 +1190,7 @@ impl VwApp {
         if let Some(i) = close {
             self.close_slot(i);
         }
+        self.manage_full_images();
         ui.allocate_rect(area, egui::Sense::hover());
     }
 }
@@ -1171,6 +1347,17 @@ fn selection_name(sel: &MetaSelection) -> String {
     match sel {
         MetaSelection::Group(g) => g.clone(),
         MetaSelection::Row(g, i) => format!("{g} row {}", i + 1),
+    }
+}
+
+/// 拡大時は最近傍（画素の境界をそのまま見せる）、縮小時は線形＋ミップマップ。
+/// 拡大まで線形にすると、画素単位で確認したい医用画像などがぼやけるため。
+fn texture_options() -> TextureOptions {
+    TextureOptions {
+        magnification: TextureFilter::Nearest,
+        minification: TextureFilter::Linear,
+        mipmap_mode: Some(TextureFilter::Linear),
+        ..TextureOptions::LINEAR
     }
 }
 
