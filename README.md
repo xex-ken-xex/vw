@@ -22,4 +22,4 @@ Linux では X11/Wayland と OpenGL のライブラリ（`libxkbcommon-x11-0`, `
 | ← → PageUp PageDown Space | 同じフォルダの前後の画像 |
 | View メニュー | 4 つのフィールドの表示・非表示 |
 
-設計は [docs/architecture.md](docs/architecture.md) を参照。
+設計は [docs/architecture.md](docs/architecture.md)、コーディングポリシーは [CLAUDE.md](CLAUDE.md) を参照。
