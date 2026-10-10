@@ -8,6 +8,7 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
+use crate::layout::SlotLayout;
 use crate::settings::{
     parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, Settings, ThemeChoice,
     Tree, TreeMode, Viewer,
@@ -53,7 +54,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 15] = [
+const ITEMS: [Item; 17] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -95,6 +96,20 @@ const ITEMS: [Item; 15] = [
         title: "Full-resolution memory limit",
         description: "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
         widget: limit_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.layout",
+        title: "Slot layout",
+        description: "How slots are arranged. Auto fits every slot on one page; a fixed grid shows the rest on further pages (Page Up / Page Down).",
+        widget: layout_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.custom_layout",
+        title: "Custom layout",
+        description: "Columns x rows used by the Custom layout in the View menu.",
+        widget: custom_layout_widget,
     },
     Item {
         section: Section::Tree,
@@ -213,6 +228,56 @@ fn limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     );
     // ドラッグ中に反映すると、値が下がるたびに画像を捨てて読み直してしまうため、離したときに反映する。
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+/// レイアウトの選択肢に出す名前。
+pub fn layout_title(layout: SlotLayout, lang: Language) -> String {
+    match layout {
+        SlotLayout::Auto => tr(lang, "Auto").to_owned(),
+        SlotLayout::Grid { cols, rows } => format!("{cols} x {rows}"),
+    }
+}
+
+fn layout_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.viewer.layout;
+    let custom = s.viewer.custom_layout;
+    egui::ComboBox::from_id_salt("viewer_layout")
+        .selected_text(layout_title(before, lang))
+        .show_ui(ui, |ui| {
+            for layout in SlotLayout::PRESETS {
+                ui.selectable_value(&mut s.viewer.layout, layout, layout_title(layout, lang));
+            }
+            if !SlotLayout::PRESETS.contains(&custom) {
+                let text = format!("{} ({})", tr(lang, "Custom"), layout_title(custom, lang));
+                ui.selectable_value(&mut s.viewer.layout, custom, text);
+            }
+        });
+    s.viewer.layout != before
+}
+
+fn custom_layout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let SlotLayout::Grid { mut cols, mut rows } = s.viewer.custom_layout else {
+        return false;
+    };
+    let side = 1..=SlotLayout::MAX_SIDE;
+    let changed = ui
+        .horizontal(|ui| {
+            let c = ui.add(egui::DragValue::new(&mut cols).range(side.clone()));
+            ui.label("x");
+            let r = ui.add(egui::DragValue::new(&mut rows).range(side));
+            c.changed() || r.changed()
+        })
+        .inner;
+    if !changed {
+        return false;
+    }
+    let old = s.viewer.custom_layout;
+    s.viewer.custom_layout = SlotLayout::grid(cols, rows);
+    // カスタムを選んでいる間は、マス目を変えたらすぐ画面に反映する。
+    if s.viewer.layout == old {
+        s.viewer.layout = s.viewer.custom_layout;
+    }
+    true
 }
 
 fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

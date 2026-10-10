@@ -10,6 +10,8 @@ use std::str::FromStr;
 use eframe::egui::{Event, Key, Modifiers};
 use serde::Serialize;
 
+use crate::layout::SlotLayout;
+
 /// ホットキーを割り当てられる操作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
@@ -24,13 +26,47 @@ pub enum Action {
     ToggleSettings,
     CloseAllSlots,
     Quit,
+    PreviousSlot,
+    NextSlot,
+    PreviousPage,
+    NextPage,
+    ToggleMaximize,
+    FitImage,
+    ActualSize,
+    ZoomIn,
+    ZoomOut,
+    LayoutAuto,
+    Layout1x1,
+    Layout1x2,
+    Layout2x1,
+    Layout2x2,
+    Layout3x3,
+    Layout4x4,
+    LayoutCustom,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 28] = [
         Action::PreviousImage,
         Action::NextImage,
+        Action::PreviousSlot,
+        Action::NextSlot,
+        Action::PreviousPage,
+        Action::NextPage,
+        Action::ToggleMaximize,
+        Action::FitImage,
+        Action::ActualSize,
+        Action::ZoomIn,
+        Action::ZoomOut,
+        Action::LayoutAuto,
+        Action::Layout1x1,
+        Action::Layout1x2,
+        Action::Layout2x1,
+        Action::Layout2x2,
+        Action::Layout3x3,
+        Action::Layout4x4,
+        Action::LayoutCustom,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -56,6 +92,23 @@ impl Action {
             Action::ToggleSettings => "toggle_settings",
             Action::CloseAllSlots => "close_all_slots",
             Action::Quit => "quit",
+            Action::PreviousSlot => "previous_slot",
+            Action::NextSlot => "next_slot",
+            Action::PreviousPage => "previous_page",
+            Action::NextPage => "next_page",
+            Action::ToggleMaximize => "toggle_maximize",
+            Action::FitImage => "fit_image",
+            Action::ActualSize => "actual_size",
+            Action::ZoomIn => "zoom_in",
+            Action::ZoomOut => "zoom_out",
+            Action::LayoutAuto => "layout_auto",
+            Action::Layout1x1 => "layout_1x1",
+            Action::Layout1x2 => "layout_1x2",
+            Action::Layout2x1 => "layout_2x1",
+            Action::Layout2x2 => "layout_2x2",
+            Action::Layout3x3 => "layout_3x3",
+            Action::Layout4x4 => "layout_4x4",
+            Action::LayoutCustom => "layout_custom",
         }
     }
 
@@ -77,24 +130,80 @@ impl Action {
             Action::ToggleSettings => "Open/close settings",
             Action::CloseAllSlots => "Close all slots",
             Action::Quit => "Quit",
+            Action::PreviousSlot => "Previous slot",
+            Action::NextSlot => "Next slot",
+            Action::PreviousPage => "Previous page",
+            Action::NextPage => "Next page",
+            Action::ToggleMaximize => "Maximize/restore slot",
+            Action::FitImage => "Fit image to slot",
+            Action::ActualSize => "Actual size (100%)",
+            Action::ZoomIn => "Zoom in",
+            Action::ZoomOut => "Zoom out",
+            Action::LayoutAuto => "Layout: auto",
+            Action::Layout1x1 => "Layout: 1 x 1",
+            Action::Layout1x2 => "Layout: 1 x 2",
+            Action::Layout2x1 => "Layout: 2 x 1",
+            Action::Layout2x2 => "Layout: 2 x 2",
+            Action::Layout3x3 => "Layout: 3 x 3",
+            Action::Layout4x4 => "Layout: 4 x 4",
+            Action::LayoutCustom => "Layout: custom",
         }
     }
 
     /// キーを押し続けたときの自動リピートで繰り返すか。
     /// 表示切替まで繰り返すと、押している間パネルが点滅してしまう。
     fn repeats(self) -> bool {
-        matches!(self, Action::PreviousImage | Action::NextImage)
+        matches!(
+            self,
+            Action::PreviousImage
+                | Action::NextImage
+                | Action::PreviousSlot
+                | Action::NextSlot
+                | Action::PreviousPage
+                | Action::NextPage
+                | Action::ZoomIn
+                | Action::ZoomOut
+        )
+    }
+
+    /// メニューのレイアウト項目が選ぶマス目。`LayoutCustom` は設定の値を使うのでここにはない。
+    pub fn layout(self) -> Option<SlotLayout> {
+        let [auto, l1x1, l1x2, l2x1, l2x2, l3x3, l4x4] = SlotLayout::PRESETS;
+        match self {
+            Action::LayoutAuto => Some(auto),
+            Action::Layout1x1 => Some(l1x1),
+            Action::Layout1x2 => Some(l1x2),
+            Action::Layout2x1 => Some(l2x1),
+            Action::Layout2x2 => Some(l2x2),
+            Action::Layout3x3 => Some(l3x3),
+            Action::Layout4x4 => Some(l4x4),
+            _ => None,
+        }
+    }
+
+    /// 以前の版の既定のキー。設定ファイルにこれが残っていれば今の既定のキーに読み替える。
+    /// 読み替えないと、新しい操作の既定のキーと重なって、毎回起動時に赤いログが出てしまう。
+    fn legacy_default_keys(self) -> Option<Vec<KeyCombo>> {
+        use Key::*;
+        match self {
+            // PageUp / PageDown はページ送りに移した。
+            Action::PreviousImage => {
+                Some(vec![KeyCombo::plain(ArrowLeft), KeyCombo::plain(PageUp)])
+            }
+            Action::NextImage => Some(vec![
+                KeyCombo::plain(ArrowRight),
+                KeyCombo::plain(PageDown),
+                KeyCombo::plain(Space),
+            ]),
+            _ => None,
+        }
     }
 
     fn default_keys(self) -> Vec<KeyCombo> {
         use Key::*;
         match self {
-            Action::PreviousImage => vec![KeyCombo::plain(ArrowLeft), KeyCombo::plain(PageUp)],
-            Action::NextImage => vec![
-                KeyCombo::plain(ArrowRight),
-                KeyCombo::plain(PageDown),
-                KeyCombo::plain(Space),
-            ],
+            Action::PreviousImage => vec![KeyCombo::plain(ArrowLeft)],
+            Action::NextImage => vec![KeyCombo::plain(ArrowRight), KeyCombo::plain(Space)],
             Action::NewSlot => vec![KeyCombo::ctrl(N)],
             Action::CloseSlot => vec![KeyCombo::ctrl(W)],
             Action::ToggleFolderTree => vec![KeyCombo::ctrl(Num1)],
@@ -104,6 +213,23 @@ impl Action {
             Action::ToggleSettings => vec![KeyCombo::ctrl(Comma)],
             Action::CloseAllSlots => vec![KeyCombo::ctrl(W).with(true, true, false)],
             Action::Quit => vec![KeyCombo::ctrl(Q)],
+            Action::PreviousSlot => vec![KeyCombo::ctrl(ArrowLeft)],
+            Action::NextSlot => vec![KeyCombo::ctrl(ArrowRight)],
+            Action::PreviousPage => vec![KeyCombo::plain(PageUp)],
+            Action::NextPage => vec![KeyCombo::plain(PageDown)],
+            Action::ToggleMaximize => vec![KeyCombo::plain(Enter)],
+            Action::FitImage => vec![KeyCombo::plain(Num0)],
+            Action::ActualSize => vec![KeyCombo::ctrl(Num0)],
+            Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
+            Action::ZoomOut => vec![KeyCombo::plain(Minus)],
+            Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
+            Action::Layout1x1 => vec![KeyCombo::alt(Num1)],
+            Action::Layout1x2 => vec![KeyCombo::alt(Num2)],
+            Action::Layout2x1 => vec![KeyCombo::alt(Num3)],
+            Action::Layout2x2 => vec![KeyCombo::alt(Num4)],
+            Action::Layout3x3 => vec![KeyCombo::alt(Num5)],
+            Action::Layout4x4 => vec![KeyCombo::alt(Num6)],
+            Action::LayoutCustom => vec![KeyCombo::alt(Num7)],
         }
     }
 }
@@ -133,6 +259,13 @@ impl KeyCombo {
     pub const fn ctrl(key: Key) -> Self {
         Self {
             ctrl: true,
+            ..Self::plain(key)
+        }
+    }
+
+    pub const fn alt(key: Key) -> Self {
+        Self {
+            alt: true,
             ..Self::plain(key)
         }
     }
@@ -276,6 +409,9 @@ impl Keymap {
                 continue;
             };
             match parse_keys(value) {
+                Ok(keys) if action.legacy_default_keys().as_ref() == Some(&keys) => {
+                    map.bindings.insert(action, action.default_keys());
+                }
                 Ok(keys) => {
                     map.bindings.insert(action, keys);
                 }
@@ -547,7 +683,7 @@ mod tests {
         let map = Keymap::default();
         assert_eq!(map.action_for(combo("Right")), Some(Action::NextImage));
         assert_eq!(map.action_for(combo("Space")), Some(Action::NextImage));
-        assert_eq!(map.action_for(combo("PageUp")), Some(Action::PreviousImage));
+        assert_eq!(map.action_for(combo("Left")), Some(Action::PreviousImage));
         assert_eq!(
             map.action_for(combo("Ctrl+Comma")),
             Some(Action::ToggleSettings)
@@ -612,15 +748,33 @@ mod tests {
         map.unassign(Action::NextImage, combo("Right"));
         assert!(!map.is_default(Action::NextImage));
         map.reset(Action::NextImage);
-        assert_eq!(
-            map.keys(Action::NextImage),
-            [combo("Right"), combo("PageDown")]
-        );
+        assert_eq!(map.keys(Action::NextImage), [combo("Right")]);
         assert_eq!(map.action_for(combo("Space")), Some(Action::NewSlot));
     }
 
     fn load(text: &str) -> (Keymap, Vec<String>) {
         Keymap::from_table(&text.parse::<toml::Table>().unwrap())
+    }
+
+    #[test]
+    fn old_default_image_keys_become_the_new_defaults_without_warning() {
+        let (map, problems) = load(
+            "next_image = [\"Right\", \"PageDown\", \"Space\"]\n\
+             previous_image = [\"Left\", \"PageUp\"]",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(map.action_for(combo("PageDown")), Some(Action::NextPage));
+        assert_eq!(map.action_for(combo("PageUp")), Some(Action::PreviousPage));
+        assert!(map.is_default(Action::NextImage));
+    }
+
+    #[test]
+    fn page_keys_page_and_arrows_step_images_by_default() {
+        let map = Keymap::default();
+        assert_eq!(map.action_for(combo("PageDown")), Some(Action::NextPage));
+        assert_eq!(map.action_for(combo("Right")), Some(Action::NextImage));
+        assert_eq!(map.action_for(combo("Ctrl+Right")), Some(Action::NextSlot));
+        assert_eq!(map.action_for(combo("Enter")), Some(Action::ToggleMaximize));
     }
 
     #[test]
