@@ -5,6 +5,12 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # Actions の画面から版番号を入れて正式リリースを出す。手元に git がなくてもタグを打てるようにするため。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'リリースする版（例: v0.1.0）。main の最新コミットにこのタグを付ける'
+        required: true
 
 jobs:
   build:
@@ -65,7 +71,7 @@ jobs:
   # プルリクエストでは載せない（未マージの変更を配布しないため）。
   release:
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # main への push が続いたとき、削除と作成が入り混じらないよう 1 つずつ実行する。
     concurrency: release
@@ -80,7 +86,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Publish main build
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # main の最新ビルドは 1 つのプレリリースを作り直して置き換える。
         # push のたびに新しいリリースを作ると一覧が埋まり、正式版が探しにくくなるため。
         run: |
@@ -96,4 +102,21 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
             --title "vw $GITHUB_REF_NAME" \
+            --generate-notes
+      - name: Publish release from the Actions page
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        # タグは gh release create に作らせる。GITHUB_TOKEN で作ったタグは push のワークフローを
+        # 起動しないので、上の「Publish versioned release」と二重にリリースされることはない。
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::main から実行してください（今は $GITHUB_REF）"; exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版は v0.1.0 の形で入れてください（入力: $VERSION）"; exit 1
+          fi
+          gh release create "$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "vw $VERSION" \
             --generate-notes

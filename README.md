@@ -370,8 +370,12 @@ CI（GitHub Actions）が Linux と Windows でチェック・テスト・ビル
 | --- | --- |
 | main ブランチへの push（プルリクエストのマージ） | 「最新ビルド (main)」を置き換える |
 | `v` で始まるタグの push | そのタグ名の正式版を作る |
+| Actions の画面から CI を手動実行（版番号を入力） | main の最新コミットにタグを付け、正式版を作る |
 
-正式版を出すときは、`Cargo.toml` の `version` を上げてから main でタグを付けます。
+正式版を出すときは、`Cargo.toml` の `version` を上げてから、次のどちらかを行います。
+
+- GitHub の **Actions** → **CI** → **Run workflow** で、Branch を `main` のまま版番号（例: `v0.1.0`）を入れて実行する
+- 手元の main でタグを付けて push する
 
 ```sh
 git tag v0.1.0
