@@ -13,6 +13,7 @@ mod i18n;
 mod keymap;
 mod loader;
 mod log;
+mod memory;
 mod settings;
 mod settings_ui;
 mod sort;

@@ -79,10 +79,29 @@ impl Appearance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Viewer {
     /// 画像の背景色（`#RRGGBB`）。空ならテーマの既定色。
     pub background: String,
+    /// フル解像度の画像に使うメモリの上限（MB）。超えた分は縮小画像で表示する。
+    pub full_image_limit_mb: u32,
+}
+
+impl Viewer {
+    pub const LIMIT_RANGE_MB: std::ops::RangeInclusive<u32> = 256..=1_048_576;
+
+    pub fn full_image_limit_bytes(&self) -> usize {
+        self.full_image_limit_mb as usize * 1024 * 1024
+    }
+}
+
+impl Default for Viewer {
+    fn default() -> Self {
+        Self {
+            background: String::new(),
+            full_image_limit_mb: 4096,
+        }
+    }
 }
 
 /// グループの見出し（メタデータ欄の File など）をクリックしたときの動作。
@@ -161,6 +180,14 @@ impl Settings {
                     "must be #RRGGBB or empty",
                 )
                 .unwrap_or(d.viewer.background),
+            full_image_limit_mb: r
+                .get_valid(
+                    "viewer",
+                    "full_image_limit_mb",
+                    |v: &u32| Viewer::LIMIT_RANGE_MB.contains(v),
+                    "must be 256 to 1048576",
+                )
+                .unwrap_or(d.viewer.full_image_limit_mb),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -479,6 +506,7 @@ mod tests {
         s.appearance.ui_scale = 1.25;
         s.viewer.background = "#202020".into();
         s.behavior.header_click = HeaderClick::SelectAndToggle;
+        s.viewer.full_image_limit_mb = 8192;
         s.tree.sort = SortKey::Modified;
         s.tree.sort_descending = true;
         s.keys
@@ -551,6 +579,20 @@ mod tests {
     fn malformed_background_falls_back_to_theme_default() {
         let (s, problems) = Settings::from_toml("[viewer]\nbackground = \"#12\"\n").unwrap();
         assert_eq!(s.viewer.background, "");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn full_image_memory_limit_is_4gb_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.full_image_limit_mb, 4096);
+        assert_eq!(s.viewer.full_image_limit_bytes(), 4 << 30);
+    }
+
+    #[test]
+    fn too_small_memory_limit_falls_back_to_default() {
+        let (s, problems) = Settings::from_toml("[viewer]\nfull_image_limit_mb = 10\n").unwrap();
+        assert_eq!(s.viewer.full_image_limit_mb, 4096);
         assert_eq!(problems.len(), 1);
     }
 

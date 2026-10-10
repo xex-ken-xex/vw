@@ -133,6 +133,51 @@ fn convert(
     }
 }
 
+/// 縦横どちらも `max_side` 以下になるよう、整数倍で縮小する。縮小しないで済むときは複製を返す。
+///
+/// 縮小した 1 画素は、元の `n × n` 画素（端は残りの画素）の平均にする。
+/// [`to_display`] の縮小（間引き）を使わないのは、大きく縮める一覧用の縮小画像で
+/// 細かい模様がちらついたり、細い線が消えたりするため。
+pub fn shrink(img: &DisplayImage, max_side: u32) -> DisplayImage {
+    let n = (img.width.max(img.height) as usize)
+        .div_ceil(max_side.max(1) as usize)
+        .max(1);
+    if n == 1 {
+        return img.clone();
+    }
+    let (w, h) = (img.width as usize, img.height as usize);
+    let (ow, oh) = (w.div_ceil(n), h.div_ceil(n));
+    let mut rgba = vec![0u8; ow * oh * 4];
+    let mut sums = vec![0u32; ow * 4];
+    for oy in 0..oh {
+        sums.fill(0);
+        let rows = (oy * n)..((oy + 1) * n).min(h);
+        let row_count = rows.len();
+        for y in rows {
+            let row = &img.rgba[y * w * 4..(y + 1) * w * 4];
+            for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
+                let sum = &mut sums[(x / n) * 4..(x / n) * 4 + 4];
+                for (s, &v) in sum.iter_mut().zip(px) {
+                    *s += u32::from(v);
+                }
+            }
+        }
+        for ox in 0..ow {
+            let cols = ((ox + 1) * n).min(w) - ox * n;
+            let count = (cols * row_count) as u32;
+            for c in 0..4 {
+                let sum = sums[ox * 4 + c];
+                rgba[(oy * ow + ox) * 4 + c] = ((sum + count / 2) / count) as u8;
+            }
+        }
+    }
+    DisplayImage {
+        width: ow as u32,
+        height: oh as u32,
+        rgba,
+    }
+}
+
 /// 0..size の値を、`lo` → 0、`hi` → 255 の直線で写す変換表。範囲外は 0 / 255 に張り付く。
 fn build_lut(size: usize, (lo, hi): (f32, f32)) -> Vec<u8> {
     let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
@@ -276,6 +321,54 @@ mod tests {
         let img = VwImage::new(2, 1, ColorModel::Gray, PixelData::F32(vec![5.0, 5.0])).unwrap();
         let d = to_display(&img, &DisplayParams::default());
         assert_eq!(d.rgba.len(), 8);
+    }
+
+    fn rgba(width: u32, height: u32, px: &[[u8; 4]]) -> DisplayImage {
+        DisplayImage {
+            width,
+            height,
+            rgba: px.concat(),
+        }
+    }
+
+    #[test]
+    fn shrink_averages_each_block() {
+        let img = rgba(
+            2,
+            2,
+            &[
+                [0, 0, 0, 255],
+                [100, 0, 0, 255],
+                [0, 200, 0, 255],
+                [0, 0, 40, 255],
+            ],
+        );
+        let small = shrink(&img, 1);
+        assert_eq!((small.width, small.height), (1, 1));
+        assert_eq!(small.rgba, [25, 50, 10, 255]);
+    }
+
+    #[test]
+    fn shrink_averages_partial_blocks_at_the_edges() {
+        let img = rgba(3, 1, &[[10, 0, 0, 255], [30, 0, 0, 255], [200, 0, 0, 255]]);
+        let small = shrink(&img, 2);
+        assert_eq!((small.width, small.height), (2, 1));
+        assert_eq!(small.rgba, [20, 0, 0, 255, 200, 0, 0, 255]);
+    }
+
+    #[test]
+    fn shrink_fits_the_longer_side_within_max_side() {
+        let img = rgba(1000, 10, &vec![[1, 2, 3, 4]; 10_000]);
+        let small = shrink(&img, 512);
+        assert!(small.width <= 512 && small.height >= 1);
+        assert_eq!(small.rgba.len(), (small.width * small.height * 4) as usize);
+        assert_eq!(&small.rgba[..4], [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn shrink_keeps_small_images_as_they_are() {
+        let img = rgba(2, 1, &[[1, 2, 3, 4], [5, 6, 7, 8]]);
+        assert_eq!(shrink(&img, 512).rgba, img.rgba);
     }
 
     #[test]

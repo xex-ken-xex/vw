@@ -102,6 +102,11 @@ const JA: &[(&str, &str)] = &[
         "#RRGGBB の形式で入力してください。",
     ),
     ("Theme default", "テーマの既定色"),
+    ("Full-resolution memory limit", "フル解像度のメモリ上限"),
+    (
+        "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
+        "フル解像度の画像に使うメモリの上限（MB）。超えた分は、空きができるまで 512px の縮小画像で表示します。",
+    ),
     ("Sort order", "並び順"),
     (
         "Order of files and folders in the tree, also used for previous/next image. Folders always come first.",

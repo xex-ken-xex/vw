@@ -8,7 +8,7 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
-use crate::settings::{parse_hex_color, HeaderClick, Language, Settings, ThemeChoice};
+use crate::settings::{parse_hex_color, HeaderClick, Language, Settings, ThemeChoice, Viewer};
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +50,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 8] = [
+const ITEMS: [Item; 9] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -85,6 +85,13 @@ const ITEMS: [Item; 8] = [
         title: "Background color",
         description: "Color behind images (#RRGGBB). Leave empty for the theme default.",
         widget: background_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.full_image_limit_mb",
+        title: "Full-resolution memory limit",
+        description: "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
+        widget: limit_widget,
     },
     Item {
         section: Section::Tree,
@@ -150,6 +157,17 @@ fn scale_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
 fn compact_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.appearance.compact, tr(lang, "Enabled"))
         .changed()
+}
+
+fn limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.viewer.full_image_limit_mb)
+            .range(Viewer::LIMIT_RANGE_MB)
+            .speed(64.0)
+            .suffix(" MB"),
+    );
+    // ドラッグ中に反映すると、値が下がるたびに画像を捨てて読み直してしまうため、離したときに反映する。
+    (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
 fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
