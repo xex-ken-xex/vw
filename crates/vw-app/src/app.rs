@@ -829,6 +829,12 @@ impl VwApp {
     }
 
     /// 画面に出すスロットとマス目。
+    /// 画像フィールドにスロットを 1 つだけ出している（最大化か 1x1）。
+    fn shows_one_slot(&self) -> bool {
+        let view = self.view();
+        view.cols * view.rows == 1
+    }
+
     fn view(&self) -> layout::View {
         let maximized = self
             .maximized
@@ -984,6 +990,8 @@ impl VwApp {
             self.sync_loaded_folder(dir, &created, &removed, &registry);
         }
         let playing = self.playback.as_ref().map(|pb| pb.slot);
+        let one_up = self.shows_one_slot();
+        let active = self.active;
         let mut siblings: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         let mut loads = Vec::new();
         for (index, slot) in self.slots.iter_mut().enumerate() {
@@ -1003,7 +1011,13 @@ impl VwApp {
             if paths.is_empty() {
                 continue;
             }
-            let at = watch::follow_newest(paths, &current, &created)
+            // 1 枚だけ表示しているときは、見ている位置に関わらず新しい画像を出す。見比べる
+            // 相手がいないので、来た画像をすぐ見られるほうが役に立つ。
+            let newest = (one_up && index == active)
+                .then(|| paths.iter().rposition(|p| created.contains(p)))
+                .flatten();
+            let at = newest
+                .or_else(|| watch::follow_newest(paths, &current, &created))
                 .or_else(|| paths.iter().position(|p| *p == current))
                 .unwrap_or_else(|| watch::position_of_removed(paths, &current, order));
             if let Some(seq) = &mut slot.sequence {
@@ -1074,7 +1088,7 @@ impl VwApp {
         let empty = |s: &Slot| s.path.is_none() && !s.loading;
         // 最後の画像か、まだ何も出していないスロットを見ていたなら、新しい画像に移る。
         let follow = match last {
-            Some(last) => self.active == last,
+            Some(last) => self.active == last || self.shows_one_slot(),
             None => empty(&self.slots[self.active]),
         };
         let followed_id = self.slots[self.active].id;
