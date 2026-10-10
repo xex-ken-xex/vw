@@ -75,7 +75,7 @@ fn convert(
     let convert_rows = |first_row: usize, out: &mut [u8]| {
         for (r, out_row) in out.chunks_exact_mut(ow * 4).enumerate() {
             let row = (first_row + r) * step * w;
-            for (ox, px) in out_row.chunks_exact_mut(4).enumerate() {
+            for (ox, px) in out_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let s = (row + ox * step) * ch;
                 let rgba_px = match img.color {
                     ColorModel::Gray => {
@@ -161,9 +161,11 @@ mod tests {
         let d = to_display(&img, &DisplayParams::default());
         assert!(d
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(&data)
-            .all(|(px, &g)| px == [g, g, g, 255]));
+            .all(|(px, &g)| *px == [g, g, g, 255]));
     }
 
     #[test]
