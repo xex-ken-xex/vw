@@ -4,13 +4,13 @@
 //! 起動が遅くなるうえ、ネットワークドライブで固まることがあるため。
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
 
 use crate::i18n::tr;
-use crate::settings::Language;
+use crate::settings::{FolderAction, Language, TreeMode};
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 
 /// ツリーの 1 項目（フォルダまたはファイル）。
@@ -32,6 +32,17 @@ struct View<'a> {
     selected: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
+    /// ファイルも出すか（ノーマルモード）。
+    show_files: bool,
+}
+
+/// ツリーを描いた結果。
+#[derive(Default)]
+struct Out {
+    action: Option<TreeAction>,
+    /// クリックされたフォルダの見出しと、Shift を押していたか。開閉と読み込みのどちらにするかは
+    /// [`ClickTracker`] が決める。
+    folder_click: Option<(PathBuf, bool)>,
 }
 
 /// ツリーでファイルがクリックされたときの要求。
@@ -44,6 +55,92 @@ pub enum TreeAction {
     Select(PathBuf),
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
+    /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
+    Load(PathBuf),
+}
+
+/// フォルダの見出しのクリックの扱い方（設定から作る）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FolderClicks {
+    pub mode: TreeMode,
+    pub action: FolderAction,
+    pub double_click: Duration,
+}
+
+/// 1 回のクリックの結果。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ClickEffect {
+    /// 今すぐ開閉するフォルダ。
+    pub toggle: Vec<PathBuf>,
+    /// 画像を読み込むフォルダ。
+    pub load: Option<PathBuf>,
+}
+
+/// フォルダの見出しのクリックを、開閉と読み込みに振り分ける。
+///
+/// egui の `double_clicked()` を使わないのは、ダブルクリックの 1 回目もクリックとして届き、
+/// 開閉を遅らせるか戻すかの判断に 1 回目の時刻が要るため。間隔を設定で変えられるようにもしたい。
+#[derive(Default)]
+pub struct ClickTracker {
+    /// 直前のクリック。ダブルクリックの 1 回目かもしれないもの。
+    last: Option<(PathBuf, Instant)>,
+}
+
+impl ClickTracker {
+    pub fn click(
+        &mut self,
+        how: FolderClicks,
+        path: &Path,
+        shift: bool,
+        now: Instant,
+    ) -> ClickEffect {
+        let mut out = ClickEffect::default();
+        if how.mode == TreeMode::Normal {
+            out.toggle.push(path.to_owned());
+            return out;
+        }
+        let second = self
+            .last
+            .take_if(|(p, at)| p == path && now - *at <= how.double_click);
+        match how.action {
+            FolderAction::ShiftClick if shift => out.load = Some(path.to_owned()),
+            FolderAction::ShiftClick => out.toggle.push(path.to_owned()),
+            FolderAction::Immediate => {
+                // 2 回目も開閉するので、1 回目の開閉が打ち消されて元に戻る。
+                out.toggle.push(path.to_owned());
+                match second {
+                    Some(_) => out.load = Some(path.to_owned()),
+                    None => self.last = Some((path.to_owned(), now)),
+                }
+            }
+            FolderAction::Delayed => match second {
+                Some(_) => out.load = Some(path.to_owned()),
+                None => {
+                    // 別のフォルダを続けてクリックしたら、前のフォルダの開閉は待たずに済ませる。
+                    if let Some((other, _)) = self.last.replace((path.to_owned(), now)) {
+                        out.toggle.push(other);
+                    }
+                }
+            },
+        }
+        out
+    }
+
+    /// 待ち時間が過ぎた、遅らせていた開閉。
+    pub fn due(&mut self, how: FolderClicks, now: Instant) -> Option<PathBuf> {
+        let (_, at) = self.last.as_ref()?;
+        if now - *at <= how.double_click {
+            return None;
+        }
+        let (path, _) = self.last.take()?;
+        (how.mode == TreeMode::AutoLoad && how.action == FolderAction::Delayed).then_some(path)
+    }
+
+    /// 次に [`Self::due`] を確かめるまでの時間。
+    fn wait(&self, how: FolderClicks, now: Instant) -> Option<Duration> {
+        let (_, at) = self.last.as_ref()?;
+        Some((*at + how.double_click).saturating_duration_since(now) + Duration::from_millis(1))
+    }
 }
 
 impl Node {
@@ -60,19 +157,19 @@ impl Node {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, view: &View, out: &mut Option<TreeAction>) {
+    fn ui(&mut self, ui: &mut egui::Ui, view: &View, out: &mut Out) {
         let lang = view.lang;
         let is_selected = view.selected == Some(self.path.as_path());
         if !self.is_dir {
             let r = ui.selectable_label(is_selected, &self.name);
             if r.clicked() {
-                *out = Some(if ui.input(|i| i.modifiers.command) {
+                out.action = Some(if ui.input(|i| i.modifiers.command) {
                     TreeAction::Add(self.path.clone())
                 } else {
                     TreeAction::Open(self.path.clone())
                 });
             }
-            copy_menu(&r, &self.path, lang, out);
+            copy_menu(&r, &self.path, lang, &mut out.action);
             return;
         }
         // CollapsingHeader を使わないのは、見出しに選択状態を出せず、右クリックメニューも
@@ -86,21 +183,47 @@ impl Node {
                 let children = self
                     .children
                     .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
-                if children.is_empty() {
-                    ui.weak("(empty)");
-                }
-                for child in children {
+                // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
+                // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
+                let mut shown = 0;
+                for child in children.iter_mut().filter(|c| c.is_dir || view.show_files) {
                     child.ui(ui, view, out);
+                    shown += 1;
+                }
+                if shown == 0 {
+                    ui.weak(tr(
+                        lang,
+                        if view.show_files {
+                            "(empty)"
+                        } else {
+                            "(no subfolders)"
+                        },
+                    ));
                 }
             });
         let label = header.inner;
-        if toggle.clicked() || label.clicked() {
+        if toggle.clicked() {
             self.open = !self.open;
         }
         if label.clicked() {
-            *out = Some(TreeAction::Select(self.path.clone()));
+            out.action = Some(TreeAction::Select(self.path.clone()));
+            out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
         }
-        copy_menu(&label, &self.path, lang, out);
+        copy_menu(&label, &self.path, lang, &mut out.action);
+    }
+
+    /// `path` の項目。読み込み済みの子だけを辿る。
+    fn find_mut(&mut self, path: &Path) -> Option<&mut Node> {
+        if self.path == path {
+            return Some(self);
+        }
+        if !path.starts_with(&self.path) {
+            return None;
+        }
+        self.children
+            .iter_mut()
+            .flatten()
+            .find_map(|c| c.find_mut(path))
     }
 
     fn collect_open(&self, out: &mut Vec<PathBuf>) {
@@ -160,6 +283,7 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
 pub struct FolderTree {
     pub roots: Vec<Node>,
     order: SortOrder,
+    clicks: ClickTracker,
 }
 
 impl FolderTree {
@@ -184,7 +308,11 @@ impl FolderTree {
         }
         #[cfg(not(windows))]
         roots.push(Node::dir(PathBuf::from("/"), Some("/".into()), false));
-        Self { roots, order }
+        Self {
+            roots,
+            order,
+            clicks: ClickTracker::default(),
+        }
     }
 
     /// 並び順を変え、表示中のフォルダもすぐ並べ直す。
@@ -214,24 +342,48 @@ impl FolderTree {
         }
     }
 
+    fn toggle(&mut self, path: &Path) {
+        if let Some(node) = self.roots.iter_mut().find_map(|r| r.find_mut(path)) {
+            node.open = !node.open;
+        }
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         registry: &Registry,
         selected: Option<&Path>,
         lang: Language,
+        how: FolderClicks,
     ) -> Option<TreeAction> {
+        let now = Instant::now();
+        if let Some(path) = self.clicks.due(how, now) {
+            self.toggle(&path);
+        }
         let view = View {
             registry,
             selected,
             lang,
             order: self.order,
+            show_files: how.mode == TreeMode::Normal,
         };
-        let mut out = None;
+        let mut out = Out::default();
         for root in &mut self.roots {
             root.ui(ui, &view, &mut out);
         }
-        out
+        if let Some((path, shift)) = out.folder_click {
+            let effect = self.clicks.click(how, &path, shift, now);
+            for p in &effect.toggle {
+                self.toggle(p);
+            }
+            if let Some(p) = effect.load {
+                out.action = Some(TreeAction::Load(p));
+            }
+        }
+        if let Some(wait) = self.clicks.wait(how, now) {
+            ui.ctx().request_repaint_after(wait);
+        }
+        out.action
     }
 }
 
@@ -277,6 +429,19 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
         .collect();
     sort_nodes(&mut nodes, order);
     nodes
+}
+
+/// フォルダの直下の (サブフォルダ, 対応画像) を、ツリーと同じ規則と順で返す。
+pub fn list_folder(
+    path: &Path,
+    registry: &Registry,
+    order: SortOrder,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let (dirs, files): (Vec<Node>, Vec<Node>) = list_dir(path, registry, order)
+        .into_iter()
+        .partition(|n| n.is_dir);
+    let paths = |v: Vec<Node>| v.into_iter().map(|n| n.path).collect();
+    (paths(dirs), paths(files))
 }
 
 fn sort_nodes(nodes: &mut [Node], order: SortOrder) {
@@ -483,7 +648,143 @@ mod tests {
         FolderTree {
             roots: vec![Node::dir(root.to_path_buf(), None, false)],
             order: SortOrder::default(),
+            clicks: ClickTracker::default(),
         }
+    }
+
+    #[test]
+    fn folder_listing_splits_subfolders_and_images_in_tree_order() {
+        let dir = TempDir::new();
+        dir.mkdir("sub2");
+        dir.mkdir("sub10");
+        dir.touch("img10.png");
+        dir.touch("img2.png");
+        dir.touch("notes.txt");
+        let (dirs, files) = list_folder(dir.path(), &png_registry(), SortOrder::default());
+        let names = |v: &[PathBuf]| v.iter().map(|p| display_name(p)).collect::<Vec<_>>();
+        assert_eq!(names(&dirs), ["sub2", "sub10"]);
+        assert_eq!(names(&files), ["img2.png", "img10.png"]);
+    }
+
+    #[test]
+    fn toggling_by_path_opens_a_loaded_subfolder() {
+        let dir = TempDir::new();
+        let sub = dir.mkdir("sub");
+        let mut tree = tree_at(dir.path());
+        tree.restore_open(&[dir.path().to_path_buf()], &png_registry());
+        tree.toggle(&sub);
+        assert_eq!(tree.open_paths(), [dir.path().to_path_buf(), sub]);
+    }
+
+    const MS: Duration = Duration::from_millis(1);
+
+    fn how(mode: TreeMode, action: FolderAction) -> FolderClicks {
+        FolderClicks {
+            mode,
+            action,
+            double_click: 300 * MS,
+        }
+    }
+
+    fn toggles(paths: &[&Path]) -> ClickEffect {
+        ClickEffect {
+            toggle: paths.iter().map(|p| p.to_path_buf()).collect(),
+            load: None,
+        }
+    }
+
+    fn loads(path: &Path) -> ClickEffect {
+        ClickEffect {
+            toggle: vec![],
+            load: Some(path.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn normal_mode_toggles_on_every_click_and_never_loads() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::Normal, FolderAction::Delayed);
+        let mut c = ClickTracker::default();
+        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
+        assert_eq!(c.click(h, a, true, t + MS), toggles(&[a]));
+    }
+
+    #[test]
+    fn delayed_click_toggles_only_after_the_double_click_time() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
+        let mut c = ClickTracker::default();
+        assert_eq!(c.click(h, a, false, t), ClickEffect::default());
+        assert_eq!(c.due(h, t + 200 * MS), None);
+        assert_eq!(c.due(h, t + 301 * MS), Some(a.to_path_buf()));
+        assert_eq!(c.due(h, t + 400 * MS), None, "toggled once");
+    }
+
+    #[test]
+    fn delayed_double_click_loads_without_toggling() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
+        let mut c = ClickTracker::default();
+        c.click(h, a, false, t);
+        assert_eq!(c.click(h, a, false, t + 250 * MS), loads(a));
+        assert_eq!(c.due(h, t + 600 * MS), None);
+    }
+
+    #[test]
+    fn delayed_clicks_slower_than_the_double_click_time_toggle_twice() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
+        let mut c = ClickTracker::default();
+        c.click(h, a, false, t);
+        assert_eq!(c.due(h, t + 350 * MS), Some(a.to_path_buf()));
+        assert_eq!(c.click(h, a, false, t + 400 * MS), ClickEffect::default());
+        assert_eq!(c.due(h, t + 800 * MS), Some(a.to_path_buf()));
+    }
+
+    #[test]
+    fn delayed_click_on_another_folder_toggles_the_first_at_once() {
+        let (a, b, t) = (Path::new("/a"), Path::new("/b"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
+        let mut c = ClickTracker::default();
+        c.click(h, a, false, t);
+        assert_eq!(c.click(h, b, false, t + 100 * MS), toggles(&[a]));
+        assert_eq!(c.due(h, t + 500 * MS), Some(b.to_path_buf()));
+    }
+
+    #[test]
+    fn immediate_double_click_toggles_back_and_loads() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Immediate);
+        let mut c = ClickTracker::default();
+        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
+        assert_eq!(
+            c.click(h, a, false, t + 100 * MS),
+            ClickEffect {
+                toggle: vec![a.to_path_buf()],
+                load: Some(a.to_path_buf()),
+            }
+        );
+        assert_eq!(c.due(h, t + 600 * MS), None);
+    }
+
+    #[test]
+    fn immediate_third_click_starts_over() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::Immediate);
+        let mut c = ClickTracker::default();
+        c.click(h, a, false, t);
+        c.click(h, a, false, t + 100 * MS);
+        assert_eq!(c.click(h, a, false, t + 200 * MS), toggles(&[a]));
+    }
+
+    #[test]
+    fn shift_click_loads_and_plain_click_toggles_at_once() {
+        let (a, t) = (Path::new("/a"), Instant::now());
+        let h = how(TreeMode::AutoLoad, FolderAction::ShiftClick);
+        let mut c = ClickTracker::default();
+        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
+        assert_eq!(c.click(h, a, false, t + MS), toggles(&[a]));
+        assert_eq!(c.click(h, a, true, t + 2 * MS), loads(a));
     }
 
     #[test]

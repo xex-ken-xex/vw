@@ -120,13 +120,79 @@ pub struct Behavior {
     pub header_click: HeaderClick,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+/// フォルダツリーの動作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeMode {
+    /// フォルダと画像を出し、画像をクリックしてスロットに開く。
+    #[default]
+    Normal,
+    /// フォルダだけを出し、フォルダの画像をまとめてスロットに読み込む。
+    AutoLoad,
+}
+
+/// 画像自動展開モードで、フォルダの開閉と読み込みをどの操作に割り当てるか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderAction {
+    /// クリックで開閉、ダブルクリックで読み込む。開閉はダブルクリックの待ち時間だけ遅らせる。
+    #[default]
+    Delayed,
+    /// クリックですぐ開閉し、ダブルクリックなら開閉を戻して読み込む。
+    Immediate,
+    /// クリックで開閉、Shift+クリックで読み込む。
+    ShiftClick,
+}
+
+/// 別のフォルダを読み込むときに、表示中のスロットをどうするか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnLoadFolder {
+    /// すべて閉じて置き換える。
+    #[default]
+    Replace,
+    /// 残して後ろに足す。
+    Append,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Tree {
     pub sort: SortKey,
     pub sort_descending: bool,
+    pub mode: TreeMode,
+    pub folder_action: FolderAction,
+    /// 2 回のクリックをダブルクリックとみなす間隔（ミリ秒）。
+    pub double_click_ms: u32,
+    pub on_load_other_folder: OnLoadFolder,
+    /// 読み込む枚数が区切りに達するたびに、続けるか確認する。
+    pub confirm_every: bool,
+    /// 確認する区切りの枚数。
+    pub confirm_chunk: u32,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            sort: SortKey::default(),
+            sort_descending: false,
+            mode: TreeMode::default(),
+            folder_action: FolderAction::default(),
+            double_click_ms: 300,
+            on_load_other_folder: OnLoadFolder::default(),
+            confirm_every: true,
+            confirm_chunk: 500,
+        }
+    }
 }
 
 impl Tree {
+    pub const DOUBLE_CLICK_RANGE_MS: std::ops::RangeInclusive<u32> = 100..=1000;
+    pub const CHUNK_RANGE: std::ops::RangeInclusive<u32> = 1..=100_000;
+
+    pub fn double_click(&self) -> Duration {
+        Duration::from_millis(self.double_click_ms.into())
+    }
+
     pub fn order(&self) -> SortOrder {
         SortOrder {
             key: self.sort,
@@ -194,6 +260,32 @@ impl Settings {
             sort_descending: r
                 .get("tree", "sort_descending")
                 .unwrap_or(d.tree.sort_descending),
+            mode: r.get("tree", "mode").unwrap_or(d.tree.mode),
+            folder_action: r
+                .get("tree", "folder_action")
+                .unwrap_or(d.tree.folder_action),
+            double_click_ms: r
+                .get_valid(
+                    "tree",
+                    "double_click_ms",
+                    |v: &u32| Tree::DOUBLE_CLICK_RANGE_MS.contains(v),
+                    "must be 100 to 1000",
+                )
+                .unwrap_or(d.tree.double_click_ms),
+            on_load_other_folder: r
+                .get("tree", "on_load_other_folder")
+                .unwrap_or(d.tree.on_load_other_folder),
+            confirm_every: r
+                .get("tree", "confirm_every")
+                .unwrap_or(d.tree.confirm_every),
+            confirm_chunk: r
+                .get_valid(
+                    "tree",
+                    "confirm_chunk",
+                    |v: &u32| Tree::CHUNK_RANGE.contains(v),
+                    "must be 1 to 100000",
+                )
+                .unwrap_or(d.tree.confirm_chunk),
         };
         let behavior = Behavior {
             header_click: r
@@ -509,6 +601,12 @@ mod tests {
         s.viewer.full_image_limit_mb = 8192;
         s.tree.sort = SortKey::Modified;
         s.tree.sort_descending = true;
+        s.tree.mode = TreeMode::AutoLoad;
+        s.tree.folder_action = FolderAction::ShiftClick;
+        s.tree.double_click_ms = 450;
+        s.tree.on_load_other_folder = OnLoadFolder::Append;
+        s.tree.confirm_every = false;
+        s.tree.confirm_chunk = 200;
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -618,6 +716,38 @@ mod tests {
         let (s, problems) = Settings::from_toml("[tree]\nsort = \"size\"\n").unwrap();
         assert_eq!(s.tree.sort, SortKey::NameNatural);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn folder_auto_load_is_off_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.tree.mode, TreeMode::Normal);
+        assert_eq!(s.tree.folder_action, FolderAction::Delayed);
+        assert_eq!(s.tree.double_click(), Duration::from_millis(300));
+        assert_eq!(s.tree.on_load_other_folder, OnLoadFolder::Replace);
+        assert!(s.tree.confirm_every);
+        assert_eq!(s.tree.confirm_chunk, 500);
+    }
+
+    #[test]
+    fn auto_load_settings_are_read_from_the_tree_section() {
+        let text = "[tree]\nmode = \"auto_load\"\nfolder_action = \"immediate\"\n\
+                    on_load_other_folder = \"append\"\nconfirm_chunk = 100\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.tree.mode, TreeMode::AutoLoad);
+        assert_eq!(s.tree.folder_action, FolderAction::Immediate);
+        assert_eq!(s.tree.on_load_other_folder, OnLoadFolder::Append);
+        assert_eq!(s.tree.confirm_chunk, 100);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn out_of_range_double_click_and_chunk_fall_back_to_defaults() {
+        let text = "[tree]\ndouble_click_ms = 5\nconfirm_chunk = 0\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.tree.double_click_ms, 300);
+        assert_eq!(s.tree.confirm_chunk, 500);
+        assert_eq!(problems.len(), 2);
     }
 
     #[test]

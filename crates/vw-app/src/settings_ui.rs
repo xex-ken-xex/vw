@@ -8,7 +8,10 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
-use crate::settings::{parse_hex_color, HeaderClick, Language, Settings, ThemeChoice, Viewer};
+use crate::settings::{
+    parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, Settings, ThemeChoice,
+    Tree, TreeMode, Viewer,
+};
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +53,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 9] = [
+const ITEMS: [Item; 15] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -106,6 +109,48 @@ const ITEMS: [Item; 9] = [
         title: "Descending",
         description: "Reverse the sort order (Z to A, newest first).",
         widget: descending_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.mode",
+        title: "Tree mode",
+        description: "Normal shows folders and images; click an image to open it. Auto-load shows folders only and loads all images of a folder into slots.",
+        widget: mode_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.folder_action",
+        title: "Folder click (auto-load)",
+        description: "How a folder is expanded/collapsed and how it is loaded in auto-load mode. Images directly in the folder load at once; subfolders are asked about first.",
+        widget: folder_action_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.double_click_ms",
+        title: "Double-click time",
+        description: "Two clicks within this time (ms) count as a double-click.",
+        widget: double_click_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.on_load_other_folder",
+        title: "Loading another folder",
+        description: "What happens to the open slots when another folder is loaded. Expanding or collapsing a folder never closes slots.",
+        widget: on_load_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.confirm_every",
+        title: "Confirm large loads",
+        description: "Ask before continuing each time the number of loaded images reaches the chunk size.",
+        widget: confirm_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.confirm_chunk",
+        title: "Chunk size",
+        description: "Number of images to load before asking again.",
+        widget: chunk_widget,
     },
     Item {
         section: Section::Behavior,
@@ -185,6 +230,86 @@ fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 fn descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.tree.sort_descending, tr(lang, "Enabled"))
         .changed()
+}
+
+fn mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.mode;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (TreeMode::Normal, "Normal"),
+            (TreeMode::AutoLoad, "Auto-load images"),
+        ] {
+            ui.radio_value(&mut s.tree.mode, choice, tr(lang, label));
+        }
+    });
+    s.tree.mode != before
+}
+
+fn folder_action_title(a: FolderAction) -> &'static str {
+    match a {
+        FolderAction::Delayed => "Click: expand after the double-click time / Double-click: load",
+        FolderAction::Immediate => "Click: expand at once / Double-click: undo and load",
+        FolderAction::ShiftClick => "Click: expand / Shift+click: load",
+    }
+}
+
+fn folder_action_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.folder_action;
+    egui::ComboBox::from_id_salt("folder_action")
+        .selected_text(tr(lang, folder_action_title(before)))
+        .show_ui(ui, |ui| {
+            for a in [
+                FolderAction::Delayed,
+                FolderAction::Immediate,
+                FolderAction::ShiftClick,
+            ] {
+                ui.selectable_value(
+                    &mut s.tree.folder_action,
+                    a,
+                    tr(lang, folder_action_title(a)),
+                );
+            }
+        });
+    s.tree.folder_action != before
+}
+
+fn double_click_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.tree.double_click_ms)
+            .range(Tree::DOUBLE_CLICK_RANGE_MS)
+            .speed(5.0)
+            .suffix(" ms"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn on_load_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.tree.on_load_other_folder;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (OnLoadFolder::Replace, "Replace the slots"),
+            (OnLoadFolder::Append, "Add after the slots"),
+        ] {
+            ui.radio_value(&mut s.tree.on_load_other_folder, choice, tr(lang, label));
+        }
+    });
+    s.tree.on_load_other_folder != before
+}
+
+fn confirm_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.tree.confirm_every, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let r = ui.add_enabled(
+        s.tree.confirm_every,
+        egui::DragValue::new(&mut s.tree.confirm_chunk)
+            .range(Tree::CHUNK_RANGE)
+            .speed(10.0)
+            .suffix(tr(lang, " images")),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
 fn header_click_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

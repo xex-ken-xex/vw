@@ -54,6 +54,7 @@ const JA: &[(&str, &str)] = &[
         "フォルダツリーで画像を選んでください（Ctrl+クリックでスロットを追加）",
     ),
     ("(empty)", "（空）"),
+    ("(no subfolders)", "（サブフォルダなし）"),
     ("Close slot", "スロットを閉じる"),
     // コピー
     ("Copy", "コピー"),
@@ -119,6 +120,73 @@ const JA: &[(&str, &str)] = &[
     (
         "Reverse the sort order (Z to A, newest first).",
         "並び順を逆にします（Z から A、新しい順）。",
+    ),
+    ("Tree mode", "ツリーのモード"),
+    (
+        "Normal shows folders and images; click an image to open it. Auto-load shows folders only and loads all images of a folder into slots.",
+        "ノーマルはフォルダと画像を表示し、画像をクリックして開きます。画像自動展開はフォルダだけを表示し、フォルダの画像をまとめてスロットに読み込みます。",
+    ),
+    ("Normal", "ノーマル"),
+    ("Auto-load images", "画像自動展開"),
+    ("Folder click (auto-load)", "フォルダのクリック（画像自動展開）"),
+    (
+        "How a folder is expanded/collapsed and how it is loaded in auto-load mode. Images directly in the folder load at once; subfolders are asked about first.",
+        "画像自動展開モードでの、フォルダの開閉と読み込みの操作。フォルダ直下の画像はすぐ読み込み、サブフォルダは先に確認します。",
+    ),
+    (
+        "Click: expand after the double-click time / Double-click: load",
+        "クリック: ダブルクリック時間の後に開閉 / ダブルクリック: 読み込み",
+    ),
+    (
+        "Click: expand at once / Double-click: undo and load",
+        "クリック: すぐ開閉 / ダブルクリック: 開閉を戻して読み込み",
+    ),
+    (
+        "Click: expand / Shift+click: load",
+        "クリック: 開閉 / Shift+クリック: 読み込み",
+    ),
+    ("Double-click time", "ダブルクリック時間"),
+    (
+        "Two clicks within this time (ms) count as a double-click.",
+        "この時間（ミリ秒）以内の 2 回のクリックをダブルクリックとみなします。",
+    ),
+    ("Loading another folder", "別のフォルダを読み込むとき"),
+    (
+        "What happens to the open slots when another folder is loaded. Expanding or collapsing a folder never closes slots.",
+        "別のフォルダを読み込むときに、表示中のスロットをどうするか。フォルダを開閉するだけではスロットは閉じません。",
+    ),
+    ("Replace the slots", "スロットを置き換える"),
+    ("Add after the slots", "スロットの後ろに追加する"),
+    ("Confirm large loads", "大量の読み込みを確認"),
+    (
+        "Ask before continuing each time the number of loaded images reaches the chunk size.",
+        "読み込んだ枚数が区切りの枚数に達するたびに、続けるか確認します。",
+    ),
+    ("Chunk size", "区切りの枚数"),
+    (
+        "Number of images to load before asking again.",
+        "次に確認するまでに読み込む枚数。",
+    ),
+    (" images", " 枚"),
+    (
+        "\"{}\" has subfolders. Load the images in all of them too?",
+        "「{}」にはサブフォルダがあります。すべてのサブフォルダの画像も読み込みますか？",
+    ),
+    ("Load subfolders", "サブフォルダも読み込む"),
+    ("This folder only", "このフォルダだけ"),
+    (
+        "{} images loaded. Load the next {}?",
+        "{} 枚読み込みました。次の {} 枚も読み込みますか？",
+    ),
+    ("Load more", "続けて読み込む"),
+    ("Stop", "やめる"),
+    (
+        "Double-click a folder in the tree to load its images",
+        "ツリーのフォルダをダブルクリックすると画像を読み込みます",
+    ),
+    (
+        "Shift+click a folder in the tree to load its images",
+        "ツリーのフォルダを Shift+クリックすると画像を読み込みます",
     ),
     ("Behavior", "動作"),
     ("Group heading click", "グループ見出しのクリック"),
