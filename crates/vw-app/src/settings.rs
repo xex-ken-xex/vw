@@ -281,40 +281,54 @@ mod tests {
         }
     }
 
+    /// テスト用の絶対パス。"/home/ken" は Windows では絶対パスにならないので、
+    /// 一時フォルダを起点にして両方の OS で通るようにする。
+    fn abs(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    fn s(p: &Path) -> &str {
+        p.to_str().unwrap()
+    }
+
     #[test]
     fn linux_config_goes_under_dot_config() {
-        let p = config_path(false, env(&[("HOME", "/home/ken")]));
-        assert_eq!(p, Some(PathBuf::from("/home/ken/.config/vw/settings.toml")));
+        let home = abs("home");
+        let p = config_path(false, env(&[("HOME", s(&home))]));
+        assert_eq!(
+            p,
+            Some(home.join(".config").join("vw").join("settings.toml"))
+        );
     }
 
     #[test]
     fn xdg_config_home_wins_over_home() {
+        let (home, cfg) = (abs("home"), abs("cfg"));
         let p = config_path(
             false,
-            env(&[("HOME", "/home/ken"), ("XDG_CONFIG_HOME", "/cfg")]),
+            env(&[("HOME", s(&home)), ("XDG_CONFIG_HOME", s(&cfg))]),
         );
-        assert_eq!(p, Some(PathBuf::from("/cfg/vw/settings.toml")));
+        assert_eq!(p, Some(cfg.join("vw").join("settings.toml")));
     }
 
     #[test]
     fn relative_xdg_config_home_is_ignored() {
+        let home = abs("home");
         let p = config_path(
             false,
-            env(&[("HOME", "/home/ken"), ("XDG_CONFIG_HOME", "cfg")]),
+            env(&[("HOME", s(&home)), ("XDG_CONFIG_HOME", "cfg")]),
         );
-        assert_eq!(p, Some(PathBuf::from("/home/ken/.config/vw/settings.toml")));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_config_goes_under_appdata() {
-        let p = config_path(true, env(&[("APPDATA", r"C:\Users\ken\AppData\Roaming")]));
         assert_eq!(
             p,
-            Some(PathBuf::from(
-                r"C:\Users\ken\AppData\Roaming\vw\settings.toml"
-            ))
+            Some(home.join(".config").join("vw").join("settings.toml"))
         );
+    }
+
+    #[test]
+    fn windows_config_goes_under_appdata() {
+        let appdata = abs("AppData");
+        let p = config_path(true, env(&[("APPDATA", s(&appdata))]));
+        assert_eq!(p, Some(appdata.join("vw").join("settings.toml")));
     }
 
     #[test]
