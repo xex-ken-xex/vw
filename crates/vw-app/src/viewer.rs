@@ -148,6 +148,7 @@ impl Slot {
         active: bool,
         background: Color32,
         lang: Language,
+        empty_hint: &'static str,
     ) -> SlotResponse {
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
@@ -220,7 +221,7 @@ impl Slot {
             } else if self.error.is_some() {
                 "Failed to load (see log)"
             } else {
-                "Select an image in the folder tree (Ctrl+click adds a slot)"
+                empty_hint
             };
             let msg = tr(lang, msg);
             painter.text(

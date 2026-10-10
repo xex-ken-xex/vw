@@ -14,17 +14,20 @@ use eframe::egui::{
 use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
+use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
-use crate::i18n::tr;
+use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
 use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
-use crate::settings::{parse_hex_color, HeaderClick, Language, SettingsStore};
+use crate::settings::{
+    parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, SettingsStore, TreeMode,
+};
 use crate::settings_ui::SettingsUi;
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
-use crate::tree::{self, FolderTree, TreeAction};
+use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
 use crate::viewer::{Full, Shown, Slot};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
@@ -122,6 +125,8 @@ pub struct VwApp {
     frame: u64,
     /// 画像フィールドの大きさ（物理ピクセル）。読み込むときにフル解像度が要りそうかの見積もりに使う。
     images_area: Option<egui::Vec2>,
+    /// 画像自動展開モードで読み込み中のフォルダ。
+    folder_load: Option<FolderLoad>,
 }
 
 /// コピーしたときにカーソルの近くに出す短い表示。
@@ -277,6 +282,7 @@ impl VwApp {
             toast: None,
             frame: 0,
             images_area: None,
+            folder_load: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -327,13 +333,17 @@ impl VwApp {
     /// アクティブなスロットで `path` を読み込み始める。結果は [`Self::receive`] で受け取る。
     /// 前の画像は新しい画像が届くまで表示したままにして、切り替え時のちらつきを避ける。
     fn open_in_active(&mut self, path: PathBuf) {
-        let request = self.next_id;
-        self.next_id += 1;
         self.tree_selected = Some(path.clone());
         let full = self.cell_needs_full();
-        let slot = &self.slots[self.active];
-        self.cancel_requests(slot);
-        let slot = &mut self.slots[self.active];
+        self.start_load(self.active, path, full);
+    }
+
+    /// `index` 番目のスロットで `path` を読み込み始める。
+    fn start_load(&mut self, index: usize, path: PathBuf, full: bool) {
+        let request = self.next_id;
+        self.next_id += 1;
+        self.cancel_requests(&self.slots[index]);
+        let slot = &mut self.slots[index];
         slot.path = Some(path.clone());
         slot.request = request;
         slot.loading = true;
@@ -347,6 +357,134 @@ impl VwApp {
             thumb: true,
             full,
         });
+    }
+
+    /// フォルダの画像をスロットに読み込み始める（画像自動展開モード）。
+    /// 前の読み込みが続いていれば、そこで打ち切る。
+    fn load_folder(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let tree = self.settings.settings.tree.clone();
+        if tree.on_load_other_folder == OnLoadFolder::Replace {
+            self.close_all_slots();
+        }
+        self.log.info(format!("Loading folder {}", path.display()));
+        let ctx = ctx.clone();
+        self.folder_load = Some(FolderLoad::start(
+            path,
+            self.loader.registry().clone(),
+            tree.order(),
+            tree.confirm_every,
+            tree.confirm_chunk as usize,
+            move || ctx.request_repaint(),
+        ));
+    }
+
+    /// 読み込み中のフォルダで見つかった画像を、末尾のスロットに足していく。
+    fn pump_folder_load(&mut self) {
+        let Some(load) = &mut self.folder_load else {
+            return;
+        };
+        let paths = load.take_ready();
+        let finished = load.finished();
+        if !paths.is_empty() {
+            // 先にスロットを全部足してから枠の大きさを見積もる。1 枚ずつ見積もると、
+            // スロットが少ない最初のうちだけフル解像度を読んでしまうため。
+            let last = &self.slots[self.slots.len() - 1];
+            let mut reuse_last = last.path.is_none() && !last.loading;
+            let mut targets = Vec::with_capacity(paths.len());
+            for path in paths {
+                if !std::mem::take(&mut reuse_last) {
+                    self.slots.push(Slot::new(self.next_id));
+                    self.next_id += 1;
+                }
+                targets.push((self.slots.len() - 1, path));
+            }
+            let full = self.cell_needs_full();
+            for (index, path) in targets {
+                self.start_load(index, path, full);
+            }
+        }
+        if finished {
+            self.finish_folder_load();
+        }
+    }
+
+    fn finish_folder_load(&mut self) {
+        if let Some(load) = self.folder_load.take() {
+            self.log.info(format!(
+                "Loaded {} images from {}",
+                load.loaded,
+                load.root.display()
+            ));
+        }
+    }
+
+    /// 読み込み中のフォルダの確認（サブフォルダも読むか、次の区切りまで続けるか）。
+    fn folder_load_dialog(&mut self, ctx: &egui::Context) {
+        let Some(load) = &self.folder_load else {
+            return;
+        };
+        let Some(question) = load.question() else {
+            return;
+        };
+        let lang = self.lang();
+        let name = load.root.file_name().map_or_else(
+            || load.root.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let chunk = self.settings.settings.tree.confirm_chunk;
+        let (message, yes, no) = match question {
+            Question::Subfolders => (
+                tr1(
+                    lang,
+                    "\"{}\" has subfolders. Load the images in all of them too?",
+                    &name,
+                ),
+                tr(lang, "Load subfolders"),
+                tr(lang, "This folder only"),
+            ),
+            Question::More => (
+                tr1(
+                    lang,
+                    "{} images loaded. Load the next {}?",
+                    &load.loaded.to_string(),
+                )
+                .replacen("{}", &chunk.to_string(), 1),
+                tr(lang, "Load more"),
+                tr(lang, "Stop"),
+            ),
+        };
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("folder_load_question")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(message);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(yes).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(no).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        // Esc や枠の外のクリックは、続けない方の答えとして扱う。
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(yes) = answer else {
+            return;
+        };
+        let Some(load) = &mut self.folder_load else {
+            return;
+        };
+        match question {
+            Question::Subfolders => load.answer_subfolders(yes),
+            Question::More => {
+                if !load.answer_more(yes) {
+                    self.finish_folder_load();
+                }
+            }
+        }
     }
 
     /// 今のスロット数で並べたとき、1 枠が縮小画像より大きいか。
@@ -422,7 +560,11 @@ impl VwApp {
             Action::NextImage => self.step_active(1),
             Action::NewSlot => self.add_slot(),
             Action::CloseSlot => self.close_slot(self.active),
-            Action::CloseAllSlots => self.close_all_slots(),
+            Action::CloseAllSlots => {
+                // 読み込み中のフォルダの残りが、閉じた後のスロットに入り続けないようにする。
+                self.finish_folder_load();
+                self.close_all_slots();
+            }
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::ToggleFolderTree => self.fields.tree ^= true,
             Action::ToggleMetadata => self.fields.metadata ^= true,
@@ -1157,6 +1299,7 @@ impl VwApp {
         let mut close = None;
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
+        let hint = empty_slot_hint(&self.settings.settings.tree);
         for i in 0..n {
             let (c, r) = (i % cols, i / cols);
             let rect = Rect::from_min_size(
@@ -1166,7 +1309,14 @@ impl VwApp {
                 ),
                 cell,
             );
-            let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active, background, lang);
+            let resp = self.slots[i].ui(
+                ui,
+                rect.shrink(1.0),
+                i == self.active,
+                background,
+                lang,
+                hint,
+            );
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
@@ -1215,6 +1365,7 @@ impl eframe::App for VwApp {
         self.restore_window(&ctx);
         self.track_window(&ctx);
         self.receive(&ctx);
+        self.pump_folder_load();
         self.reload_settings(&ctx);
 
         // キー入力待ちのときは、押されたキーを割り当てに使い切る（ホットキーとして実行しない）。
@@ -1276,11 +1427,17 @@ impl eframe::App for VwApp {
                 .show(ui, |ui| {
                     panel_header(ui, tr(lang, "Folders"));
                     let selected = self.tree_selected.clone();
+                    let t = &self.settings.settings.tree;
+                    let how = FolderClicks {
+                        mode: t.mode,
+                        action: t.folder_action,
+                        double_click: t.double_click(),
+                    };
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
                             self.tree
-                                .ui(ui, self.loader.registry(), selected.as_deref(), lang)
+                                .ui(ui, self.loader.registry(), selected.as_deref(), lang, how)
                         })
                         .inner;
                     let Some(action) = action else {
@@ -1294,6 +1451,10 @@ impl eframe::App for VwApp {
                             self.open_in_active(p);
                         }
                         TreeAction::Select(p) => self.tree_selected = Some(p),
+                        TreeAction::Load(p) => {
+                            self.tree_selected = Some(p.clone());
+                            self.load_folder(&ctx, p);
+                        }
                         TreeAction::Copy(p) => {
                             let what = format!("path {}", p.display());
                             self.copy_text(&ctx, p.display().to_string(), &what);
@@ -1322,6 +1483,7 @@ impl eframe::App for VwApp {
         });
         self.copy_selection(&ctx);
         self.toast_ui(&ctx);
+        self.folder_load_dialog(&ctx);
     }
 }
 
@@ -1334,6 +1496,17 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleLog => "Log",
         Action::ToggleSettings => "Settings",
         other => other.title(),
+    }
+}
+
+/// 空のスロットに出す案内。ツリーのモードとフォルダの操作に合わせる。
+fn empty_slot_hint(tree: &crate::settings::Tree) -> &'static str {
+    match (tree.mode, tree.folder_action) {
+        (TreeMode::Normal, _) => "Select an image in the folder tree (Ctrl+click adds a slot)",
+        (TreeMode::AutoLoad, FolderAction::ShiftClick) => {
+            "Shift+click a folder in the tree to load its images"
+        }
+        (TreeMode::AutoLoad, _) => "Double-click a folder in the tree to load its images",
     }
 }
 
