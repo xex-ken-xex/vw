@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=vw
+GenericName=Image Viewer
+GenericName[ja]=画像ビューワ
+Comment=Fast image viewer
+Comment[ja]=高速な画像ビューワ
+Exec=vw %F
+Terminal=false
+Categories=Graphics;Viewer;
+MimeType=image/png;

@@ -1,25 +1,290 @@
 # vw
 
-Linux / Windows 向けの高速な画像ビューワ（Rust + egui）。
+Linux / Windows 向けの、起動と表示が速い画像ビューワです。Rust と egui (OpenGL) で作っています。
 
-現在対応している形式: PNG（8/16bit、グレー・RGB・アルファ・パレット）
+![画面構成](docs/screenshot.png)
 
-## ビルドと実行
+- フォルダツリー、メタデータ、画像、ログの 4 つのフィールドで構成された 1 画面のアプリです
+- 画像フィールドには複数の画像を並べて表示できます
+- 16bit 画像も 8bit に落とさずに読み込みます（医用画像や RAW を見据えた設計）
+- 対応形式はプラグインとして追加していきます
+
+| 形式 | 状態 |
+| --- | --- |
+| PNG（1〜16bit、グレー / RGB / アルファ / パレット） | 対応済み |
+| BMP, JPEG, DICOM, Nikon RAW (NEF), Sony RAW (ARW) | 予定 |
+
+---
+
+## 目次
+
+- [ダウンロード](#ダウンロード)
+- [Windows での使い方](#windows-での使い方)
+- [Ubuntu での使い方](#ubuntu-での使い方)
+- [画面と操作](#画面と操作)
+- [困ったとき](#困ったとき)
+- [開発とビルド](#開発とビルド)
+
+---
+
+## ダウンロード
+
+[Releases](https://github.com/xex-ken-xex/vw/releases) から、使っている OS のファイルをダウンロードします。
+
+| ファイル | 対象 |
+| --- | --- |
+| `vw-windows-x64.zip` | Windows 10 / 11（64bit） |
+| `vw-linux-x64.tar.gz` | Ubuntu 22.04 以降など、x86_64 の Linux |
+
+Release は 2 種類あります。
+
+- **vX.Y.Z**（例: v0.1.0）: 正式版。通常はこちらを使ってください
+- **最新ビルド (main)**: 開発中の最新版。main ブランチが更新されるたびに自動で置き換わります
+
+---
+
+## Windows での使い方
+
+### インストール
+
+インストーラーはありません。zip を展開するだけで使えます。
+
+1. `vw-windows-x64.zip` をダウンロードします
+2. zip を右クリックして **すべて展開** を選び、好きな場所（例: `C:\Tools\vw`）に展開します
+3. 展開したフォルダの `vw.exe` をダブルクリックすると起動します
+
+初回起動時に「Windows によって PC が保護されました」と表示されることがあります。
+これは署名のない新しいアプリに出る警告です。**詳細情報** → **実行** で起動できます。
+
+### 画像を開く
+
+- **起動してから開く**: 左のフォルダツリーでフォルダをたどり、画像をクリックします
+- **ドラッグ＆ドロップ**: 画像やフォルダを `vw.exe` のアイコンに重ねて離します
+- **右クリックから開く**: 画像を右クリック → **プログラムから開く** → **別のプログラムを選択** → **PC でアプリを選択する** で `vw.exe` を選びます。「常にこのアプリを使う」にすると、ダブルクリックで vw が開くようになります
+- **コマンドから開く**:
+
+  ```bat
+  vw.exe C:\Users\me\Pictures
+  vw.exe a.png b.png c.png
+  ```
+
+  フォルダを渡すと、そのフォルダをツリーで開いた状態で起動します。
+  画像を複数渡すと、それぞれ別のスロットに並べて表示します。
+
+### スタートメニューやデスクトップに置く
+
+`vw.exe` を右クリック → **その他のオプションを確認** → **ショートカットの作成** で作ったショートカットを、
+デスクトップや `%APPDATA%\Microsoft\Windows\Start Menu\Programs` に置きます。
+
+### アンインストール
+
+展開したフォルダを削除するだけです。レジストリや設定ファイルは使っていません。
+
+---
+
+## Ubuntu での使い方
+
+### インストール
 
 ```sh
-cargo run --release -- [フォルダ または 画像ファイル ...]
+tar xzf vw-linux-x64.tar.gz
+cd vw
+./install.sh
 ```
 
-Linux では X11/Wayland と OpenGL のライブラリ（`libxkbcommon-x11-0`, `libgl1` など）が必要です。
+`install.sh` は次のことを行います（管理者権限は使いません）。
 
-## 操作
+- `vw` を `~/.local/bin/vw` に置く
+- アプリ一覧に「vw」を登録し、PNG の「別のアプリケーションで開く」に出るようにする
+
+インストールせずに、展開したフォルダで `./vw` を実行して使うこともできます。
+
+### 画像を開く
+
+- **アプリ一覧から**: 「vw」を起動し、左のフォルダツリーで画像をクリックします
+- **ファイルマネージャーから**: 画像を右クリック → **別のアプリケーションで開く** → **vw**
+- **端末から**:
+
+  ```sh
+  vw ~/Pictures
+  vw a.png b.png c.png
+  ```
+
+### 必要なライブラリ
+
+デスクトップ版の Ubuntu なら追加のインストールは不要です。
+サーバー版や最小構成で起動しない場合は、次を入れてください。
+
+```sh
+sudo apt install libxkbcommon-x11-0 libgl1 libegl1 libxcursor1 libxrandr2 libxi6 fonts-noto-cjk
+```
+
+`fonts-noto-cjk` はファイル名などの日本語表示に使います。
+
+### アンインストール
+
+```sh
+./install.sh --uninstall
+```
+
+---
+
+## 画面と操作
+
+```
+┌ File  View ───────────────────────────────────────────┐
+│ Folders  │        Images（n 枚をグリッド表示）   │ Metadata │
+│          │  ┌──────────┐┌──────────┐               │          │
+│          │  │ スロット1 ││ スロット2 │               │          │
+│          │  └──────────┘└──────────┘               │          │
+├──────────┴─────────────────────────────────────┴──────────┤
+│ Log                                                        │
+└────────────────────────────────────────────────────────────┘
+```
+
+| フィールド | 内容 |
+| --- | --- |
+| Folders | フォルダと対応形式の画像だけを表示します。ホームと、Windows はドライブ、Linux は `/` から辿れます |
+| Images | 画像を表示する枠（スロット）を並べます。枠の数に応じて自動でグリッドになります |
+| Metadata | 選択中のスロットの画像について、ファイル情報と画像内の情報（PNG のテキストなど）を表示します |
+| Log | 読み込みにかかった時間やエラーを表示します |
+
+各フィールドは **View** メニューで表示・非表示を切り替えられます。
+フィールドの境目はドラッグして幅や高さを変えられます。
+
+### 操作一覧
 
 | 操作 | 動作 |
 | --- | --- |
-| ツリーでクリック | アクティブなスロットに表示 |
-| ツリーで Ctrl+クリック | スロットを追加して表示 |
-| ホイール / ドラッグ / ダブルクリック | ズーム / 移動 / 全体表示 |
-| ← → PageUp PageDown Space | 同じフォルダの前後の画像 |
-| View メニュー | 4 つのフィールドの表示・非表示 |
+| ツリーで画像をクリック | 選択中のスロットに表示 |
+| ツリーで Ctrl + クリック | スロットを追加して表示 |
+| スロットをクリック | そのスロットを選択（枠が青くなります） |
+| マウスホイール / タッチパッドのピンチ | マウスの位置を中心にズーム |
+| ドラッグ | 画像を移動 |
+| ダブルクリック | 全体表示に戻す |
+| → / PageDown / Space | 同じフォルダの次の画像 |
+| ← / PageUp | 同じフォルダの前の画像 |
+| スロット右上の × | スロットを閉じる |
+| File → New slot | 空のスロットを追加 |
+| File → Close all slots | すべてのスロットを閉じる |
 
-設計は [docs/architecture.md](docs/architecture.md)、コーディングポリシーは [CLAUDE.md](CLAUDE.md) を参照。
+表示倍率はスロット上部のファイル名の横に出ます。
+窓より大きな画像は全体が入るように縮小し、小さな画像は 100% で表示します。
+
+---
+
+## 困ったとき
+
+| 症状 | 対処 |
+| --- | --- |
+| ファイル名の日本語が □ になる | Windows は通常起きません。Linux は `sudo apt install fonts-noto-cjk` を実行して再起動してください |
+| Linux で `libxkbcommon-x11.so could not be loaded` と出て起動しない | `sudo apt install libxkbcommon-x11-0` |
+| 起動直後に落ちる / 画面が真っ黒 | OpenGL 2.0 以上が必要です。グラフィックドライバを更新してください。リモートデスクトップや仮想マシンでは、Linux なら `LIBGL_ALWAYS_SOFTWARE=1 vw` で動くことがあります |
+| 大きな画像が粗く見える | 一辺 8192 ピクセルを超える画像は、GPU の制限のため縮小して表示しています（ログに表示されます） |
+| 16bit 画像が暗い | 有効ビット数が記録されていない 16bit 画像は、16bit 全体を階調として表示します。階調の調整機能は今後追加します |
+
+---
+
+## 開発とビルド
+
+### 必要なもの
+
+| もの | 用途 |
+| --- | --- |
+| Rust（stable、rustup で導入） | コンパイラとビルドツール（cargo） |
+| Windows: Visual Studio 2022 Build Tools の「C++ によるデスクトップ開発」 | Rust がリンカとして使います |
+| Linux: build-essential | C コンパイラとリンカ |
+| Git | ソースの取得 |
+
+### 環境を自動で揃える
+
+リポジトリを取得してから、OS に合ったスクリプトを実行します。
+必要なものを入れたうえで、リリースビルドとテストまで行います。何度実行しても問題ありません。
+
+**Windows**
+
+```bat
+git clone https://github.com/xex-ken-xex/vw.git
+cd vw
+scripts\setup-windows.bat
+```
+
+`scripts\setup-windows.bat` はエクスプローラーからダブルクリックしても動きます。
+winget で Visual Studio Build Tools、Git、rustup を入れるため、途中で管理者権限の確認が出ます。
+Build Tools の導入には数 GB のダウンロードと 10〜30 分ほどかかります。
+Git がまだない場合は、先に [Git for Windows](https://git-scm.com/download/win) を入れるか、
+GitHub の **Code → Download ZIP** でソースを取得してください。
+
+**Ubuntu**
+
+```sh
+git clone https://github.com/xex-ken-xex/vw.git
+cd vw
+./scripts/setup-ubuntu.sh
+```
+
+`sudo` のパスワードを聞かれます。apt で必要なパッケージを入れ、rustup で Rust を入れます。
+
+どちらも、環境だけ揃えてビルドしない場合は `-NoBuild`（Windows）/ `--no-build`（Ubuntu）を付けます。
+
+### ビルドと実行
+
+```sh
+cargo run --release -- [フォルダ または 画像ファイル ...]   # ビルドして起動
+cargo build --release                                       # 実行ファイルだけ作る
+```
+
+実行ファイルは `target/release/vw`（Windows は `target\release\vw.exe`）にできます。
+開発中は `--release` なしの `cargo run` でも動きます。依存ライブラリは最適化してビルドするので、
+デバッグビルドでも画像の読み込みはそれほど遅くなりません。
+
+### テストとチェック
+
+プルリクエストを出す前に、CI と同じ次のチェックを通してください。
+
+```sh
+cargo fmt --all --check                      # 書式
+cargo clippy --all-targets -- -D warnings    # 静的解析（警告もエラー扱い）
+cargo test                                   # 自動テスト
+```
+
+### リポジトリの構成
+
+```
+crates/
+  vw-core/   共通メモリ形式 (VwImage)、プラグインの定義 (DecoderPlugin)、描画用変換
+  vw-png/    PNG プラグイン
+  vw-app/    アプリ本体（実行ファイル vw）
+docs/        設計資料
+scripts/     開発環境の構築スクリプト
+packaging/   配布物に同梱するファイル
+```
+
+設計の詳細は [docs/architecture.md](docs/architecture.md)、
+コーディングのルールは [CLAUDE.md](CLAUDE.md) を参照してください。
+
+### 新しい形式を追加する
+
+1. `crates/vw-<形式名>` を作り、`vw_core::DecoderPlugin` を実装します
+   - `probe` でファイル先頭のマジックナンバーを判定し、`decode` で `VwImage` を返します
+   - 階調は落とさずに返します（16bit なら `PixelData::U16`）
+2. ルートの `Cargo.toml` の `members` に追加します
+3. `crates/vw-app/src/main.rs` の `registry()` に 1 行追加して登録します
+
+`crates/vw-png` が実装例です。
+
+### リリース
+
+CI（GitHub Actions）が Linux と Windows でチェック・テスト・ビルドを行い、次のときに Release へ載せます。
+
+| きっかけ | Release |
+| --- | --- |
+| main ブランチへの push（プルリクエストのマージ） | 「最新ビルド (main)」を置き換える |
+| `v` で始まるタグの push | そのタグ名の正式版を作る |
+
+正式版を出すときは、`Cargo.toml` の `version` を上げてから main でタグを付けます。
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
