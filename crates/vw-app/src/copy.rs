@@ -15,6 +15,7 @@ pub enum Focus {
     /// メタデータ欄の文字列をドラッグで範囲選択している。コピーは egui のラベル選択に任せる。
     MetadataText,
     Images,
+    Log,
 }
 
 /// メタデータ欄で選んでいるもの。
