@@ -1,11 +1,16 @@
-//! The bundled egui fonts have no CJK glyphs, so a system CJK font is loaded as a
-//! fallback. It is read on a background thread to keep startup fast.
+//! 日本語表示用のフォント読み込み。
+//!
+//! egui の組み込みフォントには日本語の字形がないので、OS にある日本語フォントを
+//! 代替フォントとして足す。フォントを実行ファイルに埋め込まないのは、日本語フォントは
+//! 数 MB〜数十 MB あり、実行ファイルが大きくなって起動も遅くなるため。
+//! 読み込みはバックグラウンドで行い、最初の画面表示を待たせない。
 
 use std::path::Path;
 
 use eframe::egui::{self, FontData, FontFamily};
 use eframe::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 
+/// 探すフォントファイル。先に見つかったものを使う。
 const CANDIDATES: &[&str] = &[
     // Windows
     "C:\\Windows\\Fonts\\YuGothM.ttc",
@@ -21,6 +26,8 @@ const CANDIDATES: &[&str] = &[
     "/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
 ];
 
+/// 見つかった日本語フォントを、優先度最低の代替フォントとして追加する。
+/// 見つからなければ何もしない（日本語は □ で表示される）。
 pub fn load_cjk_in_background(ctx: &egui::Context) {
     let ctx = ctx.clone();
     std::thread::spawn(move || {

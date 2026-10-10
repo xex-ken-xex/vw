@@ -3,9 +3,11 @@ name = "vw"
 description = "Fast image viewer"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 
 [dependencies]
 vw-core.workspace = true
 vw-png.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+
+[dev-dependencies]
+png = "0.18"

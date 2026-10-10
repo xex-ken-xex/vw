@@ -1,3 +1,9 @@
+//! アプリ本体。4 つのフィールド（フォルダツリー・メタデータ・画像・ログ）の配置と、
+//! スロットの管理、読み込み結果の受け取りを行う。
+//!
+//! egui は即時モード GUI で、毎フレーム `ui()` が呼ばれて画面全体を組み立て直す。
+//! 状態はすべて [`VwApp`] が持ち、ウィジェット側には持たせない。
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -9,7 +15,7 @@ use crate::log::{Level, Log};
 use crate::tree::{self, FolderTree, TreeAction};
 use crate::viewer::{Shown, Slot};
 
-/// Which of the four fields are visible (View menu).
+/// 4 つのフィールドそれぞれの表示・非表示（View メニュー）。
 struct Fields {
     tree: bool,
     metadata: bool,
@@ -20,13 +26,51 @@ struct Fields {
 pub struct VwApp {
     loader: Loader,
     tree: FolderTree,
+    /// 画像フィールドの枠。常に 1 つ以上ある。
     slots: Vec<Slot>,
+    /// 操作対象のスロットの添字。メタデータ表示とツリーのクリックはこのスロットに対して働く。
     active: usize,
+    /// スロット番号と読み込み要求番号の両方に使う連番。
     next_id: u64,
     fields: Fields,
     log: Log,
+    /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
     first_frame: bool,
+}
+
+/// `n` 枚のスロットを並べるグリッドの (列数, 行数)。正方形に近く、横長を優先する。
+pub fn grid_dims(n: usize) -> (usize, usize) {
+    let n = n.max(1);
+    let cols = (n as f64).sqrt().ceil() as usize;
+    (cols, n.div_ceil(cols))
+}
+
+/// `len` 件の中で `pos` から `delta` 進んだ位置。端まで行ったら反対側に回り込む。
+pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (pos as isize + delta).rem_euclid(len as isize) as usize
+}
+
+/// `removed` 番目のスロットを閉じた後の、アクティブなスロットの添字。
+/// アクティブより前が閉じられたら 1 つ詰め、アクティブ自身なら同じ位置（なければ末尾）を選ぶ。
+pub fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
+    let active = if removed < active { active - 1 } else { active };
+    active.min(remaining.saturating_sub(1))
+}
+
+/// プラグインのメタデータをグループごとにまとめる。グループの順は最初に現れた順。
+pub fn group_metadata(entries: &[(String, String, String)]) -> Vec<(&str, Vec<(&str, &str)>)> {
+    let mut groups: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
+    for (group, key, value) in entries {
+        match groups.iter_mut().find(|(g, _)| g == group) {
+            Some((_, rows)) => rows.push((key, value)),
+            None => groups.push((group, vec![(key, value)])),
+        }
+    }
+    groups
 }
 
 impl VwApp {
@@ -48,7 +92,8 @@ impl VwApp {
                 .join(", ")
         ));
 
-        // A folder argument becomes the first tree root; file arguments open in slots.
+        // 引数のフォルダはツリーの先頭に開いた状態で置き、ファイルはそれぞれ別のスロットで開く。
+        // ファイルだけが渡されたときは、その親フォルダをツリーに出して前後の画像を辿りやすくする。
         let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
             initial.into_iter().partition(|p| p.is_dir());
         let root = dirs.into_iter().next().or_else(|| {
@@ -82,20 +127,25 @@ impl VwApp {
         app
     }
 
+    /// 空のスロットを末尾に足し、アクティブにする。
     fn add_slot(&mut self) {
         self.slots.push(Slot::new(self.next_id));
         self.next_id += 1;
         self.active = self.slots.len() - 1;
     }
 
+    /// スロットを閉じる。最後の 1 つを閉じたときは空のスロットを残す。
     fn close_slot(&mut self, index: usize) {
         self.slots.remove(index);
         if self.slots.is_empty() {
             self.add_slot();
+            return;
         }
-        self.active = self.active.min(self.slots.len() - 1);
+        self.active = active_after_close(self.active, index, self.slots.len());
     }
 
+    /// アクティブなスロットで `path` を読み込み始める。結果は [`Self::receive`] で受け取る。
+    /// 前の画像は新しい画像が届くまで表示したままにして、切り替え時のちらつきを避ける。
     fn open_in_active(&mut self, path: PathBuf) {
         let request = self.next_id;
         self.next_id += 1;
@@ -107,7 +157,10 @@ impl VwApp {
         self.loader.request(slot.id, request, path);
     }
 
-    /// Previous/next supported file in the active slot's folder.
+    /// アクティブなスロットの画像と同じフォルダにある、前後の対応画像に切り替える。
+    ///
+    /// 毎回フォルダを読み直す。一覧をキャッシュしないのは、表示中にファイルが
+    /// 追加・削除されることがあり、数千件程度なら読み直しても体感できる遅れにならないため。
     fn step_active(&mut self, delta: isize) {
         let Some(path) = self.slots[self.active].path.clone() else {
             return;
@@ -116,12 +169,13 @@ impl VwApp {
         let Some(pos) = files.iter().position(|p| p == &path) else {
             return;
         };
-        let next = (pos as isize + delta).rem_euclid(files.len() as isize) as usize;
+        let next = wrap_step(pos, files.len(), delta);
         if next != pos {
             self.open_in_active(files[next].clone());
         }
     }
 
+    /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(LoadResult {
             slot,
@@ -130,6 +184,7 @@ impl VwApp {
             result,
         }) = self.loader.rx.try_recv()
         {
+            // 読み込み中にスロットが閉じられた、または別の画像に切り替えられた場合は捨てる。
             let Some(s) = self
                 .slots
                 .iter_mut()
@@ -141,6 +196,8 @@ impl VwApp {
             match result {
                 Ok(loaded) => {
                     let t = Instant::now();
+                    // 拡大時は最近傍（画素の境界をそのまま見せる）、縮小時は線形＋ミップマップ。
+                    // 拡大まで線形にすると、画素単位で確認したい医用画像などがぼやけるため。
                     let texture = ctx.load_texture(
                         path.to_string_lossy(),
                         loaded.display,
@@ -211,6 +268,7 @@ impl VwApp {
         });
     }
 
+    /// アクティブなスロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
     fn metadata_ui(&self, ui: &mut egui::Ui) {
         let slot = &self.slots[self.active];
         let Some(shown) = &slot.shown else {
@@ -219,40 +277,39 @@ impl VwApp {
         };
         let info = &shown.info;
         let img = &info.image;
-        let mut groups: Vec<(&str, Vec<(String, String)>)> = vec![(
+        let file_rows: Vec<(String, String)> = vec![
+            (
+                "Path".into(),
+                slot.path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            ),
+            ("Size".into(), format!("{} bytes", info.file_size)),
+            ("Plugin".into(), info.plugin.clone()),
+            ("Pixels".into(), format!("{} x {}", img.width, img.height)),
+            ("Color".into(), color_name(img.color).into()),
+            (
+                "Sample".into(),
+                format!(
+                    "{} bit ({} significant)",
+                    img.data.bits_per_sample(),
+                    img.significant_bits
+                ),
+            ),
+            (
+                "Texture".into(),
+                format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
+            ),
+        ];
+        let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "File",
-            vec![
-                (
-                    "Path".into(),
-                    slot.path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                ),
-                ("Size".into(), format!("{} bytes", info.file_size)),
-                ("Plugin".into(), info.plugin.clone()),
-                ("Pixels".into(), format!("{} x {}", img.width, img.height)),
-                ("Color".into(), color_name(img.color).into()),
-                (
-                    "Sample".into(),
-                    format!(
-                        "{} bit ({} significant)",
-                        img.data.bits_per_sample(),
-                        img.significant_bits
-                    ),
-                ),
-                (
-                    "Texture".into(),
-                    format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
-                ),
-            ],
+            file_rows
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect(),
         )];
-        for (group, key, value) in &img.metadata.entries {
-            match groups.iter_mut().find(|(g, _)| g == group) {
-                Some((_, rows)) => rows.push((key.clone(), value.clone())),
-                None => groups.push((group.as_str(), vec![(key.clone(), value.clone())])),
-            }
-        }
+        groups.extend(group_metadata(&img.metadata.entries));
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -275,6 +332,7 @@ impl VwApp {
             });
     }
 
+    /// ログを新しいものが下に来る順で出し、末尾に自動で追従する。
     fn log_ui(&self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -295,11 +353,14 @@ impl VwApp {
             });
     }
 
+    /// スロットをグリッドに並べて描く。
+    ///
+    /// egui の Grid ウィジェットを使わず矩形を自分で割り当てるのは、Grid が中身の大きさに
+    /// 合わせて伸び縮みするため。画像の大きさに関係なく枠を等分したい。
     fn images_ui(&mut self, ui: &mut egui::Ui) {
         let area = ui.available_rect_before_wrap();
         let n = self.slots.len();
-        let cols = (n as f32).sqrt().ceil() as usize;
-        let rows = n.div_ceil(cols);
+        let (cols, rows) = grid_dims(n);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
         for i in 0..n {
@@ -319,6 +380,7 @@ impl VwApp {
                 close = Some(i);
             }
         }
+        // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
         if let Some(i) = close {
             self.close_slot(i);
         }
@@ -327,6 +389,8 @@ impl VwApp {
 }
 
 impl eframe::App for VwApp {
+    /// 毎フレーム呼ばれる。パネルは外側から順に追加する必要があるので、
+    /// メニュー → ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.first_frame {
@@ -338,6 +402,7 @@ impl eframe::App for VwApp {
         }
         self.receive(&ctx);
 
+        // テキスト入力中などに矢印キーを奪わないよう、egui がキーボードを使っていないときだけ処理する。
         if !ctx.egui_wants_keyboard_input() {
             let (prev, next) = ctx.input(|i| {
                 (
@@ -408,6 +473,7 @@ impl eframe::App for VwApp {
     }
 }
 
+/// ログ用のミリ秒表記。
 fn ms(d: Duration) -> String {
     format!("{:.1} ms", d.as_secs_f64() * 1000.0)
 }
@@ -418,5 +484,78 @@ fn color_name(c: ColorModel) -> &'static str {
         ColorModel::GrayAlpha => "Gray + alpha",
         ColorModel::Rgb => "RGB",
         ColorModel::Rgba => "RGBA",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_is_close_to_square() {
+        assert_eq!(grid_dims(1), (1, 1));
+        assert_eq!(grid_dims(2), (2, 1));
+        assert_eq!(grid_dims(3), (2, 2));
+        assert_eq!(grid_dims(4), (2, 2));
+        assert_eq!(grid_dims(5), (3, 2));
+        assert_eq!(grid_dims(9), (3, 3));
+        assert_eq!(grid_dims(10), (4, 3));
+    }
+
+    #[test]
+    fn grid_always_has_room_for_every_slot() {
+        for n in 1..=50 {
+            let (c, r) = grid_dims(n);
+            assert!(c * r >= n, "{n}: {c}x{r}");
+            assert!(c * (r - 1) < n, "{n}: an empty row in {c}x{r}");
+        }
+    }
+
+    #[test]
+    fn zero_slots_still_gives_one_cell() {
+        assert_eq!(grid_dims(0), (1, 1));
+    }
+
+    #[test]
+    fn step_wraps_around_both_ends() {
+        assert_eq!(wrap_step(0, 3, 1), 1);
+        assert_eq!(wrap_step(2, 3, 1), 0);
+        assert_eq!(wrap_step(0, 3, -1), 2);
+        assert_eq!(wrap_step(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn closing_slot_before_active_keeps_same_slot_active() {
+        // [a, b, c] で c がアクティブ。a を閉じると [b, c] になり、c は添字 1。
+        assert_eq!(active_after_close(2, 0, 2), 1);
+    }
+
+    #[test]
+    fn closing_active_slot_selects_next_or_last() {
+        assert_eq!(active_after_close(1, 1, 2), 1);
+        assert_eq!(active_after_close(2, 2, 2), 1);
+    }
+
+    #[test]
+    fn closing_slot_after_active_keeps_index() {
+        assert_eq!(active_after_close(0, 2, 2), 0);
+    }
+
+    #[test]
+    fn metadata_is_grouped_in_first_seen_order() {
+        let e = |g: &str, k: &str, v: &str| (g.to_string(), k.to_string(), v.to_string());
+        let entries = vec![
+            e("PNG", "Size", "1 x 1"),
+            e("Text", "Title", "t"),
+            e("PNG", "Bit depth", "8"),
+        ];
+        let groups = group_metadata(&entries);
+        assert_eq!(
+            groups,
+            vec![
+                ("PNG", vec![("Size", "1 x 1"), ("Bit depth", "8")]),
+                ("Text", vec![("Title", "t")]),
+            ]
+        );
     }
 }

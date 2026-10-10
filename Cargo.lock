@@ -2270,6 +2270,7 @@ name = "vw"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "png",
  "vw-core",
  "vw-png",
 ]
