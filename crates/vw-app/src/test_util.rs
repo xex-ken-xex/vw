@@ -51,6 +51,19 @@ impl TempDir {
         std::fs::write(&p, b"").unwrap();
         p
     }
+
+    /// 更新日時を UNIX 時刻の `secs` 秒にした空のファイルを作る。
+    pub fn touch_at(&self, name: &str, secs: u64) -> PathBuf {
+        let p = self.touch(name);
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        p
+    }
 }
 
 impl Drop for TempDir {

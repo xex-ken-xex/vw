@@ -11,6 +11,7 @@ use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
+use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -101,9 +102,25 @@ pub struct Behavior {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Tree {
+    pub sort: SortKey,
+    pub sort_descending: bool,
+}
+
+impl Tree {
+    pub fn order(&self) -> SortOrder {
+        SortOrder {
+            key: self.sort,
+            descending: self.sort_descending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
     pub viewer: Viewer,
+    pub tree: Tree,
     pub behavior: Behavior,
     pub keys: Keymap,
 }
@@ -145,6 +162,12 @@ impl Settings {
                 )
                 .unwrap_or(d.viewer.background),
         };
+        let tree = Tree {
+            sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
+            sort_descending: r
+                .get("tree", "sort_descending")
+                .unwrap_or(d.tree.sort_descending),
+        };
         let behavior = Behavior {
             header_click: r
                 .get("behavior", "header_click")
@@ -164,6 +187,7 @@ impl Settings {
             Settings {
                 appearance,
                 viewer,
+                tree,
                 behavior,
                 keys,
             },
@@ -455,6 +479,8 @@ mod tests {
         s.appearance.ui_scale = 1.25;
         s.viewer.background = "#202020".into();
         s.behavior.header_click = HeaderClick::SelectAndToggle;
+        s.tree.sort = SortKey::Modified;
+        s.tree.sort_descending = true;
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -525,6 +551,30 @@ mod tests {
     fn malformed_background_falls_back_to_theme_default() {
         let (s, problems) = Settings::from_toml("[viewer]\nbackground = \"#12\"\n").unwrap();
         assert_eq!(s.viewer.background, "");
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn tree_is_sorted_by_name_with_numbers_by_value_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.tree.order(), SortOrder::default());
+        assert_eq!(s.tree.sort, SortKey::NameNatural);
+        assert!(!s.tree.sort_descending);
+    }
+
+    #[test]
+    fn tree_sort_reads_key_and_direction() {
+        let (s, problems) =
+            Settings::from_toml("[tree]\nsort = \"modified\"\nsort_descending = true\n").unwrap();
+        assert_eq!(s.tree.sort, SortKey::Modified);
+        assert!(s.tree.sort_descending);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn unknown_tree_sort_falls_back_to_default() {
+        let (s, problems) = Settings::from_toml("[tree]\nsort = \"size\"\n").unwrap();
+        assert_eq!(s.tree.sort, SortKey::NameNatural);
         assert_eq!(problems.len(), 1);
     }
 

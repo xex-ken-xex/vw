@@ -102,6 +102,19 @@ const JA: &[(&str, &str)] = &[
         "#RRGGBB の形式で入力してください。",
     ),
     ("Theme default", "テーマの既定色"),
+    ("Sort order", "並び順"),
+    (
+        "Order of files and folders in the tree, also used for previous/next image. Folders always come first.",
+        "ツリーのファイルとフォルダの並び順。前後の画像への移動もこの順になります。フォルダは常にファイルより前です。",
+    ),
+    ("Name (numbers by value)", "ファイル名（数字は数値として比較）"),
+    ("Name (character by character)", "ファイル名（文字列として比較）"),
+    ("Modified date", "更新日時"),
+    ("Descending", "降順"),
+    (
+        "Reverse the sort order (Z to A, newest first).",
+        "並び順を逆にします（Z から A、新しい順）。",
+    ),
     ("Behavior", "動作"),
     ("Group heading click", "グループ見出しのクリック"),
     (
