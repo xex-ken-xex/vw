@@ -6,7 +6,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, TextureHandle, Vec2};
+use eframe::egui::{
+    self, pos2, vec2, Color32, MouseWheelUnit, PointerButton, Pos2, Rect, Sense, TextureHandle,
+    Vec2,
+};
 use vw_core::VwImage;
 
 use crate::i18n::tr;
@@ -61,6 +64,10 @@ pub struct Slot {
     zoom: f32,
     /// 枠の中心から画像の中心までのずれ（論理ピクセル）。
     pan: Vec2,
+    /// まだ 1 段に満たないホイールの回転量（論理ピクセル）。
+    wheel: f32,
+    /// 直前に描いた画像部分の大きさ。キー操作で倍率を変えるときに使う。
+    last_body: Option<Vec2>,
 }
 
 /// 1 フレーム分の操作結果。
@@ -72,6 +79,10 @@ pub struct SlotResponse {
     pub copy: bool,
     /// 縮小画像では足りない大きさで表示している。
     pub wants_full: bool,
+    /// ダブルクリックされた（最大化の切り替え）。
+    pub toggle_maximize: bool,
+    /// ホイールで送る枚数。負なら前へ。
+    pub step: isize,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -80,8 +91,36 @@ const HEADER: f32 = 20.0;
 const MIN_ZOOM: f32 = 0.05;
 /// 実寸に対する拡大率の上限。画素を 1 つずつ確認できれば十分なので 200 倍で止める。
 const MAX_PIXEL_SCALE: f32 = 200.0;
-/// ホイール 1 論理ピクセル分のズーム量（指数の係数）。
-const WHEEL_ZOOM_RATE: f32 = 0.002;
+/// 拡大縮小のドラッグ 1 論理ピクセル分のズーム量（指数の係数）。100 px で約 2.7 倍。
+const DRAG_ZOOM_RATE: f32 = 0.01;
+/// ホイールで 1 枚送るのに要る回転量（論理ピクセル）。egui がホイール 1 目盛りを
+/// 40 論理ピクセルに換算するので、1 目盛りで 1 枚になる。
+pub const WHEEL_STEP: f32 = 40.0;
+/// キーで拡大縮小するときの 1 回分の倍率。
+pub const KEY_ZOOM_FACTOR: f32 = 1.25;
+/// パンに使うマウスボタン。
+const PAN_BUTTON: PointerButton = PointerButton::Primary;
+/// 上下のドラッグで拡大縮小するマウスボタン。
+const ZOOM_BUTTON: PointerButton = PointerButton::Secondary;
+
+/// ホイールの回転量 `delta`（論理ピクセル、上に回すと正）を `acc` に足し、
+/// 1 段分たまるごとに送る枚数を返す。上に回すと前（負）、下に回すと次（正）。
+///
+/// タッチパッドは細かい量を何度も送ってくるので、1 回のイベントを 1 枚にはしない。
+/// 回す向きが変わったら、それまでの端数は捨てる。逆向きに回し始めたのに、
+/// 前の向きの端数を打ち消すまで反応しないのを避けるため。
+pub fn wheel_steps(acc: &mut f32, delta: f32) -> isize {
+    if delta == 0.0 {
+        return 0;
+    }
+    if acc.signum() != delta.signum() {
+        *acc = 0.0;
+    }
+    *acc += delta;
+    let steps = (*acc / WHEEL_STEP).trunc();
+    *acc -= steps * WHEEL_STEP;
+    -(steps as isize)
+}
 
 /// 画像を枠に収める倍率。枠より小さい画像は拡大せず 100% で表示する。
 /// 小さな画像を枠いっぱいに拡大しないのは、アイコンなどがぼやけて実寸が分からなくなるため。
@@ -110,6 +149,30 @@ pub fn needs_full(shown_side: f32, thumb_side: usize, image_side: u32) -> bool {
     image_side as usize > thumb_side && shown_side > thumb_side as f32
 }
 
+/// このフレームのホイールの縦の回転量（論理ピクセル、上に回すと正）。
+///
+/// egui の `smooth_scroll_delta` を使わないのは、回転量を数フレームに分けて届けるので、
+/// 1 目盛りで 1 枚送る判定がフレームの区切りでぶれるため。Ctrl 付きは egui が
+/// ズームとして扱うので数えない。
+fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } if !modifiers.command => Some(match unit {
+                MouseWheelUnit::Point => delta.y,
+                MouseWheelUnit::Line => delta.y * WHEEL_STEP,
+                MouseWheelUnit::Page => delta.y * page_height,
+            }),
+            _ => None,
+        })
+        .sum()
+}
+
 impl Slot {
     pub fn new(id: u64) -> Self {
         Self {
@@ -124,6 +187,28 @@ impl Slot {
             wants_full_now: false,
             zoom: 1.0,
             pan: Vec2::ZERO,
+            wheel: 0.0,
+            last_body: None,
+        }
+    }
+
+    /// 枠の中心を動かさずに `factor` 倍する。
+    pub fn zoom_by(&mut self, factor: f32) {
+        let base = self.last_base();
+        (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, Some(Vec2::ZERO));
+    }
+
+    /// 実寸（表示倍率 100%）にする。枠の中心にある点はそのまま。
+    pub fn actual_size(&mut self) {
+        let base = self.last_base();
+        let factor = 1.0 / (base * self.zoom);
+        self.zoom_by(factor);
+    }
+
+    fn last_base(&self) -> f32 {
+        match self.last_body {
+            Some(size) => self.base_scale(Rect::from_min_size(Pos2::ZERO, size)),
+            None => 1.0,
         }
     }
 
@@ -175,29 +260,30 @@ impl Slot {
                 }
             });
         }
-        if response.double_clicked() {
-            self.reset_view();
+        out.toggle_maximize = response.double_clicked();
+        if response.hovered() {
+            let wheel = ui.input(|i| wheel_delta(&i.events, i.viewport_rect().height()));
+            out.step = wheel_steps(&mut self.wheel, wheel);
         }
 
+        self.last_body = Some(body.size());
         let base = self.base_scale(body);
         if let Some(shown) = &self.shown {
-            if response.dragged() {
+            if response.dragged_by(PAN_BUTTON) {
                 self.pan += response.drag_delta();
             }
+            if response.dragged_by(ZOOM_BUTTON) {
+                let factor = (-response.drag_delta().y * DRAG_ZOOM_RATE).exp();
+                let anchor = ui.input(|i| i.pointer.press_origin());
+                let cursor = anchor.map(|p| p - body.center());
+                (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
+            }
             if response.hovered() {
-                let (scroll, pinch, pointer) = ui.input(|i| {
-                    (
-                        i.smooth_scroll_delta.y,
-                        i.zoom_delta(),
-                        i.pointer.hover_pos(),
-                    )
-                });
-                // ホイールはスクロールではなくズームに使う。画像ビューワでは
-                // スクロールより拡大縮小の頻度が高く、移動はドラッグで足りるため。
-                let factor = pinch * (scroll * WHEEL_ZOOM_RATE).exp();
-                if factor != 1.0 {
+                // タッチパッドのピンチと Ctrl+ホイール（egui がズームとして届ける）。
+                let (pinch, pointer) = ui.input(|i| (i.zoom_delta(), i.pointer.hover_pos()));
+                if pinch != 1.0 {
                     let cursor = pointer.map(|p| p - body.center());
-                    (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
+                    (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, pinch, base, cursor);
                 }
             }
             let scale = base * self.zoom;
@@ -361,6 +447,51 @@ mod tests {
     fn image_just_over_the_thumbnail_size_needs_full_resolution() {
         // 513 px は半分の 257 px に縮小されるので、それより大きく出すなら元が要る。
         assert!(needs_full(300.0, 257, 513));
+    }
+
+    #[test]
+    fn one_wheel_notch_steps_one_image() {
+        let mut acc = 0.0;
+        assert_eq!(wheel_steps(&mut acc, -WHEEL_STEP), 1);
+        assert_eq!(wheel_steps(&mut acc, WHEEL_STEP), -1);
+    }
+
+    #[test]
+    fn small_touchpad_deltas_add_up_to_one_step() {
+        let mut acc = 0.0;
+        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
+        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
+        assert_eq!(wheel_steps(&mut acc, -15.0), 1);
+        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
+    }
+
+    #[test]
+    fn fast_spin_steps_several_images_at_once() {
+        let mut acc = 0.0;
+        assert_eq!(wheel_steps(&mut acc, -3.0 * WHEEL_STEP), 3);
+    }
+
+    #[test]
+    fn reversing_the_wheel_drops_the_leftover() {
+        let mut acc = 0.0;
+        assert_eq!(wheel_steps(&mut acc, -30.0), 0);
+        assert_eq!(wheel_steps(&mut acc, WHEEL_STEP), -1);
+    }
+
+    #[test]
+    fn wheel_with_ctrl_is_not_counted_as_image_steps() {
+        let wheel = |ctrl: bool| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: if ctrl {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            },
+        };
+        assert_eq!(wheel_delta(&[wheel(false)], 500.0), -WHEEL_STEP);
+        assert_eq!(wheel_delta(&[wheel(true)], 500.0), 0.0);
     }
 
     #[test]

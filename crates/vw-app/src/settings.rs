@@ -11,6 +11,7 @@ use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
+use crate::layout::SlotLayout;
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 
@@ -85,6 +86,10 @@ pub struct Viewer {
     pub background: String,
     /// フル解像度の画像に使うメモリの上限（MB）。超えた分は縮小画像で表示する。
     pub full_image_limit_mb: u32,
+    /// スロットの並べ方。
+    pub layout: SlotLayout,
+    /// メニューの「カスタム」で選ぶマス目。`auto` は選べない（既定の項目にあるため）。
+    pub custom_layout: SlotLayout,
 }
 
 impl Viewer {
@@ -100,6 +105,8 @@ impl Default for Viewer {
         Self {
             background: String::new(),
             full_image_limit_mb: 4096,
+            layout: SlotLayout::Auto,
+            custom_layout: SlotLayout::grid(3, 2),
         }
     }
 }
@@ -254,6 +261,15 @@ impl Settings {
                     "must be 256 to 1048576",
                 )
                 .unwrap_or(d.viewer.full_image_limit_mb),
+            layout: r.get("viewer", "layout").unwrap_or(d.viewer.layout),
+            custom_layout: r
+                .get_valid(
+                    "viewer",
+                    "custom_layout",
+                    |v: &SlotLayout| *v != SlotLayout::Auto,
+                    "must be COLSxROWS",
+                )
+                .unwrap_or(d.viewer.custom_layout),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -599,6 +615,8 @@ mod tests {
         s.viewer.background = "#202020".into();
         s.behavior.header_click = HeaderClick::SelectAndToggle;
         s.viewer.full_image_limit_mb = 8192;
+        s.viewer.layout = SlotLayout::grid(1, 2);
+        s.viewer.custom_layout = SlotLayout::grid(5, 3);
         s.tree.sort = SortKey::Modified;
         s.tree.sort_descending = true;
         s.tree.mode = TreeMode::AutoLoad;
@@ -685,6 +703,30 @@ mod tests {
         let (s, _) = Settings::from_toml("").unwrap();
         assert_eq!(s.viewer.full_image_limit_mb, 4096);
         assert_eq!(s.viewer.full_image_limit_bytes(), 4 << 30);
+    }
+
+    #[test]
+    fn slots_are_laid_out_automatically_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.layout, SlotLayout::Auto);
+    }
+
+    #[test]
+    fn layout_is_written_as_cols_x_rows() {
+        let (s, problems) =
+            Settings::from_toml("[viewer]\nlayout = \"2x2\"\ncustom_layout = \"4x1\"\n").unwrap();
+        assert!(problems.is_empty());
+        assert_eq!(s.viewer.layout, SlotLayout::grid(2, 2));
+        assert_eq!(s.viewer.custom_layout, SlotLayout::grid(4, 1));
+    }
+
+    #[test]
+    fn broken_layout_falls_back_to_default_with_a_problem() {
+        let (s, problems) =
+            Settings::from_toml("[viewer]\nlayout = \"0x3\"\ncustom_layout = \"auto\"\n").unwrap();
+        assert_eq!(s.viewer.layout, SlotLayout::Auto);
+        assert_eq!(s.viewer.custom_layout, SlotLayout::grid(3, 2));
+        assert_eq!(problems.len(), 2, "{problems:?}");
     }
 
     #[test]

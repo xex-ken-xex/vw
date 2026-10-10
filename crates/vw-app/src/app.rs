@@ -18,17 +18,18 @@ use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
+use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
 use crate::settings::{
     parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, SettingsStore, TreeMode,
 };
-use crate::settings_ui::SettingsUi;
+use crate::settings_ui::{layout_title, SettingsUi};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
-use crate::viewer::{Full, Shown, Slot};
+use crate::viewer::{Full, Shown, Slot, KEY_ZOOM_FACTOR};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,6 +128,8 @@ pub struct VwApp {
     images_area: Option<egui::Vec2>,
     /// 画像自動展開モードで読み込み中のフォルダ。
     folder_load: Option<FolderLoad>,
+    /// 画像領域いっぱいに出しているスロットの番号。
+    maximized: Option<u64>,
 }
 
 /// コピーしたときにカーソルの近くに出す短い表示。
@@ -147,13 +150,6 @@ struct Restore {
 /// 位置を送った後、移動先のモニタの拡大率が届くのを待つ最大フレーム数。
 /// 届かない環境（拡大率が変わらない移動、X11 など）でも大きさの復元を止めないための上限。
 const RESTORE_WAIT_FRAMES: u32 = 10;
-
-/// `n` 枚のスロットを並べるグリッドの (列数, 行数)。正方形に近く、横長を優先する。
-pub fn grid_dims(n: usize) -> (usize, usize) {
-    let n = n.max(1);
-    let cols = (n as f64).sqrt().ceil() as usize;
-    (cols, n.div_ceil(cols))
-}
 
 /// `len` 件の中で `pos` から `delta` 進んだ位置。端まで行ったら反対側に回り込む。
 pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
@@ -283,6 +279,7 @@ impl VwApp {
             frame: 0,
             images_area: None,
             folder_load: None,
+            maximized: None,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -302,6 +299,7 @@ impl VwApp {
 
     /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
     fn close_all_slots(&mut self) {
+        self.maximized = None;
         for s in std::mem::take(&mut self.slots) {
             self.cancel_requests(&s);
         }
@@ -323,6 +321,9 @@ impl VwApp {
     fn close_slot(&mut self, index: usize) {
         let slot = self.slots.remove(index);
         self.cancel_requests(&slot);
+        if self.maximized == Some(slot.id) {
+            self.maximized = None;
+        }
         if self.slots.is_empty() {
             self.add_slot();
             return;
@@ -496,9 +497,51 @@ impl VwApp {
         let Some(area) = self.images_area else {
             return true;
         };
-        let (cols, rows) = grid_dims(self.slots.len());
-        let cell = (area.x / cols as f32).max(area.y / rows as f32);
+        let view = self.view();
+        let cell = (area.x / view.cols as f32).max(area.y / view.rows as f32);
         cell > memory::THUMB_SIDE as f32
+    }
+
+    /// 画面に出すスロットとマス目。
+    fn view(&self) -> layout::View {
+        let maximized = self
+            .maximized
+            .and_then(|id| self.slots.iter().position(|s| s.id == id));
+        layout::view(
+            self.settings.settings.viewer.layout,
+            self.slots.len(),
+            self.active,
+            maximized,
+        )
+    }
+
+    /// アクティブなスロットを `delta` だけ前後に移す。最大化中は最大化するスロットも移す。
+    fn step_slot(&mut self, delta: isize) {
+        self.active = wrap_step(self.active, self.slots.len(), delta);
+        if self.maximized.is_some() {
+            self.maximized = Some(self.slots[self.active].id);
+        }
+        self.tree_selected = self.slots[self.active].path.clone();
+    }
+
+    /// `index` 番目のスロットの最大化を切り替える。
+    fn toggle_maximize(&mut self, index: usize) {
+        let id = self.slots[index].id;
+        self.active = index;
+        self.maximized = if self.maximized == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
+    }
+
+    /// レイアウトを変えて設定に保存する。最大化は解く（変えた結果が見えるように）。
+    fn set_layout(&mut self, ctx: &egui::Context, layout: SlotLayout) {
+        self.maximized = None;
+        if self.settings.settings.viewer.layout != layout {
+            self.settings.settings.viewer.layout = layout;
+            self.settings_changed(ctx);
+        }
     }
 
     /// アクティブなスロットの画像と同じフォルダにある、前後の対応画像に切り替える。
@@ -571,6 +614,34 @@ impl VwApp {
             Action::ToggleImages => self.fields.images ^= true,
             Action::ToggleLog => self.fields.log ^= true,
             Action::ToggleSettings => self.toggle_settings(),
+            Action::PreviousSlot => self.step_slot(-1),
+            Action::NextSlot => self.step_slot(1),
+            Action::PreviousPage | Action::NextPage => {
+                let delta = if action == Action::NextPage { 1 } else { -1 };
+                if self.maximized.is_none() {
+                    let layout = self.settings.settings.viewer.layout;
+                    self.active = layout::page_step(layout, self.slots.len(), self.active, delta);
+                }
+            }
+            Action::ToggleMaximize => self.toggle_maximize(self.active),
+            Action::FitImage => self.slots[self.active].reset_view(),
+            Action::ActualSize => self.slots[self.active].actual_size(),
+            Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
+            Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
+            Action::LayoutCustom => {
+                self.set_layout(ctx, self.settings.settings.viewer.custom_layout)
+            }
+            Action::LayoutAuto
+            | Action::Layout1x1
+            | Action::Layout1x2
+            | Action::Layout2x1
+            | Action::Layout2x2
+            | Action::Layout3x3
+            | Action::Layout4x4 => {
+                if let Some(layout) = action.layout() {
+                    self.set_layout(ctx, layout);
+                }
+            }
         }
     }
 
@@ -956,14 +1027,88 @@ impl VwApp {
                     }
                 }
                 ui.separator();
+                let maximized = self.maximized.is_some();
+                if self.menu_item(ui, Action::ToggleMaximize, Some(maximized)) {
+                    chosen = Some(Action::ToggleMaximize);
+                }
+                ui.menu_button(tr(lang, "Layout"), |ui| {
+                    if let Some(action) = self.layout_menu(ui) {
+                        chosen = Some(action);
+                    }
+                });
+                ui.separator();
                 if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
                     chosen = Some(Action::ToggleSettings);
+                }
+            });
+            ui.menu_button(tr(lang, "Image"), |ui| {
+                let groups: [&[Action]; 4] = [
+                    &[Action::PreviousImage, Action::NextImage],
+                    &[Action::PreviousSlot, Action::NextSlot],
+                    &[Action::PreviousPage, Action::NextPage],
+                    &[
+                        Action::FitImage,
+                        Action::ActualSize,
+                        Action::ZoomIn,
+                        Action::ZoomOut,
+                    ],
+                ];
+                for (i, group) in groups.into_iter().enumerate() {
+                    if i > 0 {
+                        ui.separator();
+                    }
+                    for &action in group {
+                        if self.menu_item(ui, action, None) {
+                            chosen = Some(action);
+                        }
+                    }
                 }
             });
         });
         if let Some(action) = chosen {
             self.run(&ctx, action);
         }
+    }
+
+    /// View > Layout の項目。今のレイアウトに印を付ける。
+    fn layout_menu(&self, ui: &mut egui::Ui) -> Option<Action> {
+        let lang = self.lang();
+        let viewer = &self.settings.settings.viewer;
+        let mut chosen = None;
+        let presets = [
+            Action::LayoutAuto,
+            Action::Layout1x1,
+            Action::Layout1x2,
+            Action::Layout2x1,
+            Action::Layout2x2,
+            Action::Layout3x3,
+            Action::Layout4x4,
+        ];
+        let items = presets
+            .into_iter()
+            .filter_map(|a| Some((a, a.layout()?, layout_title(a.layout()?, lang))))
+            .chain(std::iter::once((
+                Action::LayoutCustom,
+                viewer.custom_layout,
+                format!(
+                    "{} ({})",
+                    tr(lang, "Custom"),
+                    layout_title(viewer.custom_layout, lang)
+                ),
+            )));
+        let mut marked = false;
+        for (action, layout, title) in items {
+            // カスタムが既定の項目と同じマス目のときに、2 つに印が付かないようにする。
+            let current = !marked && viewer.layout == layout;
+            marked |= current;
+            let mark = if current { icon::CHECK } else { "  " };
+            let button = egui::Button::new(format!("{mark} {title}"))
+                .shortcut_text(self.shortcut(action).unwrap_or_default());
+            if ui.add(button).clicked() {
+                chosen = Some(action);
+            }
+        }
+        chosen
     }
 
     /// メニューの 1 項目。右側に操作の最初のキーを出す。`checked` があれば左にチェック欄を付ける。
@@ -1293,15 +1438,23 @@ impl VwApp {
         let area = ui.available_rect_before_wrap();
         self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
         self.frame += 1;
-        let n = self.slots.len();
-        let (cols, rows) = grid_dims(n);
+        let view = self.view();
+        let (cols, rows) = (view.cols, view.rows);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
+        let mut maximize = None;
+        let mut step = None;
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
         let hint = empty_slot_hint(&self.settings.settings.tree);
-        for i in 0..n {
-            let (c, r) = (i % cols, i / cols);
+        // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            if !view.range.contains(&i) {
+                slot.wants_full_now = false;
+            }
+        }
+        for (cell_index, i) in view.range.clone().enumerate() {
+            let (c, r) = (cell_index % cols, cell_index / cols);
             let rect = Rect::from_min_size(
                 pos2(
                     area.min.x + c as f32 * cell.x,
@@ -1335,10 +1488,37 @@ impl VwApp {
             if resp.close {
                 close = Some(i);
             }
+            if resp.toggle_maximize {
+                maximize = Some(i);
+            }
+            if resp.step != 0 {
+                step = Some((i, resp.step));
+            }
+        }
+        if view.pages > 1 {
+            let text = format!("{} / {}", view.page + 1, view.pages);
+            ui.painter().text(
+                area.right_bottom() - vec2(8.0, 6.0),
+                egui::Align2::RIGHT_BOTTOM,
+                text,
+                egui::FontId::proportional(12.0),
+                ui.visuals().weak_text_color(),
+            );
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
         if let Some(i) = close {
             self.close_slot(i);
+        } else if let Some(i) = maximize {
+            self.toggle_maximize(i);
+        } else if let Some((i, delta)) = step {
+            // 最大化中はスロットを順に送る。スロットが 1 つしかなければ、送る先がないので
+            // そのスロットのフォルダの画像を送る。
+            if self.maximized.is_some() && self.slots.len() > 1 {
+                self.step_slot(delta);
+            } else {
+                self.active = i;
+                self.step_active(delta);
+            }
         }
         self.manage_full_images();
         ui.allocate_rect(area, egui::Sense::hover());
@@ -1495,6 +1675,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleImages => "Images",
         Action::ToggleLog => "Log",
         Action::ToggleSettings => "Settings",
+        Action::ToggleMaximize => "Maximize slot",
         other => other.title(),
     }
 }
@@ -1551,31 +1732,6 @@ fn color_name(c: ColorModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grid_is_close_to_square() {
-        assert_eq!(grid_dims(1), (1, 1));
-        assert_eq!(grid_dims(2), (2, 1));
-        assert_eq!(grid_dims(3), (2, 2));
-        assert_eq!(grid_dims(4), (2, 2));
-        assert_eq!(grid_dims(5), (3, 2));
-        assert_eq!(grid_dims(9), (3, 3));
-        assert_eq!(grid_dims(10), (4, 3));
-    }
-
-    #[test]
-    fn grid_always_has_room_for_every_slot() {
-        for n in 1..=50 {
-            let (c, r) = grid_dims(n);
-            assert!(c * r >= n, "{n}: {c}x{r}");
-            assert!(c * (r - 1) < n, "{n}: an empty row in {c}x{r}");
-        }
-    }
-
-    #[test]
-    fn zero_slots_still_gives_one_cell() {
-        assert_eq!(grid_dims(0), (1, 1));
-    }
 
     #[test]
     fn step_wraps_around_both_ends() {
