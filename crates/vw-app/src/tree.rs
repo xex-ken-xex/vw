@@ -251,6 +251,38 @@ impl Node {
         }
     }
 
+    /// 読み込み済みのフォルダ `dir` の中身を読み直す。前からある項目は残すので、
+    /// サブフォルダの開閉状態と、読み込み済みの孫はそのまま保たれる。
+    fn refresh(&mut self, dir: &Path, registry: &Registry, order: SortOrder) {
+        if !dir.starts_with(&self.path) {
+            return;
+        }
+        let Some(children) = &mut self.children else {
+            return;
+        };
+        if self.path != dir {
+            for child in children.iter_mut() {
+                child.refresh(dir, registry, order);
+            }
+            return;
+        }
+        let mut old: Vec<Node> = std::mem::take(children);
+        *children = list_dir(dir, registry, order)
+            .into_iter()
+            .map(
+                |fresh| match old.iter().position(|o| o.path == fresh.path) {
+                    Some(i) => {
+                        let mut kept = old.swap_remove(i);
+                        kept.modified = fresh.modified;
+                        kept
+                    }
+                    None => fresh,
+                },
+            )
+            .collect();
+        sort_nodes(children, order);
+    }
+
     /// 読み込み済みの子を `order` で並べ直す。フォルダを読み直さないのは、開閉状態と
     /// まだ読んでいない孫の状態を保ったまま、設定の変更をすぐ見せるため。
     fn resort(&mut self, order: SortOrder) {
@@ -339,6 +371,14 @@ impl FolderTree {
     pub fn restore_open(&mut self, paths: &[PathBuf], registry: &Registry) {
         for root in &mut self.roots {
             root.restore_open(paths, registry, self.order);
+        }
+    }
+
+    /// フォルダ `dir` の中身を読み直す（フォルダの監視で変化を知ったとき）。
+    /// 同じフォルダが Home と / の両方の下に出ていることがあるので、すべてのルートを辿る。
+    pub fn refresh(&mut self, dir: &Path, registry: &Registry) {
+        for root in &mut self.roots {
+            root.refresh(dir, registry, self.order);
         }
     }
 
@@ -642,6 +682,30 @@ mod tests {
         assert_eq!(tree.roots[0].path, dir.path());
         assert!(tree.roots[0].open);
         assert!(tree.roots.len() >= 2, "home or filesystem roots follow");
+    }
+
+    #[test]
+    fn refresh_shows_new_files_and_keeps_open_subfolders() {
+        let dir = TempDir::new();
+        let sub = dir.mkdir("sub");
+        dir.touch("a.png");
+        let mut tree = tree_at(dir.path());
+        tree.restore_open(&[dir.path().to_path_buf(), sub.clone()], &png_registry());
+        dir.touch("b.png");
+        std::fs::remove_file(dir.path().join("a.png")).unwrap();
+        tree.refresh(dir.path(), &png_registry());
+        let children = tree.roots[0].children.as_ref().unwrap();
+        assert_eq!(names(children), ["sub", "b.png"]);
+        assert!(children[0].open && children[0].children.is_some());
+    }
+
+    #[test]
+    fn refresh_skips_folders_never_opened() {
+        let dir = TempDir::new();
+        dir.touch("a.png");
+        let mut tree = tree_at(dir.path());
+        tree.refresh(dir.path(), &png_registry());
+        assert!(tree.roots[0].children.is_none());
     }
 
     fn tree_at(root: &Path) -> FolderTree {

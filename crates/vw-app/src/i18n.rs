@@ -194,6 +194,11 @@ const JA: &[(&str, &str)] = &[
         "What clicking a group heading (such as File in the metadata panel) does. The arrow always expands or collapses.",
         "グループの見出し（メタデータ欄の「ファイル」など）をクリックしたときの動作。▶ は常に開閉します。",
     ),
+    ("Auto reload", "自動リロード"),
+    (
+        "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
+        "開いているフォルダを監視します。新しい画像をツリーとフォルダスロットに加え、最後の画像を表示しているスロットは最新の画像に移り、上書きされた画像は読み直します。",
+    ),
     ("Select only", "選択のみ"),
     ("Select and expand/collapse", "選択して開閉"),
     ("Add key", "キーを追加"),

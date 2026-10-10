@@ -11,6 +11,7 @@ eframe = { version = "0.36", default-features = false, features = ["glow", "defa
 egui-phosphor = "0.14"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+notify = { version = "8", default-features = false }
 
 [dev-dependencies]
 png = "0.18"
