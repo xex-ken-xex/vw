@@ -11,6 +11,7 @@ mod autoload;
 mod copy;
 mod export;
 mod fonts;
+mod frames;
 mod i18n;
 mod keymap;
 mod labels;
@@ -18,6 +19,7 @@ mod layout;
 mod loader;
 mod log;
 mod memory;
+mod series;
 mod settings;
 mod settings_ui;
 mod slideshow;
@@ -42,6 +44,7 @@ use vw_core::Registry;
 fn registry() -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
+    registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry
 }
 

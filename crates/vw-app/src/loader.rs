@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, ColorImage};
 use vw_core::{display, ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwImage};
 
+use crate::frames;
 use crate::memory::THUMB_SIDE;
 
 /// 読み込みが成功したときの結果。
@@ -47,6 +48,8 @@ pub struct ImageInfo {
     pub significant_bits: u32,
     pub metadata: Metadata,
     pub plugin: String,
+    /// ファイルに入っているフレームの数。フレームを指すパスで読んだときは 1。
+    pub frames: usize,
     pub file_size: u64,
     pub read: Duration,
     pub decode: Duration,
@@ -184,12 +187,18 @@ fn worker(
 /// 読み込み中にファイルが書き換えられると未定義動作になりうるため。
 pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result<Loaded, String> {
     let t0 = Instant::now();
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let (file, frame) =
+        frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
+    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
     let t1 = Instant::now();
     let (image, plugin) = registry
-        .decode_bytes(path, &bytes)
+        .decode_frame_bytes(&file, &bytes, frame.unwrap_or(0))
         .map_err(|e| e.to_string())?;
     let plugin = plugin.to_owned();
+    let frames = match frame {
+        Some(_) => 1,
+        None => registry.frame_count(&file, &bytes).unwrap_or(1),
+    };
     let t2 = Instant::now();
     let d = display::to_display(&image, &DisplayParams::default());
     let thumb = thumb.then(|| color_image(&display::shrink(&d, THUMB_SIDE)));
@@ -203,6 +212,7 @@ pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result
         significant_bits: image.significant_bits,
         metadata: image.metadata.clone(),
         plugin,
+        frames,
         file_size: bytes.len() as u64,
         read: t1 - t0,
         decode: t2 - t1,
@@ -223,6 +233,26 @@ fn color_image(d: &DisplayImage) -> ColorImage {
 mod tests {
     use super::*;
     use crate::test_util::{png_registry, write_png, TempDir};
+
+    #[test]
+    fn multiframe_file_reports_its_frames_and_frame_paths_load_one_frame() {
+        use vw_dicom::synth::{Synth, XA_IMAGE};
+        let dir = TempDir::new();
+        let path = dir.path().join("cine.dcm");
+        Synth::new(XA_IMAGE, 1, 1)
+            .frames_u8(&[&[10], &[200]])
+            .write(&path)
+            .unwrap();
+        let registry = crate::test_util::all_registry();
+        let whole = load(&registry, &path, true, false).unwrap();
+        assert_eq!(whole.info.frames, 2);
+        let second = load(&registry, &frames::frame_path(&path, 1), true, false).unwrap();
+        assert_eq!(second.info.frames, 1);
+        assert_eq!(
+            second.thumb.unwrap().pixels[0],
+            egui::Color32::from_gray(200)
+        );
+    }
 
     #[test]
     fn loads_png_into_info_and_thumbnail() {

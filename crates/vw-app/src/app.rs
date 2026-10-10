@@ -18,6 +18,7 @@ use vw_core::{ColorModel, Registry};
 use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::export::{self, CopyJob, Filter, ListFormat, Matcher};
+use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
 use crate::labels::{Flag, LabelStore};
@@ -34,7 +35,7 @@ use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
-use crate::viewer::{Full, Sequence, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR};
+use crate::viewer::{Full, Sequence, SequenceKind, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR};
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
@@ -462,6 +463,23 @@ impl VwApp {
         self.start_load(self.active, path, full);
     }
 
+    /// アクティブなスロットに DICOM のシリーズを出す。1 ファイルだけのシリーズは普通に開く。
+    /// マルチフレームのファイルなら、それがフレームの並びになる。
+    fn open_series(&mut self, folder: PathBuf, title: String, files: Vec<PathBuf>) {
+        let [first, ..] = files.as_slice() else {
+            return;
+        };
+        let first = first.clone();
+        if files.len() > 1 {
+            let slot = &mut self.slots[self.active];
+            slot.from_folder = false;
+            slot.sequence = Some(Sequence::series(folder, title, files));
+        } else {
+            self.slots[self.active].sequence = None;
+        }
+        self.open_in_active(first);
+    }
+
     /// `index` 番目のスロットで `path` を読み込み始める。
     fn start_load(&mut self, index: usize, path: PathBuf, full: bool) {
         let request = self.next_id;
@@ -696,13 +714,13 @@ impl VwApp {
             self.toggle_maximize(self.active);
         }
         let v = &self.settings.settings.viewer;
-        let clock = Clock::new(
-            start,
-            frames.len(),
-            v.slideshow_end,
-            v.slideshow_fps,
-            Instant::now(),
-        );
+        // シネはファイルに書かれた速さで再生する。撮影時の速さで見ないと動きの評価を誤るため。
+        let fps = self.slots[self.active]
+            .sequence
+            .as_ref()
+            .and_then(|q| q.fps)
+            .unwrap_or(v.slideshow_fps);
+        let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now());
         let loader_slot = self.next_id;
         self.next_id += 1;
         self.last_dropped = 0;
@@ -711,6 +729,7 @@ impl VwApp {
             loader_slot,
             frames,
             clock,
+            fps,
         ));
     }
 
@@ -843,7 +862,11 @@ impl VwApp {
             if ui.button(glyph).on_hover_text(tip).clicked() {
                 action = Some(BarAction::TogglePlay);
             }
-            let mut fps = viewer.slideshow_fps;
+            let current_fps = self
+                .playback
+                .as_ref()
+                .map_or(viewer.slideshow_fps, |pb| pb.fps);
+            let mut fps = current_fps;
             let r = ui.add(fps_input(&mut fps));
             if r.changed() || r.drag_stopped() {
                 // ドラッグ中は再生にだけ反映し、ファイルには離したときに書く。
@@ -851,7 +874,7 @@ impl VwApp {
                 action = Some(BarAction::Fps { fps, save });
             }
             for preset in slideshow::FPS_PRESETS {
-                let selected = (viewer.slideshow_fps - preset).abs() < 0.05;
+                let selected = (current_fps - preset).abs() < 0.05;
                 if ui.selectable_label(selected, format!("{preset}")).clicked() {
                     action = Some(BarAction::Fps {
                         fps: preset,
@@ -903,6 +926,9 @@ impl VwApp {
             BarAction::TogglePlay => return self.run(ctx, Action::TogglePlay),
             BarAction::Fps { fps, save } => {
                 viewer.slideshow_fps = fps;
+                if let Some(pb) = &mut self.playback {
+                    pb.fps = fps;
+                }
                 if !save {
                     self.restart_clock();
                     return;
@@ -919,7 +945,7 @@ impl VwApp {
         let viewer = &self.settings.settings.viewer;
         if let Some(pb) = &mut self.playback {
             pb.clock
-                .restart(viewer.slideshow_fps, viewer.slideshow_end, Instant::now());
+                .restart(pb.fps, viewer.slideshow_end, Instant::now());
         }
     }
 
@@ -1008,7 +1034,11 @@ impl VwApp {
         let mut dirs: HashSet<PathBuf> = self.tree.open_paths().into_iter().collect();
         dirs.extend(self.loaded_folders.iter().map(|(p, _)| p.clone()));
         for slot in &self.slots {
-            if let Some(seq) = &slot.sequence {
+            if let Some(seq) = slot
+                .sequence
+                .as_ref()
+                .filter(|q| q.kind == SequenceKind::Folder)
+            {
                 dirs.insert(seq.folder.clone());
             } else if let Some(dir) = slot.path.as_deref().and_then(Path::parent) {
                 dirs.insert(dir.to_path_buf());
@@ -1070,7 +1100,14 @@ impl VwApp {
                 }
                 continue;
             }
-            if !registry.supports_path(&c.path) {
+            // 消えたファイルは中身を読めないので、拡張子のないものは画像だったとみなす。
+            let image = match c.kind {
+                ChangeKind::Removed => {
+                    registry.supports_path(&c.path) || c.path.extension().is_none()
+                }
+                _ => registry.supports_file(&c.path),
+            };
+            if !image {
                 continue;
             }
             match c.kind {
@@ -1114,6 +1151,26 @@ impl VwApp {
             let Some(current) = slot.path.clone() else {
                 continue;
             };
+            // フレームの並びは元のファイルの中のもの。フォルダの画像に並べ替えず、ファイルが
+            // 書き換わったときに今のフレームを読み直すだけにする。
+            if let Some((file, _)) = frames::split(&current) {
+                if modified.contains(&file) {
+                    loads.push((index, current));
+                }
+                continue;
+            }
+            // シリーズの並びは UID で決まり、フォルダの並び順とは関係ない。ファイルが
+            // 書き換わったときに読み直すだけにする。
+            if slot
+                .sequence
+                .as_ref()
+                .is_some_and(|q| q.kind == SequenceKind::Series)
+            {
+                if modified.contains(&current) {
+                    loads.push((index, current));
+                }
+                continue;
+            }
             let Some(dir) = current.parent().filter(|d| dirs.iter().any(|x| x == d)) else {
                 continue;
             };
@@ -1252,11 +1309,10 @@ impl VwApp {
             self.next_id += 1;
         }
         let index = self.slots.len() - 1;
-        self.slots[index].sequence = Some(Sequence {
-            folder: dir.to_path_buf(),
-            index: paths.len() - 1,
-            paths,
-        });
+        let mut seq = Sequence::new(dir.to_path_buf(), newest.clone());
+        seq.index = paths.len() - 1;
+        seq.paths = paths;
+        self.slots[index].sequence = Some(seq);
         if follow {
             self.active = index;
         }
@@ -2210,6 +2266,18 @@ impl VwApp {
             ms(i.convert),
             ms(t.elapsed()),
         ));
+        // 1 枚のスロットで開いたマルチフレームのファイルは、フレームの並びのスロットにする。
+        // フォルダスロットの中では並べ替えない。フォルダの中を送れなくなるため。
+        let mut path = path;
+        let multiframe = loaded.info.frames > 1 && frames::split(&path).is_none();
+        if multiframe && s.sequence.is_none() {
+            let fps = frame_rate(&loaded.info.metadata);
+            let seq = Sequence::frames(path.clone(), loaded.info.frames, fps);
+            path = seq.paths[0].clone();
+            s.path = Some(path.clone());
+            s.sequence = Some(seq);
+            s.from_folder = false;
+        }
         s.shown = Some(Shown {
             path,
             thumb,
@@ -2524,8 +2592,9 @@ impl VwApp {
         let shown = self.slots[index].shown.as_ref()?;
         let info = &shown.info;
         let row = |k: &'static str, v: String| (tr(lang, k).to_owned(), v);
-        let file_rows = vec![
-            row("Path", shown.path.display().to_string()),
+        let frame = frames::split(&shown.path);
+        let mut file_rows = vec![
+            row("Path", frames::file_of(&shown.path).display().to_string()),
             row("Size", format!("{} bytes", info.file_size)),
             row("Plugin", info.plugin.clone()),
             row("Pixels", format!("{} x {}", info.width, info.height)),
@@ -2549,6 +2618,13 @@ impl VwApp {
                 format!("{w} x {h}{kind}")
             }),
         ];
+        if let Some((_, i)) = frame {
+            let total = self.slots[index]
+                .sequence
+                .as_ref()
+                .map_or(0, |q| q.paths.len());
+            file_rows.insert(1, row("Frame", format!("{} / {total}", i + 1)));
+        }
         let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
         groups.extend(
             group_metadata(&info.metadata.entries)
@@ -3089,7 +3165,8 @@ impl eframe::App for VwApp {
                         );
                         panel_header(ui, &text);
                     }
-                    let selected = self.tree_selected();
+                    // フレームを出しているときは、そのファイルを選択として見せる。
+                    let selected = self.tree_selected().map(|p| frames::file_of(&p));
                     let t = &self.settings.settings.tree;
                     let how = FolderClicks {
                         mode: t.mode,
@@ -3127,6 +3204,17 @@ impl eframe::App for VwApp {
                             self.open_in_active(p);
                         }
                         TreeAction::Select => {}
+                        TreeAction::Series {
+                            folder,
+                            title,
+                            files,
+                            add,
+                        } => {
+                            if add {
+                                self.add_slot();
+                            }
+                            self.open_series(folder, title, files);
+                        }
                         TreeAction::Load(p) => {
                             let tree = &self.settings.settings.tree;
                             let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
@@ -3168,6 +3256,25 @@ impl eframe::App for VwApp {
         self.toast_ui(&ctx);
         self.folder_load_dialog(&ctx);
     }
+}
+
+/// シネのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を優先し、
+/// なければ推奨の表示速度か Cine Rate を使う。
+fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
+    let number = |key| {
+        let v = metadata.get("DICOM", key)?;
+        // 複数値（`33.3\33.3`）なら最初の値。
+        v.split('\\')
+            .next()?
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|x| *x > 0.0)
+    };
+    number("Frame time (ms)")
+        .map(|ms| 1000.0 / ms)
+        .or_else(|| number("Recommended frame rate"))
+        .or_else(|| number("Cine rate"))
 }
 
 /// 絞り込みの名前。タグはそのまま（翻訳しない）。
@@ -3247,6 +3354,16 @@ fn color_name(c: ColorModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cine_frame_rate_comes_from_frame_time_first() {
+        let mut m = vw_core::Metadata::default();
+        m.push("DICOM", "Cine rate", "15");
+        assert_eq!(frame_rate(&m), Some(15.0));
+        m.push("DICOM", "Frame time (ms)", "33.333\\33.333");
+        assert!((frame_rate(&m).unwrap() - 30.0).abs() < 0.01);
+        assert_eq!(frame_rate(&vw_core::Metadata::default()), None);
+    }
 
     #[test]
     fn wheel_steps_images_in_a_chunk_slot_even_when_slots_are_tiled() {

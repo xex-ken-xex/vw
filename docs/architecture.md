@@ -57,8 +57,14 @@ DisplayImage (RGBA8)
 | --- | --- |
 | BMP | 自作（単純）または `image` の bmp |
 | JPEG | `zune-jpeg`（高速） |
-| DICOM | `dicom-object` + `dicom-pixeldata` |
+| DICOM | `dicom-object` + `dicom-pixeldata`（実装済み。純 Rust で済む非圧縮 / RLE / JPEG ベースラインのみ。JPEG 2000 / JPEG-LS は C ライブラリが要るので見送り） |
 | NEF / ARW | `rawler` または `rawloader` + デモザイク |
+
+### DICOM
+
+- ウィンドウ幅/レベルはファイルの値を `VwImage::window` に入れ、表示側の指定がなければそれを使う
+- マルチフレームは `file?frame=N` という仮のパスで 1 フレームずつ読む（`frames.rs`）。スロットの並び・キャッシュ・ラベルがパス単位なので、そのまま使える
+- ツリーは、開いたフォルダの DICOM らしいファイル（拡張子が dcm/dicom/dic か拡張子なし）のヘッダを別スレッドで読み、Study / Series Instance UID で「検査 > シリーズ」にまとめる（`series.rs`）。シリーズは Instance Number 順の 1 つの並びとしてスロットに出す
 
 ## 画面構成（SDI・シングルページ）
 

@@ -1,0 +1,12 @@
+[package]
+name = "vw-dicom"
+description = "DICOM decoder plugin for vw"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+dicom-core = "0.10"
+dicom-object = "0.10"
+dicom-dictionary-std = "0.10"
+dicom-pixeldata = { version = "0.10", default-features = false, features = ["jpeg", "rle"] }

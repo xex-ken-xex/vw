@@ -37,6 +37,7 @@ const JA: &[(&str, &str)] = &[
     ("Folders", "フォルダ"),
     ("No image", "画像なし"),
     ("Path", "パス"),
+    ("Frame", "フレーム"),
     ("Size", "サイズ"),
     ("Plugin", "プラグイン"),
     ("Pixels", "画素数"),
@@ -55,6 +56,7 @@ const JA: &[(&str, &str)] = &[
     ),
     ("(empty)", "（空）"),
     ("(no subfolders)", "（サブフォルダなし）"),
+    ("Reading DICOM headers…", "DICOM のヘッダを読んでいます…"),
     ("Close slot", "スロットを閉じる"),
     // コピー
     ("Copy", "コピー"),

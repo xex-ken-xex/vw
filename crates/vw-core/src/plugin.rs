@@ -1,6 +1,7 @@
 //! デコーダプラグインのインターフェースと、プラグインを束ねる [`Registry`]。
 
 use std::fmt;
+use std::io::Read as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,12 +56,29 @@ pub trait DecoderPlugin: Send + Sync {
     /// ファイル全体のバイト列をデコードする。
     fn decode(&self, data: &[u8]) -> Result<VwImage, DecodeError>;
 
+    /// ファイルに入っている画像（フレーム）の数。動画のような DICOM のシネは 1 ファイルに
+    /// 何百枚も入っている。既定は 1 枚。
+    fn frame_count(&self, _data: &[u8]) -> Result<usize, DecodeError> {
+        Ok(1)
+    }
+
+    /// `frame` 番目（0 始まり）のフレームをデコードする。既定は 1 枚だけの形式向け。
+    fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
+        match frame {
+            0 => self.decode(data),
+            _ => Err(DecodeError::Invalid(format!("no frame {frame}"))),
+        }
+    }
+
     /// 画素をデコードせずにメタデータだけ読む。
     /// 既定の実装は全体をデコードするので、速くできる形式は上書きする。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         self.decode(data).map(|img| img.metadata)
     }
 }
+
+/// 中身で形式を判定するときに読む先頭のバイト数。DICOM の印（128 バイト目から）が入る長さ。
+const PROBE_BYTES: usize = 132;
 
 /// 利用できるデコーダプラグインの集合。
 ///
@@ -90,6 +108,19 @@ impl Registry {
         self.by_extension(path).is_some()
     }
 
+    /// [`Self::supports_path`] に加えて、拡張子のないファイルは先頭を読んで中身で判定する。
+    /// DICOM は `IM0001` のような拡張子のない名前で保存されることが多いため。拡張子のある
+    /// ファイルは開かないので、大きなフォルダでも遅くならない。
+    pub fn supports_file(&self, path: &Path) -> bool {
+        if path.extension().is_some() {
+            return self.supports_path(path);
+        }
+        let mut header = Vec::with_capacity(PROBE_BYTES);
+        let read = std::fs::File::open(path)
+            .and_then(|f| std::io::Read::take(f, PROBE_BYTES as u64).read_to_end(&mut header));
+        read.is_ok() && self.plugins.iter().any(|p| p.probe(&header))
+    }
+
     fn by_extension(&self, path: &Path) -> Option<&Arc<dyn DecoderPlugin>> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         self.plugins
@@ -109,10 +140,27 @@ impl Registry {
 
     /// プラグインを選んでデコードし、画像と使ったプラグイン名を返す。
     pub fn decode_bytes(&self, path: &Path, data: &[u8]) -> Result<(VwImage, &str), DecodeError> {
+        self.decode_frame_bytes(path, data, 0)
+    }
+
+    /// [`Self::decode_bytes`] の、`frame` 番目のフレームを読む版。
+    pub fn decode_frame_bytes(
+        &self,
+        path: &Path,
+        data: &[u8],
+        frame: usize,
+    ) -> Result<(VwImage, &str), DecodeError> {
         let plugin = self
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
-        Ok((plugin.decode(data)?, plugin.name()))
+        Ok((plugin.decode_frame(data, frame)?, plugin.name()))
+    }
+
+    /// ファイルのフレーム数。対応するプラグインがなければエラー。
+    pub fn frame_count(&self, path: &Path, data: &[u8]) -> Result<usize, DecodeError> {
+        self.find(path, data)
+            .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?
+            .frame_count(data)
     }
 }
 
@@ -206,6 +254,34 @@ mod tests {
         };
         let m = plugin.read_metadata(b"AAA").unwrap();
         assert_eq!(m.get("AAA", "decoded"), Some("true"));
+    }
+
+    #[test]
+    fn single_image_formats_have_one_frame_and_reject_others() {
+        let r = registry();
+        let path = Path::new("x.aaa");
+        assert_eq!(r.frame_count(path, b"AAA").unwrap(), 1);
+        assert!(r.decode_frame_bytes(path, b"AAA", 0).is_ok());
+        assert!(matches!(
+            r.decode_frame_bytes(path, b"AAA", 1),
+            Err(DecodeError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn extensionless_files_are_recognised_by_their_content() {
+        let dir = std::env::temp_dir().join(format!("vw-core-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let known = dir.join("IM0001");
+        let unknown = dir.join("README");
+        std::fs::write(&known, b"BBB...").unwrap();
+        std::fs::write(&unknown, b"hello").unwrap();
+        let r = registry();
+        assert!(r.supports_file(&known));
+        assert!(!r.supports_file(&unknown));
+        // 拡張子があれば中身は見ない。
+        assert!(!r.supports_file(&dir.join("missing.ccc")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
