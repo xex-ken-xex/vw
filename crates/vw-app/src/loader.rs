@@ -38,6 +38,7 @@ impl FullImage {
 
 /// 読み込んだ画像の情報。画素は持たない。
 /// 各段階の所要時間はログに出して速度を確認するのに使う。
+#[derive(Clone)]
 pub struct ImageInfo {
     pub width: u32,
     pub height: u32,

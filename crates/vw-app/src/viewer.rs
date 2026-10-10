@@ -41,12 +41,34 @@ impl Shown {
     }
 }
 
+/// フォルダスロットが送る画像の並び。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sequence {
+    pub folder: PathBuf,
+    pub paths: Vec<PathBuf>,
+    /// 表示中（読み込み中）の画像の位置。
+    pub index: usize,
+}
+
+impl Sequence {
+    pub fn new(folder: PathBuf, first: PathBuf) -> Self {
+        Self {
+            folder,
+            paths: vec![first],
+            index: 0,
+        }
+    }
+}
+
 /// 画像フィールドの 1 枠。
 pub struct Slot {
     /// スロットを識別する番号。並べ替えや削除で位置が変わっても読み込み結果を正しく届けるため、
     /// 配列の添字ではなくこれを使う。
     pub id: u64,
     pub path: Option<PathBuf>,
+    /// フォルダスロットなら、そのフォルダの画像の並び。普通のスロットは `None` で、
+    /// 前後の画像はその都度同じフォルダから探す。
+    pub sequence: Option<Sequence>,
     /// 最後に出した読み込み要求の番号。これと違う番号の結果は古いので捨てる。
     /// 前後の画像へ素早く送ったとき、遅れて届いた前の画像で上書きされるのを防ぐ。
     pub request: u64,
@@ -178,6 +200,7 @@ impl Slot {
         Self {
             id,
             path: None,
+            sequence: None,
             request: 0,
             loading: false,
             shown: None,
@@ -328,6 +351,16 @@ impl Slot {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| tr(lang, "(empty)").into());
+        let name = match &self.sequence {
+            Some(seq) => {
+                let folder = seq
+                    .folder
+                    .file_name()
+                    .map_or_else(|| seq.folder.to_string_lossy(), |n| n.to_string_lossy());
+                format!("{folder}/{name}   {}/{}", seq.index + 1, seq.paths.len())
+            }
+            None => name,
+        };
         let label = if self.shown.is_some() {
             format!("{name}   {:.0}%", base * self.zoom * 100.0)
         } else {

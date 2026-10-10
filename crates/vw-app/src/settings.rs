@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
 use crate::layout::SlotLayout;
+use crate::slideshow::{EndMode, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 
@@ -90,6 +91,9 @@ pub struct Viewer {
     pub layout: SlotLayout,
     /// メニューの「カスタム」で選ぶマス目。`auto` は選べない（既定の項目にあるため）。
     pub custom_layout: SlotLayout,
+    /// スライドショーの速さ。再生バーで最後に使った値を覚える。
+    pub slideshow_fps: f32,
+    pub slideshow_end: EndMode,
 }
 
 impl Viewer {
@@ -107,6 +111,8 @@ impl Default for Viewer {
             full_image_limit_mb: 4096,
             layout: SlotLayout::Auto,
             custom_layout: SlotLayout::grid(3, 2),
+            slideshow_fps: 10.0,
+            slideshow_end: EndMode::Loop,
         }
     }
 }
@@ -125,6 +131,47 @@ pub enum HeaderClick {
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Behavior {
     pub header_click: HeaderClick,
+}
+
+/// 画像自動展開モードで、フォルダの画像をスロットにどう入れるか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadInto {
+    /// 1 枚の画像を 1 スロットに。
+    #[default]
+    Images,
+    /// 1 つのフォルダを 1 スロットに。スロットの中で前後の画像に送る。
+    Folders,
+}
+
+impl LoadInto {
+    pub fn other(self) -> Self {
+        match self {
+            LoadInto::Images => LoadInto::Folders,
+            LoadInto::Folders => LoadInto::Images,
+        }
+    }
+}
+
+/// 押しながら読み込むと、[`LoadInto`] の設定と逆の入れ方になる修飾キー。
+/// Shift を選べないのは、フォルダの操作を Shift+クリックで読み込む設定にできるため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadModifier {
+    #[default]
+    Alt,
+    Ctrl,
+    None,
+}
+
+impl LoadModifier {
+    pub fn held(self, modifiers: eframe::egui::Modifiers) -> bool {
+        match self {
+            LoadModifier::Alt => modifiers.alt,
+            LoadModifier::Ctrl => modifiers.ctrl,
+            LoadModifier::None => false,
+        }
+    }
 }
 
 /// フォルダツリーの動作。
@@ -175,6 +222,8 @@ pub struct Tree {
     pub confirm_every: bool,
     /// 確認する区切りの枚数。
     pub confirm_chunk: u32,
+    pub load_into: LoadInto,
+    pub other_load_modifier: LoadModifier,
 }
 
 impl Default for Tree {
@@ -188,6 +237,8 @@ impl Default for Tree {
             on_load_other_folder: OnLoadFolder::default(),
             confirm_every: true,
             confirm_chunk: 500,
+            load_into: LoadInto::default(),
+            other_load_modifier: LoadModifier::default(),
         }
     }
 }
@@ -270,6 +321,17 @@ impl Settings {
                     "must be COLSxROWS",
                 )
                 .unwrap_or(d.viewer.custom_layout),
+            slideshow_fps: r
+                .get_valid(
+                    "viewer",
+                    "slideshow_fps",
+                    |v: &f32| FPS_RANGE.contains(v),
+                    "must be 0.1 to 120",
+                )
+                .unwrap_or(d.viewer.slideshow_fps),
+            slideshow_end: r
+                .get("viewer", "slideshow_end")
+                .unwrap_or(d.viewer.slideshow_end),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -302,6 +364,10 @@ impl Settings {
                     "must be 1 to 100000",
                 )
                 .unwrap_or(d.tree.confirm_chunk),
+            load_into: r.get("tree", "load_into").unwrap_or(d.tree.load_into),
+            other_load_modifier: r
+                .get("tree", "other_load_modifier")
+                .unwrap_or(d.tree.other_load_modifier),
         };
         let behavior = Behavior {
             header_click: r
@@ -617,6 +683,10 @@ mod tests {
         s.viewer.full_image_limit_mb = 8192;
         s.viewer.layout = SlotLayout::grid(1, 2);
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
+        s.viewer.slideshow_fps = 24.0;
+        s.viewer.slideshow_end = EndMode::PingPong;
+        s.tree.load_into = LoadInto::Folders;
+        s.tree.other_load_modifier = LoadModifier::Ctrl;
         s.tree.sort = SortKey::Modified;
         s.tree.sort_descending = true;
         s.tree.mode = TreeMode::AutoLoad;
@@ -727,6 +797,27 @@ mod tests {
         assert_eq!(s.viewer.layout, SlotLayout::Auto);
         assert_eq!(s.viewer.custom_layout, SlotLayout::grid(3, 2));
         assert_eq!(problems.len(), 2, "{problems:?}");
+    }
+
+    #[test]
+    fn slideshow_starts_at_10_fps_looping() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.slideshow_fps, 10.0);
+        assert_eq!(s.viewer.slideshow_end, EndMode::Loop);
+    }
+
+    #[test]
+    fn out_of_range_fps_falls_back_to_default() {
+        let (s, problems) = Settings::from_toml("[viewer]\nslideshow_fps = 500.0\n").unwrap();
+        assert_eq!(s.viewer.slideshow_fps, 10.0);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn folders_load_one_image_per_slot_and_alt_switches_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.tree.load_into, LoadInto::Images);
+        assert_eq!(s.tree.other_load_modifier, LoadModifier::Alt);
     }
 
     #[test]

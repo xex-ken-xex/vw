@@ -169,6 +169,7 @@ sudo apt install libxkbcommon-x11-0 libgl1 libegl1 libxcursor1 libxrandr2 libxi6
 | Ctrl+→ / Ctrl+← | 次 / 前のスロットを選択 |
 | PageDown / PageUp | レイアウトを固定していてスロットが入りきらないとき、次 / 前のページ |
 | Alt+0 〜 Alt+7 / View → Layout | レイアウト（自動 / 1x1 / 1x2 / 2x1 / 2x2 / 3x3 / 4x4 / カスタム） |
+| P | スライドショーの再生・一時停止（スロットを最大化して、下の再生バーで FPS と終わりの動き（ループ / 止める / 往復）を選べます） |
 | Ctrl+N / File → New slot | 空のスロットを追加 |
 | Ctrl+W / スロット右上の × | スロットを閉じる |
 | Ctrl+1 / 2 / 3 / 4 | フォルダツリー / メタデータ / 画像 / ログの表示切替 |

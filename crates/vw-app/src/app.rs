@@ -23,13 +23,15 @@ use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
 use crate::settings::{
-    parse_hex_color, FolderAction, HeaderClick, Language, OnLoadFolder, SettingsStore, TreeMode,
+    parse_hex_color, FolderAction, HeaderClick, Language, LoadInto, OnLoadFolder, SettingsStore,
+    TreeMode,
 };
-use crate::settings_ui::{layout_title, SettingsUi};
+use crate::settings_ui::{fps_input, layout_title, SettingsUi};
+use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
 use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
-use crate::viewer::{Full, Shown, Slot, KEY_ZOOM_FACTOR};
+use crate::viewer::{Full, Sequence, Shown, Slot, KEY_ZOOM_FACTOR};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,6 +132,24 @@ pub struct VwApp {
     folder_load: Option<FolderLoad>,
     /// 画像領域いっぱいに出しているスロットの番号。
     maximized: Option<u64>,
+    /// 読み込み中のフォルダの入れ方。
+    load_into: LoadInto,
+    /// 読み込み中のフォルダのために作った最初のスロットの番号。これ以降の番号のスロットにだけ
+    /// 画像を足す。前からあるフォルダスロットに、同じフォルダの画像を重ねて足さないため。
+    load_slots_from: u64,
+    playback: Option<Playback>,
+    /// 最後に止めたスライドショーで飛ばしたコマ数。再生バーに出し続ける。
+    last_dropped: u64,
+}
+
+/// 再生バーの高さ。
+const PLAY_BAR: f32 = 30.0;
+
+/// 再生バーで行われた操作。
+enum BarAction {
+    TogglePlay,
+    Fps { fps: f32, save: bool },
+    End(EndMode),
 }
 
 /// コピーしたときにカーソルの近くに出す短い表示。
@@ -280,6 +300,10 @@ impl VwApp {
             images_area: None,
             folder_load: None,
             maximized: None,
+            load_into: LoadInto::Images,
+            load_slots_from: 0,
+            playback: None,
+            last_dropped: 0,
         };
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -335,6 +359,14 @@ impl VwApp {
     /// 前の画像は新しい画像が届くまで表示したままにして、切り替え時のちらつきを避ける。
     fn open_in_active(&mut self, path: PathBuf) {
         self.tree_selected = Some(path.clone());
+        // フォルダスロットに並びの外の画像を開いたら、普通のスロットに戻す。
+        let slot = &mut self.slots[self.active];
+        if let Some(seq) = &mut slot.sequence {
+            match seq.paths.iter().position(|p| *p == path) {
+                Some(i) => seq.index = i,
+                None => slot.sequence = None,
+            }
+        }
         let full = self.cell_needs_full();
         self.start_load(self.active, path, full);
     }
@@ -362,11 +394,19 @@ impl VwApp {
 
     /// フォルダの画像をスロットに読み込み始める（画像自動展開モード）。
     /// 前の読み込みが続いていれば、そこで打ち切る。
-    fn load_folder(&mut self, ctx: &egui::Context, path: PathBuf) {
+    fn load_folder(&mut self, ctx: &egui::Context, path: PathBuf, into: LoadInto) {
         let tree = self.settings.settings.tree.clone();
         if tree.on_load_other_folder == OnLoadFolder::Replace {
             self.close_all_slots();
         }
+        self.load_into = into;
+        // 末尾の空のスロットは読み込みで使い回すので、この読み込みのスロットに含める。
+        let last = &self.slots[self.slots.len() - 1];
+        self.load_slots_from = if last.path.is_none() && !last.loading {
+            last.id
+        } else {
+            self.next_id
+        };
         self.log.info(format!("Loading folder {}", path.display()));
         let ctx = ctx.clone();
         self.folder_load = Some(FolderLoad::start(
@@ -393,11 +433,28 @@ impl VwApp {
             let mut reuse_last = last.path.is_none() && !last.loading;
             let mut targets = Vec::with_capacity(paths.len());
             for path in paths {
+                if self.load_into == LoadInto::Folders {
+                    let last = self.slots.last_mut().expect("there is always a slot");
+                    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+                    if let Some(seq) = last
+                        .sequence
+                        .as_mut()
+                        .filter(|s| s.folder == folder && last.id >= self.load_slots_from)
+                    {
+                        seq.paths.push(path);
+                        continue;
+                    }
+                }
                 if !std::mem::take(&mut reuse_last) {
                     self.slots.push(Slot::new(self.next_id));
                     self.next_id += 1;
                 }
-                targets.push((self.slots.len() - 1, path));
+                let index = self.slots.len() - 1;
+                if self.load_into == LoadInto::Folders {
+                    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+                    self.slots[index].sequence = Some(Sequence::new(folder, path.clone()));
+                }
+                targets.push((index, path));
             }
             let full = self.cell_needs_full();
             for (index, path) in targets {
@@ -502,6 +559,257 @@ impl VwApp {
         cell > memory::THUMB_SIDE as f32
     }
 
+    /// アクティブなスロットを最大化して、その並び（フォルダスロットならその中身、
+    /// 普通のスロットなら同じフォルダの画像）をスライドショーで再生する。
+    fn start_playback(&mut self) {
+        let slot = &self.slots[self.active];
+        let (frames, start) = match &slot.sequence {
+            Some(seq) => (seq.paths.clone(), seq.index),
+            None => {
+                let Some(path) = slot.path.clone() else {
+                    return;
+                };
+                let order = self.settings.settings.tree.order();
+                let files = tree::sibling_images(&path, self.loader.registry(), order);
+                let start = files.iter().position(|p| *p == path).unwrap_or(0);
+                (files, start)
+            }
+        };
+        if frames.len() < 2 {
+            self.log.warn("Slideshow: there is only one image to show");
+            return;
+        }
+        if self.maximized != Some(slot.id) {
+            self.toggle_maximize(self.active);
+        }
+        let v = &self.settings.settings.viewer;
+        let clock = Clock::new(
+            start,
+            frames.len(),
+            v.slideshow_end,
+            v.slideshow_fps,
+            Instant::now(),
+        );
+        let loader_slot = self.next_id;
+        self.next_id += 1;
+        self.last_dropped = 0;
+        self.playback = Some(Playback::new(
+            self.slots[self.active].id,
+            loader_slot,
+            frames,
+            clock,
+        ));
+    }
+
+    fn stop_playback(&mut self) {
+        let Some(pb) = self.playback.take() else {
+            return;
+        };
+        for request in pb.pending.keys() {
+            self.loader.cancel(*request);
+        }
+        self.last_dropped = pb.clock.dropped;
+        if pb.clock.dropped > 0 {
+            self.log.warn(format!(
+                "Slideshow: {} frames were skipped because images could not be decoded fast enough",
+                pb.clock.dropped
+            ));
+        }
+    }
+
+    /// スライドショーを 1 フレーム分進める。今のコマの画像が届いていれば表示し、
+    /// この先のコマを先読みする。
+    fn drive_playback(&mut self, ctx: &egui::Context) {
+        let Some(pb) = &self.playback else {
+            return;
+        };
+        let index = self.slots.iter().position(|s| s.id == pb.slot);
+        let Some(index) = index.filter(|_| self.maximized == Some(pb.slot)) else {
+            // 最大化を解いた、別のスロットに移った、スロットを閉じた。
+            self.stop_playback();
+            return;
+        };
+        let now = Instant::now();
+        let full = self.cell_needs_full();
+        // 先読みには、表示中の画像のフル解像度と同じ上限の半分まで使う。
+        let budget = self.settings.settings.viewer.full_image_limit_bytes() / 2;
+        let pb = self.playback.as_mut().expect("checked above");
+        let step = pb.clock.advance(now);
+        let mut show = None;
+        if !pb.clock.shown() {
+            if let Some(frame) = pb.cache.get(&step.index).cloned() {
+                pb.clock.mark_shown();
+                show = Some(frame);
+            } else if pb.failed.contains(&step.index) {
+                pb.clock.mark_shown();
+            }
+        }
+        let (start, n, mode) = (pb.clock.start, pb.clock.n, pb.clock.mode);
+        let mut wanted = slideshow::upcoming(start, pb.clock.tick(), n, mode, pb.ahead(budget));
+        if !wanted.contains(&step.index) {
+            wanted.insert(0, step.index);
+        }
+        pb.cache.retain(|i, _| wanted.contains(i));
+        let loader = &self.loader;
+        pb.pending.retain(|request, i| {
+            let keep = wanted.contains(i);
+            if !keep {
+                loader.cancel(*request);
+            }
+            keep
+        });
+        let mut requests = Vec::new();
+        for &i in &wanted {
+            let busy = pb.cache.contains_key(&i) || pb.pending.values().any(|p| *p == i);
+            if !busy && !pb.failed.contains(&i) {
+                requests.push(i);
+            }
+        }
+        for i in requests {
+            let request = self.next_id;
+            self.next_id += 1;
+            pb.pending.insert(request, i);
+            self.loader.request(Job {
+                slot: pb.loader_slot,
+                request,
+                path: pb.frames[i].clone(),
+                thumb: !full,
+                full,
+            });
+        }
+        let finished = step.finished && pb.clock.shown();
+        let wait = pb.clock.until_next(now);
+        if let Some(frame) = show {
+            self.show_frame(index, step.index, frame);
+        }
+        if finished {
+            self.stop_playback();
+        } else {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// 先読みした画像を、読み込みを通さずにスロットへ出す。表示倍率と位置はそのまま保つ
+    /// （拡大した部分を見ながら再生できるように）。
+    fn show_frame(&mut self, index: usize, position: usize, frame: Frame) {
+        let request = self.next_id;
+        self.next_id += 1;
+        self.cancel_requests(&self.slots[index]);
+        let s = &mut self.slots[index];
+        s.path = Some(frame.path.clone());
+        s.request = request;
+        s.loading = false;
+        s.error = None;
+        s.full_request = None;
+        s.copy_when_full = false;
+        if let Some(seq) = &mut s.sequence {
+            seq.index = position;
+        }
+        s.shown = Some(Shown {
+            path: frame.path,
+            thumb: frame.texture,
+            info: frame.info,
+            full: None,
+        });
+    }
+
+    /// 最大化したスロットの下の再生バー。
+    fn play_bar(&self, ui: &mut egui::Ui) -> Option<BarAction> {
+        let lang = self.lang();
+        let viewer = &self.settings.settings.viewer;
+        let mut action = None;
+        ui.horizontal_centered(|ui| {
+            ui.add_space(6.0);
+            let playing = self.playback.is_some();
+            let (glyph, tip) = if playing {
+                (icon::PAUSE, "Pause")
+            } else {
+                (icon::PLAY, "Play")
+            };
+            let tip = self.with_key(tr(lang, tip), Action::TogglePlay);
+            if ui.button(glyph).on_hover_text(tip).clicked() {
+                action = Some(BarAction::TogglePlay);
+            }
+            let mut fps = viewer.slideshow_fps;
+            let r = ui.add(fps_input(&mut fps));
+            if r.changed() || r.drag_stopped() {
+                // ドラッグ中は再生にだけ反映し、ファイルには離したときに書く。
+                let save = !r.dragged();
+                action = Some(BarAction::Fps { fps, save });
+            }
+            for preset in slideshow::FPS_PRESETS {
+                let selected = (viewer.slideshow_fps - preset).abs() < 0.05;
+                if ui.selectable_label(selected, format!("{preset}")).clicked() {
+                    action = Some(BarAction::Fps {
+                        fps: preset,
+                        save: true,
+                    });
+                }
+            }
+            ui.separator();
+            let mut end = viewer.slideshow_end;
+            egui::ComboBox::from_id_salt("slideshow_end")
+                .selected_text(tr(lang, end.title()))
+                .show_ui(ui, |ui| {
+                    for mode in EndMode::ALL {
+                        ui.selectable_value(&mut end, mode, tr(lang, mode.title()));
+                    }
+                });
+            if end != viewer.slideshow_end {
+                action = Some(BarAction::End(end));
+            }
+            ui.separator();
+            if let Some(seq) = self
+                .slots
+                .get(self.active)
+                .and_then(|s| s.sequence.as_ref())
+            {
+                ui.label(format!("{} / {}", seq.index + 1, seq.paths.len()));
+            }
+            let dropped = self
+                .playback
+                .as_ref()
+                .map_or(self.last_dropped, |pb| pb.clock.dropped);
+            if dropped > 0 {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    tr1(lang, "dropped {}", &dropped.to_string()),
+                )
+                .on_hover_text(tr(
+                    lang,
+                    "Images could not be decoded fast enough; some frames were skipped.",
+                ));
+            }
+        });
+        action
+    }
+
+    fn apply_bar_action(&mut self, ctx: &egui::Context, action: BarAction) {
+        let viewer = &mut self.settings.settings.viewer;
+        match action {
+            BarAction::TogglePlay => return self.run(ctx, Action::TogglePlay),
+            BarAction::Fps { fps, save } => {
+                viewer.slideshow_fps = fps;
+                if !save {
+                    self.restart_clock();
+                    return;
+                }
+            }
+            BarAction::End(mode) => viewer.slideshow_end = mode,
+        }
+        self.restart_clock();
+        self.settings_changed(ctx);
+    }
+
+    /// 再生中なら、変えた FPS と終端の扱いで数え直す。
+    fn restart_clock(&mut self) {
+        let viewer = &self.settings.settings.viewer;
+        if let Some(pb) = &mut self.playback {
+            pb.clock
+                .restart(viewer.slideshow_fps, viewer.slideshow_end, Instant::now());
+        }
+    }
+
     /// 画面に出すスロットとマス目。
     fn view(&self) -> layout::View {
         let maximized = self
@@ -549,6 +857,13 @@ impl VwApp {
     /// 毎回フォルダを読み直す。一覧をキャッシュしないのは、表示中にファイルが
     /// 追加・削除されることがあり、数千件程度なら読み直しても体感できる遅れにならないため。
     fn step_active(&mut self, delta: isize) {
+        if let Some(seq) = &self.slots[self.active].sequence {
+            let next = wrap_step(seq.index, seq.paths.len(), delta);
+            if next != seq.index {
+                self.open_in_active(seq.paths[next].clone());
+            }
+            return;
+        }
         let Some(path) = self.slots[self.active].path.clone() else {
             return;
         };
@@ -599,8 +914,21 @@ impl VwApp {
 
     fn run(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            Action::PreviousImage => self.step_active(-1),
-            Action::NextImage => self.step_active(1),
+            Action::PreviousImage => {
+                self.stop_playback();
+                self.step_active(-1);
+            }
+            Action::NextImage => {
+                self.stop_playback();
+                self.step_active(1);
+            }
+            Action::TogglePlay => {
+                if self.playback.is_some() {
+                    self.stop_playback();
+                } else {
+                    self.start_playback();
+                }
+            }
             Action::NewSlot => self.add_slot(),
             Action::CloseSlot => self.close_slot(self.active),
             Action::CloseAllSlots => {
@@ -832,6 +1160,37 @@ impl VwApp {
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(r) = self.loader.rx.try_recv() {
+            if let Some(pb) = self.playback.as_mut().filter(|pb| pb.loader_slot == r.slot) {
+                let Some(index) = pb.pending.remove(&r.request) else {
+                    continue;
+                };
+                match r.result {
+                    Ok(loaded) => {
+                        let image = loaded.full.map(|f| f.display).or(loaded.thumb);
+                        if let Some(image) = image {
+                            pb.frame_bytes = image.pixels.len() * 4;
+                            let texture = ctx.load_texture(
+                                format!("{}#play", r.path.display()),
+                                image,
+                                texture_options(),
+                            );
+                            pb.cache.insert(
+                                index,
+                                Frame {
+                                    path: r.path,
+                                    texture,
+                                    info: loaded.info,
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        pb.failed.insert(index);
+                        self.log.error(format!("{}: {e}", r.path.display()));
+                    }
+                }
+                continue;
+            }
             // 読み込み中にスロットが閉じられた、または別の画像に切り替えられた場合は捨てる。
             let Some(index) = self.slots.iter().position(|s| {
                 s.id == r.slot
@@ -1170,7 +1529,9 @@ impl VwApp {
             ),
             row("Texture", {
                 let [w, h] = shown.texture().size();
-                let kind = if shown.full.is_some() {
+                // スライドショーの先読みは、フル解像度の描画用の画像を縮小画像の欄に入れて出す。
+                let reduced = (w as u32) < info.width && (h as u32) < info.height;
+                let kind = if shown.full.is_some() || !reduced {
                     ""
                 } else {
                     " (thumbnail)"
@@ -1435,10 +1796,23 @@ impl VwApp {
     /// egui の Grid ウィジェットを使わず矩形を自分で割り当てるのは、Grid が中身の大きさに
     /// 合わせて伸び縮みするため。画像の大きさに関係なく枠を等分したい。
     fn images_ui(&mut self, ui: &mut egui::Ui) {
-        let area = ui.available_rect_before_wrap();
-        self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
+        let whole = ui.available_rect_before_wrap();
         self.frame += 1;
         let view = self.view();
+        let maximized = self.maximized.is_some() && view.range.len() == 1;
+        let area = if maximized {
+            let (area, bar) = whole.split_top_bottom_at_y(whole.max.y - PLAY_BAR);
+            let action = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.play_bar(ui))
+                .inner;
+            if let Some(action) = action {
+                self.apply_bar_action(ui.ctx(), action);
+            }
+            area
+        } else {
+            whole
+        };
+        self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
         let (cols, rows) = (view.cols, view.rows);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
@@ -1521,7 +1895,7 @@ impl VwApp {
             }
         }
         self.manage_full_images();
-        ui.allocate_rect(area, egui::Sense::hover());
+        ui.allocate_rect(whole, egui::Sense::hover());
     }
 }
 
@@ -1546,6 +1920,7 @@ impl eframe::App for VwApp {
         self.track_window(&ctx);
         self.receive(&ctx);
         self.pump_folder_load();
+        self.drive_playback(&ctx);
         self.reload_settings(&ctx);
 
         // キー入力待ちのときは、押されたキーを割り当てに使い切る（ホットキーとして実行しない）。
@@ -1633,7 +2008,14 @@ impl eframe::App for VwApp {
                         TreeAction::Select(p) => self.tree_selected = Some(p),
                         TreeAction::Load(p) => {
                             self.tree_selected = Some(p.clone());
-                            self.load_folder(&ctx, p);
+                            let tree = &self.settings.settings.tree;
+                            let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
+                            let into = if other {
+                                tree.load_into.other()
+                            } else {
+                                tree.load_into
+                            };
+                            self.load_folder(&ctx, p, into);
                         }
                         TreeAction::Copy(p) => {
                             let what = format!("path {}", p.display());

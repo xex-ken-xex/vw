@@ -43,11 +43,12 @@ pub enum Action {
     Layout3x3,
     Layout4x4,
     LayoutCustom,
+    TogglePlay,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 28] = [
+    pub const ALL: [Action; 29] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -55,6 +56,7 @@ impl Action {
         Action::PreviousPage,
         Action::NextPage,
         Action::ToggleMaximize,
+        Action::TogglePlay,
         Action::FitImage,
         Action::ActualSize,
         Action::ZoomIn,
@@ -109,6 +111,7 @@ impl Action {
             Action::Layout3x3 => "layout_3x3",
             Action::Layout4x4 => "layout_4x4",
             Action::LayoutCustom => "layout_custom",
+            Action::TogglePlay => "toggle_play",
         }
     }
 
@@ -147,6 +150,7 @@ impl Action {
             Action::Layout3x3 => "Layout: 3 x 3",
             Action::Layout4x4 => "Layout: 4 x 4",
             Action::LayoutCustom => "Layout: custom",
+            Action::TogglePlay => "Play/pause slideshow",
         }
     }
 
@@ -230,6 +234,7 @@ impl Action {
             Action::Layout3x3 => vec![KeyCombo::alt(Num5)],
             Action::Layout4x4 => vec![KeyCombo::alt(Num6)],
             Action::LayoutCustom => vec![KeyCombo::alt(Num7)],
+            Action::TogglePlay => vec![KeyCombo::plain(P)],
         }
     }
 }
