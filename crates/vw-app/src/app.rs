@@ -1,5 +1,5 @@
-//! アプリ本体。4 つのフィールド（フォルダツリー・メタデータ・画像・ログ）の配置と、
-//! スロットの管理、読み込み結果の受け取りを行う。
+//! アプリ本体。ツール列と 4 つのフィールド（フォルダツリー・メタデータ・画像・ログ）の配置、
+//! 設定画面への切り替え、ホットキーの実行、スロットの管理、読み込み結果の受け取りを行う。
 //!
 //! egui は即時モード GUI で、毎フレーム `ui()` が呼ばれて画面全体を組み立て直す。
 //! 状態はすべて [`VwApp`] が持ち、ウィジェット側には持たせない。
@@ -7,13 +7,66 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, pos2, vec2, Color32, Key, Rect, TextureFilter, TextureOptions};
+use eframe::egui::{self, pos2, vec2, Color32, Rect, TextureFilter, TextureOptions};
+use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
+use crate::i18n::tr;
+use crate::keymap::{Action, KeyCombo};
 use crate::loader::{LoadResult, Loader};
 use crate::log::{Level, Log};
+use crate::settings::{parse_hex_color, Language, SettingsStore};
+use crate::settings_ui::SettingsUi;
+use crate::theme;
 use crate::tree::{self, FolderTree, TreeAction};
 use crate::viewer::{Shown, Slot};
+
+/// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    Browse,
+    Pan,
+    Zoom,
+    PixelProbe,
+    Measure,
+}
+
+impl Tool {
+    const ALL: [Tool; 5] = [
+        Tool::Browse,
+        Tool::Pan,
+        Tool::Zoom,
+        Tool::PixelProbe,
+        Tool::Measure,
+    ];
+
+    fn icon(self) -> &'static str {
+        match self {
+            Tool::Browse => icon::CURSOR,
+            Tool::Pan => icon::HAND_GRABBING,
+            Tool::Zoom => icon::MAGNIFYING_GLASS_PLUS,
+            Tool::PixelProbe => icon::EYEDROPPER,
+            Tool::Measure => icon::RULER,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Tool::Browse => "Browse",
+            Tool::Pan => "Pan",
+            Tool::Zoom => "Zoom",
+            Tool::PixelProbe => "Pixel probe",
+            Tool::Measure => "Measure",
+        }
+    }
+
+    fn available(self) -> bool {
+        self == Tool::Browse
+    }
+}
+
+/// ツール列の幅。アイコン 1 つ分の固定幅。
+const TOOL_COLUMN_WIDTH: f32 = 34.0;
 
 /// 4 つのフィールドそれぞれの表示・非表示（View メニュー）。
 struct Fields {
@@ -33,6 +86,11 @@ pub struct VwApp {
     /// スロット番号と読み込み要求番号の両方に使う連番。
     next_id: u64,
     fields: Fields,
+    tool: Tool,
+    settings: SettingsStore,
+    settings_ui: SettingsUi,
+    /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
+    show_settings: bool,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -80,8 +138,20 @@ impl VwApp {
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
+        crate::fonts::install_icons(&cc.egui_ctx);
         crate::fonts::load_cjk_in_background(&cc.egui_ctx);
         let mut log = Log::new(started);
+        let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
+        for n in notes {
+            log.warn(format!("Settings: {n}"));
+        }
+        for (k, actions) in settings.settings.keys.duplicates() {
+            log.warn(format!(
+                "Settings: {k} is assigned to several actions; using {}",
+                actions[0].id()
+            ));
+        }
+        theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
             registry
@@ -114,6 +184,10 @@ impl VwApp {
                 images: true,
                 log: true,
             },
+            tool: Tool::Browse,
+            settings,
+            settings_ui: SettingsUi::default(),
+            show_settings: false,
             log,
             started,
             first_frame: true,
@@ -173,6 +247,143 @@ impl VwApp {
         if next != pos {
             self.open_in_active(files[next].clone());
         }
+    }
+
+    fn lang(&self) -> Language {
+        self.settings.settings.appearance.language
+    }
+
+    /// 画像の背景色。設定が空か読めない形式ならテーマの既定色。
+    fn canvas_color(&self, ctx: &egui::Context) -> Color32 {
+        parse_hex_color(&self.settings.settings.viewer.background)
+            .unwrap_or_else(|| theme::canvas_color(ctx.theme()))
+    }
+
+    /// 操作の最初のキーをツールチップ用に「名前 (キー)」の形にする。
+    fn with_key(&self, title: &str, action: Action) -> String {
+        match self.shortcut(action) {
+            Some(k) => format!("{title} ({k})"),
+            None => title.to_owned(),
+        }
+    }
+
+    fn shortcut(&self, action: Action) -> Option<String> {
+        self.settings
+            .settings
+            .keys
+            .keys(action)
+            .first()
+            .map(KeyCombo::to_string)
+    }
+
+    fn toggle_settings(&mut self) {
+        self.show_settings = !self.show_settings;
+        if self.show_settings {
+            self.settings_ui.opened();
+        }
+    }
+
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::PreviousImage => self.step_active(-1),
+            Action::NextImage => self.step_active(1),
+            Action::NewSlot => self.add_slot(),
+            Action::CloseSlot => self.close_slot(self.active),
+            Action::ToggleFolderTree => self.fields.tree ^= true,
+            Action::ToggleMetadata => self.fields.metadata ^= true,
+            Action::ToggleImages => self.fields.images ^= true,
+            Action::ToggleLog => self.fields.log ^= true,
+            Action::ToggleSettings => self.toggle_settings(),
+        }
+    }
+
+    /// このフレームのキー入力に割り当てられた操作を実行する。
+    fn run_hotkeys(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|i| i.events.clone());
+        let keys = &self.settings.settings.keys;
+        // テキスト入力中は、文字入力と区別できる Ctrl / Alt 付きのキーだけを実行する。
+        // 全部止めると、設定画面の検索欄にいるときに Ctrl+, で設定を閉じられない。
+        let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() {
+            events
+                .into_iter()
+                .filter(|e| matches!(e, egui::Event::Key { modifiers, .. } if modifiers.ctrl || modifiers.alt))
+                .collect()
+        } else {
+            events
+        };
+        for action in keys.actions_in(&events) {
+            // 設定画面の間は画像やパネルの操作をしない。見えていない画面が変わるのを避けるため。
+            if self.show_settings && action != Action::ToggleSettings {
+                continue;
+            }
+            self.run(action);
+        }
+    }
+
+    /// 設定画面で値が変わったときに、反映して保存する。
+    fn settings_changed(&mut self, ctx: &egui::Context) {
+        theme::apply(ctx, &self.settings.settings.appearance);
+        if let Err(e) = self.settings.save() {
+            self.log.error(format!("Settings: {e}"));
+        }
+    }
+
+    /// 設定ファイルが外部のエディタで書き換えられていたら読み直して反映する。
+    fn reload_settings(&mut self, ctx: &egui::Context) {
+        match self.settings.reload_if_changed() {
+            None => {}
+            Some(Ok(problems)) => {
+                self.log.info("Settings reloaded from file");
+                for p in problems {
+                    self.log.warn(format!("Settings: {p}"));
+                }
+                theme::apply(ctx, &self.settings.settings.appearance);
+            }
+            Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
+        }
+    }
+
+    /// 左端の、アイコンが縦に並ぶ固定幅の列。
+    fn tool_column(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let big = |s: &str| egui::RichText::new(s).size(17.0);
+        let size = vec2(26.0, 26.0);
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            for tool in Tool::ALL {
+                let button =
+                    egui::Button::selectable(self.tool == tool, big(tool.icon())).min_size(size);
+                let r = ui
+                    .add_enabled(tool.available(), button)
+                    .on_hover_text(tr(lang, tool.title()))
+                    .on_disabled_hover_text(format!(
+                        "{}\n{}",
+                        tr(lang, tool.title()),
+                        tr(lang, "Not available yet")
+                    ));
+                if r.clicked() {
+                    self.tool = tool;
+                }
+            }
+            ui.separator();
+            let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);
+            if ui
+                .add(egui::Button::new(big(icon::PLUS_SQUARE)).min_size(size))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                self.add_slot();
+            }
+        });
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+            ui.add_space(4.0);
+            let tip = self.with_key(tr(lang, "Settings"), Action::ToggleSettings);
+            let button =
+                egui::Button::selectable(self.show_settings, big(icon::GEAR_SIX)).min_size(size);
+            if ui.add(button).on_hover_text(tip).clicked() {
+                self.toggle_settings();
+            }
+        });
     }
 
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
@@ -245,52 +456,65 @@ impl VwApp {
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New slot").clicked() {
+            ui.menu_button(tr(lang, "File"), |ui| {
+                let new_slot = egui::Button::new(tr(lang, "New slot"))
+                    .shortcut_text(self.shortcut(Action::NewSlot).unwrap_or_default());
+                if ui.add(new_slot).clicked() {
                     self.add_slot();
                 }
-                if ui.button("Close all slots").clicked() {
+                if ui.button(tr(lang, "Close all slots")).clicked() {
                     self.slots.clear();
                     self.add_slot();
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui.button(tr(lang, "Quit")).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
-            ui.menu_button("View", |ui| {
-                ui.checkbox(&mut self.fields.tree, "Folder tree");
-                ui.checkbox(&mut self.fields.metadata, "Metadata");
-                ui.checkbox(&mut self.fields.images, "Images");
-                ui.checkbox(&mut self.fields.log, "Log");
+            ui.menu_button(tr(lang, "View"), |ui| {
+                ui.checkbox(&mut self.fields.tree, tr(lang, "Folder tree"));
+                ui.checkbox(&mut self.fields.metadata, tr(lang, "Metadata"));
+                ui.checkbox(&mut self.fields.images, tr(lang, "Images"));
+                ui.checkbox(&mut self.fields.log, tr(lang, "Log"));
+                ui.separator();
+                let settings = egui::Button::new(tr(lang, "Settings"))
+                    .shortcut_text(self.shortcut(Action::ToggleSettings).unwrap_or_default());
+                if ui.add(settings).clicked() {
+                    self.toggle_settings();
+                }
             });
         });
     }
 
     /// アクティブなスロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
     fn metadata_ui(&self, ui: &mut egui::Ui) {
+        let lang = self.lang();
         let slot = &self.slots[self.active];
         let Some(shown) = &slot.shown else {
-            ui.weak("No image");
+            ui.weak(tr(lang, "No image"));
             return;
         };
         let info = &shown.info;
         let img = &info.image;
         let file_rows: Vec<(String, String)> = vec![
             (
-                "Path".into(),
+                tr(lang, "Path").into(),
                 slot.path
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
             ),
-            ("Size".into(), format!("{} bytes", info.file_size)),
-            ("Plugin".into(), info.plugin.clone()),
-            ("Pixels".into(), format!("{} x {}", img.width, img.height)),
-            ("Color".into(), color_name(img.color).into()),
+            (tr(lang, "Size").into(), format!("{} bytes", info.file_size)),
+            (tr(lang, "Plugin").into(), info.plugin.clone()),
             (
-                "Sample".into(),
+                tr(lang, "Pixels").into(),
+                format!("{} x {}", img.width, img.height),
+            ),
+            (tr(lang, "Color").into(), color_name(img.color).into()),
+            (
+                tr(lang, "Sample").into(),
                 format!(
                     "{} bit ({} significant)",
                     img.data.bits_per_sample(),
@@ -298,12 +522,12 @@ impl VwApp {
                 ),
             ),
             (
-                "Texture".into(),
+                tr(lang, "Texture").into(),
                 format!("{} x {}", shown.texture.size()[0], shown.texture.size()[1]),
             ),
         ];
         let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![(
-            "File",
+            tr(lang, "File"),
             file_rows
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -363,6 +587,8 @@ impl VwApp {
         let (cols, rows) = grid_dims(n);
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
+        let background = self.canvas_color(ui.ctx());
+        let lang = self.lang();
         for i in 0..n {
             let (c, r) = (i % cols, i / cols);
             let rect = Rect::from_min_size(
@@ -372,7 +598,7 @@ impl VwApp {
                 ),
                 cell,
             );
-            let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active);
+            let resp = self.slots[i].ui(ui, rect.shrink(1.0), i == self.active, background, lang);
             if resp.clicked {
                 self.active = i;
             }
@@ -390,7 +616,8 @@ impl VwApp {
 
 impl eframe::App for VwApp {
     /// 毎フレーム呼ばれる。パネルは外側から順に追加する必要があるので、
-    /// メニュー → ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
+    /// メニュー → ツール列（左端）→ ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
+    /// 設定画面を開いているときは、ツール列より内側をすべて設定画面にする。
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.first_frame {
@@ -401,32 +628,52 @@ impl eframe::App for VwApp {
             ));
         }
         self.receive(&ctx);
+        self.reload_settings(&ctx);
 
-        // テキスト入力中などに矢印キーを奪わないよう、egui がキーボードを使っていないときだけ処理する。
-        if !ctx.egui_wants_keyboard_input() {
-            let (prev, next) = ctx.input(|i| {
-                (
-                    i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::PageUp),
-                    i.key_pressed(Key::ArrowRight)
-                        || i.key_pressed(Key::PageDown)
-                        || i.key_pressed(Key::Space),
-                )
-            });
-            if prev {
-                self.step_active(-1);
-            } else if next {
-                self.step_active(1);
-            }
+        // キー入力待ちのときは、押されたキーを割り当てに使い切る（ホットキーとして実行しない）。
+        if self
+            .settings_ui
+            .capture_keys(&ctx, &mut self.settings.settings.keys)
+        {
+            self.settings_changed(&ctx);
         }
+        self.run_hotkeys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::left("tools")
+            .exact_size(TOOL_COLUMN_WIDTH)
+            .resizable(false)
+            .show(ui, |ui| self.tool_column(ui));
 
+        if self.show_settings {
+            let path = self.settings.path.as_ref().map(|p| p.display().to_string());
+            let exists = self.settings.path.as_ref().is_some_and(|p| p.exists());
+            let r = self
+                .settings_ui
+                .ui(ui, &mut self.settings.settings, path.as_deref(), exists);
+            if r.changed {
+                self.settings_changed(&ctx);
+            }
+            if r.open_file {
+                if let Err(e) = self.settings.open_in_editor() {
+                    self.log.error(format!("Settings: cannot open file: {e}"));
+                }
+            }
+            if r.close {
+                self.toggle_settings();
+            }
+            // 外部のエディタでの書き換えを、ウィンドウに触れなくても拾えるようにする。
+            ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+
+        let lang = self.lang();
         if self.fields.log {
             egui::Panel::bottom("log")
                 .resizable(true)
                 .default_size(140.0)
                 .show(ui, |ui| {
-                    ui.strong("Log");
+                    panel_header(ui, tr(lang, "Log"));
                     self.log_ui(ui);
                 });
         }
@@ -434,7 +681,7 @@ impl eframe::App for VwApp {
             egui::Panel::left("tree")
                 .default_size(260.0)
                 .show(ui, |ui| {
-                    ui.strong("Folders");
+                    panel_header(ui, tr(lang, "Folders"));
                     let selected = self.slots[self.active].path.clone();
                     let action = egui::ScrollArea::both()
                         .auto_shrink(false)
@@ -458,7 +705,7 @@ impl eframe::App for VwApp {
                 .default_size(300.0)
                 .min_size(220.0)
                 .show(ui, |ui| {
-                    ui.strong("Metadata");
+                    panel_header(ui, tr(lang, "Metadata"));
                     self.metadata_ui(ui);
                 });
         }
@@ -466,11 +713,16 @@ impl eframe::App for VwApp {
             if self.fields.images {
                 self.images_ui(ui);
             } else {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, Color32::from_gray(24));
+                let background = self.canvas_color(ui.ctx());
+                ui.painter().rect_filled(ui.max_rect(), 0.0, background);
             }
         });
     }
+}
+
+/// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
+fn panel_header(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text.to_uppercase()).small().weak());
 }
 
 /// ログ用のミリ秒表記。

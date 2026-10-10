@@ -8,8 +8,13 @@
 
 mod app;
 mod fonts;
+mod i18n;
+mod keymap;
 mod loader;
 mod log;
+mod settings;
+mod settings_ui;
+mod theme;
 mod tree;
 mod viewer;
 

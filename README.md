@@ -164,12 +164,42 @@ sudo apt install libxkbcommon-x11-0 libgl1 libegl1 libxcursor1 libxrandr2 libxi6
 | ダブルクリック | 全体表示に戻す |
 | → / PageDown / Space | 同じフォルダの次の画像 |
 | ← / PageUp | 同じフォルダの前の画像 |
-| スロット右上の × | スロットを閉じる |
-| File → New slot | 空のスロットを追加 |
+| Ctrl+N / File → New slot | 空のスロットを追加 |
+| Ctrl+W / スロット右上の × | スロットを閉じる |
+| Ctrl+1 / 2 / 3 / 4 | フォルダツリー / メタデータ / 画像 / ログの表示切替 |
+| Ctrl+, / 左下の歯車 | 設定画面を開く・閉じる |
 | File → Close all slots | すべてのスロットを閉じる |
+
+キーの割り当ては設定画面の **Keyboard shortcuts** で変えられます（下記）。
 
 表示倍率はスロット上部のファイル名の横に出ます。
 窓より大きな画像は全体が入るように縮小し、小さな画像は 100% で表示します。
+
+### 設定
+
+左下の歯車（または Ctrl+,）で設定画面に切り替わります。上の検索欄に語を入れると項目を絞り込めます。
+変更はその場で反映され、自動で保存されます。
+
+| 項目 | 内容 |
+| --- | --- |
+| Theme | OS のダーク／ライトに従う（既定）、ダーク、ライト |
+| Language | English（既定）/ 日本語 |
+| UI scale | 文字とアイコンの大きさ |
+| Compact panels | 余白を詰めて表示する |
+| Background color | 画像の背景色（`#RRGGBB`、空欄でテーマの既定色） |
+| Keyboard shortcuts | 操作ごとのキー。**+** を押してからキーを押すと追加、キーをクリックすると削除。1 つの操作に複数のキーを割り当てられます |
+
+- 別の操作で使っているキーは割り当てられません
+- OS がよく使うキー（Alt+F4 など）は割り当てられますが、オレンジ色の警告が出ます。OS が先に使うと vw には届きません
+- Ctrl+C / Ctrl+X / Ctrl+V はクリップボード用のため割り当てられません
+
+設定ファイルは次の場所にあります。設定画面の **Open settings file** で、既定のエディタで開けます。
+エディタで保存すると、vw が自動で読み直します。
+
+| OS | 場所 |
+| --- | --- |
+| Windows | `%APPDATA%\vw\settings.toml` |
+| Linux | `~/.config/vw/settings.toml`（`XDG_CONFIG_HOME` があればその下） |
 
 ---
 
@@ -177,7 +207,7 @@ sudo apt install libxkbcommon-x11-0 libgl1 libegl1 libxcursor1 libxrandr2 libxi6
 
 | 症状 | 対処 |
 | --- | --- |
-| ファイル名の日本語が □ になる | Windows は通常起きません。Linux は `sudo apt install fonts-noto-cjk` を実行して再起動してください |
+| ファイル名や日本語表示が □ になる | Windows は通常起きません。Linux は `sudo apt install fonts-noto-cjk` を実行して再起動してください（日本語の字形のフォントだけを使います。中国語フォントだけが入っている環境では □ になります） |
 | Linux で `libxkbcommon-x11.so could not be loaded` と出て起動しない | `sudo apt install libxkbcommon-x11-0` |
 | 起動直後に落ちる / 画面が真っ黒 | OpenGL 2.0 以上が必要です。グラフィックドライバを更新してください。リモートデスクトップや仮想マシンでは、Linux なら `LIBGL_ALWAYS_SOFTWARE=1 vw` で動くことがあります |
 | 大きな画像が粗く見える | 一辺 8192 ピクセルを超える画像は、GPU の制限のため縮小して表示しています（ログに表示されます） |
