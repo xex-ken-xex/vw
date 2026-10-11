@@ -19,6 +19,8 @@ accepted = [
     # カメラ RAW の rawler。vw のソースを公開しているので、利用者が rawler を差し替えて
     # 作り直せるという LGPL の条件を満たせる。
     "LGPL-2.1",
+    # 7z の bzip2 圧縮に使う libbz2-rs-sys。元の bzip2 と同じ BSD 系の条件で、著作権表示を残せばよい。
+    "bzip2-1.0.6",
 ]
 targets = [
     "x86_64-unknown-linux-gnu",

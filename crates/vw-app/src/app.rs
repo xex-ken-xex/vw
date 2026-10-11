@@ -98,6 +98,16 @@ struct Fields {
     log: bool,
 }
 
+/// パスワードを尋ねている暗号化されたアーカイブ。
+struct PasswordPrompt {
+    zip: PathBuf,
+    input: String,
+    /// 前に入力されたパスワードが違った。
+    wrong: bool,
+    /// 入力欄にフォーカスを移した。
+    focused: bool,
+}
+
 pub struct VwApp {
     loader: Loader,
     tree: FolderTree,
@@ -178,6 +188,8 @@ pub struct VwApp {
     export: Option<ExportDialog>,
     /// ごみ箱へ送るか確かめている悪いフラグの画像。
     pending_trash: Option<discard::Pending>,
+    /// パスワードを尋ねている暗号化された ZIP / 7z。
+    password_prompt: Option<PasswordPrompt>,
     trash_job: Option<TrashJob>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
@@ -389,7 +401,7 @@ impl VwApp {
         // ZIP はフォルダとして扱う（「プログラムから開く」で ZIP を渡されることがあるため）。
         let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) = initial
             .into_iter()
-            .partition(|p| p.is_dir() || archive::is_zip(p));
+            .partition(|p| p.is_dir() || archive::is_archive(p));
         let first_dir = dirs.into_iter().next();
         let root = first_dir.clone().filter(|d| d.is_dir()).or_else(|| {
             files
@@ -460,6 +472,7 @@ impl VwApp {
             filter: Filter::All,
             export: None,
             pending_trash: None,
+            password_prompt: None,
             trash_job: None,
         };
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
@@ -708,7 +721,7 @@ impl VwApp {
         let Some(folder) = self.slots[index].folder.clone() else {
             return;
         };
-        if archive::is_zip(&folder) {
+        if archive::is_archive(&folder) {
             self.open_folder(ctx, folder);
             return;
         }
@@ -732,7 +745,7 @@ impl VwApp {
 
     /// フォルダ（または ZIP）の中へ移る。ZIP は展開してから移る。
     fn open_folder(&mut self, ctx: &egui::Context, folder: PathBuf) {
-        if archive::is_zip(&folder) {
+        if archive::is_archive(&folder) {
             self.mount(ctx, &folder);
             return;
         }
@@ -967,6 +980,67 @@ impl VwApp {
         self.pending_trash = Some(discard::Pending { dir, files });
     }
 
+    /// 暗号化された ZIP / 7z のパスワードを尋ね、入力されたらそのパスワードで展開し直す。
+    /// パスワードは覚えない。設定ファイルなどに平文で残したくないため。
+    fn password_dialog(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &mut self.password_prompt else {
+            return;
+        };
+        let lang = self.settings.settings.appearance.language;
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("archive_password")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            let name = prompt
+                .zip
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ui.label(tr1(lang, "{} is encrypted. Enter the password.", &name));
+            if prompt.wrong {
+                ui.colored_label(ui.visuals().error_fg_color, tr(lang, "Wrong password."));
+            }
+            ui.add_space(4.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut prompt.input)
+                    .password(true)
+                    .desired_width(f32::INFINITY),
+            );
+            // 毎フレーム focus を求めると、ボタンのクリックまで取られてしまうので、開いたときだけ。
+            if !prompt.focused {
+                field.request_focus();
+                prompt.focused = true;
+            }
+            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Open")).clicked() || entered {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(open) = answer else {
+            return;
+        };
+        let Some(prompt) = self.password_prompt.take() else {
+            return;
+        };
+        if open {
+            self.log
+                .info(format!("Extracting {}…", prompt.zip.display()));
+            let ctx = ctx.clone();
+            self.archives
+                .mount(&prompt.zip, Some(prompt.input), move || {
+                    ctx.request_repaint()
+                });
+        }
+    }
+
     fn trash_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = &self.pending_trash else {
             return;
@@ -1108,7 +1182,7 @@ impl VwApp {
         else {
             return;
         };
-        if path.is_dir() || archive::is_zip(&path) {
+        if path.is_dir() || archive::is_archive(&path) {
             self.open_folder(ctx, path);
             return;
         }
@@ -2417,7 +2491,10 @@ impl VwApp {
             return;
         }
         let ctx = ctx.clone();
-        if self.archives.mount(zip, move || ctx.request_repaint()) {
+        if self
+            .archives
+            .mount(zip, None, move || ctx.request_repaint())
+        {
             self.log.info(format!("Extracting {}…", zip.display()));
         }
     }
@@ -2436,6 +2513,18 @@ impl VwApp {
                 archive::Event::Failed { zip, error } => {
                     self.log
                         .error(format!("Cannot open {}: {error}", zip.display()));
+                }
+                archive::Event::NeedsPassword { zip, wrong } => {
+                    if wrong {
+                        self.log
+                            .warn(format!("Wrong password for {}", zip.display()));
+                    }
+                    self.password_prompt = Some(PasswordPrompt {
+                        zip,
+                        input: String::new(),
+                        wrong,
+                        focused: false,
+                    });
                 }
             }
         }
@@ -4172,6 +4261,7 @@ impl eframe::App for VwApp {
         self.folder_load_dialog(&ctx);
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
+        self.password_dialog(&ctx);
         self.finish_trash_job();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);

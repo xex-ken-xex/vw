@@ -1,4 +1,4 @@
-//! ZIP をフォルダとして開く。vw 専用の一時フォルダに展開し、アンマウントするまで保つ。
+//! ZIP と 7z をフォルダとして開く。vw 専用の一時フォルダに展開し、アンマウントするまで保つ。
 //!
 //! ZIP の中を直接読まずに展開するのは、ツリー・フォルダの読み込み・
 //! フォルダの監視がすべてファイルのパスで動いているため。展開すれば ZIP の中も普通の
@@ -34,13 +34,38 @@ impl Mount {
 /// 展開が終わった知らせ。
 #[derive(Debug)]
 pub enum Event {
-    Mounted { mount: Mount, files: usize },
-    Failed { zip: PathBuf, error: String },
+    Mounted {
+        mount: Mount,
+        files: usize,
+    },
+    Failed {
+        zip: PathBuf,
+        error: String,
+    },
+    /// 暗号化されていてパスワードが要る。`wrong` なら渡したパスワードでは開けなかった。
+    NeedsPassword {
+        zip: PathBuf,
+        wrong: bool,
+    },
+}
+
+/// 展開できなかった理由。
+#[derive(Debug, PartialEq)]
+enum ExtractError {
+    NeedsPassword,
+    WrongPassword,
+    Other(String),
+}
+
+impl<E: std::fmt::Display> From<E> for ExtractError {
+    fn from(e: E) -> Self {
+        ExtractError::Other(e.to_string())
+    }
 }
 
 struct Pending {
     mount: Mount,
-    done: Receiver<Result<usize, String>>,
+    done: Receiver<Result<usize, ExtractError>>,
 }
 
 /// 開いている ZIP の一覧。
@@ -70,9 +95,14 @@ impl Archives {
         Self::new(root.join(std::process::id().to_string()))
     }
 
-    /// `zip` を別スレッドで展開し始める。終わったら `wake` を呼ぶ。すでに開いているか
-    /// 展開中なら何もせず `false`。
-    pub fn mount(&mut self, zip: &Path, wake: impl Fn() + Send + 'static) -> bool {
+    /// `zip`（ZIP か 7z）を別スレッドで展開し始める。終わったら `wake` を呼ぶ。すでに開いているか
+    /// 展開中なら何もせず `false`。暗号化されたものは `password` で開く。
+    pub fn mount(
+        &mut self,
+        zip: &Path,
+        password: Option<String>,
+        wake: impl Fn() + Send + 'static,
+    ) -> bool {
         let busy = |m: &Mount| m.zip == zip;
         if self.mounted.iter().any(busy) || self.pending.iter().any(|p| busy(&p.mount)) {
             return false;
@@ -90,7 +120,7 @@ impl Archives {
         let (tx, rx) = channel();
         let (from, to) = (mount.zip.clone(), mount.dir.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(extract(&from, &to));
+            let _ = tx.send(extract(&from, &to, password.as_deref()));
             wake();
         });
         self.pending.push(Pending { mount, done: rx });
@@ -108,7 +138,9 @@ impl Archives {
                     i += 1;
                     continue;
                 }
-                Err(TryRecvError::Disconnected) => Err("extraction stopped".into()),
+                Err(TryRecvError::Disconnected) => {
+                    Err(ExtractError::Other("extraction stopped".into()))
+                }
             };
             let Pending { mount, .. } = self.pending.remove(i);
             match result {
@@ -118,9 +150,11 @@ impl Archives {
                 }
                 Err(error) => {
                     let _ = std::fs::remove_dir_all(&mount.dir);
-                    events.push(Event::Failed {
-                        zip: mount.zip,
-                        error,
+                    let zip = mount.zip;
+                    events.push(match error {
+                        ExtractError::NeedsPassword => Event::NeedsPassword { zip, wrong: false },
+                        ExtractError::WrongPassword => Event::NeedsPassword { zip, wrong: true },
+                        ExtractError::Other(error) => Event::Failed { zip, error },
                     });
                 }
             }
@@ -158,40 +192,170 @@ impl Drop for Archives {
     }
 }
 
-/// ツリーで ZIP として出すファイルか。
-pub fn is_zip(path: &Path) -> bool {
+/// ツリーでフォルダのように開けるアーカイブ（ZIP と 7z）か。
+pub fn is_archive(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("7z"))
 }
 
-/// `zip` を `dir` に展開し、展開したファイルの数を返す。
-fn extract(zip: &Path, dir: &Path) -> Result<usize, String> {
-    let file = std::fs::File::open(zip).map_err(|e| e.to_string())?;
-    let mut archive =
-        zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
+
+/// `archive` を `dir` に展開し、展開したファイルの数を返す。形式は拡張子ではなく先頭の
+/// バイト列で見分ける（拡張子と中身が違うファイルもあるため）。
+fn extract(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+    let mut head = [0u8; 6];
+    let mut file = std::fs::File::open(archive)?;
+    let seven_zip =
+        std::io::Read::read_exact(&mut file, &mut head).is_ok() && head == SEVEN_ZIP_MAGIC;
+    std::fs::create_dir_all(dir)?;
+    let named_7z = archive
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("7z"));
+    if seven_zip {
+        extract_7z(archive, dir, password)
+    } else if named_7z && !head.starts_with(b"PK") {
+        Err(ExtractError::Other("not a 7z archive".into()))
+    } else {
+        extract_zip(archive, dir, password)
+    }
+}
+
+fn extract_zip(zip: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+    let file = std::fs::File::open(zip)?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))?;
     let mut files = 0;
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        // 「../」や絶対パスで展開先の外を指す項目は飛ばす。悪意のある ZIP で
-        // 一時フォルダの外のファイルを書き換えられないようにするため。
+        let encrypted = match archive.by_index(i) {
+            Ok(_) => false,
+            Err(zip::result::ZipError::UnsupportedArchive(m))
+                if m == zip::result::ZipError::PASSWORD_REQUIRED =>
+            {
+                true
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut entry = match (encrypted, password) {
+            (false, _) => archive.by_index(i)?,
+            (true, None) => return Err(ExtractError::NeedsPassword),
+            (true, Some(pw)) => match archive.by_index_decrypt(i, pw.as_bytes()) {
+                Err(zip::result::ZipError::InvalidPassword) => {
+                    return Err(ExtractError::WrongPassword)
+                }
+                other => other?,
+            },
+        };
         let Some(relative) = entry.enclosed_name() else {
             continue;
         };
         let out = dir.join(&relative);
         if entry.is_dir() {
-            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&out)?;
             continue;
         }
         if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent)?;
         }
-        let mut target = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut target)
-            .map_err(|e| format!("{}: {e}", relative.display()))?;
+        let mut target = std::fs::File::create(&out)?;
+        if let Err(e) = std::io::copy(&mut entry, &mut target) {
+            // ZipCrypto はパスワードの確認が 1 バイトしかなく、違うパスワードでも 256 回に 1 回は
+            // 確認を通ってしまう。そのときは中身の CRC が合わずにここで失敗する。
+            return Err(if encrypted {
+                ExtractError::WrongPassword
+            } else {
+                ExtractError::Other(format!("{}: {e}", relative.display()))
+            });
+        }
         files += 1;
     }
     Ok(files)
+}
+
+fn extract_7z(path: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+    use sevenz_rust2::{ArchiveReader, Error, Password};
+    // 違うパスワードでは、復号した見出しや中身が壊れたデータになるだけで、どのエラーになるかは
+    // 決まらない（「見出しがない」などになる）。パスワードを渡したときの失敗はパスワードの誤りとみなす。
+    // ファイルを書けなかった失敗は `failed` で別に返すので、ここに来るのは読む側の失敗だけ。
+    let map = |e: Error| match (e, password) {
+        (_, Some(_)) => ExtractError::WrongPassword,
+        (Error::PasswordRequired | Error::MaybeBadPassword(_), None) => ExtractError::NeedsPassword,
+        (other, None) => ExtractError::Other(other.to_string()),
+    };
+    let key = password.map_or_else(Password::empty, Password::from);
+    let mut reader = ArchiveReader::open(path, key).map_err(map)?;
+    let mut files = 0;
+    let mut failed = None;
+    reader
+        .for_each_entries(|entry, data| {
+            let Some(relative) = enclosed_name(entry.name()) else {
+                return Ok(true);
+            };
+            let out = dir.join(&relative);
+            let target = if entry.is_directory() {
+                std::fs::create_dir_all(&out).map(|()| None)
+            } else {
+                out.parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| std::fs::File::create(&out))
+                    .map(Some)
+            };
+            let written = match target {
+                Ok(Some(mut file)) => copy_entry(data, &mut file)?,
+                Ok(None) => Ok(()),
+                Err(e) => Err(e),
+            };
+            match written {
+                Ok(()) => {
+                    files += usize::from(!entry.is_directory());
+                    Ok(true)
+                }
+                Err(e) => {
+                    failed = Some(format!("{}: {e}", relative.display()));
+                    Ok(false)
+                }
+            }
+        })
+        .map_err(map)?;
+    match failed {
+        Some(error) => Err(ExtractError::Other(error)),
+        None => Ok(files),
+    }
+}
+
+/// 中身を書き写す。読めなかったとき（壊れたデータや違うパスワード）は外側の `Err`、書けなかったとき
+/// （ディスクがいっぱいなど）は内側の `Err` にして、パスワードの誤りと見分けられるようにする。
+/// `std::io::copy` はどちらも同じ `io::Error` で返すので使わない。
+fn copy_entry(
+    data: &mut dyn std::io::Read,
+    target: &mut std::fs::File,
+) -> Result<std::io::Result<()>, std::io::Error> {
+    use std::io::Write as _;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = data.read(&mut buf)?;
+        if n == 0 {
+            return Ok(Ok(()));
+        }
+        if let Err(e) = target.write_all(&buf[..n]) {
+            return Ok(Err(e));
+        }
+    }
+}
+
+/// アーカイブの中の名前を、展開先の中を指す相対パスにする。「../」や絶対パスで展開先の外を
+/// 指すものは `None`。悪意のあるアーカイブで一時フォルダの外のファイルを書き換えられないようにするため。
+/// ZIP は zip クレートの `enclosed_name` が同じことをするが、7z のクレートにはない。
+fn enclosed_name(name: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in name.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            // Windows のドライブ名（C:）や代替データストリームを含む名前も外を指しうる。
+            p if p.contains(':') => return None,
+            p => out.push(p),
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
 }
 
 /// 前回までの vw が残した展開先のうち、古いものを消す。
@@ -232,6 +396,36 @@ mod tests {
         w.finish().unwrap();
     }
 
+    fn write_encrypted_zip(path: &Path, password: &str, aes: bool) {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        let options = if aes {
+            options.with_aes_encryption(zip::AesMode::Aes256, password)
+        } else {
+            use zip::unstable::write::FileOptionsExt as _;
+            options
+                .with_deprecated_encryption(password.as_bytes())
+                .unwrap()
+        };
+        w.start_file("secret.png", options).unwrap();
+        w.write_all(&[7; 4096]).unwrap();
+        w.finish().unwrap();
+    }
+
+    /// `files` を入れた 7z を作る。`password` があれば暗号化する。
+    fn write_7z(path: &Path, files: &[(&str, &[u8])], password: Option<&str>) {
+        let src = path.with_extension("src");
+        for (name, data) in files {
+            let file = src.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, data).unwrap();
+        }
+        match password {
+            Some(pw) => sevenz_rust2::compress_to_path_encrypted(&src, path, pw.into()).unwrap(),
+            None => sevenz_rust2::compress_to_path(&src, path).unwrap(),
+        }
+    }
+
     fn wait(archives: &mut Archives) -> Vec<Event> {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -253,8 +447,11 @@ mod tests {
         let zip = tmp.path().join("scans.zip");
         write_zip(&zip, &[("a.png", b"A"), ("sub/b.dcm", b"B")]);
         let mut archives = Archives::new(tmp.path().join("work"));
-        assert!(archives.mount(&zip, || {}));
-        assert!(!archives.mount(&zip, || {}), "the same zip is opened once");
+        assert!(archives.mount(&zip, None, || {}));
+        assert!(
+            !archives.mount(&zip, None, || {}),
+            "the same zip is opened once"
+        );
         let events = wait(&mut archives);
         let Event::Mounted { mount, files } = &events[0] else {
             panic!("{events:?}");
@@ -275,12 +472,97 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_zip_asks_for_a_password_then_opens_with_the_right_one() {
+        for aes in [false, true] {
+            let tmp = TempDir::new();
+            let zip = tmp.path().join("secret.zip");
+            write_encrypted_zip(&zip, "open sesame", aes);
+            let out = tmp.path().join("out");
+            assert_eq!(extract(&zip, &out, None), Err(ExtractError::NeedsPassword));
+            assert_eq!(
+                extract(&zip, &out, Some("wrong")),
+                Err(ExtractError::WrongPassword),
+                "aes = {aes}"
+            );
+            assert_eq!(extract(&zip, &out, Some("open sesame")), Ok(1));
+            assert_eq!(std::fs::read(out.join("secret.png")).unwrap(), [7; 4096]);
+        }
+    }
+
+    #[test]
+    fn mounting_an_encrypted_zip_reports_that_a_password_is_needed() {
+        let tmp = TempDir::new();
+        let zip = tmp.path().join("secret.zip");
+        write_encrypted_zip(&zip, "pw", true);
+        let mut archives = Archives::new(tmp.path().join("work"));
+        archives.mount(&zip, None, || {});
+        let events = wait(&mut archives);
+        assert!(
+            matches!(&events[0], Event::NeedsPassword { wrong: false, .. }),
+            "{events:?}"
+        );
+        archives.mount(&zip, Some("pw".into()), || {});
+        let events = wait(&mut archives);
+        assert!(
+            matches!(&events[0], Event::Mounted { files: 1, .. }),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn seven_zip_is_extracted_with_its_folders() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("photos.7z");
+        write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
+        let out = tmp.path().join("out");
+        assert_eq!(extract(&archive, &out, None), Ok(2));
+        assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
+    }
+
+    #[test]
+    fn encrypted_seven_zip_needs_the_right_password() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("secret.7z");
+        write_7z(&archive, &[("a.png", &[1; 4096])], Some("pw"));
+        let out = tmp.path().join("out");
+        assert_eq!(
+            extract(&archive, &out, None),
+            Err(ExtractError::NeedsPassword)
+        );
+        assert_eq!(
+            extract(&archive, &out, Some("nope")),
+            Err(ExtractError::WrongPassword)
+        );
+        assert_eq!(extract(&archive, &out, Some("pw")), Ok(1));
+    }
+
+    #[test]
+    fn archive_names_outside_the_folder_are_rejected() {
+        assert_eq!(
+            enclosed_name("a/b.png"),
+            Some(PathBuf::from("a").join("b.png"))
+        );
+        assert_eq!(
+            enclosed_name("a\\b.png"),
+            Some(PathBuf::from("a").join("b.png"))
+        );
+        assert_eq!(
+            enclosed_name("/etc/passwd"),
+            Some(PathBuf::from("etc").join("passwd"))
+        );
+        assert_eq!(enclosed_name("../x.png"), None);
+        assert_eq!(enclosed_name("a/../../x.png"), None);
+        assert_eq!(enclosed_name("C:/x.png"), None);
+        assert_eq!(enclosed_name(""), None);
+    }
+
+    #[test]
     fn entries_pointing_outside_the_extraction_folder_are_skipped() {
         let tmp = TempDir::new();
         let zip = tmp.path().join("evil.zip");
         write_zip(&zip, &[("../escaped.txt", b"x"), ("ok.png", b"y")]);
         let out = tmp.path().join("out");
-        assert_eq!(extract(&zip, &out).unwrap(), 1);
+        assert_eq!(extract(&zip, &out, None).unwrap(), 1);
         assert!(!tmp.path().join("escaped.txt").exists());
     }
 
@@ -290,7 +572,7 @@ mod tests {
         let zip = tmp.path().join("broken.zip");
         std::fs::write(&zip, b"not a zip").unwrap();
         let mut archives = Archives::new(tmp.path().join("work"));
-        archives.mount(&zip, || {});
+        archives.mount(&zip, None, || {});
         assert!(matches!(wait(&mut archives)[0], Event::Failed { .. }));
         assert!(archives.mount_of(&tmp.path().join("work")).is_none());
     }
@@ -302,15 +584,16 @@ mod tests {
         write_zip(&zip, &[("a.png", b"A")]);
         let base = tmp.path().join("work");
         let mut archives = Archives::new(base.clone());
-        archives.mount(&zip, || {});
+        archives.mount(&zip, None, || {});
         wait(&mut archives);
         drop(archives);
         assert!(!base.exists());
     }
 
     #[test]
-    fn zip_files_are_recognised_by_extension_in_any_case() {
-        assert!(is_zip(Path::new("a.ZIP")));
-        assert!(!is_zip(Path::new("a.png")));
+    fn zip_and_7z_files_are_recognised_by_extension_in_any_case() {
+        assert!(is_archive(Path::new("a.ZIP")));
+        assert!(is_archive(Path::new("a.7Z")));
+        assert!(!is_archive(Path::new("a.png")));
     }
 }

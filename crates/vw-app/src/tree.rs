@@ -486,7 +486,7 @@ pub fn has_tree_children(dir: &Path, registry: &Registry) -> bool {
             continue;
         }
         let path = e.path();
-        if entry_is_dir(&e) || crate::archive::is_zip(&path) {
+        if entry_is_dir(&e) || crate::archive::is_archive(&path) {
             return true;
         }
         if has_dicom_extension(dicom_extensions, &path) {
@@ -692,7 +692,7 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
             }
             let path = e.path();
             let is_dir = entry_is_dir(&e);
-            let archive = !is_dir && crate::archive::is_zip(&path);
+            let archive = !is_dir && crate::archive::is_archive(&path);
             if !is_dir && !archive && !registry.supports_file(&path) {
                 return None;
             }

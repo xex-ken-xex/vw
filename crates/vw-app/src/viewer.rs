@@ -416,7 +416,7 @@ impl Slot {
         let drop_target = self
             .folder
             .as_ref()
-            .filter(|f| !crate::archive::is_zip(f))
+            .filter(|f| !crate::archive::is_archive(f))
             .is_some();
         if drop_target {
             if response.dnd_hover_payload::<DraggedFile>().is_some() {
@@ -497,7 +497,7 @@ impl Slot {
                 Color32::WHITE,
             );
         } else if let Some(folder) = self.folder.as_ref().filter(|_| self.is_closed_folder()) {
-            let zip = crate::archive::is_zip(folder);
+            let zip = crate::archive::is_archive(folder);
             let icon = if zip {
                 egui_phosphor::regular::FILE_ZIP
             } else {
