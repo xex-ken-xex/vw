@@ -391,6 +391,12 @@ const JA: &[(&str, &str)] = &[
     ("Register", "登録"),
     ("Save", "保存"),
     ("Save and update", "保存して更新"),
+    ("File speed", "ファイルの速さ"),
+    (
+        "Play at the speed written in the file. Changing the FPS turns this off.",
+        "ファイルに書かれた速さで再生します。FPS を変えると外れます。",
+    ),
+    ("This file has no speed information.", "このファイルには速さの情報がありません。"),
     ("Extract dataset", "データセットの取り出し"),
     ("Destination", "出力先"),
     (
