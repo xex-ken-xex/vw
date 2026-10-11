@@ -1,0 +1,11 @@
+[package]
+name = "vw-bmp"
+description = "BMP decoder plugin for vw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+zune-core = "0.5"
+zune-bmp = "0.5"

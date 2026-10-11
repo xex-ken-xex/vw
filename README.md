@@ -15,7 +15,8 @@ Linux / Windows 向けの、起動と表示が速い画像ビューワです。R
 | JPEG（ベースライン / プログレッシブ、グレー / カラー / CMYK、EXIF の向きと情報） | 対応済み |
 | WebP（非可逆 / 可逆、透過、EXIF の向きと情報。アニメーションは全コマを 1 つのスロットに並べ、スライドショーで再生） | 対応済み |
 | カメラ RAW（Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF。Canon CR2 / CR3、DNG も読める）。カメラが埋め込んだプレビュー JPEG を表示し、撮影情報を出す。続けて裏でセンサーのデータを現像し、精細な画像に差し替える（現像中はスロットにフィルムの印） | 対応済み |
-| BMP, GIF, TIFF | 予定 |
+| BMP（1〜32bit、パレット / RLE / ビットフィールド、上下逆の BMP も） | 対応済み |
+| GIF, TIFF | 予定 |
 
 ---
 
@@ -99,7 +100,7 @@ cd vw
 `install.sh` は次のことを行います（管理者権限は使いません）。
 
 - `vw` を `~/.local/bin/vw` に置く
-- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・カメラ RAW の「別のアプリケーションで開く」に出るようにする
+- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・BMP・カメラ RAW の「別のアプリケーションで開く」に出るようにする
 
 インストールせずに、展開したフォルダで `./vw` を実行して使うこともできます。
 
@@ -376,6 +377,7 @@ crates/
   vw-core/   共通メモリ形式 (VwImage)、プラグインの定義 (DecoderPlugin)、描画用変換
   vw-png/    PNG プラグイン
   vw-jpeg/   JPEG プラグイン
+  vw-bmp/    BMP プラグイン
   vw-webp/   WebP プラグイン
   vw-raw/    カメラ RAW プラグイン（rawler、LGPL-2.1）
   vw-app/    アプリ本体（実行ファイル vw）

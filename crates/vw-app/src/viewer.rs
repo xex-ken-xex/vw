@@ -592,13 +592,6 @@ impl Slot {
         } else {
             visuals.weak_text_color()
         };
-        painter.text(
-            header.left_center() + vec2(6.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(13.0),
-            text_color,
-        );
         // 画像の移動はヘッダのドラッグで始める。画像の上のドラッグはパンに使っているため。
         let header_response = ui.interact(
             header,
@@ -716,8 +709,25 @@ impl Slot {
                 labels_right - 6.0 - galley.size().x,
                 header.center().y - galley.size().y / 2.0,
             );
+            labels_right = pos.x;
             painter.galley(pos, galley, text_color);
         }
+        // 名前は右側の倍率やボタンを置いてから、残りの幅に収まるよう末尾を省いて描く。
+        // 先に描くと、狭いスロットで長い名前と倍率の文字が重なって読めなくなるため。
+        let name_left = header.left() + 6.0;
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            label,
+            egui::FontId::proportional(13.0),
+            text_color,
+        );
+        job.wrap =
+            egui::text::TextWrapping::truncate_at_width((labels_right - 6.0 - name_left).max(0.0));
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        painter.galley(
+            pos2(name_left, header.center().y - galley.size().y / 2.0),
+            galley,
+            text_color,
+        );
         if let Some(flag) = image_label.flag {
             let strip = Rect::from_min_max(pos2(header.min.x, header.max.y - 2.0), header.max);
             painter.rect_filled(strip, 0.0, crate::theme::flag_color(flag));

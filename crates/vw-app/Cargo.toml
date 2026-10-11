@@ -9,6 +9,7 @@ license.workspace = true
 vw-core.workspace = true
 vw-png.workspace = true
 vw-jpeg.workspace = true
+vw-bmp.workspace = true
 vw-webp.workspace = true
 vw-raw.workspace = true
 vw-dicom.workspace = true
