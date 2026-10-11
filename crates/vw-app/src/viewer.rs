@@ -168,6 +168,9 @@ pub struct SlotLook<'a> {
     pub label: &'a Label,
 }
 
+/// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
+pub struct DraggedFile(pub PathBuf);
+
 /// 1 フレーム分の操作結果。
 #[derive(Default)]
 pub struct SlotResponse {
@@ -183,6 +186,8 @@ pub struct SlotResponse {
     pub step: isize,
     /// フォルダのスロットの「このフォルダへ移動」が押された。
     pub open_folder: bool,
+    /// フォルダのスロットに画像がドロップされた。
+    pub dropped: Option<PathBuf>,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -364,6 +369,24 @@ impl Slot {
         if response.clicked() || response.drag_started() || response.secondary_clicked() {
             out.clicked = true;
         }
+        let drop_target = self
+            .folder
+            .as_ref()
+            .filter(|f| !crate::archive::is_zip(f))
+            .is_some();
+        if drop_target {
+            if response.dnd_hover_payload::<DraggedFile>().is_some() {
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(2.0, visuals.selection.stroke.color),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            out.dropped = response
+                .dnd_release_payload::<DraggedFile>()
+                .map(|f| f.0.clone());
+        }
         if self.shown.is_some() {
             response.context_menu(|ui| {
                 if ui.button(tr(lang, "Fit image to slot")).clicked() {
@@ -507,11 +530,17 @@ impl Slot {
             egui::FontId::proportional(13.0),
             text_color,
         );
-        if ui
-            .interact(header, ui.id().with(("header", self.id)), Sense::click())
-            .clicked()
-        {
+        // 画像の移動はヘッダのドラッグで始める。画像の上のドラッグはパンに使っているため。
+        let header_response = ui.interact(
+            header,
+            ui.id().with(("header", self.id)),
+            Sense::click_and_drag(),
+        );
+        if header_response.clicked() {
             out.clicked = true;
+        }
+        if let Some(shown) = self.shown.as_ref().filter(|_| self.folder.is_none()) {
+            header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
         }
         let close_rect = Rect::from_center_size(
             header.right_center() - vec2(HEADER / 2.0, 0.0),

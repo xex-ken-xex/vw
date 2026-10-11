@@ -28,6 +28,7 @@ mod sort;
 mod state;
 mod theme;
 mod toml_reader;
+mod transfer;
 mod tree;
 mod viewer;
 mod watch;

@@ -189,6 +189,8 @@ const JA: &[(&str, &str)] = &[
     ("Output file", "書き出すファイル"),
     ("Export", "書き出す"),
     ("Cancel", "キャンセル"),
+    ("Move", "移動"),
+    ("Move \"{}\" to", "「{}」を次のフォルダへ移動します"),
     ("Close", "閉じる"),
     ("Select a folder in the tree first.", "先にツリーでフォルダを選んでください。"),
     ("Filter", "絞り込み"),

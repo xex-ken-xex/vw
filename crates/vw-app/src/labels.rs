@@ -112,6 +112,11 @@ impl LabelStore {
         })
     }
 
+    /// 画像のラベルを `label` に置き換える（空なら消す）。ファイルを移動・コピーしたときに使う。
+    pub fn set(&mut self, path: &Path, label: Label) -> Result<(), String> {
+        self.edit_file(path, |l| *l = label)
+    }
+
     /// フォルダのラベルファイルが外で書き換えられたときに、次に使うときに読み直させる。
     pub fn forget(&mut self, dir: &Path) {
         self.dirs.borrow_mut().remove(dir);

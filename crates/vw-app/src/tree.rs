@@ -16,6 +16,7 @@ use crate::i18n::tr;
 use crate::series::{Scan, Series, SeriesIndex, Study};
 use crate::settings::Language;
 use crate::sort::{self, SortItem, SortKey, SortOrder};
+use crate::viewer::DraggedFile;
 
 /// ツリーの 1 項目（フォルダまたはファイル）。
 pub struct Node {
@@ -101,6 +102,8 @@ pub enum TreeAction {
     Mount(PathBuf),
     /// 展開した ZIP を閉じる。展開先のフォルダを渡す。
     Unmount(PathBuf),
+    /// スロットからドラッグした画像 `file` をフォルダ `dir` にドロップした。
+    Drop { file: PathBuf, dir: PathBuf },
     /// DICOM のシリーズを出す。そのシリーズのあるフォルダへ移り、シリーズのスロットを選ぶ。
     Series {
         folder: PathBuf,
@@ -182,6 +185,18 @@ impl Node {
     /// 見出しのクリック（cd）・スクロール・右クリックメニュー。
     fn label_actions(&self, label: &egui::Response, view: &View, out: &mut Out) {
         let lang = view.lang;
+        // 展開した ZIP の中は書き込めないので、ドロップ先にしない。
+        if !self.mounted {
+            if label.dnd_hover_payload::<DraggedFile>().is_some() {
+                label.clone().highlight();
+            }
+            if let Some(file) = label.dnd_release_payload::<DraggedFile>() {
+                out.action = Some(TreeAction::Drop {
+                    file: file.0.clone(),
+                    dir: self.path.clone(),
+                });
+            }
+        }
         if label.clicked() {
             out.action = Some(TreeAction::Cd(self.path.clone()));
         }
