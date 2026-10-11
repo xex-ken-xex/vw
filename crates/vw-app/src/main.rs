@@ -46,6 +46,7 @@ use vw_core::Registry;
 fn registry() -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
+    registry.register(Arc::new(vw_jpeg::JpegPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry
 }

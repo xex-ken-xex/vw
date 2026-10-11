@@ -133,9 +133,110 @@ impl VwImage {
     }
 }
 
+impl VwImage {
+    /// EXIF の向き（Orientation、1〜8）に従って画素を並べ替え、正しい向きにする。
+    /// 1 と範囲外の値は何もしない。
+    ///
+    /// 表示側で回転させずに画素を並べ替えるのは、縮小画像・メタデータの幅と高さ・
+    /// ズームの計算をすべて見た目の向きで扱えるようにするため。
+    pub fn apply_orientation(&mut self, orientation: u32) {
+        if !(2..=8).contains(&orientation) {
+            return;
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let channels = self.color.channels();
+        self.data = match &self.data {
+            PixelData::U8(v) => PixelData::U8(reorient(v, w, h, channels, orientation)),
+            PixelData::U16(v) => PixelData::U16(reorient(v, w, h, channels, orientation)),
+            PixelData::F32(v) => PixelData::F32(reorient(v, w, h, channels, orientation)),
+        };
+        if orientation >= 5 {
+            std::mem::swap(&mut self.width, &mut self.height);
+        }
+    }
+}
+
+/// 幅 `w`、高さ `h` の画素 `src` を、EXIF の向き `orientation` に従って並べ替えたもの。
+fn reorient<T: Copy>(src: &[T], w: usize, h: usize, channels: usize, orientation: u32) -> Vec<T> {
+    let (dw, dh) = if orientation >= 5 { (h, w) } else { (w, h) };
+    let mut out = Vec::with_capacity(src.len());
+    for dy in 0..dh {
+        for dx in 0..dw {
+            let (sx, sy) = match orientation {
+                2 => (w - 1 - dx, dy),
+                3 => (w - 1 - dx, h - 1 - dy),
+                4 => (dx, h - 1 - dy),
+                5 => (dy, dx),
+                6 => (dy, h - 1 - dx),
+                7 => (w - 1 - dy, h - 1 - dx),
+                _ => (w - 1 - dy, dx),
+            };
+            let at = (sy * w + sx) * channels;
+            out.extend_from_slice(&src[at..at + channels]);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 3x2 のグレー画像。画素の値は左上から 1, 2, 3 / 4, 5, 6。
+    fn sample() -> VwImage {
+        VwImage::new(
+            3,
+            2,
+            ColorModel::Gray,
+            PixelData::U8(vec![1, 2, 3, 4, 5, 6]),
+        )
+        .unwrap()
+    }
+
+    fn oriented(orientation: u32) -> (u32, u32, Vec<u8>) {
+        let mut img = sample();
+        img.apply_orientation(orientation);
+        let PixelData::U8(v) = img.data else {
+            unreachable!()
+        };
+        (img.width, img.height, v)
+    }
+
+    #[test]
+    fn orientation_1_and_out_of_range_values_leave_pixels_as_they_are() {
+        assert_eq!(oriented(1), (3, 2, vec![1, 2, 3, 4, 5, 6]));
+        assert_eq!(oriented(0), (3, 2, vec![1, 2, 3, 4, 5, 6]));
+        assert_eq!(oriented(9), (3, 2, vec![1, 2, 3, 4, 5, 6]));
+    }
+
+    #[test]
+    fn orientations_2_to_4_mirror_or_turn_upside_down() {
+        assert_eq!(oriented(2), (3, 2, vec![3, 2, 1, 6, 5, 4]));
+        assert_eq!(oriented(3), (3, 2, vec![6, 5, 4, 3, 2, 1]));
+        assert_eq!(oriented(4), (3, 2, vec![4, 5, 6, 1, 2, 3]));
+    }
+
+    #[test]
+    fn orientations_5_to_8_turn_the_image_on_its_side() {
+        assert_eq!(oriented(5), (2, 3, vec![1, 4, 2, 5, 3, 6]));
+        assert_eq!(oriented(6), (2, 3, vec![4, 1, 5, 2, 6, 3]));
+        assert_eq!(oriented(7), (2, 3, vec![6, 3, 5, 2, 4, 1]));
+        assert_eq!(oriented(8), (2, 3, vec![3, 6, 2, 5, 1, 4]));
+    }
+
+    #[test]
+    fn orientation_keeps_channels_of_a_pixel_together() {
+        let mut img = VwImage::new(
+            2,
+            1,
+            ColorModel::Rgb,
+            PixelData::U16(vec![1, 2, 3, 4, 5, 6]),
+        )
+        .unwrap();
+        img.apply_orientation(6);
+        assert_eq!((img.width, img.height), (1, 2));
+        assert!(matches!(img.data, PixelData::U16(v) if v == [1, 2, 3, 4, 5, 6]));
+    }
 
     #[test]
     fn channels_match_color_model() {

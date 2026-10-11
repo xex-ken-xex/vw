@@ -12,7 +12,8 @@ Linux / Windows 向けの、起動と表示が速い画像ビューワです。R
 | 形式 | 状態 |
 | --- | --- |
 | PNG（1〜16bit、グレー / RGB / アルファ / パレット） | 対応済み |
-| BMP, JPEG, Nikon RAW (NEF), Sony RAW (ARW) | 予定 |
+| JPEG（ベースライン / プログレッシブ、グレー / カラー / CMYK、EXIF の向きと情報） | 対応済み |
+| WebP, GIF, BMP, TIFF, カメラ RAW | 予定 |
 
 ---
 
@@ -96,7 +97,7 @@ cd vw
 `install.sh` は次のことを行います（管理者権限は使いません）。
 
 - `vw` を `~/.local/bin/vw` に置く
-- アプリ一覧に「vw」を登録し、PNG の「別のアプリケーションで開く」に出るようにする
+- アプリ一覧に「vw」を登録し、PNG と JPEG の「別のアプリケーションで開く」に出るようにする
 
 インストールせずに、展開したフォルダで `./vw` を実行して使うこともできます。
 
@@ -147,7 +148,7 @@ sudo apt install libxkbcommon-x11-0 libgl1 libegl1 libxcursor1 libxrandr2 libxi6
 | --- | --- |
 | Folders | フォルダと対応形式の画像だけを表示します。ホームと、Windows はドライブ、Linux は `/` から辿れます |
 | Images | 画像を表示する枠（スロット）を並べます。既定は枠の数に応じた自動のグリッドで、**View → Layout** で 2 x 2 などに固定できます |
-| Metadata | 選択中のスロットの画像について、ファイル情報と画像内の情報（PNG のテキストなど）を表示します |
+| Metadata | 選択中のスロットの画像について、ファイル情報と画像内の情報（PNG のテキストや JPEG の EXIF など）を表示します |
 | Log | 読み込みにかかった時間やエラーを表示します |
 
 各フィールドは **View** メニューで表示・非表示を切り替えられます。
@@ -350,6 +351,7 @@ cargo test                                   # 自動テスト
 crates/
   vw-core/   共通メモリ形式 (VwImage)、プラグインの定義 (DecoderPlugin)、描画用変換
   vw-png/    PNG プラグイン
+  vw-jpeg/   JPEG プラグイン
   vw-app/    アプリ本体（実行ファイル vw）
 docs/        設計資料
 scripts/     開発環境の構築スクリプト

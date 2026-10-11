@@ -8,4 +8,4 @@ Comment[ja]=高速な画像ビューワ
 Exec=vw %F
 Terminal=false
 Categories=Graphics;Viewer;
-MimeType=image/png;
+MimeType=image/png;image/jpeg;
