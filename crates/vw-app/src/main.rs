@@ -54,6 +54,16 @@ fn registry() -> Registry {
     registry
 }
 
+/// タイトルバーとタスクバーのアイコン。指定しないと eframe の既定（egui のロゴ）になる。
+fn window_icon() -> eframe::egui::IconData {
+    const SIDE: u32 = 64;
+    eframe::egui::IconData {
+        rgba: include_bytes!("../../../packaging/icons/vw-64.rgba").to_vec(),
+        width: SIDE,
+        height: SIDE,
+    }
+}
+
 fn main() -> eframe::Result {
     let started = Instant::now();
     let initial: Vec<PathBuf> = std::env::args_os()
@@ -67,7 +77,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("vw")
-            .with_inner_size([1280.0, 800.0]),
+            .with_inner_size([1280.0, 800.0])
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -75,4 +86,13 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::VwApp::new(cc, registry(), initial, started)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_is_a_full_64px_square() {
+        let icon = super::window_icon();
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+    }
 }
