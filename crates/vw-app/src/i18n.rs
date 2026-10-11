@@ -56,6 +56,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("(empty)", "（空）"),
     ("(no subfolders)", "（サブフォルダなし）"),
+    ("Keep zoom when stepping", "前後の画像で倍率と位置を保つ"),
+    ("Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.", "複数枚あるスロット（フォルダ・フレーム・シリーズ）で前後の画像に送るとき、倍率と位置を引き継ぎます。DICOM は常に引き継ぎます。"),
     ("Medical images (DICOM)", "医用画像 (DICOM)"),
     ("Extensions to check for DICOM", "DICOM か調べる拡張子"),
     ("Regular expression for the extensions (without the dot, empty for no extension, case-insensitive) of files whose first bytes are read to see if they are DICOM. .dcm, .dicom and .dic files are always shown as DICOM. The default checks files with no extension, only digits, dcm, dicom or ima.", "先頭を読んで DICOM か調べるファイルの拡張子の正規表現（. を除いた部分。拡張子がなければ空文字列。大文字小文字は区別しない）。.dcm / .dicom / .dic は常に DICOM として扱います。既定は、拡張子なし・数字のみ・dcm・dicom・ima を調べます。"),

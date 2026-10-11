@@ -2254,6 +2254,7 @@ impl VwApp {
         path: PathBuf,
         result: Result<Loaded, String>,
     ) {
+        let keep_view_setting = self.settings.settings.viewer.keep_view;
         let s = &mut self.slots[index];
         s.loading = false;
         let reloaded = s.shown.as_ref().is_some_and(|shown| shown.path == path);
@@ -2299,6 +2300,12 @@ impl VwApp {
             s.sequence = Some(seq);
             s.from_folder = false;
         }
+        let stepped = keeps_view(
+            s.shown.as_ref().map(|shown| shown.path.as_path()),
+            &path,
+            s.sequence.as_ref(),
+            keep_view_setting || loaded.info.plugin == "DICOM",
+        );
         s.shown = Some(Shown {
             path,
             thumb,
@@ -2307,7 +2314,7 @@ impl VwApp {
         });
         s.error = None;
         // 同じ画像の読み直し（上書きされたとき）は、拡大している場所を見続けられるよう倍率と位置を保つ。
-        if !reloaded {
+        if !reloaded && !stepped {
             s.reset_view();
         }
         if let Some(full) = loaded.full {
@@ -3279,6 +3286,20 @@ impl eframe::App for VwApp {
     }
 }
 
+/// 複数枚のスロットの中で `previous` から `next` に送ったときに、倍率と位置を引き継ぐか。
+/// スライスやフレームを送って同じ場所を見比べるため。別の並びに入れ替えたときは引き継がない。
+fn keeps_view(
+    previous: Option<&Path>,
+    next: &Path,
+    sequence: Option<&Sequence>,
+    enabled: bool,
+) -> bool {
+    let (Some(previous), Some(seq)) = (previous, sequence) else {
+        return false;
+    };
+    enabled && seq.paths.iter().any(|p| p == previous) && seq.paths.iter().any(|p| p == next)
+}
+
 /// シネのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を優先し、
 /// なければ推奨の表示速度か Cine Rate を使う。
 fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
@@ -3375,6 +3396,18 @@ fn color_name(c: ColorModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_is_kept_only_when_stepping_inside_the_same_sequence() {
+        let p = |n: &str| PathBuf::from(n);
+        let seq = Sequence::series(p("dir"), "s".into(), vec![p("a"), p("b")]);
+        assert!(keeps_view(Some(&p("a")), &p("b"), Some(&seq), true));
+        assert!(!keeps_view(Some(&p("a")), &p("b"), Some(&seq), false));
+        // 別の並びから来た、初めて出した、並びのないスロットでは全体表示に戻す。
+        assert!(!keeps_view(Some(&p("x")), &p("b"), Some(&seq), true));
+        assert!(!keeps_view(None, &p("b"), Some(&seq), true));
+        assert!(!keeps_view(Some(&p("a")), &p("b"), None, true));
+    }
 
     #[test]
     fn cine_frame_rate_comes_from_frame_time_first() {

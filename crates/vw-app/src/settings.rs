@@ -94,6 +94,8 @@ pub struct Viewer {
     /// スライドショーの速さ。再生バーで最後に使った値を覚える。
     pub slideshow_fps: f32,
     pub slideshow_end: EndMode,
+    /// 複数枚のスロットで前後の画像に送るとき、倍率と位置を引き継ぐ（DICOM は常に引き継ぐ）。
+    pub keep_view: bool,
 }
 
 impl Viewer {
@@ -113,6 +115,7 @@ impl Default for Viewer {
             custom_layout: SlotLayout::grid(3, 2),
             slideshow_fps: 10.0,
             slideshow_end: EndMode::Loop,
+            keep_view: false,
         }
     }
 }
@@ -393,6 +396,7 @@ impl Settings {
             slideshow_end: r
                 .get("viewer", "slideshow_end")
                 .unwrap_or(d.viewer.slideshow_end),
+            keep_view: r.get("viewer", "keep_view").unwrap_or(d.viewer.keep_view),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -776,6 +780,7 @@ mod tests {
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
         s.viewer.slideshow_fps = 24.0;
         s.viewer.slideshow_end = EndMode::PingPong;
+        s.viewer.keep_view = true;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
         s.tree.sort = SortKey::Modified;

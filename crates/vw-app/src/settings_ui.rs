@@ -61,7 +61,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 25] = [
+const ITEMS: [Item; 26] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -131,6 +131,13 @@ const ITEMS: [Item; 25] = [
         title: "Slideshow end",
         description: "What happens after the last image: start over, stop, or play backwards.",
         widget: end_mode_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.keep_view",
+        title: "Keep zoom when stepping",
+        description: "Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.",
+        widget: keep_view_widget,
     },
     Item {
         section: Section::Tree,
@@ -488,6 +495,11 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
             .suffix(tr(lang, " images")),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.viewer.keep_view, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
