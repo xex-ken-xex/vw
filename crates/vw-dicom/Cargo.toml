@@ -10,4 +10,7 @@ vw-core.workspace = true
 dicom-core = "0.10"
 dicom-object = "0.10"
 dicom-dictionary-std = "0.10"
-dicom-pixeldata = { version = "0.10", default-features = false, features = ["jpeg", "rle"] }
+dicom-pixeldata = { version = "0.10", default-features = false, features = ["jpeg", "rle", "openjpeg-sys", "charls"] }
+
+[dev-dependencies]
+charls = { version = "0.4.2", features = ["static"] }

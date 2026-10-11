@@ -3,10 +3,11 @@
 //! - `ct/`: 2 つの検査に分かれた CT の 3 シリーズ（円柱のファントム、HU、ウィンドウ付き）
 //! - `cine.dcm`: 30 フレームのシネ（動く円、15 fps）
 //! - `IM0001`: 拡張子のない CT 1 枚
+//! - `jpeg-ls.dcm` / `jpeg-ls-color.dcm`: JPEG-LS（ロスレス）で圧縮した CT とカラー画像
 
 use std::path::PathBuf;
 
-use vw_dicom::synth::{Synth, CT_IMAGE, XA_IMAGE};
+use vw_dicom::synth::{Synth, CT_IMAGE, JPEG_LS_LOSSLESS, XA_IMAGE};
 
 const SIDE: u16 = 256;
 
@@ -33,6 +34,18 @@ fn phantom(z: usize, slices: usize) -> Vec<i16> {
             (hu + 1024) as i16
         })
         .collect()
+}
+
+fn jpeg_ls(bits: i32, components: i32, src: &[u8]) -> Vec<u8> {
+    let frame = charls::FrameInfo {
+        width: SIDE.into(),
+        height: SIDE.into(),
+        bits_per_sample: bits,
+        component_count: components,
+    };
+    charls::CharLS::default()
+        .encode(frame, 0, src)
+        .expect("CharLS encodes a valid frame")
 }
 
 fn main() -> std::io::Result<()> {
@@ -122,6 +135,24 @@ fn main() -> std::io::Result<()> {
         .study("1.2.826.0.1.3680043.10.1.4", "Scout", "20261004")
         .series("1.2.826.0.1.3680043.10.1.4.1", 1, "Localizer")
         .write(&out.join("IM0001"))?;
+    let stored: Vec<u16> = phantom(3, 10).iter().map(|&v| v as u16).collect();
+    let bytes: Vec<u8> = stored.iter().flat_map(|v| v.to_le_bytes()).collect();
+    Synth::new(CT_IMAGE, SIDE, SIDE)
+        .pixels_u16(&stored, 12)
+        .rescale(1.0, -1024.0)
+        .window(40.0, 400.0)
+        .study("1.2.826.0.1.3680043.10.1.5", "Compressed", "20261011")
+        .series("1.2.826.0.1.3680043.10.1.5.1", 1, "JPEG-LS")
+        .encapsulated(JPEG_LS_LOSSLESS, vec![jpeg_ls(12, 1, &bytes)])
+        .write(&out.join("jpeg-ls.dcm"))?;
+    let rgb: Vec<u8> = (0..SIDE as usize * SIDE as usize)
+        .flat_map(|i| [(i % 256) as u8, (i / 256) as u8, 128])
+        .collect();
+    Synth::rgb(SIDE, SIDE, &rgb, false)
+        .study("1.2.826.0.1.3680043.10.1.5", "Compressed", "20261011")
+        .series("1.2.826.0.1.3680043.10.1.5.2", 2, "JPEG-LS color")
+        .encapsulated(JPEG_LS_LOSSLESS, vec![jpeg_ls(8, 3, &rgb)])
+        .write(&out.join("jpeg-ls-color.dcm"))?;
     println!("wrote samples to {}", out.display());
     Ok(())
 }
