@@ -49,23 +49,30 @@ pub enum Event {
     },
 }
 
-/// 展開できなかった理由。
+/// 開けなかった理由。
 #[derive(Debug, PartialEq)]
-enum ExtractError {
+pub enum ArchiveError {
     NeedsPassword,
     WrongPassword,
     Other(String),
 }
 
-impl<E: std::fmt::Display> From<E> for ExtractError {
+impl<E: std::fmt::Display> From<E> for ArchiveError {
     fn from(e: E) -> Self {
-        ExtractError::Other(e.to_string())
+        ArchiveError::Other(e.to_string())
     }
+}
+
+/// [`for_each_entry`] に渡す処理の失敗。中身を読めなかった（壊れたデータや違うパスワード）のか、
+/// 受け取った側の都合（書き込めないなど）なのかを分けて、パスワードの誤りと見分けられるようにする。
+pub enum EntryError {
+    Read(std::io::Error),
+    Other(String),
 }
 
 struct Pending {
     mount: Mount,
-    done: Receiver<Result<usize, ExtractError>>,
+    done: Receiver<Result<usize, ArchiveError>>,
 }
 
 /// 開いている ZIP の一覧。
@@ -139,7 +146,7 @@ impl Archives {
                     continue;
                 }
                 Err(TryRecvError::Disconnected) => {
-                    Err(ExtractError::Other("extraction stopped".into()))
+                    Err(ArchiveError::Other("extraction stopped".into()))
                 }
             };
             let Pending { mount, .. } = self.pending.remove(i);
@@ -152,9 +159,9 @@ impl Archives {
                     let _ = std::fs::remove_dir_all(&mount.dir);
                     let zip = mount.zip;
                     events.push(match error {
-                        ExtractError::NeedsPassword => Event::NeedsPassword { zip, wrong: false },
-                        ExtractError::WrongPassword => Event::NeedsPassword { zip, wrong: true },
-                        ExtractError::Other(error) => Event::Failed { zip, error },
+                        ArchiveError::NeedsPassword => Event::NeedsPassword { zip, wrong: false },
+                        ArchiveError::WrongPassword => Event::NeedsPassword { zip, wrong: true },
+                        ArchiveError::Other(error) => Event::Failed { zip, error },
                     });
                 }
             }
@@ -200,27 +207,56 @@ pub fn is_archive(path: &Path) -> bool {
 
 const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
 
-/// `archive` を `dir` に展開し、展開したファイルの数を返す。形式は拡張子ではなく先頭の
-/// バイト列で見分ける（拡張子と中身が違うファイルもあるため）。
-fn extract(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+/// `archive` を `dir` に展開し、展開したファイルの数を返す。
+fn extract(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ArchiveError> {
+    std::fs::create_dir_all(dir)?;
+    for_each_entry(archive, password, |relative, data| {
+        let out = dir.join(relative);
+        let Some(data) = data else {
+            return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
+        };
+        let target = out
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::File::create(&out));
+        match target {
+            Ok(mut file) => copy_entry(data, &mut file),
+            Err(e) => Err(EntryError::Other(e.to_string())),
+        }
+    })
+}
+
+/// `archive`（ZIP か 7z）の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
+/// アーカイブの中の相対パスと、ファイルなら中身を読むもの、フォルダなら `None` を渡す。
+/// 展開先の外を指す名前の項目は渡さない（[`enclosed_name`]）。
+///
+/// 形式は拡張子ではなく先頭のバイト列で見分ける（拡張子と中身が違うファイルもあるため）。
+pub fn for_each_entry(
+    archive: &Path,
+    password: Option<&str>,
+    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
     let mut head = [0u8; 6];
     let mut file = std::fs::File::open(archive)?;
     let seven_zip =
         std::io::Read::read_exact(&mut file, &mut head).is_ok() && head == SEVEN_ZIP_MAGIC;
-    std::fs::create_dir_all(dir)?;
     let named_7z = archive
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("7z"));
     if seven_zip {
-        extract_7z(archive, dir, password)
+        each_in_7z(archive, password, visit)
     } else if named_7z && !head.starts_with(b"PK") {
-        Err(ExtractError::Other("not a 7z archive".into()))
+        Err(ArchiveError::Other("not a 7z archive".into()))
     } else {
-        extract_zip(archive, dir, password)
+        each_in_zip(archive, password, visit)
     }
 }
 
-fn extract_zip(zip: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+fn each_in_zip(
+    zip: &Path,
+    password: Option<&str>,
+    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
     let file = std::fs::File::open(zip)?;
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))?;
     let mut files = 0;
@@ -236,10 +272,10 @@ fn extract_zip(zip: &Path, dir: &Path, password: Option<&str>) -> Result<usize, 
         };
         let mut entry = match (encrypted, password) {
             (false, _) => archive.by_index(i)?,
-            (true, None) => return Err(ExtractError::NeedsPassword),
+            (true, None) => return Err(ArchiveError::NeedsPassword),
             (true, Some(pw)) => match archive.by_index_decrypt(i, pw.as_bytes()) {
                 Err(zip::result::ZipError::InvalidPassword) => {
-                    return Err(ExtractError::WrongPassword)
+                    return Err(ArchiveError::WrongPassword)
                 }
                 other => other?,
             },
@@ -247,38 +283,39 @@ fn extract_zip(zip: &Path, dir: &Path, password: Option<&str>) -> Result<usize, 
         let Some(relative) = entry.enclosed_name() else {
             continue;
         };
-        let out = dir.join(&relative);
         if entry.is_dir() {
-            std::fs::create_dir_all(&out)?;
+            visit(&relative, None).map_err(|e| entry_failed(&relative, e, false))?;
             continue;
         }
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut target = std::fs::File::create(&out)?;
-        if let Err(e) = std::io::copy(&mut entry, &mut target) {
-            // ZipCrypto はパスワードの確認が 1 バイトしかなく、違うパスワードでも 256 回に 1 回は
-            // 確認を通ってしまう。そのときは中身の CRC が合わずにここで失敗する。
-            return Err(if encrypted {
-                ExtractError::WrongPassword
-            } else {
-                ExtractError::Other(format!("{}: {e}", relative.display()))
-            });
-        }
+        // ZipCrypto はパスワードの確認が 1 バイトしかなく、違うパスワードでも 256 回に 1 回は
+        // 確認を通ってしまう。そのときは中身の CRC が合わずに読む途中で失敗する。
+        visit(&relative, Some(&mut entry)).map_err(|e| entry_failed(&relative, e, encrypted))?;
         files += 1;
     }
     Ok(files)
 }
 
-fn extract_7z(path: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ExtractError> {
+fn entry_failed(relative: &Path, e: EntryError, encrypted: bool) -> ArchiveError {
+    match e {
+        EntryError::Read(_) if encrypted => ArchiveError::WrongPassword,
+        EntryError::Read(e) => ArchiveError::Other(format!("{}: {e}", relative.display())),
+        EntryError::Other(e) => ArchiveError::Other(format!("{}: {e}", relative.display())),
+    }
+}
+
+fn each_in_7z(
+    path: &Path,
+    password: Option<&str>,
+    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
     use sevenz_rust2::{ArchiveReader, Error, Password};
     // 違うパスワードでは、復号した見出しや中身が壊れたデータになるだけで、どのエラーになるかは
     // 決まらない（「見出しがない」などになる）。パスワードを渡したときの失敗はパスワードの誤りとみなす。
-    // ファイルを書けなかった失敗は `failed` で別に返すので、ここに来るのは読む側の失敗だけ。
+    // 受け取った側の失敗は `failed` で別に返すので、ここに来るのは読む側の失敗だけ。
     let map = |e: Error| match (e, password) {
-        (_, Some(_)) => ExtractError::WrongPassword,
-        (Error::PasswordRequired | Error::MaybeBadPassword(_), None) => ExtractError::NeedsPassword,
-        (other, None) => ExtractError::Other(other.to_string()),
+        (_, Some(_)) => ArchiveError::WrongPassword,
+        (Error::PasswordRequired | Error::MaybeBadPassword(_), None) => ArchiveError::NeedsPassword,
+        (other, None) => ArchiveError::Other(other.to_string()),
     };
     let key = password.map_or_else(Password::empty, Password::from);
     let mut reader = ArchiveReader::open(path, key).map_err(map)?;
@@ -289,26 +326,18 @@ fn extract_7z(path: &Path, dir: &Path, password: Option<&str>) -> Result<usize, 
             let Some(relative) = enclosed_name(entry.name()) else {
                 return Ok(true);
             };
-            let out = dir.join(&relative);
-            let target = if entry.is_directory() {
-                std::fs::create_dir_all(&out).map(|()| None)
+            let result = if entry.is_directory() {
+                visit(&relative, None)
             } else {
-                out.parent()
-                    .map_or(Ok(()), std::fs::create_dir_all)
-                    .and_then(|()| std::fs::File::create(&out))
-                    .map(Some)
+                visit(&relative, Some(data))
             };
-            let written = match target {
-                Ok(Some(mut file)) => copy_entry(data, &mut file)?,
-                Ok(None) => Ok(()),
-                Err(e) => Err(e),
-            };
-            match written {
+            match result {
                 Ok(()) => {
                     files += usize::from(!entry.is_directory());
                     Ok(true)
                 }
-                Err(e) => {
+                Err(EntryError::Read(e)) => Err(e.into()),
+                Err(EntryError::Other(e)) => {
                     failed = Some(format!("{}: {e}", relative.display()));
                     Ok(false)
                 }
@@ -316,28 +345,24 @@ fn extract_7z(path: &Path, dir: &Path, password: Option<&str>) -> Result<usize, 
         })
         .map_err(map)?;
     match failed {
-        Some(error) => Err(ExtractError::Other(error)),
+        Some(error) => Err(ArchiveError::Other(error)),
         None => Ok(files),
     }
 }
 
-/// 中身を書き写す。読めなかったとき（壊れたデータや違うパスワード）は外側の `Err`、書けなかったとき
-/// （ディスクがいっぱいなど）は内側の `Err` にして、パスワードの誤りと見分けられるようにする。
-/// `std::io::copy` はどちらも同じ `io::Error` で返すので使わない。
-fn copy_entry(
-    data: &mut dyn std::io::Read,
-    target: &mut std::fs::File,
-) -> Result<std::io::Result<()>, std::io::Error> {
+/// 中身を書き写す。`std::io::copy` を使わないのは、読めなかったのか書けなかったのかを
+/// 同じ `io::Error` で返すため。
+fn copy_entry(data: &mut dyn std::io::Read, target: &mut std::fs::File) -> Result<(), EntryError> {
     use std::io::Write as _;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = data.read(&mut buf)?;
+        let n = data.read(&mut buf).map_err(EntryError::Read)?;
         if n == 0 {
-            return Ok(Ok(()));
+            return Ok(());
         }
-        if let Err(e) = target.write_all(&buf[..n]) {
-            return Ok(Err(e));
-        }
+        target
+            .write_all(&buf[..n])
+            .map_err(|e| EntryError::Other(e.to_string()))?;
     }
 }
 
@@ -478,10 +503,10 @@ mod tests {
             let zip = tmp.path().join("secret.zip");
             write_encrypted_zip(&zip, "open sesame", aes);
             let out = tmp.path().join("out");
-            assert_eq!(extract(&zip, &out, None), Err(ExtractError::NeedsPassword));
+            assert_eq!(extract(&zip, &out, None), Err(ArchiveError::NeedsPassword));
             assert_eq!(
                 extract(&zip, &out, Some("wrong")),
-                Err(ExtractError::WrongPassword),
+                Err(ArchiveError::WrongPassword),
                 "aes = {aes}"
             );
             assert_eq!(extract(&zip, &out, Some("open sesame")), Ok(1));
@@ -527,11 +552,11 @@ mod tests {
         let out = tmp.path().join("out");
         assert_eq!(
             extract(&archive, &out, None),
-            Err(ExtractError::NeedsPassword)
+            Err(ArchiveError::NeedsPassword)
         );
         assert_eq!(
             extract(&archive, &out, Some("nope")),
-            Err(ExtractError::WrongPassword)
+            Err(ArchiveError::WrongPassword)
         );
         assert_eq!(extract(&archive, &out, Some("pw")), Ok(1));
     }

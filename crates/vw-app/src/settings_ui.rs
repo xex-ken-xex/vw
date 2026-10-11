@@ -23,17 +23,19 @@ enum Section {
     Tree,
     Behavior,
     Labels,
+    Datasets,
     Dicom,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    const ALL: [Section; 8] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
         Section::Behavior,
         Section::Labels,
+        Section::Datasets,
         Section::Dicom,
         Section::Keys,
     ];
@@ -45,6 +47,7 @@ impl Section {
             Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
             Section::Labels => "Flags and tags",
+            Section::Datasets => "Datasets",
             Section::Dicom => "Medical images (DICOM)",
             Section::Keys => "Keyboard shortcuts",
         }
@@ -61,7 +64,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 24] = [
+const ITEMS: [Item; 26] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -222,6 +225,20 @@ const ITEMS: [Item; 24] = [
         title: "Next image after labeling",
         description: "Move to the next image after putting a flag or tag on an image in tagging mode.",
         widget: advance_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.roots",
+        title: "Dataset folders",
+        description: "Folders searched for datasets (folders with a search catalog), one per line. Subfolders are searched too.",
+        widget: dataset_roots_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.fields",
+        title: "Dataset fields",
+        description: "Fields you fill in for each dataset besides the name, memo and tags (such as where the data came from), separated by commas. They can be used as search conditions.",
+        widget: dataset_fields_widget,
     },
     Item {
         section: Section::Dicom,
@@ -475,6 +492,75 @@ fn tags_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     } else {
         if r.lost_focus() && valid && parsed != s.labels.tags {
             s.labels.tags = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+fn dataset_roots_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let id = ui.make_persistent_id("dataset.roots.edit");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.dataset.roots.join("\n"));
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .hint_text(if cfg!(windows) {
+                "D:\\datasets"
+            } else {
+                "/data/datasets"
+            })
+            .desired_rows(3)
+            .desired_width(420.0),
+    );
+    let parsed: Vec<String> = text
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && parsed != s.dataset.roots {
+            s.dataset.roots = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+/// タグと同じくカンマ区切りで編集する。
+fn dataset_fields_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("dataset.fields.edit");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.dataset.fields.join(", "));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text("Source, Purpose")
+            .desired_width(320.0),
+    );
+    let parsed: Vec<String> = text
+        .split(',')
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let valid = Labels::valid_tags(&parsed);
+    if !valid {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            tr(lang, "Field names must be unique."),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && valid && parsed != s.dataset.fields {
+            s.dataset.fields = parsed;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));

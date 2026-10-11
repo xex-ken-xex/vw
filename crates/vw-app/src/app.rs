@@ -190,6 +190,7 @@ pub struct VwApp {
     pending_trash: Option<discard::Pending>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
+    dataset_dialog: Option<crate::dataset_ui::DatasetDialog>,
     trash_job: Option<TrashJob>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
@@ -473,6 +474,7 @@ impl VwApp {
             export: None,
             pending_trash: None,
             password_prompt: None,
+            dataset_dialog: None,
             trash_job: None,
         };
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
@@ -978,6 +980,30 @@ impl VwApp {
             return;
         }
         self.pending_trash = Some(discard::Pending { dir, files });
+    }
+
+    fn open_dataset_dialog(&mut self, ctx: &egui::Context, request: crate::dataset_ui::Request) {
+        if self.dataset_dialog.is_some() {
+            self.log
+                .warn(tr(self.lang(), "Finish the open dataset dialog first."));
+            return;
+        }
+        self.dataset_dialog = Some(crate::dataset_ui::DatasetDialog::open(
+            request,
+            &self.settings.settings.dataset.fields,
+            self.loader.registry(),
+            ctx,
+        ));
+    }
+
+    fn dataset_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.dataset_dialog else {
+            return;
+        };
+        let lang = self.settings.settings.appearance.language;
+        if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
+            self.dataset_dialog = None;
+        }
     }
 
     /// 暗号化された ZIP / 7z のパスワードを尋ね、入力されたらそのパスワードで展開し直す。
@@ -4220,6 +4246,7 @@ impl eframe::App for VwApp {
                     };
                     match action {
                         TreeAction::Cd(p) => self.open_folder(&ctx, p),
+                        TreeAction::Dataset(request) => self.open_dataset_dialog(&ctx, request),
                         TreeAction::Mount(zip) => self.mount(&ctx, &zip),
                         TreeAction::Unmount(dir) => self.unmount(&ctx, &dir),
                         TreeAction::Series { folder, files } => {
@@ -4262,6 +4289,7 @@ impl eframe::App for VwApp {
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
+        self.dataset_window(&ctx);
         self.finish_trash_job();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);

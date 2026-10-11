@@ -9,7 +9,9 @@
 mod app;
 mod archive;
 mod autoload;
+mod catalog;
 mod copy;
+mod dataset_ui;
 mod discard;
 mod export;
 mod fonts;

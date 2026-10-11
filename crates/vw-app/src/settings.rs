@@ -277,6 +277,15 @@ impl Dicom {
     }
 }
 
+/// データセット（[`crate::catalog`]）。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Dataset {
+    /// データセットを探しにいくフォルダ。
+    pub roots: Vec<String>,
+    /// 名前・メモ・タグのほかに、データセットに書き込む項目（入手元など）。
+    pub fields: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -285,6 +294,7 @@ pub struct Settings {
     pub behavior: Behavior,
     pub labels: Labels,
     pub dicom: Dicom,
+    pub dataset: Dataset,
     pub keys: Keymap,
 }
 
@@ -415,6 +425,19 @@ impl Settings {
                 )
                 .unwrap_or_else(|| d.dicom.probe_extensions.clone()),
         };
+        let dataset = Dataset {
+            roots: r
+                .get("dataset", "roots")
+                .unwrap_or_else(|| d.dataset.roots.clone()),
+            fields: r
+                .get_valid(
+                    "dataset",
+                    "fields",
+                    |t: &Vec<String>| Labels::valid_tags(t),
+                    "field names must be non-empty and unique",
+                )
+                .unwrap_or_else(|| d.dataset.fields.clone()),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -433,6 +456,7 @@ impl Settings {
                 behavior,
                 labels,
                 dicom,
+                dataset,
                 keys,
             },
             problems,
@@ -740,6 +764,8 @@ mod tests {
         s.tree.sort_descending = false;
         s.tree.confirm_every = true;
         s.tree.confirm_chunk = 200;
+        s.dataset.roots = vec!["/data/sets".into(), r"D:\test data".into()];
+        s.dataset.fields = vec!["Source".into(), "入手元".into()];
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -753,6 +779,15 @@ mod tests {
         assert!(text.contains("theme = \"system\""), "{text}");
         assert!(text.contains("language = \"en\""), "{text}");
         assert!(text.contains("next_image = ["), "{text}");
+    }
+
+    #[test]
+    fn duplicate_dataset_fields_fall_back_to_none() {
+        let (s, problems) =
+            Settings::from_toml("[dataset]\nfields = [\"a\", \"a\"]\nroots = [\"/x\"]\n").unwrap();
+        assert!(s.dataset.fields.is_empty());
+        assert_eq!(s.dataset.roots, ["/x"]);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

@@ -109,6 +109,8 @@ pub enum TreeAction {
         folder: PathBuf,
         files: Vec<PathBuf>,
     },
+    /// データセットの登録・編集・更新。
+    Dataset(crate::dataset_ui::Request),
 }
 
 impl Node {
@@ -215,7 +217,7 @@ impl Node {
                 }
             });
         } else {
-            copy_menu(label, &self.path, lang, &mut out.action);
+            folder_menu(label, &self.path, lang, &mut out.action);
         }
     }
 
@@ -414,6 +416,34 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
         if ui.button(tr(lang, "Copy")).clicked() {
             *out = Some(TreeAction::Copy(path.to_owned()));
             ui.close();
+        }
+    });
+}
+
+/// フォルダの右クリックメニュー。パスのコピーと、データセットの登録・編集・更新。
+fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
+    use crate::dataset_ui::Request;
+    r.context_menu(|ui| {
+        if ui.button(tr(lang, "Copy")).clicked() {
+            *out = Some(TreeAction::Copy(path.to_owned()));
+            ui.close();
+        }
+        ui.separator();
+        // メニューを開いている間だけ確かめる。ツリーを描くたびに全フォルダで調べると、
+        // ネットワークドライブで遅くなるため。
+        let requests = if crate::catalog::exists_in(path) {
+            vec![
+                (Request::Edit(path.to_owned()), "Edit dataset..."),
+                (Request::Update(path.to_owned()), "Update dataset"),
+            ]
+        } else {
+            vec![(Request::Register(path.to_owned()), "Register as dataset...")]
+        };
+        for (request, label) in requests {
+            if ui.button(tr(lang, label)).clicked() {
+                *out = Some(TreeAction::Dataset(request));
+                ui.close();
+            }
         }
     });
 }

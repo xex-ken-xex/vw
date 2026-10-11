@@ -369,6 +369,40 @@ const JA: &[(&str, &str)] = &[
         "Columns x rows used by the Custom layout in the View menu.",
         "表示メニューの「カスタム」で使う 列 x 行。",
     ),
+    // データセット
+    ("Datasets", "データセット"),
+    ("Register as dataset", "データセットとして登録"),
+    ("Edit dataset", "データセットを編集"),
+    ("Update dataset", "データセットを更新"),
+    ("Register as dataset...", "データセットとして登録..."),
+    ("Edit dataset...", "データセットを編集..."),
+    ("Register", "登録"),
+    ("Save", "保存"),
+    ("Save and update", "保存して更新"),
+    (
+        "Read all files again and rebuild the search catalog.",
+        "全ファイルを読み直して検索カタログを作り直します。",
+    ),
+    ("Name", "名前"),
+    ("Memo", "メモ"),
+    ("Separate with commas", "カンマ区切り"),
+    ("Stopped reading {}.", "{} の読み込みを止めました。"),
+    ("Skip", "スキップ"),
+    (
+        "Finish the open dataset dialog first.",
+        "開いているデータセットのダイアログを先に閉じてください。",
+    ),
+    ("Field names must be unique.", "項目名が重なっています。"),
+    ("Dataset folders", "データセットのフォルダ"),
+    (
+        "Folders searched for datasets (folders with a search catalog), one per line. Subfolders are searched too.",
+        "データセット（検索カタログのあるフォルダ）を探すフォルダ。1 行に 1 つ。下のフォルダも探します。",
+    ),
+    ("Dataset fields", "データセットの項目"),
+    (
+        "Fields you fill in for each dataset besides the name, memo and tags (such as where the data came from), separated by commas. They can be used as search conditions.",
+        "名前・メモ・タグのほかに、データセットごとに書き込む項目（入手元など）。カンマ区切り。検索の条件に使えます。",
+    ),
 ];
 
 #[cfg(test)]
