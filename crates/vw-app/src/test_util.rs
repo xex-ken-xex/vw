@@ -19,6 +19,7 @@ pub fn all_registry() -> Registry {
     r.register(Arc::new(vw_jpeg::JpegPlugin));
     r.register(Arc::new(vw_bmp::BmpPlugin));
     r.register(Arc::new(vw_webp::WebpPlugin::default()));
+    r.register(Arc::new(vw_gif::GifPlugin::default()));
     r.register(Arc::new(vw_raw::RawPlugin));
     r.register(Arc::new(vw_dicom::DicomPlugin));
     r

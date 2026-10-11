@@ -11,6 +11,7 @@ vw-png.workspace = true
 vw-jpeg.workspace = true
 vw-bmp.workspace = true
 vw-webp.workspace = true
+vw-gif.workspace = true
 vw-raw.workspace = true
 vw-dicom.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }

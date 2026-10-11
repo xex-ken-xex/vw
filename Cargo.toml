@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vw-core", "crates/vw-png", "crates/vw-jpeg", "crates/vw-bmp", "crates/vw-webp", "crates/vw-raw", "crates/vw-dicom", "crates/vw-app"]
+members = ["crates/vw-core", "crates/vw-png", "crates/vw-jpeg", "crates/vw-bmp", "crates/vw-webp", "crates/vw-gif", "crates/vw-raw", "crates/vw-dicom", "crates/vw-app"]
 
 [workspace.package]
 version = "0.2.0"
@@ -13,6 +13,7 @@ vw-png = { path = "crates/vw-png" }
 vw-jpeg = { path = "crates/vw-jpeg" }
 vw-bmp = { path = "crates/vw-bmp" }
 vw-webp = { path = "crates/vw-webp" }
+vw-gif = { path = "crates/vw-gif" }
 vw-raw = { path = "crates/vw-raw" }
 vw-dicom = { path = "crates/vw-dicom" }
 

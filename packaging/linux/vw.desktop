@@ -9,4 +9,4 @@ Exec=vw %F
 Icon=vw
 Terminal=false
 Categories=Graphics;Viewer;
-MimeType=image/png;image/jpeg;image/webp;image/bmp;image/x-nikon-nef;image/x-nikon-nrw;image/x-sony-arw;image/x-sony-sr2;image/x-sony-srf;image/x-fuji-raf;image/x-canon-cr2;image/x-canon-cr3;image/x-adobe-dng;
+MimeType=image/png;image/jpeg;image/webp;image/gif;image/bmp;image/x-nikon-nef;image/x-nikon-nrw;image/x-sony-arw;image/x-sony-sr2;image/x-sony-srf;image/x-fuji-raf;image/x-canon-cr2;image/x-canon-cr3;image/x-adobe-dng;
