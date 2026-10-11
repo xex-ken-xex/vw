@@ -16,6 +16,9 @@ accepted = [
     "IJG",
     "OFL-1.1",
     "Ubuntu-font-1.0",
+    # カメラ RAW の rawler。vw のソースを公開しているので、利用者が rawler を差し替えて
+    # 作り直せるという LGPL の条件を満たせる。
+    "LGPL-2.1",
 ]
 targets = [
     "x86_64-unknown-linux-gnu",
