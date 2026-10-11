@@ -118,46 +118,15 @@ fn metadata(decoder: &JpegDecoder<ZCursor<&[u8]>>) -> (Metadata, u32) {
     }
     let orientation = decoder
         .exif()
-        .map_or(1, |raw| push_exif(&mut m, raw.clone()));
+        .map_or(1, |raw| vw_core::exif::push_exif(&mut m, raw.clone()));
     (m, orientation)
-}
-
-/// EXIF のタグを `m` に足し、向きを返す（なければ 1）。読めない EXIF は無視する。
-/// 画像が表示できることを優先し、EXIF の不備で開けなくはしないため。
-fn push_exif(m: &mut Metadata, raw: Vec<u8>) -> u32 {
-    let Ok(exif) = exif::Reader::new().read_raw(raw) else {
-        return 1;
-    };
-    for f in exif.fields() {
-        // メーカーノートは中身がメーカー独自の長いバイナリで、表示しても読めないため除く。
-        // サムネイルの IFD は本体と同じタグ（幅や向き）を持ち、紛らわしいため除く。
-        if f.ifd_num == exif::In::THUMBNAIL || f.tag == exif::Tag::MakerNote {
-            continue;
-        }
-        m.push("EXIF", f.tag.to_string(), exif_value(f, &exif));
-    }
-    exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
-        .and_then(|f| f.value.get_uint(0))
-        .unwrap_or(1)
-}
-
-/// EXIF の値の表示。文字列は kamadak-exif の表示だと `"NIKON"` のように引用符が付くので、
-/// 中身だけを出す。
-fn exif_value(f: &exif::Field, exif: &exif::Exif) -> String {
-    match &f.value {
-        exif::Value::Ascii(parts) => parts
-            .iter()
-            .map(|p| String::from_utf8_lossy(p).trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join(", "),
-        _ => f.display_value().with_unit(exif).to_string(),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use jpeg_encoder::{ColorType, Encoder};
+    use vw_core::exif::sample;
 
     /// テスト用の JPEG。`exif` があれば APP1 に入れる。
     fn encode(w: u16, h: u16, color: ColorType, data: &[u8], exif: Option<Vec<u8>>) -> Vec<u8> {
@@ -170,41 +139,6 @@ mod tests {
         }
         enc.encode(data, w, h, color).unwrap();
         out
-    }
-
-    /// 向き（Orientation）のタグだけを持つ、リトルエンディアンの EXIF（TIFF の形）。
-    fn orientation_exif(orientation: u16) -> Vec<u8> {
-        let mut t = b"II*\0".to_vec();
-        t.extend(8u32.to_le_bytes()); // 0 番目の IFD の位置
-        t.extend(1u16.to_le_bytes()); // タグの数
-        t.extend(0x0112u16.to_le_bytes()); // Orientation
-        t.extend(3u16.to_le_bytes()); // SHORT
-        t.extend(1u32.to_le_bytes()); // 個数
-        t.extend(orientation.to_le_bytes());
-        t.extend([0, 0]);
-        t.extend(0u32.to_le_bytes()); // 次の IFD はない
-        t
-    }
-
-    /// メーカー名（Make、3 文字）のタグだけを持つ EXIF。
-    fn make_exif(make: &[u8; 3]) -> Vec<u8> {
-        let mut t = b"II*\0".to_vec();
-        t.extend(8u32.to_le_bytes());
-        t.extend(1u16.to_le_bytes());
-        t.extend(0x010Fu16.to_le_bytes()); // Make
-        t.extend(2u16.to_le_bytes()); // ASCII
-        t.extend(4u32.to_le_bytes()); // 終端の NUL を含む長さ
-        t.extend(make);
-        t.push(0);
-        t.extend(0u32.to_le_bytes());
-        t
-    }
-
-    #[test]
-    fn exif_text_is_shown_without_quotes() {
-        let jpg = encode(4, 4, ColorType::Luma, &[0u8; 16], Some(make_exif(b"Cam")));
-        let m = JpegPlugin.read_metadata(&jpg).unwrap();
-        assert_eq!(m.get("EXIF", "Make"), Some("Cam"));
     }
 
     #[test]
@@ -248,7 +182,7 @@ mod tests {
             8,
             ColorType::Luma,
             &[0u8; 128],
-            Some(orientation_exif(6)),
+            Some(sample::orientation(6)),
         );
         let img = JpegPlugin.decode(&jpg).unwrap();
         assert_eq!((img.width, img.height), (8, 16));
@@ -265,7 +199,7 @@ mod tests {
             8,
             ColorType::Luma,
             &[0u8; 128],
-            Some(orientation_exif(3)),
+            Some(sample::orientation(3)),
         );
         let m = JpegPlugin.read_metadata(&jpg).unwrap();
         assert_eq!(m.get("JPEG", "Size"), Some("16 x 8"));

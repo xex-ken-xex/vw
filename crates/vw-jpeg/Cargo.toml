@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-kamadak-exif = "0.6.1"
 vw-core.workspace = true
 zune-core = "0.5"
 zune-jpeg = "0.5"
