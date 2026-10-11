@@ -33,8 +33,11 @@ use crate::settings_ui::{fps_input, layout_title, SettingsUi};
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
+use crate::transfer::{Op, Transfer};
 use crate::tree::{self, FolderTree, TreeAction};
-use crate::viewer::{Full, Sequence, SequenceKind, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR};
+use crate::viewer::{
+    DraggedFile, Full, Sequence, SequenceKind, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR,
+};
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
 /// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
@@ -142,6 +145,12 @@ pub struct VwApp {
     explores: Vec<(u64, FolderLoad)>,
     /// フォルダの DICOM の検査とシリーズ。ツリーと、cd したフォルダのスロットの両方で使う。
     series: SeriesIndex,
+    /// ドロップされ、確認を待っている画像の移動。
+    pending_move: Option<Transfer>,
+    /// ドラッグ中に Ctrl が押されていた（コピーとして見せていた）か。
+    drag_copy: bool,
+    /// OS からドロップされた画像。cd した先で読み込まれたら、そのスロットを選ぶ。
+    select_when_loaded: Option<PathBuf>,
     /// 画像領域いっぱいに出しているスロットの番号。
     maximized: Option<u64>,
     /// 読み込み中のフォルダの入れ方。
@@ -397,6 +406,9 @@ impl VwApp {
             folder_load: None,
             explores: Vec::new(),
             series: SeriesIndex::default(),
+            pending_move: None,
+            drag_copy: false,
+            select_when_loaded: None,
             maximized: None,
             load_into: LoadInto::Images,
             load_slots_from: 0,
@@ -832,6 +844,156 @@ impl VwApp {
     }
 
     /// 読み込み中のフォルダの確認（サブフォルダも読むか、次の区切りまで続けるか）。
+    /// スロットからドラッグした画像 `file` がフォルダ `dir` にドロップされた。Ctrl を押していれば
+    /// コピーしてすぐ終える。移動は確認してから行う。
+    fn drop_file(&mut self, ctx: &egui::Context, file: PathBuf, dir: PathBuf) {
+        // ドロップした瞬間の Ctrl だけで決めないのは、ボタンと Ctrl をほぼ同時に離すと
+        // Ctrl を先に離したことになり、コピーと見せていたものが移動になるため。
+        let copy = self.drag_copy || ctx.input(|i| i.modifiers.command);
+        let op = if copy { Op::Copy } else { Op::Move };
+        let t = Transfer {
+            file,
+            to_dir: dir,
+            op,
+        };
+        if t.is_noop() {
+            return;
+        }
+        // 展開した ZIP は一時フォルダの写しなので、中へ入れても ZIP には入らず、中から移しても
+        // ZIP からは消えない。コピーで取り出すことだけ許す。
+        let into_zip = self.archives.mount_of(&t.to_dir).is_some();
+        let out_of_zip = op == Op::Move && self.archives.mount_of(&t.file).is_some();
+        if into_zip || out_of_zip {
+            self.log.warn(format!(
+                "{}: files in a ZIP are read-only (Ctrl+drag copies them out)",
+                t.file.display()
+            ));
+            return;
+        }
+        match op {
+            Op::Copy => self.run_transfer(&t),
+            Op::Move => self.pending_move = Some(t),
+        }
+    }
+
+    fn run_transfer(&mut self, t: &Transfer) {
+        let verb = match t.op {
+            Op::Move => "Moved",
+            Op::Copy => "Copied",
+        };
+        match t.run(&mut self.labels) {
+            Ok(done) => {
+                self.log.info(format!(
+                    "{verb} {} to {}",
+                    t.file.display(),
+                    done.dest.display()
+                ));
+                if let Some(e) = done.label_error {
+                    self.log.error(format!("Labels were not carried over: {e}"));
+                }
+            }
+            Err(e) => self.log.error(format!("Cannot move or copy: {e}")),
+        }
+    }
+
+    /// ドロップした画像を移してよいか尋ねる。
+    fn move_dialog(&mut self, ctx: &egui::Context) {
+        let Some(t) = &self.pending_move else {
+            return;
+        };
+        let lang = self.lang();
+        let name = t.file.file_name().unwrap_or_default().to_string_lossy();
+        let message = tr1(lang, "Move \"{}\" to", &name);
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("move_question")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(message);
+            ui.label(egui::RichText::new(t.to_dir.display().to_string()).monospace());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Move")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(yes) = answer else {
+            return;
+        };
+        if let Some(t) = self.pending_move.take().filter(|_| yes) {
+            self.run_transfer(&t);
+        }
+    }
+
+    /// ドラッグ中の画像の名前と、移動かコピーかをマウスの横に出す。
+    fn drag_preview(&mut self, ctx: &egui::Context) {
+        let Some(file) = egui::DragAndDrop::payload::<DraggedFile>(ctx) else {
+            self.drag_copy = false;
+            return;
+        };
+        self.drag_copy = ctx.input(|i| i.modifiers.command);
+        let Some(pointer) = ctx.pointer_latest_pos() else {
+            return;
+        };
+        let lang = self.lang();
+        let (icon, verb) = if self.drag_copy {
+            (icon::COPY, tr(lang, "Copy"))
+        } else {
+            (icon::ARROW_RIGHT, tr(lang, "Move"))
+        };
+        let name = file.0.file_name().unwrap_or_default().to_string_lossy();
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        egui::Area::new(egui::Id::new("drag_preview"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pointer + vec2(14.0, 14.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(format!("{icon} {verb}: {name}"));
+                });
+            });
+    }
+
+    /// エクスプローラなどからドロップされたパスへ移る。ファイルならそのフォルダへ移って、その画像を選ぶ。
+    /// ZIP は展開してその中へ移る。複数ドロップされたときは先頭だけを使う。
+    fn receive_os_drop(&mut self, ctx: &egui::Context) {
+        let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()))
+        else {
+            return;
+        };
+        if path.is_dir() || archive::is_zip(&path) {
+            self.open_folder(ctx, path);
+            return;
+        }
+        let Some(dir) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        self.open_folder(ctx, dir);
+        self.select_when_loaded = Some(path);
+    }
+
+    fn select_dropped_image(&mut self) {
+        let Some(path) = &self.select_when_loaded else {
+            return;
+        };
+        if let Some(i) = self
+            .slots
+            .iter()
+            .position(|s| s.path.as_ref() == Some(path))
+        {
+            self.active = i;
+            self.select_when_loaded = None;
+        } else if self.folder_load.is_none() {
+            // 読み込みを終えても出てこない（対応していない形式など）。
+            self.select_when_loaded = None;
+        }
+    }
+
     fn folder_load_dialog(&mut self, ctx: &egui::Context) {
         // cd したフォルダの読み込みを先に、次に開いたフォルダのスロットを開いた順に尋ねる。
         let asking = if self
@@ -3456,6 +3618,7 @@ impl VwApp {
         let mut maximize = None;
         let mut explore = None;
         let mut open_folder = None;
+        let mut dropped = None;
         let mut step = None;
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
@@ -3523,6 +3686,9 @@ impl VwApp {
             if resp.open_folder {
                 open_folder = self.slots[i].folder.clone();
             }
+            if let (Some(file), Some(dir)) = (resp.dropped, self.slots[i].folder.clone()) {
+                dropped = Some((file, dir));
+            }
             if resp.step != 0 {
                 step = Some((i, resp.step));
             }
@@ -3538,7 +3704,10 @@ impl VwApp {
             );
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
-        if let Some(folder) = open_folder {
+        if let Some((file, dir)) = dropped {
+            let ctx = ui.ctx().clone();
+            self.drop_file(&ctx, file, dir);
+        } else if let Some(folder) = open_folder {
             let ctx = ui.ctx().clone();
             self.open_folder(&ctx, folder);
         } else if let Some(i) = close {
@@ -3702,6 +3871,10 @@ impl eframe::App for VwApp {
                         TreeAction::Series { folder, files } => {
                             self.show_series(&ctx, folder, &files)
                         }
+                        TreeAction::Drop { file, dir } => {
+                            self.drop_file(&ctx, file, dir);
+                            return;
+                        }
                         TreeAction::Copy(p) => {
                             let what = format!("path {}", p.display());
                             self.copy_text(&ctx, p.display().to_string(), &what);
@@ -3732,6 +3905,10 @@ impl eframe::App for VwApp {
         self.export_window(&ctx);
         self.toast_ui(&ctx);
         self.folder_load_dialog(&ctx);
+        self.move_dialog(&ctx);
+        self.drag_preview(&ctx);
+        self.receive_os_drop(&ctx);
+        self.select_dropped_image();
     }
 }
 
