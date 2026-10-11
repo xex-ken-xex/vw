@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
@@ -17,10 +18,15 @@ pub const XA_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.12.1";
 pub const SC_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.7";
 
 const EXPLICIT_VR_LE: &str = "1.2.840.10008.1.2.1";
+pub const JPEG_LS_LOSSLESS: &str = "1.2.840.10008.1.2.4.80";
+pub const JPEG_LS_NEAR_LOSSLESS: &str = "1.2.840.10008.1.2.4.81";
+pub const JPEG_2000_LOSSLESS: &str = "1.2.840.10008.1.2.4.90";
+pub const JPEG_2000: &str = "1.2.840.10008.1.2.4.91";
 
 /// 組み立て中の DICOM ファイル。
 pub struct Synth {
     sop_class: &'static str,
+    transfer_syntax: &'static str,
     obj: InMemDicomObject,
 }
 
@@ -29,6 +35,7 @@ impl Synth {
     pub fn new(sop_class: &'static str, columns: u16, rows: u16) -> Self {
         let mut s = Self {
             sop_class,
+            transfer_syntax: EXPLICIT_VR_LE,
             obj: InMemDicomObject::new_empty(),
         };
         let modality = match sop_class {
@@ -82,6 +89,27 @@ impl Synth {
         self.bits(8, 8, false);
         self.put_str(tags::NUMBER_OF_FRAMES, VR::IS, &frames.len().to_string());
         self.pixel_data(VR::OB, frames.concat())
+    }
+
+    /// 画素データを、圧縮済みのフレームを並べたものに置き換える。Bits Allocated などの属性は
+    /// 先に `pixels_u16` などで決めておく。
+    pub fn encapsulated(mut self, transfer_syntax: &'static str, frames: Vec<Vec<u8>>) -> Self {
+        self.transfer_syntax = transfer_syntax;
+        if frames.len() > 1 {
+            self.put_str(tags::NUMBER_OF_FRAMES, VR::IS, &frames.len().to_string());
+        }
+        self.obj.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new_fragments(frames),
+        ));
+        self
+    }
+
+    /// 圧縮したカラーは YBR_RCT（可逆）や YBR_ICT（非可逆）と書かれる。
+    pub fn photometric(mut self, value: &str) -> Self {
+        self.put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, value);
+        self
     }
 
     pub fn signed(mut self) -> Self {
@@ -146,7 +174,7 @@ impl Synth {
             .map(|s| s.into_owned())
             .unwrap_or_default();
         let meta = FileMetaTableBuilder::new()
-            .transfer_syntax(EXPLICIT_VR_LE)
+            .transfer_syntax(self.transfer_syntax)
             .media_storage_sop_class_uid(self.sop_class)
             .media_storage_sop_instance_uid(uid);
         let file = self

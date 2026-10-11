@@ -1,7 +1,9 @@
 //! DICOM デコーダプラグイン。
 //!
-//! - 非圧縮・RLE・JPEG（ベースライン / ロスレス）を読む。JPEG 2000 / JPEG-LS は C ライブラリ
-//!   （OpenJPEG / CharLS）が要り、Windows のビルドが重くなるので今は読まない
+//! - 非圧縮・RLE・JPEG（ベースライン / ロスレス）・JPEG-LS・JPEG 2000 を読む。JPEG-LS は
+//!   CharLS（C++）、JPEG 2000 は OpenJPEG（C）を静的にリンクする。純 Rust の候補は、
+//!   pure_jpegls がカラーを読めず、openjp2 がデコードのたびに未定義動作（null の Box の解放）
+//!   を起こすので採らない
 //! - モノクロは Rescale Slope / Intercept を当てた値（CT なら HU）で持ち、ファイルの
 //!   ウィンドウ幅 / レベルを表示の階調として渡す。MONOCHROME1 は値を反転して持つ
 //! - 1 ファイルに複数フレームが入ったもの（シネなど）はフレームごとに読む
@@ -321,7 +323,37 @@ fn dicom_transfer_syntax_name(uid: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synth::{Synth, CT_IMAGE, XA_IMAGE};
+    use synth::{
+        Synth, CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, XA_IMAGE,
+    };
+
+    /// testdata/*.j2k に入れた値。testdata/make_j2k.py で作った。
+    const J2K_GRAY16: [u16; 8] = [0, 1000, 2000, 3000, 4095, 300, 40, 7];
+    const J2K_RGB8: [u8; 24] = [
+        255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30, 200, 100, 50, 0, 0, 0, 255, 255, 255, 128, 64,
+        32,
+    ];
+
+    fn jpeg_ls(
+        width: u32,
+        height: u32,
+        bits: i32,
+        components: i32,
+        near: i32,
+        src: &[u8],
+    ) -> Vec<u8> {
+        let frame = charls::FrameInfo {
+            width,
+            height,
+            bits_per_sample: bits,
+            component_count: components,
+        };
+        charls::CharLS::default().encode(frame, near, src).unwrap()
+    }
+
+    fn u16_bytes(values: &[u16]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
 
     fn gray_f32(img: &VwImage) -> &[f32] {
         match &img.data {
@@ -409,6 +441,73 @@ mod tests {
             m.get("DICOM", "Transfer syntax"),
             Some("Explicit VR Little Endian")
         );
+    }
+
+    #[test]
+    fn lossless_jpeg_ls_gives_back_the_exact_values() {
+        let values = [0, 1, 4095, 2048, 100, 7, 3000, 12];
+        let jls = jpeg_ls(4, 2, 12, 1, 0, &u16_bytes(&values));
+        let synth = Synth::new(CT_IMAGE, 4, 2)
+            .pixels_u16(&values, 12)
+            .encapsulated(JPEG_LS_LOSSLESS, vec![jls]);
+        let img = DicomPlugin.decode(&synth.bytes()).unwrap();
+        assert!(matches!(&img.data, PixelData::U16(v) if v == &values));
+    }
+
+    #[test]
+    fn near_lossless_jpeg_ls_stays_within_the_allowed_error() {
+        let values: Vec<u16> = (0..64).map(|i| (i * 37 % 251) as u16).collect();
+        let jls = jpeg_ls(
+            8,
+            8,
+            8,
+            1,
+            3,
+            &values.iter().map(|&v| v as u8).collect::<Vec<_>>(),
+        );
+        let synth = Synth::new(XA_IMAGE, 8, 8)
+            .frames_u8(&[&[0; 64]])
+            .encapsulated(JPEG_LS_NEAR_LOSSLESS, vec![jls]);
+        let img = DicomPlugin.decode(&synth.bytes()).unwrap();
+        let PixelData::U8(got) = &img.data else {
+            panic!("expected U8")
+        };
+        for (g, v) in got.iter().zip(&values) {
+            assert!((*g as i32 - *v as i32).abs() <= 3, "{g} vs {v}");
+        }
+    }
+
+    #[test]
+    fn jpeg_ls_color_and_multiframe_are_read_per_frame() {
+        let first = [1, 2, 3, 4, 5, 6];
+        let second = [60, 50, 40, 30, 20, 10];
+        let frames = [first, second].map(|f| jpeg_ls(2, 1, 8, 3, 0, &f)).to_vec();
+        let synth = Synth::rgb(2, 1, &[0; 6], false).encapsulated(JPEG_LS_LOSSLESS, frames);
+        let bytes = synth.bytes();
+        assert_eq!(DicomPlugin.frame_count(&bytes).unwrap(), 2);
+        let img = DicomPlugin.decode_frame(&bytes, 1).unwrap();
+        assert_eq!(img.color, ColorModel::Rgb);
+        assert!(matches!(&img.data, PixelData::U8(v) if v == &second));
+    }
+
+    #[test]
+    fn lossless_jpeg_2000_gives_back_the_exact_values() {
+        let j2k = include_bytes!("../testdata/gray16.j2k").to_vec();
+        let synth = Synth::new(CT_IMAGE, 4, 2)
+            .pixels_u16(&J2K_GRAY16, 16)
+            .encapsulated(JPEG_2000_LOSSLESS, vec![j2k]);
+        let img = DicomPlugin.decode(&synth.bytes()).unwrap();
+        assert!(matches!(&img.data, PixelData::U16(v) if v == &J2K_GRAY16));
+    }
+
+    #[test]
+    fn jpeg_2000_color_written_as_ybr_rct_is_shown_as_rgb() {
+        let j2k = include_bytes!("../testdata/rgb8.j2k").to_vec();
+        let synth = Synth::rgb(4, 2, &J2K_RGB8, false)
+            .photometric("YBR_RCT")
+            .encapsulated(JPEG_2000_LOSSLESS, vec![j2k]);
+        let img = DicomPlugin.decode(&synth.bytes()).unwrap();
+        assert!(matches!(&img.data, PixelData::U8(v) if v == &J2K_RGB8));
     }
 
     #[test]
