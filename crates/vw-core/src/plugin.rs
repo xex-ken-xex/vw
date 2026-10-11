@@ -84,6 +84,13 @@ pub trait DecoderPlugin: Send + Sync {
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         self.decode(data).map(|img| img.metadata)
     }
+
+    /// 検索カタログに入れるメタデータ。既定は [`Self::read_metadata`] と同じ。
+    /// メタデータ欄には見やすいよう選んだ項目だけを出し、検索にはすべてを使いたい形式
+    /// （DICOM のタグ）が上書きする。
+    fn read_all_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
+        self.read_metadata(data)
+    }
 }
 
 /// 中身で形式を判定するときに読む先頭のバイト数。DICOM の印（128 バイト目から）が入る長さ。
@@ -227,6 +234,18 @@ impl Registry {
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
         Ok((plugin.develop(data)?, plugin.name()))
+    }
+
+    /// プラグインを選んで [`DecoderPlugin::read_all_metadata`] し、メタデータと使ったプラグイン名を返す。
+    pub fn read_all_metadata_bytes(
+        &self,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(Metadata, &str), DecodeError> {
+        let plugin = self
+            .find(path, data)
+            .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
+        Ok((plugin.read_all_metadata(data)?, plugin.name()))
     }
 
     /// ファイルのフレーム数。対応するプラグインがなければエラー。

@@ -71,6 +71,73 @@ impl DecoderPlugin for DicomPlugin {
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         Ok(metadata(&open(data, true)?))
     }
+
+    /// 画素データなどの大きなバイナリを除いた全タグ。グループは `DICOM`、キーは `0010,0020` の形。
+    fn read_all_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
+        let obj = open(data, true)?;
+        let mut m = Metadata::default();
+        let meta = obj.meta();
+        for (tag, value) in [
+            (
+                tags::MEDIA_STORAGE_SOP_CLASS_UID,
+                &meta.media_storage_sop_class_uid,
+            ),
+            (tags::TRANSFER_SYNTAX_UID, &meta.transfer_syntax),
+        ] {
+            push_tag(&mut m, tag, value);
+        }
+        all_tags(&obj, &mut m);
+        Ok(m)
+    }
+}
+
+/// 検索カタログのキー（`0010,0020`）からタグの名前（`PatientID`）を引く。画面でキーの候補に添える。
+pub fn tag_name(key: &str) -> Option<&'static str> {
+    use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
+    let (group, element) = key.split_once(',')?;
+    let tag = Tag(
+        u16::from_str_radix(group, 16).ok()?,
+        u16::from_str_radix(element, 16).ok()?,
+    );
+    dicom_dictionary_std::StandardDataDictionary
+        .by_tag(tag)
+        .map(|e| e.alias())
+}
+
+/// シーケンスの中も同じように辿る。入れ子の位置は持たない（検索では値が見つかれば足りるため）。
+fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
+    use dicom_core::value::Value;
+    use dicom_core::VR;
+    for e in obj.iter() {
+        match e.value() {
+            Value::Sequence(seq) => {
+                for item in seq.items() {
+                    all_tags(item, m);
+                }
+            }
+            Value::PixelSequence(_) => {}
+            Value::Primitive(p) => {
+                let binary = matches!(
+                    e.vr(),
+                    VR::OB | VR::OD | VR::OF | VR::OL | VR::OV | VR::OW | VR::UN
+                );
+                if !binary {
+                    push_tag(m, e.header().tag, &p.to_str());
+                }
+            }
+        }
+    }
+}
+
+fn push_tag(m: &mut Metadata, tag: Tag, value: &str) {
+    let value = value.trim_matches([' ', '\0']);
+    if !value.is_empty() {
+        m.push(
+            "DICOM",
+            format!("{:04X},{:04X}", tag.group(), tag.element()),
+            value,
+        );
+    }
 }
 
 /// DICOM ファイルを開く。`header_only` なら画素データの手前で読むのをやめる。
@@ -441,6 +508,24 @@ mod tests {
             m.get("DICOM", "Transfer syntax"),
             Some("Explicit VR Little Endian")
         );
+    }
+
+    #[test]
+    fn catalog_metadata_has_every_tag_by_number_except_pixel_data() {
+        let bytes = Synth::ct(2, 2).patient("Doe^Jane").bytes();
+        let m = DicomPlugin.read_all_metadata(&bytes).unwrap();
+        assert_eq!(m.get("DICOM", "0010,0010"), Some("Doe^Jane"));
+        assert_eq!(m.get("DICOM", "0008,0060"), Some("CT"));
+        assert_eq!(m.get("DICOM", "0002,0010"), Some("1.2.840.10008.1.2.1"));
+        assert_eq!(m.get("DICOM", "7FE0,0010"), None);
+        assert!(m.entries.iter().all(|(g, _, _)| g == "DICOM"));
+    }
+
+    #[test]
+    fn tag_numbers_are_named_from_the_dictionary() {
+        assert_eq!(tag_name("0010,0020"), Some("PatientID"));
+        assert_eq!(tag_name("7FE0,0010"), Some("PixelData"));
+        assert_eq!(tag_name("not a tag"), None);
     }
 
     #[test]
