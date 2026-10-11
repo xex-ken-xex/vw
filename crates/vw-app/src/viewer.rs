@@ -227,13 +227,16 @@ pub fn wheel_steps(acc: &mut f32, delta: f32) -> isize {
     -(steps as isize)
 }
 
-/// 画像を枠に収める倍率。枠より小さい画像は拡大せず 100% で表示する。
-/// 小さな画像を枠いっぱいに拡大しないのは、アイコンなどがぼやけて実寸が分からなくなるため。
+/// 画像を枠いっぱいに収める倍率。枠より小さい画像も拡大する。
+///
+/// 小さな画像を 100% のまま止めないのは、1x1 や最大化でスロットを広げても画像が
+/// 広がらず、「枠に合わせる」が効いていないように見えるため。実寸で見たいときは
+/// 100% 表示の操作がある。
 pub fn fit_scale(view: Vec2, image: Vec2) -> f32 {
     if image.x <= 0.0 || image.y <= 0.0 {
         return 1.0;
     }
-    (view.x / image.x).min(view.y / image.y).min(1.0)
+    (view.x / image.x).min(view.y / image.y)
 }
 
 /// 倍率を `factor` 倍し、`cursor`（画像中心からのずれではなく枠中心からの位置）の下にある
@@ -630,8 +633,8 @@ mod tests {
     }
 
     #[test]
-    fn small_image_is_not_enlarged() {
-        assert_eq!(fit_scale(vec2(1000.0, 1000.0), vec2(10.0, 10.0)), 1.0);
+    fn small_image_is_enlarged_to_fill_the_slot() {
+        assert_eq!(fit_scale(vec2(1000.0, 500.0), vec2(10.0, 10.0)), 50.0);
     }
 
     #[test]

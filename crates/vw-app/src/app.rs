@@ -3298,6 +3298,21 @@ impl VwApp {
         let mut text_drag = false;
         let selected = self.meta_selected.clone();
         let highlight = ui.visuals().selection.bg_fill;
+        let widest_key = groups
+            .iter()
+            .flat_map(|(_, rows)| rows)
+            .map(|(k, _)| {
+                egui::WidgetText::from(k.as_str())
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Body,
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -3309,46 +3324,61 @@ impl VwApp {
                     let (_, head, _) = state
                         .show_header(ui, |ui| ui.selectable_label(is_selected, group.as_str()))
                         .body(|ui| {
+                            let avail = ui.available_width();
+                            let gap = ui.spacing().item_spacing.x;
+                            let gap_y = ui.spacing().item_spacing.y;
+                            let key_width = key_column_width(widest_key, avail - gap);
+                            let value_width = (avail - gap - key_width).max(0.0);
                             let row_of = |i: usize| MetaSelection::Row(group.clone(), i);
                             let selected_row = match &selected {
                                 Some(MetaSelection::Row(g, i)) if g == group => Some(*i),
                                 _ => None,
                             };
-                            egui::Grid::new(group)
-                                .num_columns(2)
-                                // striped(true) と併用できないので、縞も自分で塗る。
-                                .with_row_color(move |r, style| {
-                                    if Some(r) == selected_row {
-                                        Some(highlight)
-                                    } else {
-                                        (r % 2 == 1).then_some(style.visuals.faint_bg_color)
-                                    }
-                                })
-                                .show(ui, |ui| {
-                                    for (i, (k, v)) in rows.iter().enumerate() {
-                                        let key = ui.add(
+                            for (i, (k, v)) in rows.iter().enumerate() {
+                                // 縞と選択の色は行の高さが決まってから塗るので、先に場所だけ取る。
+                                let background = ui.painter().add(egui::Shape::Noop);
+                                let row = ui.horizontal_top(|ui| {
+                                    let key = fixed_width(ui, key_width, |ui| {
+                                        ui.add(
                                             egui::Label::new(k)
+                                                .truncate()
                                                 .selectable(false)
                                                 .sense(egui::Sense::click()),
-                                        );
-                                        let value = ui.add(egui::Label::new(v).wrap());
-                                        ui.end_row();
-                                        if key.clicked() || value.clicked() {
-                                            picked = Some(row_of(i));
-                                        }
-                                        if value.drag_started() {
-                                            text_drag = true;
-                                        }
-                                        for r in [&key, &value] {
-                                            r.context_menu(|ui| {
-                                                if ui.button(tr(lang, "Copy")).clicked() {
-                                                    copy = Some(row_of(i));
-                                                    ui.close();
-                                                }
-                                            });
-                                        }
-                                    }
+                                        )
+                                    });
+                                    let value = fixed_width(ui, value_width, |ui| {
+                                        ui.add(egui::Label::new(v).wrap())
+                                    });
+                                    (key, value)
                                 });
+                                let fill = if selected_row == Some(i) {
+                                    Some(highlight)
+                                } else {
+                                    (i % 2 == 1).then_some(ui.visuals().faint_bg_color)
+                                };
+                                if let Some(fill) = fill {
+                                    let rect = row.response.rect.expand2(vec2(0.0, gap_y / 2.0));
+                                    ui.painter().set(
+                                        background,
+                                        egui::epaint::RectShape::filled(rect, 0.0, fill),
+                                    );
+                                }
+                                let (key, value) = row.inner;
+                                if key.clicked() || value.clicked() {
+                                    picked = Some(row_of(i));
+                                }
+                                if value.drag_started() {
+                                    text_drag = true;
+                                }
+                                for r in [&key, &value] {
+                                    r.context_menu(|ui| {
+                                        if ui.button(tr(lang, "Copy")).clicked() {
+                                            copy = Some(row_of(i));
+                                            ui.close();
+                                        }
+                                    });
+                                }
+                            }
                         });
                     let label = head.inner;
                     if label.clicked() {
@@ -3985,8 +4015,38 @@ fn is_blank(slot: &Slot) -> bool {
 }
 
 /// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
+/// メタデータ欄のキーの列の幅。いちばん長いキーに合わせるが、欄の幅の一定の割合までにする。
+///
+/// 列の幅を中身に任せない（egui の Grid の既定）のは、長いキーや値で列が広がると
+/// 欄そのものが押し広げられ、画像を選び替えるたびに欄の幅が変わってしまうため。
+/// 収まらないキーは末尾を省略し、マウスを乗せると全体を出す。
+fn key_column_width(widest_key: f32, available: f32) -> f32 {
+    widest_key.min(available * KEY_COLUMN_SHARE).max(0.0)
+}
+
+/// メタデータ欄でキーの列に使える幅の割合。残りは値の列（折り返す）に使う。
+const KEY_COLUMN_SHARE: f32 = 0.45;
+
+/// ちょうど `width` の幅の中に `add` で 1 つ置く。中身がそれより広くても外へは広げない。
+fn fixed_width(
+    ui: &mut egui::Ui,
+    width: f32,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(width);
+            add(ui)
+        },
+    )
+    .inner
+}
+
 fn panel_header(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text.to_uppercase()).small().weak());
+    // 絞り込みの条件などで長くなっても、欄を押し広げないよう省略する。
+    ui.add(egui::Label::new(egui::RichText::new(text.to_uppercase()).small().weak()).truncate());
 }
 
 /// ログに出す、メタデータ欄で選んだものの名前。
@@ -4025,6 +4085,16 @@ fn color_name(c: ColorModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_key_column_fits_the_widest_key_when_there_is_room() {
+        assert_eq!(key_column_width(80.0, 300.0), 80.0);
+    }
+
+    #[test]
+    fn metadata_key_column_is_capped_to_a_share_of_the_panel() {
+        assert_eq!(key_column_width(500.0, 200.0), 200.0 * KEY_COLUMN_SHARE);
+    }
 
     #[test]
     fn view_is_kept_only_when_stepping_inside_the_same_sequence() {
