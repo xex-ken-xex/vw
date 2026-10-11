@@ -104,10 +104,6 @@ pub fn tag_name(key: &str) -> Option<&'static str> {
         .map(|e| e.alias())
 }
 
-/// これより長い値は検索カタログに入れない。長い文字列（埋め込まれた報告書など）は検索の
-/// 役に立たない割に、カタログを大きくするため。
-const LONGEST_VALUE: usize = 1024;
-
 /// シーケンスの中も同じように辿る。入れ子の位置は持たない（検索では値が見つかれば足りるため）。
 fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
     use dicom_core::value::Value;
@@ -135,7 +131,7 @@ fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
 
 fn push_tag(m: &mut Metadata, tag: Tag, value: &str) {
     let value = value.trim_matches([' ', '\0']);
-    if !value.is_empty() && value.len() <= LONGEST_VALUE {
+    if !value.is_empty() {
         m.push(
             "DICOM",
             format!("{:04X},{:04X}", tag.group(), tag.element()),

@@ -387,7 +387,7 @@ impl DatasetDialog {
                     report.changed,
                     self.dir.display()
                 ));
-                for p in &report.problems {
+                for p in &c.skipped {
                     log.warn(format!("Dataset \"{}\": {p}", c.name));
                 }
                 Some(true)

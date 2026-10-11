@@ -2,7 +2,7 @@
 //! 名前・メモ・タグ・足した項目と、フォルダ以下の画像（ZIP / 7z の中も）のメタデータを持つ。
 //!
 //! メタデータは「種類・キー・値」の 3 つ組にし、同じ組はデータセットで 1 つだけ持つ
-//! （`metadata`）。各ファイルはその番号の一覧を持つ。ファイルごとに組を書き並べないのは、
+//! （`meta`）。各ファイルはその番号の一覧を持つ。ファイルごとに組を書き並べないのは、
 //! 同じ装置・同じ患者の画像では大半の値が重なり、カタログが何倍にも膨らむため。
 
 use std::collections::{BTreeMap, HashMap};
@@ -43,10 +43,32 @@ pub struct Catalog {
     #[serde(default)]
     pub source: Option<Source>,
     #[serde(default)]
-    pub metadata: Vec<Triple>,
+    pub meta: Vec<Triple>,
     #[serde(default)]
     pub files: Vec<FileEntry>,
+    /// 読めなかったファイルや、パスワードを入れずに飛ばしたアーカイブ。
+    #[serde(default)]
+    pub skipped: Vec<Skipped>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Skipped {
+    pub path: String,
+    /// パスワードを入れずに飛ばしたアーカイブは `password`。ほかは読めなかった理由。
+    pub reason: String,
+}
+
+impl std::fmt::Display for Skipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.reason == PASSWORD_SKIPPED {
+            write!(f, "{}: skipped (no password)", self.path)
+        } else {
+            write!(f, "{}: {}", self.path, self.reason)
+        }
+    }
+}
+
+const PASSWORD_SKIPPED: &str = "password";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
@@ -61,8 +83,8 @@ pub struct FileEntry {
     pub size: u64,
     /// 更新時刻（UTC、RFC 3339）。ZIP の中のファイルは ZIP の更新時刻。
     pub modified: String,
-    /// [`Catalog::metadata`] の番号。
-    pub metadata: Vec<u32>,
+    /// [`Catalog::meta`] の番号。
+    pub meta: Vec<u32>,
 }
 
 /// 人が入力する部分。登録・編集のダイアログで変える。
@@ -110,24 +132,10 @@ pub fn save(dir: &Path, catalog: &Catalog) -> Result<(), String> {
         })
 }
 
-/// `dir` の上位のフォルダにあるデータセット。データセットは入れ子にしないので、あれば登録できない。
-pub fn enclosing(dir: &Path) -> Option<PathBuf> {
-    dir.ancestors()
-        .skip(1)
-        .find(|d| exists_in(d))
-        .map(Path::to_path_buf)
-}
-
-/// 登録できるか。カタログを置くので書き込めること、上位にデータセットがないこと。
-/// 下位のデータセットは、フォルダ以下を辿る [`scan`] で見つけて止める（ここで全体を辿ると 2 度手間）。
+/// 登録できるか。カタログを置くので書き込めること。
+///
+/// データセットの中に別のデータセットがあってもよい。外側は内側のファイルも含めて持つ。
 pub fn check_can_register(dir: &Path) -> Result<(), String> {
-    if let Some(outer) = enclosing(dir) {
-        return Err(format!(
-            "{} is inside the dataset {}. Datasets cannot be nested.",
-            dir.display(),
-            outer.display()
-        ));
-    }
     let probe = dir.join(format!("{FILE_NAME}.write-test"));
     std::fs::write(&probe, b"")
         .and_then(|()| std::fs::remove_file(&probe))
@@ -160,8 +168,6 @@ pub struct Report {
     pub added: usize,
     pub removed: usize,
     pub changed: usize,
-    /// 読めなかったファイルや、パスワードを入れずに飛ばしたアーカイブ。
-    pub problems: Vec<String>,
 }
 
 /// `dir` 以下の画像（ZIP / 7z の中も）のメタデータを集めてカタログを作る。`previous` があれば
@@ -180,10 +186,10 @@ pub fn scan(
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<Report, String> {
     let mut candidates = Vec::new();
-    walk(dir, dir, registry, &mut candidates)?;
+    walk(dir, registry, &mut candidates)?;
     progress.total.store(candidates.len(), Ordering::Relaxed);
     let mut builder = Builder::default();
-    let mut problems = Vec::new();
+    let mut problems: Vec<Skipped> = Vec::new();
     for path in &candidates {
         if progress.cancelled() {
             return Err("Cancelled".into());
@@ -208,10 +214,10 @@ pub fn scan(
                     let size = data.len() as u64;
                     match triples(registry, path, &data) {
                         Ok(t) => builder.add(relative, size, modified, t),
-                        Err(e) => problems.push(format!("{relative}: {e}")),
+                        Err(e) => problems.push(skip(&relative, e)),
                     }
                 }
-                Err(e) => problems.push(format!("{relative}: {e}")),
+                Err(e) => problems.push(skip(&relative, e.to_string())),
             }
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
@@ -225,8 +231,9 @@ pub fn scan(
         created: previous.map_or_else(|| now.clone(), |p| p.created.clone()),
         updated: now,
         source: previous.and_then(|p| p.source.clone()),
-        metadata: builder.triples,
+        meta: builder.triples,
         files: builder.files,
+        skipped: problems,
         ..Catalog::default()
     };
     catalog.set_info(info);
@@ -238,17 +245,18 @@ pub fn scan(
         added,
         removed,
         changed,
-        problems,
     })
 }
 
-/// 調べるファイル（画像とアーカイブ）を名前順に集める。下位にデータセットがあれば止める。
-fn walk(
-    root: &Path,
-    dir: &Path,
-    registry: &Registry,
-    out: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+fn skip(path: &str, reason: impl Into<String>) -> Skipped {
+    Skipped {
+        path: path.to_owned(),
+        reason: reason.into(),
+    }
+}
+
+/// 調べるファイル（画像とアーカイブ）を名前順に集める。
+fn walk(dir: &Path, registry: &Registry, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -258,14 +266,7 @@ fn walk(
             continue;
         };
         if kind.is_dir() {
-            if exists_in(&path) {
-                return Err(format!(
-                    "{} already contains the dataset {}. Datasets cannot be nested.",
-                    root.display(),
-                    path.display()
-                ));
-            }
-            walk(root, &path, registry, out)?;
+            walk(&path, registry, out)?;
         } else if kind.is_file() && (archive::is_archive(&path) || registry.supports_file(&path)) {
             out.push(path);
         }
@@ -282,7 +283,7 @@ fn scan_archive(
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
     builder: &mut Builder,
-    problems: &mut Vec<String>,
+    problems: &mut Vec<Skipped>,
 ) {
     let mut password = None;
     loop {
@@ -313,7 +314,7 @@ fn scan_archive(
             Ok(_) => {
                 for (name, size, t) in found {
                     if t.is_empty() {
-                        problems.push(format!("{name}: cannot read the metadata"));
+                        problems.push(skip(&name, "cannot read the metadata"));
                     } else {
                         builder.add(name, size, modified.to_owned(), t);
                     }
@@ -327,7 +328,7 @@ fn scan_archive(
                 match ask_password(path, wrong) {
                     Some(p) => password = Some(p),
                     None => {
-                        problems.push(format!("{relative}: skipped (no password)"));
+                        problems.push(skip(relative, PASSWORD_SKIPPED));
                         return;
                     }
                 }
@@ -335,7 +336,7 @@ fn scan_archive(
             Err(ArchiveError::NeedsPassword | ArchiveError::WrongPassword) => return,
             Err(ArchiveError::Other(e)) => {
                 if !progress.cancelled() {
-                    problems.push(format!("{relative}: {e}"));
+                    problems.push(skip(relative, e));
                 }
                 return;
             }
@@ -356,9 +357,22 @@ fn triples(registry: &Registry, path: &Path, data: &[u8]) -> Result<Vec<Triple>,
         metadata
             .entries
             .into_iter()
-            .map(|(group, key, value)| (group.to_lowercase(), key, value)),
+            .map(|(group, key, value)| (group.to_lowercase(), key, limit(value))),
     );
     Ok(out)
+}
+
+/// これより長い値はカタログに入れない。画像のデータを文字列のタグに入れたファイルがあり、
+/// そのまま入れるとカタログが膨らむうえ検索の役にも立たないため。
+const LONGEST_VALUE: usize = 2048;
+
+/// 長すぎる値は、キーを「存在する」で探せるよう、値の代わりに長さを入れる。
+fn limit(value: String) -> String {
+    if value.len() <= LONGEST_VALUE {
+        value
+    } else {
+        format!("(2KB 超: {} バイト)", value.len())
+    }
 }
 
 /// 形式によらない基本情報（形式名・幅・高さ・ビット深度）。形式ごとのメタデータの書き方から拾う。
@@ -415,7 +429,7 @@ impl Builder {
             path,
             size,
             modified,
-            metadata: ids,
+            meta: ids,
         });
     }
 }
@@ -519,9 +533,9 @@ mod tests {
 
     fn values_of<'a>(c: &'a Catalog, file: &str, kind: &str, key: &str) -> Vec<&'a str> {
         let f = c.files.iter().find(|f| f.path == file).unwrap();
-        f.metadata
+        f.meta
             .iter()
-            .map(|&i| &c.metadata[i as usize])
+            .map(|&i| &c.meta[i as usize])
             .filter(|(k, key2, _)| k == kind && key2 == key)
             .map(|(_, _, v)| v.as_str())
             .collect()
@@ -555,9 +569,9 @@ mod tests {
         write_png(&tmp.path().join("1.png"), 4, 4, &[0; 48]);
         write_png(&tmp.path().join("2.png"), 4, 4, &[9; 48]);
         let c = run(tmp.path(), None).unwrap().catalog;
-        let widths = c.metadata.iter().filter(|(_, k, _)| k == "width").count();
+        let widths = c.meta.iter().filter(|(_, k, _)| k == "width").count();
         assert_eq!(widths, 1);
-        assert_eq!(c.files[0].metadata, c.files[1].metadata);
+        assert_eq!(c.files[0].meta, c.files[1].meta);
     }
 
     #[test]
@@ -619,7 +633,7 @@ mod tests {
         .unwrap();
         assert_eq!(asked, [false, true]);
         assert_eq!(report.catalog.files[0].path, "secret.zip!/a.png");
-        assert!(report.problems.is_empty());
+        assert!(report.catalog.skipped.is_empty());
     }
 
     #[test]
@@ -634,7 +648,9 @@ mod tests {
         write_png(&tmp.path().join("b.png"), 1, 1, &[0; 3]);
         let report = run(tmp.path(), None).unwrap();
         assert_eq!(report.catalog.files.len(), 1);
-        assert_eq!(report.problems, ["secret.zip: skipped (no password)"]);
+        let skipped = &report.catalog.skipped;
+        assert_eq!(skipped, &[skip("secret.zip", "password")]);
+        assert_eq!(skipped[0].to_string(), "secret.zip: skipped (no password)");
     }
 
     #[test]
@@ -654,22 +670,21 @@ mod tests {
     }
 
     #[test]
-    fn a_dataset_inside_the_folder_stops_the_scan() {
+    fn a_dataset_inside_the_folder_is_included_in_the_outer_one() {
         let tmp = TempDir::new();
         let inner = tmp.mkdir("inner");
+        write_png(&inner.join("a.png"), 1, 1, &[0; 3]);
         std::fs::write(inner.join(FILE_NAME), "{}").unwrap();
-        let err = run(tmp.path(), None).unwrap_err();
-        assert!(err.contains("cannot be nested"), "{err}");
+        let c = run(tmp.path(), None).unwrap().catalog;
+        let paths: Vec<_> = c.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["inner/a.png"]);
+        assert!(check_can_register(&inner).is_ok());
     }
 
     #[test]
-    fn a_folder_inside_a_dataset_cannot_be_registered() {
-        let tmp = TempDir::new();
-        let inner = tmp.mkdir("a/b");
-        std::fs::write(tmp.path().join(FILE_NAME), "{}").unwrap();
-        let err = check_can_register(&inner).unwrap_err();
-        assert!(err.contains("cannot be nested"), "{err}");
-        assert!(check_can_register(tmp.path()).is_ok());
+    fn values_longer_than_2kb_keep_only_their_length() {
+        assert_eq!(limit("x".repeat(2048)).len(), 2048);
+        assert_eq!(limit("x".repeat(3000)), "(2KB 超: 3000 バイト)");
     }
 
     #[test]
