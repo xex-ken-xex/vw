@@ -3,7 +3,7 @@
 ## 目標
 
 - Linux / Windows で動く、起動と表示が速い画像ビューワ
-- 対応予定形式: BMP, JPEG, PNG, DICOM, Nikon RAW (NEF), Sony RAW (ARW)
+- 対応予定形式: BMP, JPEG, PNG, Nikon RAW (NEF), Sony RAW (ARW)
 - 形式ごとの対応はプラグインとして追加する（最初は PNG のみ）
 
 ## 技術選定
@@ -33,11 +33,11 @@ DisplayImage (RGBA8)
 
 - `VwImage`（`crates/vw-core/src/image.rs`）
   - 幅・高さ・チャンネル構成（Gray / GrayAlpha / RGB / RGBA）
-  - 画素は `U8` / `U16` / `F32` のいずれか。16bit PNG・DICOM・RAW を 8bit に落とさず保持する
-  - `significant_bits`（DICOM の 12bit、RAW の 14bit など）
+  - 画素は `U8` / `U16` / `F32` のいずれか。16bit PNG・RAW を 8bit に落とさず保持する
+  - `significant_bits`（RAW の 14bit など）
   - メタデータ（グループ・キー・値の並び）
 - `DisplayImage`（`crates/vw-core/src/display.rs`）
-  - 描画用の RGBA8。ウィンドウ幅/レベル（`DisplayParams::window`）で階調を決める。DICOM のウィンドウ調整はここを使う
+  - 描画用の RGBA8。ウィンドウ幅/レベル（`DisplayParams::window`）で階調を決める
   - GPU のテクスチャ上限を超える画像は縮小する（今は 8192px。将来はタイル分割）
 
 ## プラグイン
@@ -46,7 +46,7 @@ DisplayImage (RGBA8)
 
 - `name()` / `extensions()` / `probe(header)` / `decode(bytes)` / `read_metadata(bytes)`
 - `Registry` が中身（マジックナンバー）→ 拡張子の順でプラグインを選ぶ
-- ツリーに出すファイルは、拡張子でプラグインが決まるものはそのまま、決まらないもののうち設定 `dicom.probe_extensions`（拡張子に当てる正規表現。既定 `^(|[0-9]+|dcm|dicom|ima)$`）に合うものは先頭 132 バイトを読んで判定する。DICOM の名前は拡張子が当てにならないため
+- ツリーに出すファイルは、拡張子でプラグインが決まるものはそのまま、決まらないもののうち設定の正規表現に合う拡張子のものは先頭を読んで判定する。拡張子が当てにならない形式があるため
 
 現在は静的リンク（`crates/vw-app/src/main.rs` の `registry()` で登録）。
 トレイトはジェネリクスなしのオブジェクト安全な形にしてあり、後で C ABI を被せれば
@@ -58,14 +58,7 @@ DisplayImage (RGBA8)
 | --- | --- |
 | BMP | 自作（単純）または `image` の bmp |
 | JPEG | `zune-jpeg`（高速） |
-| DICOM | `dicom-object` + `dicom-pixeldata`（実装済み。純 Rust で済む非圧縮 / RLE / JPEG ベースラインのみ。JPEG 2000 / JPEG-LS は C ライブラリが要るので見送り） |
 | NEF / ARW | `rawler` または `rawloader` + デモザイク |
-
-### DICOM
-
-- ウィンドウ幅/レベルはファイルの値を `VwImage::window` に入れ、表示側の指定がなければそれを使う
-- マルチフレームは `file?frame=N` という仮のパスで 1 フレームずつ読む（`frames.rs`）。スロットの並び・キャッシュ・ラベルがパス単位なので、そのまま使える
-- ツリーは、開いたフォルダの DICOM らしいファイル（拡張子が dcm/dicom/dic か、上の正規表現に合うもの）のヘッダを別スレッドで読み、Study / Series Instance UID で「検査 > シリーズ」にまとめる（`series.rs`）。シリーズは Instance Number 順の 1 つの並びとしてスロットに出す
 
 ### ZIP
 
