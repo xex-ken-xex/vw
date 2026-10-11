@@ -129,12 +129,24 @@ fn push_exif(m: &mut Metadata, raw: Vec<u8>) -> u32 {
         if f.ifd_num == exif::In::THUMBNAIL || f.tag == exif::Tag::MakerNote {
             continue;
         }
-        let value = f.display_value().with_unit(&exif).to_string();
-        m.push("EXIF", f.tag.to_string(), value);
+        m.push("EXIF", f.tag.to_string(), exif_value(f, &exif));
     }
     exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
         .and_then(|f| f.value.get_uint(0))
         .unwrap_or(1)
+}
+
+/// EXIF の値の表示。文字列は kamadak-exif の表示だと `"NIKON"` のように引用符が付くので、
+/// 中身だけを出す。
+fn exif_value(f: &exif::Field, exif: &exif::Exif) -> String {
+    match &f.value {
+        exif::Value::Ascii(parts) => parts
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => f.display_value().with_unit(exif).to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +179,27 @@ mod tests {
         t.extend([0, 0]);
         t.extend(0u32.to_le_bytes()); // 次の IFD はない
         t
+    }
+
+    /// メーカー名（Make、3 文字）のタグだけを持つ EXIF。
+    fn make_exif(make: &[u8; 3]) -> Vec<u8> {
+        let mut t = b"II*\0".to_vec();
+        t.extend(8u32.to_le_bytes());
+        t.extend(1u16.to_le_bytes());
+        t.extend(0x010Fu16.to_le_bytes()); // Make
+        t.extend(2u16.to_le_bytes()); // ASCII
+        t.extend(4u32.to_le_bytes()); // 終端の NUL を含む長さ
+        t.extend(make);
+        t.push(0);
+        t.extend(0u32.to_le_bytes());
+        t
+    }
+
+    #[test]
+    fn exif_text_is_shown_without_quotes() {
+        let jpg = encode(4, 4, ColorType::Luma, &[0u8; 16], Some(make_exif(b"Cam")));
+        let m = JpegPlugin.read_metadata(&jpg).unwrap();
+        assert_eq!(m.get("EXIF", "Make"), Some("Cam"));
     }
 
     #[test]
