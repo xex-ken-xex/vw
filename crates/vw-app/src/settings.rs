@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
 use crate::layout::SlotLayout;
-use crate::slideshow::{EndMode, FPS_RANGE};
+use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 
@@ -94,6 +94,8 @@ pub struct Viewer {
     /// スライドショーの速さ。再生バーで最後に使った値を覚える。
     pub slideshow_fps: f32,
     pub slideshow_end: EndMode,
+    /// 再生バーのコマ落ちの数を、直近の何秒の分で数えるか。
+    pub slideshow_drop_window_secs: u32,
     /// 複数枚のスロットで前後の画像に送るとき、倍率と位置を引き継ぐ（DICOM は常に引き継ぐ）。
     pub keep_view: bool,
     /// カメラ RAW を開いたら、まず埋め込みプレビューを出し、裏で現像して差し替える。
@@ -117,6 +119,7 @@ impl Default for Viewer {
             custom_layout: SlotLayout::grid(6, 6),
             slideshow_fps: 30.0,
             slideshow_end: EndMode::Loop,
+            slideshow_drop_window_secs: 5,
             keep_view: true,
             develop_raw: true,
         }
@@ -349,6 +352,14 @@ impl Settings {
             slideshow_end: r
                 .get("viewer", "slideshow_end")
                 .unwrap_or(d.viewer.slideshow_end),
+            slideshow_drop_window_secs: r
+                .get_valid(
+                    "viewer",
+                    "slideshow_drop_window_secs",
+                    |v: &u32| DROP_WINDOW_RANGE.contains(v),
+                    "must be 1 to 60",
+                )
+                .unwrap_or(d.viewer.slideshow_drop_window_secs),
             keep_view: r.get("viewer", "keep_view").unwrap_or(d.viewer.keep_view),
             develop_raw: r
                 .get("viewer", "develop_raw")
@@ -721,6 +732,7 @@ mod tests {
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
         s.viewer.slideshow_fps = 24.0;
         s.viewer.slideshow_end = EndMode::PingPong;
+        s.viewer.slideshow_drop_window_secs = 10;
         s.viewer.keep_view = false;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
@@ -837,6 +849,20 @@ mod tests {
         let (s, _) = Settings::from_toml("").unwrap();
         assert_eq!(s.viewer.slideshow_fps, 30.0);
         assert_eq!(s.viewer.slideshow_end, EndMode::Loop);
+    }
+
+    #[test]
+    fn dropped_frames_are_counted_over_the_last_5_seconds_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.slideshow_drop_window_secs, 5);
+    }
+
+    #[test]
+    fn out_of_range_drop_window_falls_back_to_default() {
+        let (s, problems) =
+            Settings::from_toml("[viewer]\nslideshow_drop_window_secs = 0\n").unwrap();
+        assert_eq!(s.viewer.slideshow_drop_window_secs, 5);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

@@ -58,6 +58,9 @@ const JA: &[(&str, &str)] = &[
     ("No images or folders here", "画像もフォルダもありません"),
     ("Open this folder", "このフォルダへ移動"),
     ("Double-click to show the images inside", "ダブルクリックで中の画像を表示"),
+    ("Dropped frames period", "コマ落ちを数える期間"),
+    ("The play bar shows how many frames were skipped (not decoded in time) during this many last seconds.", "再生バーには、直近のこの秒数の間に落ちた（読み込みが間に合わずに飛ばした）コマの数を出します。"),
+    (" s", " 秒"),
     ("Keep zoom when stepping", "前後の画像で倍率と位置を保つ"),
     ("Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.", "複数枚あるスロット（フォルダ・フレーム・シリーズ）で前後の画像に送るとき、倍率と位置を引き継ぎます。DICOM は常に引き継ぎます。"),
     ("Develop RAW in the background", "RAW を裏で現像"),
@@ -329,7 +332,7 @@ const JA: &[(&str, &str)] = &[
     ("Stop at end", "最後で止める"),
     ("Ping-pong", "往復"),
     ("dropped {}", "コマ落ち {}"),
-    ("Images could not be decoded fast enough; some frames were skipped.", "デコードが間に合わず、一部のコマを飛ばしました。"),
+    ("Frames skipped in the last {} seconds because images could not be decoded fast enough.", "直近 {} 秒の間に、デコードが間に合わずに飛ばしたコマの数です。"),
     ("Slideshow speed", "スライドショーの速さ"),
     (
         "Frames per second of the slideshow. The play bar of a maximized slot changes and remembers it.",
