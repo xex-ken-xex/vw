@@ -4,7 +4,9 @@
 //! フォルダの中身は初めて開いたときに読む。起動時にドライブ全体を走査すると
 //! 起動が遅くなるうえ、ネットワークドライブで固まることがあるため。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::SystemTime;
 
 use eframe::egui::{self, collapsing_header::CollapsingState};
@@ -47,6 +49,8 @@ struct View<'a> {
     series: &'a SeriesIndex,
     /// DICOM の拡張子。
     dicom_extensions: &'a [&'a str],
+    /// まだ読んでいないフォルダの下に項目があるか（[`Peeker`]）。
+    peeks: &'a HashMap<PathBuf, Peek>,
 }
 
 impl View<'_> {
@@ -59,11 +63,13 @@ impl View<'_> {
 
 /// DICOM かもしれないファイル（[`View::may_be_dicom`]）。
 pub fn may_be_dicom(registry: &Registry, dicom_extensions: &[&str], path: &Path) -> bool {
-    let dicom_extension = path
-        .extension()
+    has_dicom_extension(dicom_extensions, path) || registry.needs_probe(path)
+}
+
+fn has_dicom_extension(dicom_extensions: &[&str], path: &Path) -> bool {
+    path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| dicom_extensions.iter().any(|d| d.eq_ignore_ascii_case(e)));
-    dicom_extension || registry.needs_probe(path)
+        .is_some_and(|e| dicom_extensions.iter().any(|d| d.eq_ignore_ascii_case(e)))
 }
 
 /// レジストリの DICOM プラグインの拡張子。
@@ -81,6 +87,8 @@ struct Out {
     action: Option<TreeAction>,
     /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
     scans: Vec<(PathBuf, Vec<PathBuf>)>,
+    /// 下に項目があるか先読みしてほしいフォルダ。
+    peeks: Vec<PathBuf>,
 }
 
 /// ツリーの操作の要求。
@@ -121,11 +129,16 @@ impl Node {
         let is_current = view.current == Some(self.path.as_path());
         if self.archive {
             let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
-            let r = ui.selectable_label(false, text);
+            let r = without_toggle(ui, |ui| ui.selectable_label(false, text));
             if r.clicked() {
                 out.action = Some(TreeAction::Mount(self.path.clone()));
             }
             copy_menu(&r, &self.path, lang, &mut out.action);
+            return;
+        }
+        if !self.shows_children(view, out) {
+            let label = without_toggle(ui, |ui| self.label(ui, is_current));
+            self.label_actions(&label, view, out);
             return;
         }
         // CollapsingHeader を使わないのは、見出しに選択状態を出せず、右クリックメニューも
@@ -133,41 +146,42 @@ impl Node {
         let id = ui.make_persistent_id(&self.path);
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
         state.set_open(self.open);
-        let (toggle, header, _) = state
-            .show_header(ui, |ui| {
-                if self.mounted {
-                    let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
-                    ui.selectable_label(is_current, text)
-                } else {
-                    ui.selectable_label(is_current, self.name.as_str())
-                }
-            })
-            .body(|ui| {
-                let children = self
-                    .children
-                    .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
-                let studies = dicom_studies(&self.path, children, view, out);
-                let mut shown = 0;
-                for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
-                    child.ui(ui, view, out);
-                    shown += 1;
-                }
-                for study in &studies {
-                    study_ui(ui, &self.path, study, view, out);
-                    shown += 1;
-                }
-                if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
-                    ui.weak(tr(lang, "Reading DICOM headers…"));
-                    shown += 1;
-                }
-                if shown == 0 {
-                    ui.weak(tr(lang, "(no subfolders)"));
-                }
-            });
-        let label = header.inner;
+        let (toggle, header, _) =
+            state
+                .show_header(ui, |ui| self.label(ui, is_current))
+                .body(|ui| {
+                    let children = self
+                        .children
+                        .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
+                    let studies = dicom_studies(&self.path, children, view, out);
+                    for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
+                        child.ui(ui, view, out);
+                    }
+                    for study in &studies {
+                        study_ui(ui, &self.path, study, view, out);
+                    }
+                    if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
+                        ui.weak(tr(lang, "Reading DICOM headers…"));
+                    }
+                });
         if toggle.clicked() {
             self.open = !self.open;
         }
+        self.label_actions(&header.inner, view, out);
+    }
+
+    fn label(&self, ui: &mut egui::Ui, is_current: bool) -> egui::Response {
+        if self.mounted {
+            let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
+            ui.selectable_label(is_current, text)
+        } else {
+            ui.selectable_label(is_current, self.name.as_str())
+        }
+    }
+
+    /// 見出しのクリック（cd）・スクロール・右クリックメニュー。
+    fn label_actions(&self, label: &egui::Response, view: &View, out: &mut Out) {
+        let lang = view.lang;
         if label.clicked() {
             out.action = Some(TreeAction::Cd(self.path.clone()));
         }
@@ -186,8 +200,34 @@ impl Node {
                 }
             });
         } else {
-            copy_menu(&label, &self.path, lang, &mut out.action);
+            copy_menu(label, &self.path, lang, &mut out.action);
         }
+    }
+
+    /// 開いたときに下へ出す項目（サブフォルダ・ZIP・DICOM の検査）があるか。▶ を出すかを決める。
+    ///
+    /// 読み込み済みなら中身で決める。まだなら先読みの結果を使い、分かるまでは ▶ を出しておく。
+    /// 分からないうちに ▶ を消さないのは、遅いドライブで中身のあるフォルダを開けなくなるより、
+    /// 末端に ▶ が残るほうが害が小さいため。
+    fn shows_children(&self, view: &View, out: &mut Out) -> bool {
+        let Some(children) = &self.children else {
+            return match view.peeks.get(&self.path) {
+                Some(Peek::Done(has)) => *has,
+                Some(Peek::Asked) => true,
+                None => {
+                    out.peeks.push(self.path.clone());
+                    true
+                }
+            };
+        };
+        children.iter().any(|c| c.is_dir || c.archive)
+            || match view.series.scan(&self.path) {
+                Scan::Done(studies) => !studies.is_empty(),
+                Scan::Reading => true,
+                Scan::NotStarted => children
+                    .iter()
+                    .any(|c| !c.is_dir && view.may_be_dicom(&c.path)),
+            }
     }
 
     /// `path` の項目。読み込み済みの子だけを辿る。
@@ -338,6 +378,21 @@ fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &
     }
 }
 
+/// ▶ を出さない項目。▶ の幅だけ空けて、▶ のある兄弟と名前の位置を揃える。
+fn without_toggle(
+    ui: &mut egui::Ui,
+    label: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.allocate_space(egui::vec2(ui.spacing().indent, ui.spacing().icon_width));
+        ui.spacing_mut().item_spacing = spacing;
+        label(ui)
+    })
+    .inner
+}
+
 /// 右クリックメニュー。選んだ項目のフルパスをコピーする。
 fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
     r.context_menu(|ui| {
@@ -346,6 +401,105 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
             ui.close();
         }
     });
+}
+
+/// まだ読んでいないフォルダの下に項目があるかの先読みの状態。
+#[derive(Clone, Copy)]
+enum Peek {
+    Asked,
+    Done(bool),
+}
+
+/// フォルダの下に項目があるかを、裏のスレッドで 1 段だけ先読みする（[`has_tree_children`]）。
+///
+/// スレッドを 1 本にして順に調べるのは、表示中のフォルダが多いときに、ネットワークドライブへ
+/// 同時にたくさん問い合わせて詰まらせないため。
+struct Peeker {
+    requests: Sender<PathBuf>,
+    results: Receiver<(PathBuf, bool)>,
+    known: HashMap<PathBuf, Peek>,
+}
+
+impl Peeker {
+    fn start(registry: Registry, wake: impl Fn() + Send + 'static) -> Self {
+        let (requests, todo) = std::sync::mpsc::channel::<PathBuf>();
+        let (done, results) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for dir in todo {
+                let has = has_tree_children(&dir, &registry);
+                if done.send((dir, has)).is_err() {
+                    break;
+                }
+                wake();
+            }
+        });
+        Self {
+            requests,
+            results,
+            known: HashMap::new(),
+        }
+    }
+
+    fn receive(&mut self) {
+        for (dir, has) in self.results.try_iter() {
+            self.known.insert(dir, Peek::Done(has));
+        }
+    }
+
+    fn ask(&mut self, dirs: Vec<PathBuf>) {
+        for dir in dirs {
+            if self.requests.send(dir.clone()).is_ok() {
+                self.known.insert(dir, Peek::Asked);
+            }
+        }
+    }
+}
+
+/// 中身を読んで DICOM か確かめるファイルの数の上限（[`has_tree_children`]）。
+const PEEK_PROBES: usize = 32;
+
+/// フォルダ `dir` を開いたときにツリーへ出す項目（サブフォルダ・ZIP・DICOM の検査）がありそうか。
+/// 1 つ見つけたらそこで止める。読めないフォルダは開いても何も出ないので、ないとする。
+pub fn has_tree_children(dir: &Path, registry: &Registry) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let dicom_extensions = dicom_extensions(registry);
+    let mut probes = 0;
+    for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = e.path();
+        if entry_is_dir(&e) || crate::archive::is_zip(&path) {
+            return true;
+        }
+        if has_dicom_extension(dicom_extensions, &path) {
+            return true;
+        }
+        if registry.needs_probe(&path) {
+            // 中身を読むのは決まった数まで。/usr/bin のように拡張子のないファイルが数千ある
+            // フォルダで、先読みのためだけに全部を開かないため。超えたら ▶ を残す側に倒す。
+            if probes == PEEK_PROBES {
+                return true;
+            }
+            probes += 1;
+            if registry.supports_file(&path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 種別は DirEntry::file_type() で取る。path.is_dir() は項目ごとに stat を発行し、
+/// 数万件のフォルダで目に見えて遅くなる。シンボリックリンクのときだけ辿って確かめる。
+fn entry_is_dir(e: &std::fs::DirEntry) -> bool {
+    match e.file_type() {
+        Ok(t) if t.is_symlink() => e.path().is_dir(),
+        Ok(t) => t.is_dir(),
+        Err(_) => false,
+    }
 }
 
 /// ツリーで描くときに外から渡すもの。
@@ -370,6 +524,8 @@ pub struct FolderTree {
     order: SortOrder,
     /// 次に描くときに、見える位置までスクロールするフォルダ。
     reveal: Option<PathBuf>,
+    /// 初めて描くときに始める。スレッドを起こすのに egui の Context が要るため。
+    peeker: Option<Peeker>,
 }
 
 impl FolderTree {
@@ -398,6 +554,7 @@ impl FolderTree {
             roots,
             order,
             reveal: None,
+            peeker: None,
         }
     }
 
@@ -431,8 +588,23 @@ impl FolderTree {
     /// フォルダ `dir` の中身を読み直す（フォルダの監視で変化を知ったとき）。
     /// 同じフォルダが Home と / の両方の下に出ていることがあるので、すべてのルートを辿る。
     pub fn refresh(&mut self, dir: &Path, registry: &Registry) {
+        self.forget_peek(dir);
         for root in &mut self.roots {
             root.refresh(dir, registry, self.order);
+        }
+    }
+
+    /// `dir` の先読みの結果を捨て、次に描くときに調べ直す。
+    fn forget_peek(&mut self, dir: &Path) {
+        if let Some(p) = &mut self.peeker {
+            p.known.remove(dir);
+        }
+    }
+
+    /// 先読みの結果をすべて捨てる。DICOM として中身を調べる拡張子が変わったときに使う。
+    pub fn forget_peeks(&mut self) {
+        if let Some(p) = &mut self.peeker {
+            p.known.clear();
         }
     }
 
@@ -460,6 +632,11 @@ impl FolderTree {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: Context) -> Drawn {
+        let peeker = self.peeker.get_or_insert_with(|| {
+            let wake = ui.ctx().clone();
+            Peeker::start(cx.registry.clone(), move || wake.request_repaint())
+        });
+        peeker.receive();
         let view = View {
             registry: cx.registry,
             current: cx.current,
@@ -469,11 +646,13 @@ impl FolderTree {
             order: self.order,
             series: cx.series,
             dicom_extensions: dicom_extensions(cx.registry),
+            peeks: &peeker.known,
         };
         let mut out = Out::default();
         for root in &mut self.roots {
             root.ui(ui, &view, &mut out);
         }
+        peeker.ask(out.peeks);
         self.reveal = None;
         Drawn {
             action: out.action,
@@ -497,13 +676,7 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
                 return None;
             }
             let path = e.path();
-            // 種別は DirEntry::file_type() で取る。path.is_dir() は項目ごとに stat を発行し、
-            // 数万件のフォルダで目に見えて遅くなる。シンボリックリンクのときだけ辿って確かめる。
-            let is_dir = match e.file_type() {
-                Ok(t) if t.is_symlink() => path.is_dir(),
-                Ok(t) => t.is_dir(),
-                Err(_) => false,
-            };
+            let is_dir = entry_is_dir(&e);
             let archive = !is_dir && crate::archive::is_zip(&path);
             if !is_dir && !archive && !registry.supports_file(&path) {
                 return None;
@@ -613,7 +786,7 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, TempDir};
+    use crate::test_util::{all_registry, png_registry, TempDir};
 
     fn names(nodes: &[Node]) -> Vec<&str> {
         nodes.iter().map(|n| n.name.as_str()).collect()
@@ -782,6 +955,7 @@ mod tests {
             roots: vec![Node::dir(root.to_path_buf(), None, false)],
             order: SortOrder::default(),
             reveal: None,
+            peeker: None,
         }
     }
 
@@ -799,6 +973,46 @@ mod tests {
         assert_eq!(names(&listing.folders), ["sub2", "sub10"]);
         assert_eq!(names(&listing.archives), ["pack.zip"]);
         assert_eq!(names(&listing.images), ["img2.png", "img10.png"]);
+    }
+
+    #[test]
+    fn folder_with_a_subfolder_or_zip_shows_children() {
+        let with_sub = TempDir::new();
+        with_sub.mkdir("inner");
+        assert!(has_tree_children(with_sub.path(), &all_registry()));
+        let with_zip = TempDir::new();
+        with_zip.touch("scans.zip");
+        assert!(has_tree_children(with_zip.path(), &all_registry()));
+    }
+
+    #[test]
+    fn folder_with_only_images_and_hidden_folders_is_a_leaf() {
+        let dir = TempDir::new();
+        dir.touch("a.png");
+        dir.touch("notes.txt");
+        dir.mkdir(".git");
+        assert!(!has_tree_children(dir.path(), &all_registry()));
+    }
+
+    #[test]
+    fn folder_with_a_dicom_file_shows_children_but_one_with_plain_extensionless_files_does_not() {
+        let plain = TempDir::new();
+        std::fs::write(plain.path().join("README"), b"hello").unwrap();
+        assert!(!has_tree_children(plain.path(), &all_registry()));
+        let dicom = TempDir::new();
+        let mut data = vec![0u8; 128];
+        data.extend_from_slice(b"DICM");
+        std::fs::write(dicom.path().join("IM0001"), data).unwrap();
+        assert!(has_tree_children(dicom.path(), &all_registry()));
+    }
+
+    #[test]
+    fn unreadable_folder_is_a_leaf() {
+        let dir = TempDir::new();
+        assert!(!has_tree_children(
+            &dir.path().join("missing"),
+            &all_registry()
+        ));
     }
 
     #[test]
@@ -825,6 +1039,7 @@ mod tests {
             ],
             order: SortOrder::default(),
             reveal: None,
+            peeker: None,
         };
         tree.reveal(&sub, &png_registry());
         assert!(tree.roots[0].open);

@@ -2459,6 +2459,7 @@ impl VwApp {
         self.probe_extensions = dicom.probe_extensions.clone();
         let registry = self.loader.registry().clone();
         registry.set_probe_extensions(dicom.probe());
+        self.tree.forget_peeks();
         for dir in self.tree.open_paths() {
             self.tree.refresh(&dir, &registry);
         }

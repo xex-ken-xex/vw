@@ -58,7 +58,6 @@ const JA: &[(&str, &str)] = &[
     ("No images or folders here", "画像もフォルダもありません"),
     ("Open this folder", "このフォルダへ移動"),
     ("Double-click to show the images inside", "ダブルクリックで中の画像を表示"),
-    ("(no subfolders)", "（サブフォルダなし）"),
     ("Keep zoom when stepping", "前後の画像で倍率と位置を保つ"),
     ("Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.", "複数枚あるスロット（フォルダ・フレーム・シリーズ）で前後の画像に送るとき、倍率と位置を引き継ぎます。DICOM は常に引き継ぎます。"),
     ("Medical images (DICOM)", "医用画像 (DICOM)"),

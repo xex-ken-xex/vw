@@ -366,6 +366,10 @@ impl Slot {
         }
         if self.shown.is_some() {
             response.context_menu(|ui| {
+                if ui.button(tr(lang, "Fit image to slot")).clicked() {
+                    self.reset_view();
+                    ui.close();
+                }
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.copy = true;
                     ui.close();

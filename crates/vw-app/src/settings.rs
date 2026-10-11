@@ -115,7 +115,7 @@ impl Default for Viewer {
             custom_layout: SlotLayout::grid(3, 2),
             slideshow_fps: 10.0,
             slideshow_end: EndMode::Loop,
-            keep_view: false,
+            keep_view: true,
         }
     }
 }
@@ -715,7 +715,7 @@ mod tests {
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
         s.viewer.slideshow_fps = 24.0;
         s.viewer.slideshow_end = EndMode::PingPong;
-        s.viewer.keep_view = true;
+        s.viewer.keep_view = false;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
         s.tree.sort = SortKey::Modified;
