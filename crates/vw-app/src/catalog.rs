@@ -68,7 +68,7 @@ impl std::fmt::Display for Skipped {
     }
 }
 
-const PASSWORD_SKIPPED: &str = "password";
+pub(crate) const PASSWORD_SKIPPED: &str = "password";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
@@ -155,11 +155,11 @@ pub struct Progress {
 }
 
 impl Progress {
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn step(&self, current: &str) {
+    pub(crate) fn step(&self, current: &str) {
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = current.to_owned();
     }
 }
@@ -251,7 +251,7 @@ pub fn scan(
     })
 }
 
-fn skip(path: &str, reason: impl Into<String>) -> Skipped {
+pub(crate) fn skip(path: &str, reason: impl Into<String>) -> Skipped {
     Skipped {
         path: path.to_owned(),
         reason: reason.into(),
@@ -465,7 +465,7 @@ fn relative_name(root: &Path, path: &Path) -> String {
 }
 
 /// OS によらず `/` で区切る。Windows で作ったカタログを Linux でも使えるように。
-fn slash_path(path: &Path) -> String {
+pub(crate) fn slash_path(path: &Path) -> String {
     path.components()
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

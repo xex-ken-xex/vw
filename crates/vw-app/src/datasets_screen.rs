@@ -14,6 +14,9 @@ use crate::settings::Language;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Close,
+    /// データセットのフォルダへ移ってファイルを読み込む。
+    Show(PathBuf),
+    Extract(PathBuf),
     Edit(PathBuf),
     /// 並べたデータセットを順に更新する。
     Update(Vec<PathBuf>),
@@ -190,7 +193,9 @@ impl DatasetsScreen {
         }
         egui::CentralPanel::default().show(ui, |ui| {
             self.status_line(ui, lang, roots);
-            self.table_ui(ui, lang, &field_names);
+            if let Some(a) = self.table_ui(ui, lang, &field_names) {
+                action = Some(a);
+            }
         });
         action
     }
@@ -365,6 +370,14 @@ impl DatasetsScreen {
                     );
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Show")).clicked() {
+                            action = Some(Action::Show(entry.dir.clone()));
+                        }
+                        if ui.button(tr(lang, "Extract...")).clicked() {
+                            action = Some(Action::Extract(entry.dir.clone()));
+                        }
+                    });
+                    ui.horizontal(|ui| {
                         if ui.button(tr(lang, "Edit...")).clicked() {
                             action = Some(Action::Edit(entry.dir.clone()));
                         }
@@ -419,10 +432,13 @@ impl DatasetsScreen {
         action
     }
 
-    fn table_ui(&mut self, ui: &mut egui::Ui, lang: Language, field_names: &[String]) {
-        let Some(index) = &self.index else {
-            return;
-        };
+    fn table_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        field_names: &[String],
+    ) -> Option<Action> {
+        let index = self.index.as_ref()?;
         let mut order: Vec<&Hit> = self.hits.iter().collect();
         let entry = |h: &Hit| &index.entries[h.entry];
         let key = |h: &Hit| -> String {
@@ -448,6 +464,7 @@ impl DatasetsScreen {
         let nest = self.sort == Column::Location && !self.descending;
         let dirs: Vec<&Path> = order.iter().map(|h| entry(h).dir.as_path()).collect();
         let mut clicked = None;
+        let mut show = None;
         let mut sort_by = None;
         egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
             egui::Grid::new("datasets-table")
@@ -492,8 +509,12 @@ impl DatasetsScreen {
                         };
                         let selected = self.selected.as_ref() == Some(&e.dir);
                         let name = format!("{}{}", "    ".repeat(depth), e.catalog.name);
-                        if ui.selectable_label(selected, name).clicked() {
+                        let row = ui.selectable_label(selected, name);
+                        if row.clicked() {
                             clicked = Some(e.dir.clone());
+                        }
+                        if row.double_clicked() {
+                            show = Some(e.dir.clone());
                         }
                         ui.label(e.catalog.tags.join(", "));
                         for f in field_names {
@@ -516,6 +537,7 @@ impl DatasetsScreen {
         if let Some(dir) = clicked {
             self.selected = Some(dir);
         }
+        show.map(Action::Show)
     }
 }
 

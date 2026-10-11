@@ -11,6 +11,7 @@ mod archive;
 mod autoload;
 mod catalog;
 mod copy;
+mod dataset_extract;
 mod dataset_search;
 mod dataset_ui;
 mod datasets_screen;

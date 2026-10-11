@@ -16,6 +16,18 @@ pub fn tr(lang: Language, en: &'static str) -> &'static str {
     }
 }
 
+/// 実行時に決まる文言（エラーなど）を訳す。訳がなければそのまま。
+pub fn tr_text(lang: Language, en: &str) -> String {
+    match lang {
+        Language::English => en.to_owned(),
+        Language::Japanese => JA
+            .iter()
+            .find(|(k, _)| *k == en)
+            .map_or(en, |(_, ja)| *ja)
+            .to_owned(),
+    }
+}
+
 /// 訳に `{}` を 1 つ含む文言を、`arg` を埋め込んで返す。
 pub fn tr1(lang: Language, en: &'static str, arg: &str) -> String {
     tr(lang, en).replacen("{}", arg, 1)
@@ -379,6 +391,32 @@ const JA: &[(&str, &str)] = &[
     ("Register", "登録"),
     ("Save", "保存"),
     ("Save and update", "保存して更新"),
+    ("Extract dataset", "データセットの取り出し"),
+    ("Destination", "出力先"),
+    (
+        "An empty or new folder. The files are copied with their folders, and the search catalog is rebuilt there.",
+        "空のフォルダか、まだないフォルダ。ファイルはフォルダ構成のまま写し、そこで検索カタログを作り直します。",
+    ),
+    ("Extract", "取り出す"),
+    ("Extract...", "取り出し..."),
+    ("Show", "表示"),
+    ("Later", "後で"),
+    (
+        "Stopped extracting. The files already copied remain in {}.",
+        "取り出しを止めました。写したファイルは {} に残っています。",
+    ),
+    (
+        "The files were extracted into the dataset \"{}\". Update it now?",
+        "データセット「{}」の中に取り出しました。このデータセットを更新しますか？",
+    ),
+    (
+        "Until it is updated, its search catalog does not include the extracted files.",
+        "更新するまで、その検索カタログには取り出したファイルが入りません。",
+    ),
+    ("Enter the full path of the destination folder.", "出力先のフォルダをフルパスで入れてください。"),
+    ("The destination is inside the dataset being extracted.", "出力先が、取り出すデータセットの中にあります。"),
+    ("The destination folder is not empty.", "出力先のフォルダが空ではありません。"),
+    ("The destination is not a folder.", "出力先がフォルダではありません。"),
     (
         "Read all files again and rebuild the search catalog.",
         "全ファイルを読み直して検索カタログを作り直します。",

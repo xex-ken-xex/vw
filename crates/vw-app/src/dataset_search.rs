@@ -217,13 +217,22 @@ impl Matcher {
             Matcher::Regex(r) => r.is_match(value),
             // 複数の値（`0.5\0.5`）はどれか 1 つが範囲に入れば当たり。
             Matcher::Range(lo, hi) => value.split('\\').any(|v| {
-                v.trim()
-                    .parse::<f64>()
-                    .is_ok_and(|n| lo.is_none_or(|lo| n >= lo) && hi.is_none_or(|hi| n <= hi))
+                leading_number(v)
+                    .is_some_and(|n| lo.is_none_or(|lo| n >= lo) && hi.is_none_or(|hi| n <= hi))
             }),
             Matcher::Exists => !value.is_empty(),
         }
     }
+}
+
+/// 値の先頭の数。単位の付いた値（EXIF の `50 mm` など）も範囲で探せるように、数の後ろは見ない。
+fn leading_number(value: &str) -> Option<f64> {
+    let v = value.trim();
+    let end = v
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+'))))
+        .map_or(v.len(), |(i, _)| i);
+    v[..end].parse().ok()
 }
 
 /// データセットにかける条件。メタデータの条件はファイルの単位で数える。
@@ -535,6 +544,22 @@ mod tests {
             ..Query::default()
         };
         assert_eq!(names(&i, &q).len(), 1);
+    }
+
+    #[test]
+    fn range_reads_the_number_before_a_unit() {
+        let i = index(vec![
+            catalog("wide", &[&[("exif", "FocalLength", "24 mm")]]),
+            catalog("tele", &[&[("exif", "FocalLength", "200 mm")]]),
+            catalog("text", &[&[("exif", "FocalLength", "unknown")]]),
+        ]);
+        let mut range = cond(meta("exif", "FocalLength"), Op::Range, "100");
+        range.max = "300".into();
+        let q = Query {
+            conditions: vec![range],
+            ..Query::default()
+        };
+        assert_eq!(names(&i, &q), [("tele".to_owned(), 1)]);
     }
 
     #[test]

@@ -72,7 +72,7 @@ DisplayImage (RGBA8)
 - 対応は ZIP（無圧縮 / Deflate / Deflate64、ZipCrypto・AES の暗号化）と 7z（`sevenz-rust2`、LZMA / LZMA2 / BZip2 / PPMd、AES）。形式は拡張子ではなく先頭のバイト列で見分ける。
   暗号化されていればパスワードのダイアログを出し、入力されたパスワードで展開し直す。パスワードは覚えない（設定ファイルに平文で残したくないため）
 
-### データセット（`catalog.rs` / `dataset_ui.rs` / `dataset_search.rs` / `datasets_screen.rs`）
+### データセット（`catalog.rs` / `dataset_ui.rs` / `dataset_search.rs` / `datasets_screen.rs` / `dataset_extract.rs`）
 
 - データセットはフォルダ 1 つ。直下の検索カタログ `vw-search-catalog.json` に、名前・メモ・タグ・足した項目と、
   フォルダ以下の画像（ZIP / 7z の中も `data.zip!/a/b.png` の形で）のメタデータを持つ
@@ -87,6 +87,9 @@ DisplayImage (RGBA8)
   カタログが組の辞書を持つので、条件ごとに辞書を一度なめて当たる組の番号を集め、各ファイルの番号の一覧と突き合わせる
 - メタデータの条件は同じファイルで満たすものだけを数える。データセット単位で別々に満たすだけでは、
   「この機種でこのレンズ」のような絞り込みが別々のファイルで当たってしまうため
+- 取り出しは検索カタログの `files` を写し、出力先を読み直して新しい検索カタログを作る（`source` に元を書く）。
+  出力先は空のフォルダに限る。もとからあったファイルまで取り出したものとして入らないように。
+  アーカイブの中のファイルはアーカイブと同じ名前のフォルダに展開するので、`archive::is_archive` はフォルダを除く
 
 ## 画面構成（SDI・シングルページ）
 
