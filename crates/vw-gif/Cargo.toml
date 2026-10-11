@@ -1,0 +1,10 @@
+[package]
+name = "vw-gif"
+description = "GIF decoder plugin for vw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gif = { version = "0.14", default-features = false, features = ["std"] }
+vw-core.workspace = true

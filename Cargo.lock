@@ -1250,6 +1250,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
+dependencies = [
+ "weezl",
+]
+
+[[package]]
 name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3699,6 +3708,7 @@ dependencies = [
  "vw-bmp",
  "vw-core",
  "vw-dicom",
+ "vw-gif",
  "vw-jpeg",
  "vw-png",
  "vw-raw",
@@ -3735,6 +3745,14 @@ dependencies = [
  "dicom-dictionary-std",
  "dicom-object",
  "dicom-pixeldata",
+ "vw-core",
+]
+
+[[package]]
+name = "vw-gif"
+version = "0.2.0"
+dependencies = [
+ "gif",
  "vw-core",
 ]
 
