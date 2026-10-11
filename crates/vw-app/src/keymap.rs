@@ -24,6 +24,7 @@ pub enum Action {
     ToggleImages,
     ToggleLog,
     ToggleSettings,
+    ToggleDatasets,
     CloseAllSlots,
     Quit,
     PreviousSlot,
@@ -68,7 +69,7 @@ pub enum Action {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 49] = [
+    pub const ALL: [Action; 50] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -118,6 +119,7 @@ impl Action {
         Action::ToggleImages,
         Action::ToggleLog,
         Action::ToggleSettings,
+        Action::ToggleDatasets,
     ];
 
     /// 設定ファイルでの名前。
@@ -132,6 +134,7 @@ impl Action {
             Action::ToggleImages => "toggle_images",
             Action::ToggleLog => "toggle_log",
             Action::ToggleSettings => "toggle_settings",
+            Action::ToggleDatasets => "toggle_datasets",
             Action::CloseAllSlots => "close_all_slots",
             Action::Quit => "quit",
             Action::PreviousSlot => "previous_slot",
@@ -191,6 +194,7 @@ impl Action {
             Action::ToggleImages => "Show/hide images",
             Action::ToggleLog => "Show/hide log",
             Action::ToggleSettings => "Open/close settings",
+            Action::ToggleDatasets => "Open/close datasets",
             Action::CloseAllSlots => "Close all slots",
             Action::Quit => "Quit",
             Action::PreviousSlot => "Previous slot",
@@ -317,6 +321,7 @@ impl Action {
             Action::ToggleImages => vec![KeyCombo::ctrl(Num3)],
             Action::ToggleLog => vec![KeyCombo::ctrl(Num4)],
             Action::ToggleSettings => vec![KeyCombo::ctrl(Comma)],
+            Action::ToggleDatasets => vec![KeyCombo::ctrl(D)],
             Action::CloseAllSlots => vec![KeyCombo::ctrl(W).with(true, true, false)],
             Action::Quit => vec![KeyCombo::ctrl(Q)],
             Action::PreviousSlot => vec![KeyCombo::ctrl(ArrowLeft)],

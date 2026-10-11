@@ -80,10 +80,13 @@ pub struct Source {
 pub struct FileEntry {
     /// データセットのフォルダからの相対パス（区切りは `/`）。ZIP の中は [`IN_ARCHIVE`] でつなぐ。
     pub path: String,
+    #[serde(default)]
     pub size: u64,
     /// 更新時刻（UTC、RFC 3339）。ZIP の中のファイルは ZIP の更新時刻。
+    #[serde(default)]
     pub modified: String,
     /// [`Catalog::meta`] の番号。
+    #[serde(default)]
     pub meta: Vec<u32>,
 }
 

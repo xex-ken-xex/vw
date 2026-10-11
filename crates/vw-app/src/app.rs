@@ -125,6 +125,11 @@ pub struct VwApp {
     settings_ui: SettingsUi,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
+    /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
+    show_datasets: bool,
+    datasets: crate::datasets_screen::DatasetsScreen,
+    /// 「すべて更新」で順に更新するデータセット。
+    dataset_queue: Vec<PathBuf>,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -439,6 +444,9 @@ impl VwApp {
             settings,
             settings_ui: SettingsUi::default(),
             show_settings: false,
+            show_datasets: false,
+            datasets: Default::default(),
+            dataset_queue: Vec::new(),
             log,
             started,
             first_frame: true,
@@ -991,6 +999,7 @@ impl VwApp {
         self.dataset_dialog = Some(crate::dataset_ui::DatasetDialog::open(
             request,
             &self.settings.settings.dataset.fields,
+            self.datasets.index(),
             self.loader.registry(),
             ctx,
         ));
@@ -1002,8 +1011,21 @@ impl VwApp {
         };
         let lang = self.settings.settings.appearance.language;
         if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
+            let dir = dialog.dir().to_path_buf();
             self.dataset_dialog = None;
+            self.datasets.refresh(&dir);
+            self.next_queued_update(ctx);
         }
+    }
+
+    /// 「すべて更新」で残っているデータセットを、前のものが終わるたびに 1 つずつ更新する。
+    /// 同時に走らせないのは、パスワードを聞くダイアログが重ならないようにするため。
+    fn next_queued_update(&mut self, ctx: &egui::Context) {
+        if self.dataset_dialog.is_some() || self.dataset_queue.is_empty() {
+            return;
+        }
+        let dir = self.dataset_queue.remove(0);
+        self.open_dataset_dialog(ctx, crate::dataset_ui::Request::Update(dir));
     }
 
     /// 暗号化された ZIP / 7z のパスワードを尋ね、入力されたらそのパスワードで展開し直す。
@@ -2774,6 +2796,15 @@ impl VwApp {
             .map(KeyCombo::to_string)
     }
 
+    fn toggle_datasets(&mut self, ctx: &egui::Context) {
+        self.show_datasets = !self.show_datasets;
+        if self.show_datasets {
+            self.show_settings = false;
+            self.datasets
+                .opened(&self.settings.settings.dataset.roots, ctx);
+        }
+    }
+
     fn toggle_settings(&mut self) {
         self.show_settings = !self.show_settings;
         if self.show_settings {
@@ -2833,6 +2864,7 @@ impl VwApp {
             Action::ToggleImages => self.fields.images ^= true,
             Action::ToggleLog => self.fields.log ^= true,
             Action::ToggleSettings => self.toggle_settings(),
+            Action::ToggleDatasets => self.toggle_datasets(ctx),
             Action::PreviousSlot => self.step_slot(-1),
             Action::NextSlot => self.step_slot(1),
             Action::PreviousPage | Action::NextPage => {
@@ -2888,6 +2920,11 @@ impl VwApp {
         for action in keys.actions_in(&events) {
             // 設定画面の間は画像やパネルの操作をしない。見えていない画面が変わるのを避けるため。
             if self.show_settings && action != Action::ToggleSettings {
+                continue;
+            }
+            if self.show_datasets
+                && !matches!(action, Action::ToggleDatasets | Action::ToggleSettings)
+            {
                 continue;
             }
             if action.needs_tagging_mode() && !self.tagging {
@@ -3096,6 +3133,13 @@ impl VwApp {
                 egui::Button::selectable(self.show_settings, big(icon::GEAR_SIX)).min_size(size);
             if ui.add(button).on_hover_text(tip).clicked() {
                 self.toggle_settings();
+            }
+            let tip = self.with_key(tr(lang, "Datasets"), Action::ToggleDatasets);
+            let button =
+                egui::Button::selectable(self.show_datasets, big(icon::DATABASE)).min_size(size);
+            if ui.add(button).on_hover_text(tip).clicked() {
+                let ctx = ui.ctx().clone();
+                self.toggle_datasets(&ctx);
             }
         });
     }
@@ -3398,6 +3442,9 @@ impl VwApp {
                     }
                 });
                 ui.separator();
+                if self.menu_item(ui, Action::ToggleDatasets, Some(self.show_datasets)) {
+                    chosen = Some(Action::ToggleDatasets);
+                }
                 if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
                     chosen = Some(Action::ToggleSettings);
                 }
@@ -4191,6 +4238,26 @@ impl eframe::App for VwApp {
             return;
         }
 
+        if self.show_datasets {
+            let lang = self.lang();
+            let dataset = &self.settings.settings.dataset;
+            let action = self.datasets.ui(ui, lang, &dataset.roots, &dataset.fields);
+            match action {
+                Some(crate::datasets_screen::Action::Close) => self.show_datasets = false,
+                Some(crate::datasets_screen::Action::Edit(dir)) => {
+                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Edit(dir));
+                }
+                Some(crate::datasets_screen::Action::Update(dirs)) => {
+                    self.dataset_queue.extend(dirs);
+                }
+                None => {}
+            }
+            self.next_queued_update(&ctx);
+            self.dataset_window(&ctx);
+            self.password_dialog(&ctx);
+            return;
+        }
+
         let lang = self.lang();
         if self.fields.log {
             egui::Panel::bottom("log")
@@ -4352,6 +4419,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleImages => "Images",
         Action::ToggleLog => "Log",
         Action::ToggleSettings => "Settings",
+        Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
         other => other.title(),
     }
