@@ -50,11 +50,14 @@ const JA: &[(&str, &str)] = &[
         "Failed to load (see log)",
         "読み込めませんでした（ログを参照）",
     ),
-    (
-        "Select an image in the folder tree (Ctrl+click adds a slot)",
-        "フォルダツリーで画像を選んでください（Ctrl+クリックでスロットを追加）",
-    ),
     ("(empty)", "（空）"),
+    (
+        "Click a folder in the tree to show its contents",
+        "ツリーのフォルダをクリックすると中身を表示します",
+    ),
+    ("No images or folders here", "画像もフォルダもありません"),
+    ("Open this folder", "このフォルダへ移動"),
+    ("Double-click to show the images inside", "ダブルクリックで中の画像を表示"),
     ("(no subfolders)", "（サブフォルダなし）"),
     ("Keep zoom when stepping", "前後の画像で倍率と位置を保つ"),
     ("Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.", "複数枚あるスロット（フォルダ・フレーム・シリーズ）で前後の画像に送るとき、倍率と位置を引き継ぎます。DICOM は常に引き継ぎます。"),
@@ -121,8 +124,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Sort order", "並び順"),
     (
-        "Order of files and folders in the tree, also used for previous/next image. Folders always come first.",
-        "ツリーのファイルとフォルダの並び順。前後の画像への移動もこの順になります。フォルダは常にファイルより前です。",
+        "Order of the folders in the tree and of the folders and images in the slots, also used for previous/next image. Folders always come first.",
+        "ツリーのフォルダと、スロットに並べるフォルダ・画像の並び順。前後の画像への移動もこの順になります。フォルダは常に画像より前です。",
     ),
     ("Name (numbers by value)", "ファイル名（数字は数値として比較）"),
     ("Name (character by character)", "ファイル名（文字列として比較）"),
@@ -132,42 +135,6 @@ const JA: &[(&str, &str)] = &[
         "Reverse the sort order (Z to A, newest first).",
         "並び順を逆にします（Z から A、新しい順）。",
     ),
-    ("Tree mode", "ツリーのモード"),
-    (
-        "Normal shows folders and images; click an image to open it. Auto-load shows folders only and loads all images of a folder into slots.",
-        "ノーマルはフォルダと画像を表示し、画像をクリックして開きます。画像自動展開はフォルダだけを表示し、フォルダの画像をまとめてスロットに読み込みます。",
-    ),
-    ("Normal", "ノーマル"),
-    ("Auto-load images", "画像自動展開"),
-    ("Folder click (auto-load)", "フォルダのクリック（画像自動展開）"),
-    (
-        "How a folder is expanded/collapsed and how it is loaded in auto-load mode. Images directly in the folder load at once; subfolders are asked about first.",
-        "画像自動展開モードでの、フォルダの開閉と読み込みの操作。フォルダ直下の画像はすぐ読み込み、サブフォルダは先に確認します。",
-    ),
-    (
-        "Click: expand after the double-click time / Double-click: load",
-        "クリック: ダブルクリック時間の後に開閉 / ダブルクリック: 読み込み",
-    ),
-    (
-        "Click: expand at once / Double-click: undo and load",
-        "クリック: すぐ開閉 / ダブルクリック: 開閉を戻して読み込み",
-    ),
-    (
-        "Click: expand / Shift+click: load",
-        "クリック: 開閉 / Shift+クリック: 読み込み",
-    ),
-    ("Double-click time", "ダブルクリック時間"),
-    (
-        "Two clicks within this time (ms) count as a double-click.",
-        "この時間（ミリ秒）以内の 2 回のクリックをダブルクリックとみなします。",
-    ),
-    ("Loading another folder", "別のフォルダを読み込むとき"),
-    (
-        "What happens to the open slots when another folder is loaded. Expanding or collapsing a folder never closes slots.",
-        "別のフォルダを読み込むときに、表示中のスロットをどうするか。フォルダを開閉するだけではスロットは閉じません。",
-    ),
-    ("Replace the slots", "スロットを置き換える"),
-    ("Add after the slots", "スロットの後ろに追加する"),
     ("Confirm large loads", "大量の読み込みを確認"),
     (
         "Ask before continuing each time the number of loaded images reaches the chunk size.",
@@ -191,14 +158,6 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Load more", "続けて読み込む"),
     ("Stop", "やめる"),
-    (
-        "Double-click a folder in the tree to load its images",
-        "ツリーのフォルダをダブルクリックすると画像を読み込みます",
-    ),
-    (
-        "Shift+click a folder in the tree to load its images",
-        "ツリーのフォルダを Shift+クリックすると画像を読み込みます",
-    ),
     ("Behavior", "動作"),
     ("Group heading click", "グループ見出しのクリック"),
     (
@@ -334,7 +293,11 @@ const JA: &[(&str, &str)] = &[
     ("Next slot", "次のスロット"),
     ("Previous page", "前のページ"),
     ("Next page", "次のページ"),
-    ("Maximize/restore slot", "スロットの最大化/元に戻す"),
+    (
+        "Maximize/restore slot, or open folder",
+        "スロットの最大化/元に戻す、またはフォルダへ移動",
+    ),
+    ("Up one folder", "1 つ上のフォルダへ"),
     ("Maximize slot", "スロットを最大化"),
     ("Fit image to slot", "スロットに合わせる"),
     ("Actual size (100%)", "実寸 (100%)"),
@@ -370,8 +333,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Load folders into", "フォルダの読み込み先"),
     (
-        "Auto-load mode: put each image into its own slot, or each folder into one slot that steps through its images.",
-        "画像自動展開モードで、画像を 1 枚ずつ別のスロットに入れるか、フォルダごとに 1 つのスロットに入れて中の画像を送るか。",
+        "Put each image of the current folder into its own slot, or all of them into one slot that steps through them.",
+        "今いるフォルダの画像を 1 枚ずつ別のスロットに入れるか、まとめて 1 つのスロットに入れて中の画像を送るか。",
     ),
     ("One slot per image", "画像ごとに 1 スロット"),
     ("One slot per folder", "フォルダごとに 1 スロット"),

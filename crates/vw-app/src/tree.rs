@@ -1,19 +1,18 @@
-//! フォルダツリー。フォルダと、対応形式の画像ファイルだけを表示する。
+//! フォルダツリー。フォルダ（ZIP や DICOM の検査・シリーズといった仮想のフォルダを含む）だけを
+//! 表示する。ファイルはツリーに出さず、クリックで cd したフォルダの中身としてスロットに並べる。
 //!
 //! フォルダの中身は初めて開いたときに読む。起動時にドライブ全体を走査すると
 //! 起動が遅くなるうえ、ネットワークドライブで固まることがあるため。
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
 
 use crate::i18n::tr;
-use crate::labels::{self, Label, LabelStore};
 use crate::series::{Scan, Series, SeriesIndex, Study};
-use crate::settings::{FolderAction, Language, TreeMode};
+use crate::settings::Language;
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 
 /// ツリーの 1 項目（フォルダまたはファイル）。
@@ -22,6 +21,7 @@ pub struct Node {
     name: String,
     is_dir: bool,
     /// フォルダを初めて開くまでは `None`。一度読んだら閉じても保持する。
+    /// ファイルも持っておくのは、DICOM のシリーズを作るのにフォルダの中のファイルが要るため。
     children: Option<Vec<Node>>,
     /// 開いているか。egui の内部状態に任せず自分で持つのは、終了時に保存して次回復元するため。
     open: bool,
@@ -33,23 +33,17 @@ pub struct Node {
     mounted: bool,
 }
 
-/// 項目に付ける印と、出すファイルの絞り込み。
-pub struct Marks<'a> {
-    pub labels: &'a LabelStore,
-    pub show_file: &'a dyn Fn(&Path) -> bool,
-}
-
 /// ツリーを描くときに全項目で共通の情報。
 struct View<'a> {
     registry: &'a Registry,
-    labels: &'a LabelStore,
-    /// 絞り込みでファイルを出すか。
-    show_file: &'a dyn Fn(&Path) -> bool,
-    selected: Option<&'a Path>,
+    /// cd しているフォルダ。ハイライトする。
+    current: Option<&'a Path>,
+    /// アクティブなスロットの画像。それを含むシリーズをハイライトする。
+    active_image: Option<&'a Path>,
+    /// 見える位置までスクロールするフォルダ。
+    reveal: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
-    /// ファイルも出すか（ノーマルモード）。
-    show_files: bool,
     series: &'a SeriesIndex,
     /// DICOM の拡張子。
     dicom_extensions: &'a [&'a str],
@@ -59,133 +53,51 @@ impl View<'_> {
     /// DICOM かもしれないファイル。拡張子が他のプラグインのもの（PNG など）でなければ、
     /// ヘッダを読んで確かめる。
     fn may_be_dicom(&self, path: &Path) -> bool {
-        let dicom_extension = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-            self.dicom_extensions
-                .iter()
-                .any(|d| d.eq_ignore_ascii_case(e))
-        });
-        dicom_extension || self.registry.needs_probe(path)
+        may_be_dicom(self.registry, self.dicom_extensions, path)
     }
+}
+
+/// DICOM かもしれないファイル（[`View::may_be_dicom`]）。
+pub fn may_be_dicom(registry: &Registry, dicom_extensions: &[&str], path: &Path) -> bool {
+    let dicom_extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| dicom_extensions.iter().any(|d| d.eq_ignore_ascii_case(e)));
+    dicom_extension || registry.needs_probe(path)
+}
+
+/// レジストリの DICOM プラグインの拡張子。
+pub fn dicom_extensions(registry: &Registry) -> &[&str] {
+    registry
+        .plugins()
+        .iter()
+        .find(|p| p.name() == "DICOM")
+        .map_or(&[][..], |p| p.extensions())
 }
 
 /// ツリーを描いた結果。
 #[derive(Default)]
 struct Out {
     action: Option<TreeAction>,
-    /// クリックされたフォルダの見出しと、Shift を押していたか。開閉と読み込みのどちらにするかは
-    /// [`ClickTracker`] が決める。
-    folder_click: Option<(PathBuf, bool)>,
     /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
     scans: Vec<(PathBuf, Vec<PathBuf>)>,
 }
 
-/// ツリーでファイルがクリックされたときの要求。
+/// ツリーの操作の要求。
 pub enum TreeAction {
-    /// アクティブなスロットに表示する（通常のクリック）。
-    Open(PathBuf),
-    /// スロットを追加して表示する（Ctrl / Cmd + クリック）。
-    Add(PathBuf),
-    /// フォルダの見出しをクリックした（ツリーを Ctrl+C の対象にするだけ）。
-    Select,
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
-    /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
-    Load(PathBuf),
+    /// フォルダへ移る（中身をスロットに並べる）。
+    Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
     Mount(PathBuf),
     /// 展開した ZIP を閉じる。展開先のフォルダを渡す。
     Unmount(PathBuf),
-    /// DICOM のシリーズを 1 つのスロットに出す。`add` なら Ctrl / Cmd + クリックでスロットを足す。
+    /// DICOM のシリーズを出す。そのシリーズのあるフォルダへ移り、シリーズのスロットを選ぶ。
     Series {
         folder: PathBuf,
-        title: String,
         files: Vec<PathBuf>,
-        add: bool,
     },
-}
-
-/// フォルダの見出しのクリックの扱い方（設定から作る）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FolderClicks {
-    pub mode: TreeMode,
-    pub action: FolderAction,
-    pub double_click: Duration,
-}
-
-/// 1 回のクリックの結果。
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct ClickEffect {
-    /// 今すぐ開閉するフォルダ。
-    pub toggle: Vec<PathBuf>,
-    /// 画像を読み込むフォルダ。
-    pub load: Option<PathBuf>,
-}
-
-/// フォルダの見出しのクリックを、開閉と読み込みに振り分ける。
-///
-/// egui の `double_clicked()` を使わないのは、ダブルクリックの 1 回目もクリックとして届き、
-/// 開閉を遅らせるか戻すかの判断に 1 回目の時刻が要るため。間隔を設定で変えられるようにもしたい。
-#[derive(Default)]
-pub struct ClickTracker {
-    /// 直前のクリック。ダブルクリックの 1 回目かもしれないもの。
-    last: Option<(PathBuf, Instant)>,
-}
-
-impl ClickTracker {
-    pub fn click(
-        &mut self,
-        how: FolderClicks,
-        path: &Path,
-        shift: bool,
-        now: Instant,
-    ) -> ClickEffect {
-        let mut out = ClickEffect::default();
-        if how.mode == TreeMode::Normal {
-            out.toggle.push(path.to_owned());
-            return out;
-        }
-        let second = self
-            .last
-            .take_if(|(p, at)| p == path && now - *at <= how.double_click);
-        match how.action {
-            FolderAction::ShiftClick if shift => out.load = Some(path.to_owned()),
-            FolderAction::ShiftClick => out.toggle.push(path.to_owned()),
-            FolderAction::Immediate => {
-                // 2 回目も開閉するので、1 回目の開閉が打ち消されて元に戻る。
-                out.toggle.push(path.to_owned());
-                match second {
-                    Some(_) => out.load = Some(path.to_owned()),
-                    None => self.last = Some((path.to_owned(), now)),
-                }
-            }
-            FolderAction::Delayed => match second {
-                Some(_) => out.load = Some(path.to_owned()),
-                None => {
-                    // 別のフォルダを続けてクリックしたら、前のフォルダの開閉は待たずに済ませる。
-                    if let Some((other, _)) = self.last.replace((path.to_owned(), now)) {
-                        out.toggle.push(other);
-                    }
-                }
-            },
-        }
-        out
-    }
-
-    /// 待ち時間が過ぎた、遅らせていた開閉。
-    pub fn due(&mut self, how: FolderClicks, now: Instant) -> Option<PathBuf> {
-        let (_, at) = self.last.as_ref()?;
-        if now - *at <= how.double_click {
-            return None;
-        }
-        let (path, _) = self.last.take()?;
-        (how.mode == TreeMode::AutoLoad && how.action == FolderAction::Delayed).then_some(path)
-    }
-
-    /// 次に [`Self::due`] を確かめるまでの時間。
-    fn wait(&self, how: FolderClicks, now: Instant) -> Option<Duration> {
-        let (_, at) = self.last.as_ref()?;
-        Some((*at + how.double_click).saturating_duration_since(now) + Duration::from_millis(1))
-    }
 }
 
 impl Node {
@@ -206,24 +118,12 @@ impl Node {
 
     fn ui(&mut self, ui: &mut egui::Ui, view: &View, out: &mut Out) {
         let lang = view.lang;
-        let is_selected = view.selected == Some(self.path.as_path());
+        let is_current = view.current == Some(self.path.as_path());
         if self.archive {
             let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
             let r = ui.selectable_label(false, text);
             if r.clicked() {
                 out.action = Some(TreeAction::Mount(self.path.clone()));
-            }
-            copy_menu(&r, &self.path, lang, &mut out.action);
-            return;
-        }
-        if !self.is_dir {
-            let r = ui.selectable_label(is_selected, self.text(ui, view.labels.get(&self.path)));
-            if r.clicked() {
-                out.action = Some(if ui.input(|i| i.modifiers.command) {
-                    TreeAction::Add(self.path.clone())
-                } else {
-                    TreeAction::Open(self.path.clone())
-                });
             }
             copy_menu(&r, &self.path, lang, &mut out.action);
             return;
@@ -237,9 +137,9 @@ impl Node {
             .show_header(ui, |ui| {
                 if self.mounted {
                     let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
-                    ui.selectable_label(is_selected, text)
+                    ui.selectable_label(is_current, text)
                 } else {
-                    ui.selectable_label(is_selected, self.name.as_str())
+                    ui.selectable_label(is_current, self.name.as_str())
                 }
             })
             .body(|ui| {
@@ -247,16 +147,6 @@ impl Node {
                     .children
                     .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
                 let studies = dicom_studies(&self.path, children, view, out);
-                // シリーズに入ったファイルは、ファイルとしては出さない。数百枚の CT のファイルが
-                // シリーズの下に並ぶと、ツリーがそれで埋まるため。
-                let in_series: HashSet<&Path> = studies
-                    .iter()
-                    .flat_map(|s| &s.series)
-                    .flat_map(|s| &s.files)
-                    .map(PathBuf::as_path)
-                    .collect();
-                // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
-                // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
                 let mut shown = 0;
                 for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
                     child.ui(ui, view, out);
@@ -270,26 +160,8 @@ impl Node {
                     ui.weak(tr(lang, "Reading DICOM headers…"));
                     shown += 1;
                 }
-                let shown_file = |c: &&mut Node| {
-                    !c.is_dir
-                        && !c.archive
-                        && view.show_files
-                        && !in_series.contains(c.path.as_path())
-                        && (view.show_file)(&c.path)
-                };
-                for child in children.iter_mut().filter(shown_file) {
-                    child.ui(ui, view, out);
-                    shown += 1;
-                }
                 if shown == 0 {
-                    ui.weak(tr(
-                        lang,
-                        if view.show_files {
-                            "(empty)"
-                        } else {
-                            "(no subfolders)"
-                        },
-                    ));
+                    ui.weak(tr(lang, "(no subfolders)"));
                 }
             });
         let label = header.inner;
@@ -297,8 +169,10 @@ impl Node {
             self.open = !self.open;
         }
         if label.clicked() {
-            out.action = Some(TreeAction::Select);
-            out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
+            out.action = Some(TreeAction::Cd(self.path.clone()));
+        }
+        if view.reveal == Some(self.path.as_path()) {
+            label.scroll_to_me(Some(egui::Align::Center));
         }
         if self.mounted {
             label.context_menu(|ui| {
@@ -316,28 +190,34 @@ impl Node {
         }
     }
 
-    /// 表示する名前。フラグやタグがあれば一緒に出す。
-    fn text(&self, ui: &egui::Ui, label: Label) -> egui::WidgetText {
-        if label.is_empty() {
-            return self.name.as_str().into();
-        }
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let weak = ui.visuals().weak_text_color();
-        labels::labeled_name(&self.name, &label, egui::Color32::PLACEHOLDER, weak, font).into()
-    }
-
     /// `path` の項目。読み込み済みの子だけを辿る。
-    fn find_mut(&mut self, path: &Path) -> Option<&mut Node> {
+    #[cfg(test)]
+    fn find(&self, path: &Path) -> Option<&Node> {
         if self.path == path {
             return Some(self);
         }
         if !path.starts_with(&self.path) {
             return None;
         }
-        self.children
+        self.children.iter().flatten().find_map(|c| c.find(path))
+    }
+
+    /// `path` までの親フォルダを開く（中身を読みながら）。`path` 自体は開閉を変えない。
+    /// `path` が見つかったら true。
+    fn open_towards(&mut self, path: &Path, registry: &Registry, order: SortOrder) -> bool {
+        if self.path == path {
+            return true;
+        }
+        if !self.is_dir || !path.starts_with(&self.path) {
+            return false;
+        }
+        self.open = true;
+        let children = self
+            .children
+            .get_or_insert_with(|| list_dir(&self.path, registry, order));
+        children
             .iter_mut()
-            .flatten()
-            .find_map(|c| c.find_mut(path))
+            .any(|c| c.open_towards(path, registry, order))
     }
 
     fn collect_open(&self, out: &mut Vec<PathBuf>) {
@@ -364,7 +244,6 @@ impl Node {
             child.restore_open(paths, registry, order);
         }
     }
-
     /// 読み込み済みのフォルダ `dir` の中身を読み直す。前からある項目は残すので、
     /// サブフォルダの開閉状態と、読み込み済みの孫はそのまま保たれる。
     fn refresh(&mut self, dir: &Path, registry: &Registry, order: SortOrder) {
@@ -448,16 +327,13 @@ fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut
 
 fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &mut Out) {
     let selected = view
-        .selected
+        .active_image
         .is_some_and(|p| series.files.iter().any(|f| f == p));
-    let title = series.title();
-    let r = ui.selectable_label(selected, &title);
+    let r = ui.selectable_label(selected, series.title());
     if r.clicked() {
         out.action = Some(TreeAction::Series {
             folder: dir.to_path_buf(),
-            title,
             files: series.files.clone(),
-            add: ui.input(|i| i.modifiers.command),
         });
     }
 }
@@ -472,12 +348,28 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
     });
 }
 
+/// ツリーで描くときに外から渡すもの。
+pub struct Context<'a> {
+    pub registry: &'a Registry,
+    pub series: &'a SeriesIndex,
+    pub current: Option<&'a Path>,
+    pub active_image: Option<&'a Path>,
+    pub lang: Language,
+}
+
+/// ツリーを描いた結果。
+pub struct Drawn {
+    pub action: Option<TreeAction>,
+    /// ヘッダを読み始めてほしいフォルダと、その中の DICOM らしいファイル。
+    pub scans: Vec<(PathBuf, Vec<PathBuf>)>,
+}
+
 /// ツリー全体。ルートは、起動時に渡されたフォルダ、ホーム、ドライブ（Windows）または / の順。
 pub struct FolderTree {
     pub roots: Vec<Node>,
     order: SortOrder,
-    clicks: ClickTracker,
-    series: SeriesIndex,
+    /// 次に描くときに、見える位置までスクロールするフォルダ。
+    reveal: Option<PathBuf>,
 }
 
 impl FolderTree {
@@ -505,8 +397,7 @@ impl FolderTree {
         Self {
             roots,
             order,
-            clicks: ClickTracker::default(),
-            series: SeriesIndex::default(),
+            reveal: None,
         }
     }
 
@@ -540,10 +431,21 @@ impl FolderTree {
     /// フォルダ `dir` の中身を読み直す（フォルダの監視で変化を知ったとき）。
     /// 同じフォルダが Home と / の両方の下に出ていることがあるので、すべてのルートを辿る。
     pub fn refresh(&mut self, dir: &Path, registry: &Registry) {
-        self.series.forget(dir);
         for root in &mut self.roots {
             root.refresh(dir, registry, self.order);
         }
+    }
+
+    /// `path` が見えるよう親フォルダを開き、次に描くときにそこまでスクロールする。
+    ///
+    /// 含むルートのうち先頭の 1 つだけで開く。Home の下のフォルダを / の下でも開くと、
+    /// 同じフォルダが 2 か所に出てどちらを見ればよいか分からなくなるため。
+    pub fn reveal(&mut self, path: &Path, registry: &Registry) {
+        let order = self.order;
+        if let Some(root) = self.roots.iter_mut().find(|r| path.starts_with(&r.path)) {
+            root.open_towards(path, registry, order);
+        }
+        self.reveal = Some(path.to_path_buf());
     }
 
     /// 展開した ZIP をツリーの先頭にルートとして開く。
@@ -557,64 +459,26 @@ impl FolderTree {
         self.roots.retain(|r| r.path != dir);
     }
 
-    fn toggle(&mut self, path: &Path) {
-        if let Some(node) = self.roots.iter_mut().find_map(|r| r.find_mut(path)) {
-            node.open = !node.open;
-        }
-    }
-
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        registry: &Registry,
-        marks: Marks,
-        selected: Option<&Path>,
-        lang: Language,
-        how: FolderClicks,
-    ) -> Option<TreeAction> {
-        let now = Instant::now();
-        if let Some(path) = self.clicks.due(how, now) {
-            self.toggle(&path);
-        }
-        self.series.poll();
-        let dicom_extensions = registry
-            .plugins()
-            .iter()
-            .find(|p| p.name() == "DICOM")
-            .map_or(&[][..], |p| p.extensions());
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: Context) -> Drawn {
         let view = View {
-            registry,
-            labels: marks.labels,
-            show_file: marks.show_file,
-            selected,
-            lang,
+            registry: cx.registry,
+            current: cx.current,
+            active_image: cx.active_image,
+            reveal: self.reveal.as_deref(),
+            lang: cx.lang,
             order: self.order,
-            show_files: how.mode == TreeMode::Normal,
-            series: &self.series,
-            dicom_extensions,
+            series: cx.series,
+            dicom_extensions: dicom_extensions(cx.registry),
         };
         let mut out = Out::default();
         for root in &mut self.roots {
             root.ui(ui, &view, &mut out);
         }
-        for (dir, files) in out.scans {
-            let ctx = ui.ctx().clone();
-            self.series
-                .start(dir, files, registry.clone(), move || ctx.request_repaint());
+        self.reveal = None;
+        Drawn {
+            action: out.action,
+            scans: out.scans,
         }
-        if let Some((path, shift)) = out.folder_click {
-            let effect = self.clicks.click(how, &path, shift, now);
-            for p in &effect.toggle {
-                self.toggle(p);
-            }
-            if let Some(p) = effect.load {
-                out.action = Some(TreeAction::Load(p));
-            }
-        }
-        if let Some(wait) = self.clicks.wait(how, now) {
-            ui.ctx().request_repaint_after(wait);
-        }
-        out.action
     }
 }
 
@@ -665,18 +529,26 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
     nodes
 }
 
-/// フォルダの直下の (サブフォルダ, 対応画像) を、ツリーと同じ規則と順で返す。
-pub fn list_folder(
-    path: &Path,
-    registry: &Registry,
-    order: SortOrder,
-) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let (dirs, files): (Vec<Node>, Vec<Node>) = list_dir(path, registry, order)
-        .into_iter()
-        .filter(|n| !n.archive)
-        .partition(|n| n.is_dir);
-    let paths = |v: Vec<Node>| v.into_iter().map(|n| n.path).collect();
-    (paths(dirs), paths(files))
+/// フォルダの直下の中身。それぞれツリーと同じ規則と順で並ぶ。
+#[derive(Debug, Default)]
+pub struct Listing {
+    pub folders: Vec<PathBuf>,
+    pub archives: Vec<PathBuf>,
+    pub images: Vec<PathBuf>,
+}
+
+pub fn list_folder(path: &Path, registry: &Registry, order: SortOrder) -> Listing {
+    let mut out = Listing::default();
+    for n in list_dir(path, registry, order) {
+        if n.is_dir {
+            out.folders.push(n.path);
+        } else if n.archive {
+            out.archives.push(n.path);
+        } else {
+            out.images.push(n.path);
+        }
+    }
+    out
 }
 
 fn sort_nodes(nodes: &mut [Node], order: SortOrder) {
@@ -909,144 +781,54 @@ mod tests {
         FolderTree {
             roots: vec![Node::dir(root.to_path_buf(), None, false)],
             order: SortOrder::default(),
-            clicks: ClickTracker::default(),
-            series: SeriesIndex::default(),
+            reveal: None,
         }
     }
 
     #[test]
-    fn folder_listing_splits_subfolders_and_images_in_tree_order() {
+    fn folder_listing_splits_subfolders_zips_and_images_in_tree_order() {
         let dir = TempDir::new();
         dir.mkdir("sub2");
         dir.mkdir("sub10");
         dir.touch("img10.png");
         dir.touch("img2.png");
         dir.touch("notes.txt");
-        let (dirs, files) = list_folder(dir.path(), &png_registry(), SortOrder::default());
+        dir.touch("pack.zip");
+        let listing = list_folder(dir.path(), &png_registry(), SortOrder::default());
         let names = |v: &[PathBuf]| v.iter().map(|p| display_name(p)).collect::<Vec<_>>();
-        assert_eq!(names(&dirs), ["sub2", "sub10"]);
-        assert_eq!(names(&files), ["img2.png", "img10.png"]);
+        assert_eq!(names(&listing.folders), ["sub2", "sub10"]);
+        assert_eq!(names(&listing.archives), ["pack.zip"]);
+        assert_eq!(names(&listing.images), ["img2.png", "img10.png"]);
     }
 
     #[test]
-    fn toggling_by_path_opens_a_loaded_subfolder() {
+    fn revealing_a_folder_opens_its_parents_but_not_the_folder() {
         let dir = TempDir::new();
-        let sub = dir.mkdir("sub");
+        let sub = dir.mkdir("a/b");
         let mut tree = tree_at(dir.path());
-        tree.restore_open(&[dir.path().to_path_buf()], &png_registry());
-        tree.toggle(&sub);
-        assert_eq!(tree.open_paths(), [dir.path().to_path_buf(), sub]);
-    }
-
-    const MS: Duration = Duration::from_millis(1);
-
-    fn how(mode: TreeMode, action: FolderAction) -> FolderClicks {
-        FolderClicks {
-            mode,
-            action,
-            double_click: 300 * MS,
-        }
-    }
-
-    fn toggles(paths: &[&Path]) -> ClickEffect {
-        ClickEffect {
-            toggle: paths.iter().map(|p| p.to_path_buf()).collect(),
-            load: None,
-        }
-    }
-
-    fn loads(path: &Path) -> ClickEffect {
-        ClickEffect {
-            toggle: vec![],
-            load: Some(path.to_path_buf()),
-        }
-    }
-
-    #[test]
-    fn normal_mode_toggles_on_every_click_and_never_loads() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::Normal, FolderAction::Delayed);
-        let mut c = ClickTracker::default();
-        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
-        assert_eq!(c.click(h, a, true, t + MS), toggles(&[a]));
-    }
-
-    #[test]
-    fn delayed_click_toggles_only_after_the_double_click_time() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
-        let mut c = ClickTracker::default();
-        assert_eq!(c.click(h, a, false, t), ClickEffect::default());
-        assert_eq!(c.due(h, t + 200 * MS), None);
-        assert_eq!(c.due(h, t + 301 * MS), Some(a.to_path_buf()));
-        assert_eq!(c.due(h, t + 400 * MS), None, "toggled once");
-    }
-
-    #[test]
-    fn delayed_double_click_loads_without_toggling() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
-        let mut c = ClickTracker::default();
-        c.click(h, a, false, t);
-        assert_eq!(c.click(h, a, false, t + 250 * MS), loads(a));
-        assert_eq!(c.due(h, t + 600 * MS), None);
-    }
-
-    #[test]
-    fn delayed_clicks_slower_than_the_double_click_time_toggle_twice() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
-        let mut c = ClickTracker::default();
-        c.click(h, a, false, t);
-        assert_eq!(c.due(h, t + 350 * MS), Some(a.to_path_buf()));
-        assert_eq!(c.click(h, a, false, t + 400 * MS), ClickEffect::default());
-        assert_eq!(c.due(h, t + 800 * MS), Some(a.to_path_buf()));
-    }
-
-    #[test]
-    fn delayed_click_on_another_folder_toggles_the_first_at_once() {
-        let (a, b, t) = (Path::new("/a"), Path::new("/b"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Delayed);
-        let mut c = ClickTracker::default();
-        c.click(h, a, false, t);
-        assert_eq!(c.click(h, b, false, t + 100 * MS), toggles(&[a]));
-        assert_eq!(c.due(h, t + 500 * MS), Some(b.to_path_buf()));
-    }
-
-    #[test]
-    fn immediate_double_click_toggles_back_and_loads() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Immediate);
-        let mut c = ClickTracker::default();
-        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
+        tree.reveal(&sub, &png_registry());
         assert_eq!(
-            c.click(h, a, false, t + 100 * MS),
-            ClickEffect {
-                toggle: vec![a.to_path_buf()],
-                load: Some(a.to_path_buf()),
-            }
+            tree.open_paths(),
+            [dir.path().to_path_buf(), dir.path().join("a")]
         );
-        assert_eq!(c.due(h, t + 600 * MS), None);
+        assert!(tree.roots[0].find(&sub).is_some_and(|n| !n.open));
     }
 
     #[test]
-    fn immediate_third_click_starts_over() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::Immediate);
-        let mut c = ClickTracker::default();
-        c.click(h, a, false, t);
-        c.click(h, a, false, t + 100 * MS);
-        assert_eq!(c.click(h, a, false, t + 200 * MS), toggles(&[a]));
-    }
-
-    #[test]
-    fn shift_click_loads_and_plain_click_toggles_at_once() {
-        let (a, t) = (Path::new("/a"), Instant::now());
-        let h = how(TreeMode::AutoLoad, FolderAction::ShiftClick);
-        let mut c = ClickTracker::default();
-        assert_eq!(c.click(h, a, false, t), toggles(&[a]));
-        assert_eq!(c.click(h, a, false, t + MS), toggles(&[a]));
-        assert_eq!(c.click(h, a, true, t + 2 * MS), loads(a));
+    fn revealing_opens_only_the_first_root_that_holds_the_folder() {
+        let dir = TempDir::new();
+        let sub = dir.mkdir("a");
+        let mut tree = FolderTree {
+            roots: vec![
+                Node::dir(dir.path().to_path_buf(), None, false),
+                Node::dir(dir.path().parent().unwrap().to_path_buf(), None, false),
+            ],
+            order: SortOrder::default(),
+            reveal: None,
+        };
+        tree.reveal(&sub, &png_registry());
+        assert!(tree.roots[0].open);
+        assert!(!tree.roots[1].open);
     }
 
     #[test]

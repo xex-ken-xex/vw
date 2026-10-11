@@ -1,4 +1,4 @@
-//! フォルダの画像をまとめてスロットに読み込む（画像自動展開モード）。
+//! フォルダの画像をまとめてスロットに読み込む（cd したフォルダの画像と、フォルダのスロットの中身）。
 //!
 //! サブフォルダを辿るのは別スレッドで行い、見つけた画像のパスを順に UI スレッドへ渡す。
 //! ホームやドライブ全体を辿ると数分かかることがあり、その間ウインドウが固まらないようにするため。
@@ -18,7 +18,7 @@ use crate::tree::list_folder;
 /// 辿るスレッドがドライブ全体を走査し続けないよう、ここで待たせる。
 const LOOKAHEAD: usize = 256;
 
-/// 1 回の読み込み（フォルダをダブルクリックしてから終わるまで）。
+/// 1 回の読み込み（フォルダへ移るか、フォルダのスロットを開いてから終わるまで）。
 pub struct FolderLoad {
     pub root: PathBuf,
     rx: Receiver<PathBuf>,
@@ -46,18 +46,25 @@ pub enum Question {
 }
 
 impl FolderLoad {
-    /// `root` の読み込みを始める。直下の画像は確認せずに渡し、サブフォルダがあれば
+    /// `root` の読み込みを始める。直下の画像は確認せずに渡し、`subfolders` でサブフォルダがあれば
     /// [`Question::Subfolders`] の答えを待ってから辿る。`chunk` 枚ごとに確認するなら `confirm`。
     /// `wake` は新しいパスを渡せるようになったときに呼ぶ（画面の再描画を頼む）。
     pub fn start(
         root: PathBuf,
         registry: Registry,
         order: SortOrder,
+        subfolders: bool,
         confirm: bool,
         chunk: usize,
         wake: impl Fn() + Send + 'static,
     ) -> Self {
-        let (dirs, files) = list_folder(&root, &registry, order);
+        let listing = list_folder(&root, &registry, order);
+        let files = listing.images;
+        let dirs = if subfolders {
+            listing.folders
+        } else {
+            Vec::new()
+        };
         let (tx, rx) = sync_channel(LOOKAHEAD);
         let cancel = Arc::new(AtomicBool::new(false));
         let (subfolders, answer) = if dirs.is_empty() {
@@ -210,11 +217,11 @@ impl Walker {
             if !seen.insert(real) {
                 continue;
             }
-            let (subdirs, files) = list_folder(&dir, &self.registry, self.order);
-            if !self.send_all(files) {
+            let listing = list_folder(&dir, &self.registry, self.order);
+            if !self.send_all(listing.images) {
                 return;
             }
-            stack.extend(subdirs.into_iter().rev());
+            stack.extend(listing.folders.into_iter().rev());
         }
     }
 }
@@ -230,6 +237,7 @@ mod tests {
             root.to_path_buf(),
             png_registry(),
             SortOrder::default(),
+            true,
             confirm,
             chunk,
             || {},
@@ -295,6 +303,26 @@ mod tests {
         dir.touch("sub/inner.png");
         let mut load = start(dir.path(), true, 500);
         load.answer_subfolders(false);
+        assert_eq!(drain(&mut load), ["top.png"]);
+        assert!(load.finished());
+    }
+
+    #[test]
+    fn subfolders_are_neither_asked_about_nor_walked_when_not_wanted() {
+        let dir = TempDir::new();
+        dir.touch("top.png");
+        dir.mkdir("sub");
+        dir.touch("sub/inner.png");
+        let mut load = FolderLoad::start(
+            dir.path().to_path_buf(),
+            png_registry(),
+            SortOrder::default(),
+            false,
+            true,
+            500,
+            || {},
+        );
+        assert_eq!(load.question(), None);
         assert_eq!(drain(&mut load), ["top.png"]);
         assert!(load.finished());
     }

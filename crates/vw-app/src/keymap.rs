@@ -61,11 +61,12 @@ pub enum Action {
     FilterBad,
     FilterUnflagged,
     ExportImages,
+    ParentFolder,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 46] = [
+    pub const ALL: [Action; 47] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -73,6 +74,7 @@ impl Action {
         Action::PreviousPage,
         Action::NextPage,
         Action::ToggleMaximize,
+        Action::ParentFolder,
         Action::TogglePlay,
         Action::FitImage,
         Action::ActualSize,
@@ -163,6 +165,7 @@ impl Action {
             Action::FilterBad => "filter_bad",
             Action::FilterUnflagged => "filter_unflagged",
             Action::ExportImages => "export_images",
+            Action::ParentFolder => "parent_folder",
         }
     }
 
@@ -188,7 +191,7 @@ impl Action {
             Action::NextSlot => "Next slot",
             Action::PreviousPage => "Previous page",
             Action::NextPage => "Next page",
-            Action::ToggleMaximize => "Maximize/restore slot",
+            Action::ToggleMaximize => "Maximize/restore slot, or open folder",
             Action::FitImage => "Fit image to slot",
             Action::ActualSize => "Actual size (100%)",
             Action::ZoomIn => "Zoom in",
@@ -219,6 +222,7 @@ impl Action {
             Action::FilterBad => "Show only bad images",
             Action::FilterUnflagged => "Show only unflagged images",
             Action::ExportImages => "Export images...",
+            Action::ParentFolder => "Up one folder",
         }
     }
 
@@ -312,6 +316,7 @@ impl Action {
             Action::PreviousPage => vec![KeyCombo::plain(PageUp)],
             Action::NextPage => vec![KeyCombo::plain(PageDown)],
             Action::ToggleMaximize => vec![KeyCombo::plain(Enter)],
+            Action::ParentFolder => vec![KeyCombo::plain(Backspace)],
             Action::FitImage => vec![KeyCombo::plain(Num0)],
             Action::ActualSize => vec![KeyCombo::ctrl(Num0)],
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
