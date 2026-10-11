@@ -265,8 +265,8 @@ const JA: &[(&str, &str)] = &[
     ("Used by the OS for \"{}\".", "OS が「{}」に使っています。"),
     ("No keys", "キーなし"),
     // 操作
-    ("Previous image", "前の画像"),
-    ("Next image", "次の画像"),
+    ("Previous image slot", "前の画像スロット"),
+    ("Next image slot", "次の画像スロット"),
     ("Show/hide folder tree", "フォルダツリーの表示切替"),
     ("Show/hide metadata", "メタデータの表示切替"),
     ("Show/hide images", "画像の表示切替"),

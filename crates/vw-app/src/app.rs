@@ -1564,7 +1564,9 @@ impl VwApp {
     }
 
     /// 画像のスロット（フォルダや空のスロットでないもの）だけを辿って、アクティブなスロットを移す。
-    /// 進めたら `true`。
+    /// 進めたら `true`。← → はスロットの中身を差し替えずにこれで移る。差し替えると、並んだ別の
+    /// スロットと同じ画像になったり、どのスロットに何があったか分からなくなったりするため。
+    /// スロットの中の画像はホイールで送る。
     fn step_image_slot(&mut self, delta: isize, wrap: bool) -> bool {
         let images: Vec<bool> = self
             .slots
@@ -1579,18 +1581,6 @@ impl VwApp {
             self.maximized = Some(self.slots[next].id);
         }
         true
-    }
-
-    /// ← → で送る。1 枚ずつのスロットが並んでいるときは、スロットの中身を差し替えずに隣の画像の
-    /// スロットへ移る。差し替えると、並んだ別のスロットと同じ画像になったり、どのスロットに
-    /// 何があったか分からなくなったりするため。
-    fn step_image(&mut self, delta: isize) {
-        let slot = &self.slots[self.active];
-        if slot.sequence.is_none() && self.slots.len() > 1 {
-            self.step_image_slot(delta, true);
-        } else {
-            self.step_active(delta);
-        }
     }
 
     /// `index` 番目のスロットの最大化を切り替える。
@@ -2673,11 +2663,11 @@ impl VwApp {
         match action {
             Action::PreviousImage => {
                 self.stop_playback();
-                self.step_image(-1);
+                self.step_image_slot(-1, true);
             }
             Action::NextImage => {
                 self.stop_playback();
-                self.step_image(1);
+                self.step_image_slot(1, true);
             }
             Action::ToggleTagging => self.tagging ^= true,
             Action::FilterAll => self.set_filter(ctx, Filter::All),

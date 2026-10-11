@@ -182,8 +182,8 @@ impl Action {
     /// 画面に出す名前（英語。翻訳は [`crate::i18n`]）。
     pub fn title(self) -> &'static str {
         match self {
-            Action::PreviousImage => "Previous image",
-            Action::NextImage => "Next image",
+            Action::PreviousImage => "Previous image slot",
+            Action::NextImage => "Next image slot",
             Action::NewSlot => "New slot",
             Action::CloseSlot => "Close slot",
             Action::ToggleFolderTree => "Show/hide folder tree",
