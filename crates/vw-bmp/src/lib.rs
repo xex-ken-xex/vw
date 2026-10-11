@@ -111,11 +111,15 @@ fn invalid(e: zune_bmp::BmpDecoderErrors) -> DecodeError {
 /// R = G = B の画素だけならグレーにする。パレットの BMP は zune-bmp が RGB に広げて返すため、
 /// グレーのパレット（スキャナの画像に多い）もここでグレーに戻す。
 fn rgb_or_gray(pixels: Vec<u8>) -> (ColorModel, Vec<u8>) {
-    let gray = pixels.chunks_exact(3).all(|p| p[0] == p[1] && p[1] == p[2]);
+    let gray = pixels
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .all(|[r, g, b]| r == g && g == b);
     if gray {
         (
             ColorModel::Gray,
-            pixels.chunks_exact(3).map(|p| p[0]).collect(),
+            pixels.as_chunks::<3>().0.iter().map(|p| p[0]).collect(),
         )
     } else {
         (ColorModel::Rgb, pixels)
@@ -126,10 +130,13 @@ fn rgb_or_gray(pixels: Vec<u8>) -> (ColorModel, Vec<u8>) {
 /// 埋めていて、そのままアルファとして扱うと画像全体が透明になるため。
 fn drop_unused_alpha(pixels: Vec<u8>) -> (ColorModel, Vec<u8>) {
     let first = pixels.get(3).copied().unwrap_or(255);
-    let uniform = (first == 0 || first == 255) && pixels.chunks_exact(4).all(|p| p[3] == first);
+    let uniform =
+        (first == 0 || first == 255) && pixels.as_chunks::<4>().0.iter().all(|p| p[3] == first);
     if uniform {
         let rgb = pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect();
         (ColorModel::Rgb, rgb)

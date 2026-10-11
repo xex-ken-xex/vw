@@ -34,8 +34,8 @@ pub fn decode(data: &[u8], header: &Header) -> Result<Vec<u8>, DecodeError> {
     for y in 0..h {
         let row = if header.top_down() { y } else { h - 1 - y };
         let row = &rows[row * stride..row * stride + w * 2];
-        for p in row.chunks_exact(2) {
-            let v = u32::from(u16::from_le_bytes([p[0], p[1]]));
+        for &p in row.as_chunks::<2>().0 {
+            let v = u32::from(u16::from_le_bytes(p));
             rgb.extend(channels.iter().map(|c| c.expand(v)));
         }
     }
