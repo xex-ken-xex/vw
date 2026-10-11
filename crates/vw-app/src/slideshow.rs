@@ -3,7 +3,7 @@
 //! 再生開始からの経過時間と FPS からコマ番号（tick）を決め、そのコマで出す画像の位置を
 //! 終端の扱い（[`EndMode`]）に従って求める。画像の読み込みと表示は [`crate::app`] が行う。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -39,6 +39,8 @@ impl EndMode {
 }
 
 pub const FPS_RANGE: RangeInclusive<f32> = 0.1..=120.0;
+/// 再生バーのコマ落ちを数える期間（秒）。
+pub const DROP_WINDOW_RANGE: RangeInclusive<u32> = 1..=60;
 /// 再生バーに並べる FPS。
 pub const FPS_PRESETS: [f32; 6] = [1.0, 5.0, 10.0, 15.0, 30.0, 60.0];
 
@@ -91,8 +93,10 @@ pub struct Clock {
     tick: u64,
     /// 今のコマの画像を出せたか。
     shown: bool,
-    /// 間に合わずに出せなかったコマの数。
+    /// 間に合わずに出せなかったコマの数（再生を始めてからの合計）。
     pub dropped: u64,
+    /// コマ落ちが起きた時刻とその数。古いものは `DROP_WINDOW_RANGE` の上限を過ぎたら捨てる。
+    drops: VecDeque<(Instant, u64)>,
 }
 
 /// 時計を進めた結果。
@@ -118,6 +122,7 @@ impl Clock {
             // 開始位置の画像は表示中なので、出せたことにする。
             shown: true,
             dropped: 0,
+            drops: VecDeque::new(),
         }
     }
 
@@ -132,7 +137,19 @@ impl Clock {
         if advanced {
             // 1 フレームの間に複数コマ進んだ分（FPS が画面の更新より速い）と、
             // 前のコマを出せないまま次に進んだ分は、どちらも見せられなかったコマ。
-            self.dropped += tick - self.tick - 1 + u64::from(!self.shown);
+            let dropped = tick - self.tick - 1 + u64::from(!self.shown);
+            if dropped > 0 {
+                self.dropped += dropped;
+                self.drops.push_back((now, dropped));
+            }
+            let keep = Duration::from_secs(u64::from(*DROP_WINDOW_RANGE.end()));
+            while self
+                .drops
+                .front()
+                .is_some_and(|(at, _)| now.saturating_duration_since(*at) > keep)
+            {
+                self.drops.pop_front();
+            }
             self.tick = tick;
             self.shown = false;
         }
@@ -142,6 +159,16 @@ impl Clock {
             advanced,
             finished,
         }
+    }
+
+    /// `now` までの `window` の間に落ちたコマの数。累計だと、再生の始めに一度詰まっただけでも
+    /// 数が残り続け、今まさに間に合っていないのかが分からないため。
+    pub fn recent_dropped(&self, now: Instant, window: Duration) -> u64 {
+        self.drops
+            .iter()
+            .filter(|(at, _)| now.saturating_duration_since(*at) <= window)
+            .map(|(_, n)| n)
+            .sum()
     }
 
     /// 今のコマの画像を出したことを記録する。
@@ -164,8 +191,10 @@ impl Clock {
     pub fn restart(&mut self, fps: f32, mode: EndMode, now: Instant) {
         let (index, _) = frame_at(self.start, self.tick, self.n, self.mode);
         let dropped = self.dropped;
+        let drops = std::mem::take(&mut self.drops);
         *self = Clock::new(index, self.n, mode, fps, now);
         self.dropped = dropped;
+        self.drops = drops;
     }
 }
 
@@ -298,6 +327,28 @@ mod tests {
         // 1 回の更新で 3 コマ進むと、間の 2 コマは見せられない。
         c.advance(t0 + Duration::from_millis(500));
         assert_eq!(c.dropped, 3);
+    }
+
+    #[test]
+    fn only_drops_within_the_window_are_counted_as_recent() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(0, 100, EndMode::Loop, 10.0, t0);
+        // 0.3 秒の時点で 2 コマ落ちる。
+        c.advance(t0 + Duration::from_millis(300));
+        let window = Duration::from_secs(5);
+        assert_eq!(c.recent_dropped(t0 + Duration::from_secs(5), window), 2);
+        assert_eq!(c.recent_dropped(t0 + Duration::from_secs(6), window), 0);
+        assert_eq!(c.dropped, 2);
+    }
+
+    #[test]
+    fn restart_keeps_recent_drops() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(0, 100, EndMode::Loop, 10.0, t0);
+        c.advance(t0 + Duration::from_millis(300));
+        let t1 = t0 + Duration::from_millis(310);
+        c.restart(30.0, EndMode::Loop, t1);
+        assert_eq!(c.recent_dropped(t1, Duration::from_secs(5)), 2);
     }
 
     #[test]

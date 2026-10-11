@@ -161,7 +161,8 @@ pub struct VwApp {
     load_slots_from: u64,
     playback: Option<Playback>,
     /// 最後に止めたスライドショーで飛ばしたコマ数。再生バーに出し続ける。
-    last_dropped: u64,
+    /// 止めたスライドショーの時計。止めた後も、直近のコマ落ちの数が消えるまで再生バーに出すため。
+    stopped_clock: Option<Clock>,
     /// フォルダの監視。自動リロードが無効なら `None`。
     watcher: Option<FolderWatcher>,
     /// cd したフォルダと、画像の入れ方。画像がなかったフォルダも監視して、
@@ -449,7 +450,7 @@ impl VwApp {
             load_into: LoadInto::Images,
             load_slots_from: 0,
             playback: None,
-            last_dropped: 0,
+            stopped_clock: None,
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
@@ -1293,7 +1294,7 @@ impl VwApp {
         let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now());
         let loader_slot = self.next_id;
         self.next_id += 1;
-        self.last_dropped = 0;
+        self.stopped_clock = None;
         self.playback = Some(Playback::new(
             self.slots[self.active].id,
             loader_slot,
@@ -1310,13 +1311,13 @@ impl VwApp {
         for request in pb.pending.keys() {
             self.loader.cancel(*request);
         }
-        self.last_dropped = pb.clock.dropped;
         if pb.clock.dropped > 0 {
             self.log.warn(format!(
                 "Slideshow: {} frames were skipped because images could not be decoded fast enough",
                 pb.clock.dropped
             ));
         }
+        self.stopped_clock = Some(pb.clock);
     }
 
     /// スライドショーを 1 フレーム分進める。今のコマの画像が届いていれば表示し、
@@ -1481,18 +1482,24 @@ impl VwApp {
             {
                 ui.label(format!("{} / {}", seq.index + 1, seq.paths.len()));
             }
+            let window = Duration::from_secs(u64::from(viewer.slideshow_drop_window_secs));
             let dropped = self
                 .playback
                 .as_ref()
-                .map_or(self.last_dropped, |pb| pb.clock.dropped);
+                .map(|pb| &pb.clock)
+                .or(self.stopped_clock.as_ref())
+                .map_or(0, |clock| clock.recent_dropped(Instant::now(), window));
             if dropped > 0 {
+                // 止めている間は描き直しが起きないので、期間を過ぎた数が消えるよう描き直しを頼む。
+                ui.ctx().request_repaint_after(Duration::from_millis(500));
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
                     tr1(lang, "dropped {}", &dropped.to_string()),
                 )
-                .on_hover_text(tr(
+                .on_hover_text(tr1(
                     lang,
-                    "Images could not be decoded fast enough; some frames were skipped.",
+                    "Frames skipped in the last {} seconds because images could not be decoded fast enough.",
+                    &viewer.slideshow_drop_window_secs.to_string(),
                 ));
             }
         });

@@ -13,7 +13,7 @@ use crate::settings::{
     parse_hex_color, HeaderClick, Labels, Language, LoadInto, LoadModifier, Settings, ThemeChoice,
     Tree, Viewer,
 };
-use crate::slideshow::{EndMode, FPS_RANGE};
+use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +61,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 23] = [
+const ITEMS: [Item; 24] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -131,6 +131,13 @@ const ITEMS: [Item; 23] = [
         title: "Slideshow end",
         description: "What happens after the last image: start over, stop, or play backwards.",
         widget: end_mode_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.slideshow_drop_window_secs",
+        title: "Dropped frames period",
+        description: "The play bar shows how many frames were skipped (not decoded in time) during this many last seconds.",
+        widget: drop_window_widget,
     },
     Item {
         section: Section::Viewer,
@@ -340,6 +347,15 @@ pub fn fps_input(fps: &mut f32) -> egui::DragValue<'_> {
 
 fn fps_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     ui.add(fps_input(&mut s.viewer.slideshow_fps)).changed()
+}
+
+fn drop_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.viewer.slideshow_drop_window_secs)
+            .range(DROP_WINDOW_RANGE)
+            .suffix(tr(lang, " s")),
+    )
+    .changed()
 }
 
 fn end_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
