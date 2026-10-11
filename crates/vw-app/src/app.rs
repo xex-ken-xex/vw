@@ -278,6 +278,34 @@ pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
     (pos as isize + delta).rem_euclid(len as isize) as usize
 }
 
+/// `active` から `delta` 個先の画像のスロット（`images` が `true` のもの）。フォルダや空の
+/// スロットは飛ばす。`wrap` なら端で反対側に回り込み、そうでなければ端で止まる。
+/// 進める先がなければ `None`。
+pub fn image_slot_step(images: &[bool], active: usize, delta: isize, wrap: bool) -> Option<usize> {
+    let len = images.len() as isize;
+    let dir = delta.signum();
+    let mut pos = active as isize;
+    for _ in 0..delta.unsigned_abs() {
+        let mut next = pos;
+        loop {
+            next += dir;
+            if wrap {
+                next = next.rem_euclid(len);
+            } else if !(0..len).contains(&next) {
+                return (pos != active as isize).then_some(pos as usize);
+            }
+            if next == pos {
+                return (pos != active as isize).then_some(pos as usize);
+            }
+            if images[next as usize] {
+                break;
+            }
+        }
+        pos = next;
+    }
+    (pos != active as isize).then_some(pos as usize)
+}
+
 /// `removed` 番目のスロットを閉じた後の、アクティブなスロットの添字。
 /// アクティブより前が閉じられたら 1 つ詰め、アクティブ自身なら同じ位置（なければ末尾）を選ぶ。
 pub fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
@@ -1535,6 +1563,36 @@ impl VwApp {
         }
     }
 
+    /// 画像のスロット（フォルダや空のスロットでないもの）だけを辿って、アクティブなスロットを移す。
+    /// 進めたら `true`。
+    fn step_image_slot(&mut self, delta: isize, wrap: bool) -> bool {
+        let images: Vec<bool> = self
+            .slots
+            .iter()
+            .map(|s| s.folder.is_none() && s.path.is_some())
+            .collect();
+        let Some(next) = image_slot_step(&images, self.active, delta, wrap) else {
+            return false;
+        };
+        self.active = next;
+        if self.maximized.is_some() {
+            self.maximized = Some(self.slots[next].id);
+        }
+        true
+    }
+
+    /// ← → で送る。1 枚ずつのスロットが並んでいるときは、スロットの中身を差し替えずに隣の画像の
+    /// スロットへ移る。差し替えると、並んだ別のスロットと同じ画像になったり、どのスロットに
+    /// 何があったか分からなくなったりするため。
+    fn step_image(&mut self, delta: isize) {
+        let slot = &self.slots[self.active];
+        if slot.sequence.is_none() && self.slots.len() > 1 {
+            self.step_image_slot(delta, true);
+        } else {
+            self.step_active(delta);
+        }
+    }
+
     /// `index` 番目のスロットの最大化を切り替える。
     fn toggle_maximize(&mut self, index: usize) {
         let id = self.slots[index].id;
@@ -2493,9 +2551,7 @@ impl VwApp {
         }
         let slot = &self.slots[self.active];
         if slot.sequence.is_none() && self.slots.len() > 1 {
-            if self.active + 1 < self.slots.len() {
-                self.step_slot(1);
-            }
+            self.step_image_slot(1, false);
             return;
         }
         let at_end = match &slot.sequence {
@@ -2617,11 +2673,11 @@ impl VwApp {
         match action {
             Action::PreviousImage => {
                 self.stop_playback();
-                self.step_active(-1);
+                self.step_image(-1);
             }
             Action::NextImage => {
                 self.stop_playback();
-                self.step_active(1);
+                self.step_image(1);
             }
             Action::ToggleTagging => self.tagging ^= true,
             Action::FilterAll => self.set_filter(ctx, Filter::All),
@@ -3936,7 +3992,9 @@ impl VwApp {
                     self.active = i;
                     self.step_active(delta);
                 }
-                WheelStep::Slot => self.step_slot(delta),
+                WheelStep::Slot => {
+                    self.step_image_slot(delta, true);
+                }
                 WheelStep::Nothing => {}
             }
         }
@@ -4329,6 +4387,28 @@ mod tests {
         let mut m = vw_core::Metadata::default();
         m.push("Animation", "Frame time (ms)", "50.0");
         assert_eq!(frame_rate(&m), Some(20.0));
+    }
+
+    #[test]
+    fn stepping_image_slots_skips_folder_slots() {
+        // フォルダ, フォルダ, 画像, 画像, 画像
+        let images = [false, false, true, true, true];
+        assert_eq!(image_slot_step(&images, 2, 1, true), Some(3));
+        assert_eq!(image_slot_step(&images, 2, -1, true), Some(4));
+        assert_eq!(image_slot_step(&images, 4, 1, true), Some(2));
+    }
+
+    #[test]
+    fn stepping_image_slots_without_wrap_stops_at_the_last_image() {
+        let images = [false, true, true];
+        assert_eq!(image_slot_step(&images, 2, 1, false), None);
+        assert_eq!(image_slot_step(&images, 1, -1, false), None);
+        assert_eq!(image_slot_step(&images, 1, 5, false), Some(2));
+    }
+
+    #[test]
+    fn stepping_image_slots_with_no_other_image_does_nothing() {
+        assert_eq!(image_slot_step(&[false, true, false], 1, 1, true), None);
     }
 
     #[test]
