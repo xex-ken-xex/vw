@@ -62,6 +62,8 @@ const JA: &[(&str, &str)] = &[
     ("Extensions to check for DICOM", "DICOM か調べる拡張子"),
     ("Regular expression for the extensions (without the dot, empty for no extension, case-insensitive) of files whose first bytes are read to see if they are DICOM. .dcm, .dicom and .dic files are always shown as DICOM. The default checks files with no extension, only digits, dcm, dicom or ima.", "先頭を読んで DICOM か調べるファイルの拡張子の正規表現（. を除いた部分。拡張子がなければ空文字列。大文字小文字は区別しない）。.dcm / .dicom / .dic は常に DICOM として扱います。既定は、拡張子なし・数字のみ・dcm・dicom・ima を調べます。"),
     ("Not a valid regular expression", "正規表現として正しくありません"),
+    ("Close ZIP", "ZIP を閉じる"),
+    ("Images inside a ZIP cannot be labeled", "ZIP の中の画像にはラベルを付けられません"),
     ("Reading DICOM headers…", "DICOM のヘッダを読んでいます…"),
     ("Close slot", "スロットを閉じる"),
     // コピー

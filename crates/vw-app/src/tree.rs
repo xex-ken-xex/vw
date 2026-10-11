@@ -27,6 +27,10 @@ pub struct Node {
     open: bool,
     /// 更新日時。更新日時順で並べるときだけ取る（[`list_dir`]）。
     modified: Option<SystemTime>,
+    /// ZIP ファイル。クリックで展開して別のルートとして開く（[`crate::archive`]）。
+    archive: bool,
+    /// ZIP を展開したルート。右クリックでアンマウントできる。
+    mounted: bool,
 }
 
 /// 項目に付ける印と、出すファイルの絞り込み。
@@ -87,6 +91,10 @@ pub enum TreeAction {
     Copy(PathBuf),
     /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
     Load(PathBuf),
+    /// ZIP を展開して別のルートとして開く。
+    Mount(PathBuf),
+    /// 展開した ZIP を閉じる。展開先のフォルダを渡す。
+    Unmount(PathBuf),
     /// DICOM のシリーズを 1 つのスロットに出す。`add` なら Ctrl / Cmd + クリックでスロットを足す。
     Series {
         folder: PathBuf,
@@ -191,12 +199,23 @@ impl Node {
             children: None,
             open,
             modified: None,
+            archive: false,
+            mounted: false,
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, view: &View, out: &mut Out) {
         let lang = view.lang;
         let is_selected = view.selected == Some(self.path.as_path());
+        if self.archive {
+            let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
+            let r = ui.selectable_label(false, text);
+            if r.clicked() {
+                out.action = Some(TreeAction::Mount(self.path.clone()));
+            }
+            copy_menu(&r, &self.path, lang, &mut out.action);
+            return;
+        }
         if !self.is_dir {
             let r = ui.selectable_label(is_selected, self.text(ui, view.labels.get(&self.path)));
             if r.clicked() {
@@ -216,7 +235,12 @@ impl Node {
         state.set_open(self.open);
         let (toggle, header, _) = state
             .show_header(ui, |ui| {
-                ui.selectable_label(is_selected, self.name.as_str())
+                if self.mounted {
+                    let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
+                    ui.selectable_label(is_selected, text)
+                } else {
+                    ui.selectable_label(is_selected, self.name.as_str())
+                }
             })
             .body(|ui| {
                 let children = self
@@ -234,7 +258,7 @@ impl Node {
                 // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
                 // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
                 let mut shown = 0;
-                for child in children.iter_mut().filter(|c| c.is_dir) {
+                for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
                     child.ui(ui, view, out);
                     shown += 1;
                 }
@@ -248,6 +272,7 @@ impl Node {
                 }
                 let shown_file = |c: &&mut Node| {
                     !c.is_dir
+                        && !c.archive
                         && view.show_files
                         && !in_series.contains(c.path.as_path())
                         && (view.show_file)(&c.path)
@@ -275,7 +300,20 @@ impl Node {
             out.action = Some(TreeAction::Select);
             out.folder_click = Some((self.path.clone(), ui.input(|i| i.modifiers.shift)));
         }
-        copy_menu(&label, &self.path, lang, &mut out.action);
+        if self.mounted {
+            label.context_menu(|ui| {
+                if ui.button(tr(lang, "Copy")).clicked() {
+                    out.action = Some(TreeAction::Copy(self.path.clone()));
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Close ZIP")).clicked() {
+                    out.action = Some(TreeAction::Unmount(self.path.clone()));
+                    ui.close();
+                }
+            });
+        } else {
+            copy_menu(&label, &self.path, lang, &mut out.action);
+        }
     }
 
     /// 表示する名前。フラグやタグがあれば一緒に出す。
@@ -508,6 +546,17 @@ impl FolderTree {
         }
     }
 
+    /// 展開した ZIP をツリーの先頭にルートとして開く。
+    pub fn add_mounted_root(&mut self, dir: PathBuf, name: String) {
+        let mut node = Node::dir(dir, Some(name), true);
+        node.mounted = true;
+        self.roots.insert(0, node);
+    }
+
+    pub fn remove_root(&mut self, dir: &Path) {
+        self.roots.retain(|r| r.path != dir);
+    }
+
     fn toggle(&mut self, path: &Path) {
         if let Some(node) = self.roots.iter_mut().find_map(|r| r.find_mut(path)) {
             node.open = !node.open;
@@ -591,7 +640,8 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
                 Ok(t) => t.is_dir(),
                 Err(_) => false,
             };
-            if !is_dir && !registry.supports_file(&path) {
+            let archive = !is_dir && crate::archive::is_zip(&path);
+            if !is_dir && !archive && !registry.supports_file(&path) {
                 return None;
             }
             // 更新日時は並べるのに使うときだけ取る。Linux では項目ごとに stat が要り、
@@ -606,6 +656,8 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
                 children: None,
                 open: false,
                 modified,
+                archive,
+                mounted: false,
             })
         })
         .collect();
@@ -621,6 +673,7 @@ pub fn list_folder(
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let (dirs, files): (Vec<Node>, Vec<Node>) = list_dir(path, registry, order)
         .into_iter()
+        .filter(|n| !n.archive)
         .partition(|n| n.is_dir);
     let paths = |v: Vec<Node>| v.into_iter().map(|n| n.path).collect();
     (paths(dirs), paths(files))
@@ -662,6 +715,8 @@ pub fn sibling_images(path: &Path, registry: &Registry, order: SortOrder) -> Vec
                     modified: (order.key == SortKey::Modified)
                         .then(|| modified(&path))
                         .flatten(),
+                    archive: false,
+                    mounted: false,
                     path,
                 })
                 .collect()

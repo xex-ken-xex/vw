@@ -15,6 +15,7 @@ use eframe::egui::{
 use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
+use crate::archive::{self, Archives};
 use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::export::{self, CopyJob, Filter, ListFormat, Matcher};
@@ -152,6 +153,8 @@ pub struct VwApp {
     /// 画像自動展開モードで読み込んだフォルダと入れ方。画像がなかったフォルダも監視して、
     /// 後から来た画像をスロットに足すために覚えておく。
     loaded_folders: Vec<(PathBuf, LoadInto)>,
+    /// ツリーで開いた ZIP。
+    archives: Archives,
     labels: LabelStore,
     /// タグ付けモード。↑ ↓ と数字キーでフラグとタグを付ける。
     tagging: bool,
@@ -394,6 +397,7 @@ impl VwApp {
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
+            archives: Archives::in_temp_dir(),
             labels: LabelStore::new(label_fallback),
             tagging: false,
             filter: Filter::All,
@@ -1091,6 +1095,10 @@ impl VwApp {
         let mut modified = HashSet::new();
         let mut removed = HashSet::new();
         for c in changes {
+            // 閉じた ZIP の展開先を消したときの変化。画像が消えたとログに出さない。
+            if self.archives.is_closed(&c.path) {
+                continue;
+            }
             if let Some(dir) = c.path.parent().filter(|d| !dirs.iter().any(|x| x == d)) {
                 dirs.push(dir.to_path_buf());
             }
@@ -1720,11 +1728,76 @@ impl VwApp {
         self.slots[self.active].path.clone()
     }
 
+    /// ZIP をツリーで開く。展開は別スレッドで行い、終わったら [`Self::receive_archives`] で
+    /// ルートに足す。
+    fn mount(&mut self, ctx: &egui::Context, zip: &Path) {
+        if self.archives.mounted_zip(zip).is_some() {
+            self.log.info(format!("{} is already open", zip.display()));
+            return;
+        }
+        let ctx = ctx.clone();
+        if self.archives.mount(zip, move || ctx.request_repaint()) {
+            self.log.info(format!("Extracting {}…", zip.display()));
+        }
+    }
+
+    fn receive_archives(&mut self) {
+        for event in self.archives.poll() {
+            match event {
+                archive::Event::Mounted { mount, files } => {
+                    self.log
+                        .info(format!("Opened {} ({files} files)", mount.zip.display()));
+                    self.tree.add_mounted_root(mount.dir.clone(), mount.name());
+                }
+                archive::Event::Failed { zip, error } => {
+                    self.log
+                        .error(format!("Cannot open {}: {error}", zip.display()));
+                }
+            }
+        }
+    }
+
+    /// 展開した ZIP を閉じる。中の画像を出しているスロットも閉じる。展開したファイルを消すので、
+    /// スロットに残しておいても読み直せなくなるため。
+    fn unmount(&mut self, dir: &Path) {
+        for index in (0..self.slots.len()).rev() {
+            let slot = &self.slots[index];
+            let inside = slot.path.as_deref().is_some_and(|p| p.starts_with(dir))
+                || slot
+                    .sequence
+                    .as_ref()
+                    .is_some_and(|q| q.folder.starts_with(dir));
+            if inside {
+                self.close_slot(index);
+            }
+        }
+        self.loaded_folders.retain(|(p, _)| !p.starts_with(dir));
+        self.tree.remove_root(dir);
+        if let Some(mount) = self.archives.unmount(dir) {
+            self.log.info(format!("Closed {}", mount.zip.display()));
+        }
+    }
+
+    /// ラベルを付けられる画像か。ZIP の中はラベルファイルを書く場所がなく、閉じると消えるので付けない。
+    fn labelable(&mut self, path: &Path) -> bool {
+        if let Some(mount) = self.archives.mount_of(path) {
+            let zip = mount.zip.display().to_string();
+            self.log.warn(format!(
+                "Flags and tags cannot be put on images inside {zip}"
+            ));
+            return false;
+        }
+        true
+    }
+
     /// フラグを付ける・外す。
     fn flag(&mut self, flag: Flag) {
         let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
             return;
         };
+        if !self.labelable(&path) {
+            return;
+        }
         match self.labels.toggle_flag(&path, flag) {
             Ok(now) => {
                 let what = match now {
@@ -1753,6 +1826,9 @@ impl VwApp {
         let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
             return;
         };
+        if !self.labelable(&path) {
+            return;
+        }
         match self.labels.toggle_tag(&path, &tag) {
             Ok(added) => {
                 let what = if added { "tagged" } else { "untagged" };
@@ -1801,6 +1877,10 @@ impl VwApp {
             .as_deref()
             .map(|p| self.labels.get(p))
             .unwrap_or_default();
+        let in_zip = self.slots[self.active]
+            .path
+            .as_deref()
+            .and_then(|p| self.archives.mount_of(p));
         let mut clicked = None;
         let frame = egui::Frame::new()
             .fill(ui.visuals().faint_bg_color)
@@ -1808,6 +1888,9 @@ impl VwApp {
         frame.show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             ui.horizontal_centered(|ui| {
+                if in_zip.is_some() {
+                    ui.disable();
+                }
                 for (flag, action, title) in [
                     (Flag::Good, Action::FlagGood, "Good"),
                     (Flag::Bad, Action::FlagBad, "Bad"),
@@ -1831,6 +1914,10 @@ impl VwApp {
                 let tags = &self.settings.settings.labels.tags;
                 if tags.is_empty() {
                     ui.weak(tr(lang, "Add tags in Settings > Flags and tags"));
+                }
+                if in_zip.is_some() {
+                    ui.separator();
+                    ui.weak(tr(lang, "Images inside a ZIP cannot be labeled"));
                 }
                 for (i, tag) in tags.iter().enumerate() {
                     let key = Action::ALL.into_iter().find(|a| a.tag_index() == Some(i));
@@ -3116,6 +3203,7 @@ impl eframe::App for VwApp {
         self.restore_window(&ctx);
         self.track_window(&ctx);
         self.receive(&ctx);
+        self.receive_archives();
         self.pump_folder_load();
         self.watch_folders(&ctx);
         for problem in self.labels.take_problems() {
@@ -3232,6 +3320,8 @@ impl eframe::App for VwApp {
                             self.open_in_active(p);
                         }
                         TreeAction::Select => {}
+                        TreeAction::Mount(zip) => self.mount(&ctx, &zip),
+                        TreeAction::Unmount(dir) => self.unmount(&dir),
                         TreeAction::Series {
                             folder,
                             title,
