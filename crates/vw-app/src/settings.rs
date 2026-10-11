@@ -96,8 +96,8 @@ pub struct Viewer {
     pub slideshow_end: EndMode,
     /// 複数枚のスロットで前後の画像に送るとき、倍率と位置を引き継ぐ（DICOM は常に引き継ぐ）。
     pub keep_view: bool,
-    /// カメラ RAW を、埋め込みプレビューより大きく表示したら自動で現像する。
-    pub develop_on_zoom: bool,
+    /// カメラ RAW を開いたら、まず埋め込みプレビューを出し、裏で現像して差し替える。
+    pub develop_raw: bool,
 }
 
 impl Viewer {
@@ -118,7 +118,7 @@ impl Default for Viewer {
             slideshow_fps: 10.0,
             slideshow_end: EndMode::Loop,
             keep_view: true,
-            develop_on_zoom: true,
+            develop_raw: true,
         }
     }
 }
@@ -350,9 +350,9 @@ impl Settings {
                 .get("viewer", "slideshow_end")
                 .unwrap_or(d.viewer.slideshow_end),
             keep_view: r.get("viewer", "keep_view").unwrap_or(d.viewer.keep_view),
-            develop_on_zoom: r
-                .get("viewer", "develop_on_zoom")
-                .unwrap_or(d.viewer.develop_on_zoom),
+            develop_raw: r
+                .get("viewer", "develop_raw")
+                .unwrap_or(d.viewer.develop_raw),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),

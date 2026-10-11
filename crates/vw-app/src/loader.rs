@@ -124,15 +124,29 @@ struct Queue {
 pub struct Loader {
     registry: Registry,
     queue: Arc<(Mutex<Queue>, Condvar)>,
+    /// 現像の要求。普通の読み込みとは別のスレッドで処理する。現像は 1 枚に数秒かかるので、
+    /// 同じ待ち行列に並べると、フォルダを開いたときのサムネイルが現像の後ろで待たされるため。
+    develop_queue: Arc<(Mutex<Queue>, Condvar)>,
     pub rx: Receiver<LoadResult>,
 }
+
+/// 現像に使うスレッドの数。
+///
+/// コア数まで増やさないのは、rawler が 1 枚の現像の中で全コアを使う（rayon）ので、
+/// 同時に現像する枚数を増やしても速くならず、作業用のメモリ（1 枚に数百 MB）だけが増えるため。
+/// 1 ではなく 2 にするのは、ファイルの読み込みなど 1 枚の中で並列にならない部分の間も
+/// CPU を使い切るため。
+const DEVELOP_WORKERS: usize = 2;
 
 impl Loader {
     pub fn new(registry: Registry, ctx: egui::Context) -> Self {
         let (tx, rx) = channel();
         let queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
         let workers = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 8));
-        for _ in 0..workers {
+        let develop_queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
+        let queues = std::iter::repeat_n(&queue, workers)
+            .chain(std::iter::repeat_n(&develop_queue, DEVELOP_WORKERS));
+        for queue in queues {
             let (registry, queue, tx, ctx) =
                 (registry.clone(), queue.clone(), tx.clone(), ctx.clone());
             std::thread::spawn(move || worker(&registry, &queue, &tx, &ctx));
@@ -140,6 +154,7 @@ impl Loader {
         Self {
             registry,
             queue,
+            develop_queue,
             rx,
         }
     }
@@ -150,18 +165,28 @@ impl Loader {
 
     /// 読み込みを予約する。結果は [`Self::rx`] に届く。
     pub fn request(&self, job: Job) {
-        let (lock, cvar) = &*self.queue;
+        let queue = if job.develop {
+            &self.develop_queue
+        } else {
+            &self.queue
+        };
+        let (lock, cvar) = &**queue;
         lock.lock().unwrap().jobs.push_back(job);
         cvar.notify_one();
     }
 
     /// まだ始まっていない要求を取り消す。始まったものは最後まで読むが、結果は要求番号で捨てられる。
     pub fn cancel(&self, request: u64) {
-        let mut q = self.queue.0.lock().unwrap();
-        if let Some(i) = q.jobs.iter().position(|j| j.request == request) {
-            q.jobs.remove(i);
-        } else {
-            q.cancelled.insert(request);
+        for queue in [&self.queue, &self.develop_queue] {
+            let mut q = queue.0.lock().unwrap();
+            if let Some(i) = q.jobs.iter().position(|j| j.request == request) {
+                q.jobs.remove(i);
+                return;
+            }
+        }
+        // どちらの待ち行列にもなければ始まっている。どちらで始まったかは分からないので両方に記す。
+        for queue in [&self.queue, &self.develop_queue] {
+            queue.0.lock().unwrap().cancelled.insert(request);
         }
     }
 }
@@ -232,7 +257,7 @@ pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result
     ))
 }
 
-/// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。フル解像度の画像だけを返す。
+/// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。縮小画像とフル解像度の画像を返す。
 pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
     let t0 = Instant::now();
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -242,7 +267,7 @@ pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
         .map_err(|e| e.to_string())?;
     let t2 = Instant::now();
     let times = (t1 - t0, t2 - t1);
-    Ok(finish(image, plugin, 1, bytes.len(), times, false, true))
+    Ok(finish(image, plugin, 1, bytes.len(), times, true, true))
 }
 
 /// デコードした画像から、要る分の縮小画像・描画用バッファと情報を作る。
@@ -411,6 +436,21 @@ mod tests {
         let r = loader.rx.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(r.request, 7);
         assert!(r.result.is_ok());
+    }
+
+    #[test]
+    fn develop_requests_are_answered_through_the_channel() {
+        let dir = TempDir::new();
+        let path = dir.path().join("a.png");
+        write_png(&path, 1, 1, &[1, 2, 3]);
+        let loader = Loader::new(png_registry(), egui::Context::default());
+        loader.request(Job {
+            develop: true,
+            ..job(8, &path)
+        });
+        let r = loader.rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(r.request, 8);
+        assert!(r.result.is_err(), "a PNG has nothing to develop");
     }
 
     #[test]

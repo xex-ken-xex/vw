@@ -141,10 +141,10 @@ const ITEMS: [Item; 23] = [
     },
     Item {
         section: Section::Viewer,
-        key: "viewer.develop_on_zoom",
-        title: "Develop RAW when zoomed in",
-        description: "Camera RAW files first show the preview JPEG embedded by the camera. When it is shown larger than the preview, develop the sensor data for more detail (takes a few seconds). Developing is always available from the right-click menu.",
-        widget: develop_on_zoom_widget,
+        key: "viewer.develop_raw",
+        title: "Develop RAW in the background",
+        description: "Camera RAW files first show the preview JPEG embedded by the camera, then are developed from the sensor data in the background and replaced (a film icon is shown on the slot meanwhile). When off, develop from the right-click menu.",
+        widget: develop_raw_widget,
     },
     Item {
         section: Section::Tree,
@@ -417,8 +417,8 @@ fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool
         .changed()
 }
 
-fn develop_on_zoom_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
-    ui.checkbox(&mut s.viewer.develop_on_zoom, tr(lang, "Enabled"))
+fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.viewer.develop_raw, tr(lang, "Enabled"))
         .changed()
 }
 

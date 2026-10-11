@@ -24,7 +24,7 @@ use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
 use crate::labels::{Flag, LabelStore};
 use crate::layout::{self, SlotLayout};
-use crate::loader::{FullImage, ImageInfo, Job, Loaded, Loader};
+use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
 use crate::series::{Scan, SeriesIndex};
@@ -2866,8 +2866,8 @@ impl VwApp {
             } else {
                 self.slots[index].full_request = None;
                 match r.result {
-                    Ok(loaded) => {
-                        self.receive_developed(index, &r.path, &loaded.info);
+                    Ok(mut loaded) => {
+                        self.receive_developed(ctx, index, &r.path, &mut loaded);
                         if let Some(full) = loaded.full {
                             self.attach_full(ctx, index, full);
                         }
@@ -2878,16 +2878,31 @@ impl VwApp {
         }
     }
 
-    /// 現像した画像が届いたら、表示中の画像の情報（大きさ・メタデータ）を差し替える。
-    /// 現像し直した（捨てたあと読み直した）ときは同じなので、ログを出さずに済ませる。
-    fn receive_developed(&mut self, index: usize, path: &Path, info: &ImageInfo) {
+    /// 現像した画像が届いたら、表示中の画像の情報（大きさ・メタデータ）と縮小画像を差し替える。
+    /// 縮小画像も差し替えるのは、並べて見たときにプレビューと現像の色が混ざらないようにするため。
+    /// 現像し直した（捨てたあと読み直した）ときは同じなので、何もしない。
+    fn receive_developed(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        path: &Path,
+        loaded: &mut Loaded,
+    ) {
         let Some(shown) = &mut self.slots[index].shown else {
             return;
         };
-        if !shown.developed || shown.info.develop_size.is_none() {
+        if !shown.developing() {
             return;
         }
+        let info = &loaded.info;
         shown.info = info.clone();
+        if let Some(thumb) = loaded.thumb.take() {
+            shown.thumb = ctx.load_texture(
+                format!("{}#thumb", path.display()),
+                thumb,
+                texture_options(),
+            );
+        }
         self.log.info(format!(
             "{}: developed {}x{} | read {} / develop {} / convert {}",
             path.display(),
@@ -2973,6 +2988,9 @@ impl VwApp {
         }
         if let Some(full) = loaded.full {
             self.attach_full(ctx, index, full);
+        }
+        if self.settings.settings.viewer.develop_raw {
+            self.develop_slot(index);
         }
     }
 
@@ -3549,8 +3567,6 @@ impl VwApp {
             return;
         }
         shown.developed = true;
-        self.log
-            .info(format!("{}: developing...", shown.path.display()));
         // 読み込み中のプレビューは要らなくなる。届くと現像の結果を待たずにそれを出してしまう。
         if let Some((request, _)) = s.full_request.take() {
             self.loader.cancel(request);
@@ -3748,8 +3764,7 @@ impl VwApp {
             if resp.copy {
                 self.copy_image(ui.ctx(), i);
             }
-            if resp.develop || (resp.wants_develop && self.settings.settings.viewer.develop_on_zoom)
-            {
+            if resp.develop {
                 self.develop_slot(i);
             }
             if resp.close {
