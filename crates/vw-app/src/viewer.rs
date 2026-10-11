@@ -25,6 +25,9 @@ pub struct Shown {
     pub info: ImageInfo,
     /// フル解像度の画像。縮小画像では足りない大きさで表示するときだけ持つ（[`crate::memory`]）。
     pub full: Option<Full>,
+    /// フル解像度の画像を、普通に読む代わりに現像して作る（カメラ RAW）。
+    /// 現像を頼んだときに立て、捨てたフル解像度の画像を読み直すときも現像する。
+    pub developed: bool,
 }
 
 pub struct Full {
@@ -36,6 +39,12 @@ pub struct Full {
 }
 
 impl Shown {
+    /// 現像を頼んで、まだ届いていない。届くと情報が現像した画像のものになり、
+    /// [`ImageInfo::develop_size`] がなくなる。
+    pub fn developing(&self) -> bool {
+        self.developed && self.info.develop_size.is_some()
+    }
+
     /// 描画に使うテクスチャ。フル解像度があればそれ、なければ縮小画像。
     pub fn texture(&self) -> &TextureHandle {
         self.full.as_ref().map_or(&self.thumb, |f| &f.texture)
@@ -180,6 +189,8 @@ pub struct SlotResponse {
     pub copy: bool,
     /// 縮小画像では足りない大きさで表示している。
     pub wants_full: bool,
+    /// 右クリックメニューで「現像」が選ばれた。
+    pub develop: bool,
     /// ダブルクリックされた（最大化の切り替え）。
     pub toggle_maximize: bool,
     /// ホイールで送る枚数。負なら前へ。
@@ -400,6 +411,18 @@ impl Slot {
                     out.copy = true;
                     ui.close();
                 }
+                let developable = self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|s| s.info.develop_size.is_some() && !s.developed);
+                if developable
+                    && ui
+                        .button(tr(lang, "Develop RAW from sensor data"))
+                        .clicked()
+                {
+                    out.develop = true;
+                    ui.close();
+                }
             });
         }
         out.toggle_maximize = response.double_clicked();
@@ -583,6 +606,20 @@ impl Slot {
             );
             out.open_folder = open.on_hover_text(tr(lang, "Open this folder")).clicked();
             labels_right = open_rect.left();
+        }
+
+        if self.shown.as_ref().is_some_and(Shown::developing) {
+            let film_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
+            let film = ui.interact(film_rect, ui.id().with(("film", self.id)), Sense::hover());
+            painter.text(
+                film_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::FILM_STRIP,
+                egui::FontId::proportional(14.0),
+                visuals.weak_text_color(),
+            );
+            film.on_hover_text(tr(lang, "Developing RAW..."));
+            labels_right = film_rect.left();
         }
 
         // フラグとタグはヘッダの右端に出し、フラグはヘッダの下端の色の線でも示す。

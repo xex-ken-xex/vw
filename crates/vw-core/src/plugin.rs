@@ -70,6 +70,15 @@ pub trait DecoderPlugin: Send + Sync {
         }
     }
 
+    /// [`Self::decode`] の画像の代わりに、時間をかけて精細な画像を作る（カメラ RAW の
+    /// センサーのデータの現像）。作れるかどうかは [`VwImage::develop_size`] で分かる。
+    fn develop(&self, _data: &[u8]) -> Result<VwImage, DecodeError> {
+        Err(DecodeError::Unsupported(format!(
+            "{} images cannot be developed",
+            self.name()
+        )))
+    }
+
     /// 画素をデコードせずにメタデータだけ読む。
     /// 既定の実装は全体をデコードするので、速くできる形式は上書きする。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
@@ -210,6 +219,14 @@ impl Registry {
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
         Ok((plugin.decode_frame(data, frame)?, plugin.name()))
+    }
+
+    /// プラグインを選んで [`DecoderPlugin::develop`] し、画像と使ったプラグイン名を返す。
+    pub fn develop_bytes(&self, path: &Path, data: &[u8]) -> Result<(VwImage, &str), DecodeError> {
+        let plugin = self
+            .find(path, data)
+            .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
+        Ok((plugin.develop(data)?, plugin.name()))
     }
 
     /// ファイルのフレーム数。対応するプラグインがなければエラー。

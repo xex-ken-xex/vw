@@ -62,11 +62,12 @@ pub enum Action {
     FilterUnflagged,
     ExportImages,
     ParentFolder,
+    DevelopRaw,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 47] = [
+    pub const ALL: [Action; 48] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -80,6 +81,7 @@ impl Action {
         Action::ActualSize,
         Action::ZoomIn,
         Action::ZoomOut,
+        Action::DevelopRaw,
         Action::LayoutAuto,
         Action::Layout1x1,
         Action::Layout1x2,
@@ -166,6 +168,7 @@ impl Action {
             Action::FilterUnflagged => "filter_unflagged",
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
+            Action::DevelopRaw => "develop_raw",
         }
     }
 
@@ -196,6 +199,7 @@ impl Action {
             Action::ActualSize => "Actual size (100%)",
             Action::ZoomIn => "Zoom in",
             Action::ZoomOut => "Zoom out",
+            Action::DevelopRaw => "Develop RAW from sensor data",
             Action::LayoutAuto => "Layout: auto",
             Action::Layout1x1 => "Layout: 1 x 1",
             Action::Layout1x2 => "Layout: 1 x 2",
@@ -321,6 +325,7 @@ impl Action {
             Action::ActualSize => vec![KeyCombo::ctrl(Num0)],
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
+            Action::DevelopRaw => vec![KeyCombo::plain(D)],
             Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
             Action::Layout1x1 => vec![KeyCombo::alt(Num1)],
             Action::Layout1x2 => vec![KeyCombo::alt(Num2)],

@@ -20,7 +20,7 @@ fn main() {
         };
         let t = Instant::now();
         let result = if develop {
-            vw_raw::develop_bytes(&data)
+            vw_raw::RawPlugin.develop(&data)
         } else {
             vw_raw::RawPlugin.decode(&data)
         };
@@ -34,6 +34,9 @@ fn main() {
                     img.data.bits_per_sample(),
                     t.elapsed().as_secs_f64() * 1000.0
                 );
+                if let Some((w, h)) = img.develop_size {
+                    println!("  develops to about {w}x{h}");
+                }
                 for (g, k, v) in &img.metadata.entries {
                     println!("  [{g}] {k}: {v}");
                 }
