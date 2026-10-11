@@ -31,6 +31,11 @@ impl DecoderPlugin for JpegPlugin {
     }
 
     fn decode(&self, data: &[u8]) -> Result<VwImage, DecodeError> {
+        // 先に印を確かめるのは、zune-jpeg のエラー（"Illegal start bytes:7468" など）では
+        // JPEG でないファイルだと分かりにくいため。
+        if !self.probe(data) {
+            return Err(DecodeError::Invalid("not a JPEG file".into()));
+        }
         let mut decoder = headers(data)?;
         let gray = decoder.input_colorspace() == Some(ColorSpace::Luma);
         let out = if gray {
@@ -277,6 +282,12 @@ mod tests {
             Some(b"II*\0garbage".to_vec()),
         );
         assert!(JpegPlugin.decode(&jpg).is_ok());
+    }
+
+    #[test]
+    fn file_that_is_not_jpeg_says_so() {
+        let err = JpegPlugin.decode(b"this is not an image\n").unwrap_err();
+        assert_eq!(err.to_string(), "invalid data: not a JPEG file");
     }
 
     #[test]
