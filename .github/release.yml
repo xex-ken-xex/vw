@@ -1,0 +1,6 @@
+# 自動生成するリリースノートから外す PR。
+# タイトルに載せたくない内容がある PR に、このラベルを付ける。
+changelog:
+  exclude:
+    labels:
+      - no-release-notes
