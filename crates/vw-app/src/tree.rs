@@ -3,6 +3,7 @@
 //! フォルダの中身は初めて開いたときに読む。起動時にドライブ全体を走査すると
 //! 起動が遅くなるうえ、ネットワークドライブで固まることがあるため。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -11,6 +12,7 @@ use vw_core::Registry;
 
 use crate::i18n::tr;
 use crate::labels::{self, Label, LabelStore};
+use crate::series::{Scan, Series, SeriesIndex, Study};
 use crate::settings::{FolderAction, Language, TreeMode};
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 
@@ -44,6 +46,22 @@ struct View<'a> {
     order: SortOrder,
     /// ファイルも出すか（ノーマルモード）。
     show_files: bool,
+    series: &'a SeriesIndex,
+    /// DICOM の拡張子。
+    dicom_extensions: &'a [&'a str],
+}
+
+impl View<'_> {
+    /// DICOM かもしれないファイル。拡張子が他のプラグインのもの（PNG など）でなければ、
+    /// ヘッダを読んで確かめる。
+    fn may_be_dicom(&self, path: &Path) -> bool {
+        let dicom_extension = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            self.dicom_extensions
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(e))
+        });
+        dicom_extension || self.registry.needs_probe(path)
+    }
 }
 
 /// ツリーを描いた結果。
@@ -53,6 +71,8 @@ struct Out {
     /// クリックされたフォルダの見出しと、Shift を押していたか。開閉と読み込みのどちらにするかは
     /// [`ClickTracker`] が決める。
     folder_click: Option<(PathBuf, bool)>,
+    /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
+    scans: Vec<(PathBuf, Vec<PathBuf>)>,
 }
 
 /// ツリーでファイルがクリックされたときの要求。
@@ -67,6 +87,13 @@ pub enum TreeAction {
     Copy(PathBuf),
     /// フォルダの画像をスロットに読み込む（画像自動展開モード）。
     Load(PathBuf),
+    /// DICOM のシリーズを 1 つのスロットに出す。`add` なら Ctrl / Cmd + クリックでスロットを足す。
+    Series {
+        folder: PathBuf,
+        title: String,
+        files: Vec<PathBuf>,
+        add: bool,
+    },
 }
 
 /// フォルダの見出しのクリックの扱い方（設定から作る）。
@@ -195,12 +222,37 @@ impl Node {
                 let children = self
                     .children
                     .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
+                let studies = dicom_studies(&self.path, children, view, out);
+                // シリーズに入ったファイルは、ファイルとしては出さない。数百枚の CT のファイルが
+                // シリーズの下に並ぶと、ツリーがそれで埋まるため。
+                let in_series: HashSet<&Path> = studies
+                    .iter()
+                    .flat_map(|s| &s.series)
+                    .flat_map(|s| &s.files)
+                    .map(PathBuf::as_path)
+                    .collect();
                 // 画像自動展開モードでもファイルは読んで持っておく。モードを切り替えたときに
                 // フォルダを読み直さず、開閉状態もそのまま保てるようにするため。
                 let mut shown = 0;
-                let shown_child =
-                    |c: &&mut Node| c.is_dir || (view.show_files && (view.show_file)(&c.path));
-                for child in children.iter_mut().filter(shown_child) {
+                for child in children.iter_mut().filter(|c| c.is_dir) {
+                    child.ui(ui, view, out);
+                    shown += 1;
+                }
+                for study in &studies {
+                    study_ui(ui, &self.path, study, view, out);
+                    shown += 1;
+                }
+                if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
+                    ui.weak(tr(lang, "Reading DICOM headers…"));
+                    shown += 1;
+                }
+                let shown_file = |c: &&mut Node| {
+                    !c.is_dir
+                        && view.show_files
+                        && !in_series.contains(c.path.as_path())
+                        && (view.show_file)(&c.path)
+                };
+                for child in children.iter_mut().filter(shown_file) {
                     child.ui(ui, view, out);
                     shown += 1;
                 }
@@ -325,6 +377,53 @@ impl Node {
     }
 }
 
+/// フォルダ `dir` の DICOM の検査。まだヘッダを読んでいなければ読むよう `out` に頼む。
+fn dicom_studies(dir: &Path, children: &[Node], view: &View, out: &mut Out) -> Vec<Study> {
+    match view.series.scan(dir) {
+        Scan::Done(studies) => studies.to_vec(),
+        Scan::Reading => Vec::new(),
+        Scan::NotStarted => {
+            let files: Vec<PathBuf> = children
+                .iter()
+                .filter(|c| !c.is_dir && view.may_be_dicom(&c.path))
+                .map(|c| c.path.clone())
+                .collect();
+            if !files.is_empty() {
+                out.scans.push((dir.to_path_buf(), files));
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// 検査の見出しと、その下のシリーズ。
+fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut Out) {
+    let id = ui.make_persistent_id((dir, &study.uid));
+    CollapsingState::load_with_default_open(ui.ctx(), id, true)
+        .show_header(ui, |ui| ui.label(study.title()))
+        .body(|ui| {
+            for series in &study.series {
+                series_ui(ui, dir, series, view, out);
+            }
+        });
+}
+
+fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &mut Out) {
+    let selected = view
+        .selected
+        .is_some_and(|p| series.files.iter().any(|f| f == p));
+    let title = series.title();
+    let r = ui.selectable_label(selected, &title);
+    if r.clicked() {
+        out.action = Some(TreeAction::Series {
+            folder: dir.to_path_buf(),
+            title,
+            files: series.files.clone(),
+            add: ui.input(|i| i.modifiers.command),
+        });
+    }
+}
+
 /// 右クリックメニュー。選んだ項目のフルパスをコピーする。
 fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
     r.context_menu(|ui| {
@@ -340,6 +439,7 @@ pub struct FolderTree {
     pub roots: Vec<Node>,
     order: SortOrder,
     clicks: ClickTracker,
+    series: SeriesIndex,
 }
 
 impl FolderTree {
@@ -368,6 +468,7 @@ impl FolderTree {
             roots,
             order,
             clicks: ClickTracker::default(),
+            series: SeriesIndex::default(),
         }
     }
 
@@ -401,6 +502,7 @@ impl FolderTree {
     /// フォルダ `dir` の中身を読み直す（フォルダの監視で変化を知ったとき）。
     /// 同じフォルダが Home と / の両方の下に出ていることがあるので、すべてのルートを辿る。
     pub fn refresh(&mut self, dir: &Path, registry: &Registry) {
+        self.series.forget(dir);
         for root in &mut self.roots {
             root.refresh(dir, registry, self.order);
         }
@@ -425,6 +527,12 @@ impl FolderTree {
         if let Some(path) = self.clicks.due(how, now) {
             self.toggle(&path);
         }
+        self.series.poll();
+        let dicom_extensions = registry
+            .plugins()
+            .iter()
+            .find(|p| p.name() == "DICOM")
+            .map_or(&[][..], |p| p.extensions());
         let view = View {
             registry,
             labels: marks.labels,
@@ -433,10 +541,17 @@ impl FolderTree {
             lang,
             order: self.order,
             show_files: how.mode == TreeMode::Normal,
+            series: &self.series,
+            dicom_extensions,
         };
         let mut out = Out::default();
         for root in &mut self.roots {
             root.ui(ui, &view, &mut out);
+        }
+        for (dir, files) in out.scans {
+            let ctx = ui.ctx().clone();
+            self.series
+                .start(dir, files, registry.clone(), move || ctx.request_repaint());
         }
         if let Some((path, shift)) = out.folder_click {
             let effect = self.clicks.click(how, &path, shift, now);
@@ -476,7 +591,7 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
                 Ok(t) => t.is_dir(),
                 Err(_) => false,
             };
-            if !is_dir && !registry.supports_path(&path) {
+            if !is_dir && !registry.supports_file(&path) {
                 return None;
             }
             // 更新日時は並べるのに使うときだけ取る。Linux では項目ごとに stat が要り、
@@ -538,7 +653,7 @@ pub fn sibling_images(path: &Path, registry: &Registry, order: SortOrder) -> Vec
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
-                .filter(|p| registry.supports_path(p) && p.is_file())
+                .filter(|p| registry.supports_file(p) && p.is_file())
                 .map(|path| Node {
                     name: display_name(&path),
                     is_dir: false,
@@ -740,6 +855,7 @@ mod tests {
             roots: vec![Node::dir(root.to_path_buf(), None, false)],
             order: SortOrder::default(),
             clicks: ClickTracker::default(),
+            series: SeriesIndex::default(),
         }
     }
 

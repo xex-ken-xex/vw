@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vw-core", "crates/vw-png", "crates/vw-app"]
+members = ["crates/vw-core", "crates/vw-png", "crates/vw-dicom", "crates/vw-app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,7 @@ edition = "2021"
 [workspace.dependencies]
 vw-core = { path = "crates/vw-core" }
 vw-png = { path = "crates/vw-png" }
+vw-dicom = { path = "crates/vw-dicom" }
 
 [profile.release]
 lto = "thin"

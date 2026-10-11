@@ -13,6 +13,13 @@ pub fn png_registry() -> Registry {
     r
 }
 
+/// アプリと同じく、組み込みのプラグインをすべて登録したもの。
+pub fn all_registry() -> Registry {
+    let mut r = png_registry();
+    r.register(Arc::new(vw_dicom::DicomPlugin));
+    r
+}
+
 /// 8bit RGB の PNG を書き出す。
 pub fn write_png(path: &Path, w: u32, h: u32, rgb: &[u8]) {
     let file = std::fs::File::create(path).unwrap();

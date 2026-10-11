@@ -94,6 +94,8 @@ pub struct Viewer {
     /// スライドショーの速さ。再生バーで最後に使った値を覚える。
     pub slideshow_fps: f32,
     pub slideshow_end: EndMode,
+    /// 複数枚のスロットで前後の画像に送るとき、倍率と位置を引き継ぐ（DICOM は常に引き継ぐ）。
+    pub keep_view: bool,
 }
 
 impl Viewer {
@@ -113,6 +115,7 @@ impl Default for Viewer {
             custom_layout: SlotLayout::grid(3, 2),
             slideshow_fps: 10.0,
             slideshow_end: EndMode::Loop,
+            keep_view: false,
         }
     }
 }
@@ -297,6 +300,27 @@ impl Labels {
     }
 }
 
+/// DICOM（[`vw_dicom`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Dicom {
+    /// 先頭を読んで DICOM か確かめる拡張子の正規表現（[`vw_core::ProbeExtensions`]）。
+    pub probe_extensions: String,
+}
+
+impl Default for Dicom {
+    fn default() -> Self {
+        Self {
+            probe_extensions: vw_core::ProbeExtensions::DEFAULT.into(),
+        }
+    }
+}
+
+impl Dicom {
+    pub fn probe(&self) -> vw_core::ProbeExtensions {
+        vw_core::ProbeExtensions::new(&self.probe_extensions).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -304,6 +328,7 @@ pub struct Settings {
     pub tree: Tree,
     pub behavior: Behavior,
     pub labels: Labels,
+    pub dicom: Dicom,
     pub keys: Keymap,
 }
 
@@ -371,6 +396,7 @@ impl Settings {
             slideshow_end: r
                 .get("viewer", "slideshow_end")
                 .unwrap_or(d.viewer.slideshow_end),
+            keep_view: r.get("viewer", "keep_view").unwrap_or(d.viewer.keep_view),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -427,6 +453,16 @@ impl Settings {
                 .unwrap_or_else(|| d.labels.tags.clone()),
             advance: r.get("labels", "advance").unwrap_or(d.labels.advance),
         };
+        let dicom = Dicom {
+            probe_extensions: r
+                .get_valid(
+                    "dicom",
+                    "probe_extensions",
+                    |e: &String| vw_core::ProbeExtensions::new(e).is_ok(),
+                    "not a valid regular expression",
+                )
+                .unwrap_or_else(|| d.dicom.probe_extensions.clone()),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -444,6 +480,7 @@ impl Settings {
                 tree,
                 behavior,
                 labels,
+                dicom,
                 keys,
             },
             problems,
@@ -737,11 +774,13 @@ mod tests {
         s.behavior.auto_reload = false;
         s.labels.tags = vec!["cat".into(), "dog".into()];
         s.labels.advance = false;
+        s.dicom.probe_extensions = "^(|raw)$".into();
         s.viewer.full_image_limit_mb = 8192;
         s.viewer.layout = SlotLayout::grid(1, 2);
         s.viewer.custom_layout = SlotLayout::grid(5, 3);
         s.viewer.slideshow_fps = 24.0;
         s.viewer.slideshow_end = EndMode::PingPong;
+        s.viewer.keep_view = true;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
         s.tree.sort = SortKey::Modified;
@@ -950,6 +989,21 @@ mod tests {
     fn duplicate_tag_names_fall_back_to_the_default_list() {
         let (s, problems) = Settings::from_toml("[labels]\ntags = [\"cat\", \"cat\"]\n").unwrap();
         assert!(s.labels.tags.is_empty());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn dicom_probes_files_without_extension_or_with_digits_dcm_dicom_or_ima_by_default() {
+        assert_eq!(
+            Settings::default().dicom.probe_extensions,
+            "^(|[0-9]+|dcm|dicom|ima)$"
+        );
+    }
+
+    #[test]
+    fn invalid_dicom_extension_pattern_falls_back_to_the_default() {
+        let (s, problems) = Settings::from_toml("[dicom]\nprobe_extensions = \"(\"\n").unwrap();
+        assert_eq!(s.dicom, Dicom::default());
         assert_eq!(problems.len(), 1);
     }
 

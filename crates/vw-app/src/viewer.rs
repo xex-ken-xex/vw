@@ -42,21 +42,65 @@ impl Shown {
     }
 }
 
-/// フォルダスロットが送る画像の並び。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 塊のスロット（フォルダスロットなど）が送る画像の並び。
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sequence {
+    /// 並びの元。フォルダか、フレームの並びなら元のファイル。
     pub folder: PathBuf,
+    pub kind: SequenceKind,
     pub paths: Vec<PathBuf>,
     /// 表示中（読み込み中）の画像の位置。
     pub index: usize,
+    /// ファイルが勧めるスライドショーの速さ（シネのフレーム間隔から）。
+    pub fps: Option<f32>,
+    /// ヘッダに出す並びの名前。`None` ならフォルダ名かファイル名。
+    pub title: Option<String>,
+}
+
+/// 並びの種類。フォルダの中身が変わったときに並びを読み直すかが変わる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceKind {
+    /// フォルダの画像すべて。
+    Folder,
+    /// 1 つのファイルのフレーム（[`crate::frames`]）。
+    Frames,
+    /// DICOM の 1 シリーズのファイル（[`crate::series`]）。
+    Series,
 }
 
 impl Sequence {
     pub fn new(folder: PathBuf, first: PathBuf) -> Self {
         Self {
             folder,
+            kind: SequenceKind::Folder,
             paths: vec![first],
             index: 0,
+            fps: None,
+            title: None,
+        }
+    }
+
+    /// `file` の `count` 枚のフレームの並び。
+    pub fn frames(file: PathBuf, count: usize, fps: Option<f32>) -> Self {
+        Self {
+            paths: crate::frames::frame_paths(&file, count),
+            folder: file,
+            kind: SequenceKind::Frames,
+            index: 0,
+            fps,
+            title: None,
+        }
+    }
+
+    /// フォルダ `folder` にある DICOM の 1 シリーズ。
+    pub fn series(folder: PathBuf, title: String, files: Vec<PathBuf>) -> Self {
+        Self {
+            folder,
+            kind: SequenceKind::Series,
+            paths: files,
+            index: 0,
+            fps: None,
+            title: Some(title),
         }
     }
 }
@@ -372,6 +416,16 @@ impl Slot {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| tr(lang, "(empty)").into());
         let name = match &self.sequence {
+            Some(seq) if seq.kind == SequenceKind::Frames => {
+                let file = seq.folder.file_name().unwrap_or_default().to_string_lossy();
+                format!("{file}   {}/{}", seq.index + 1, seq.paths.len())
+            }
+            Some(Sequence {
+                title: Some(title),
+                index,
+                paths,
+                ..
+            }) => format!("{title}/{name}   {}/{}", index + 1, paths.len()),
             Some(seq) => {
                 let folder = seq
                     .folder

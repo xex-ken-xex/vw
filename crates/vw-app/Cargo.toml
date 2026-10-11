@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 vw-core.workspace = true
 vw-png.workspace = true
+vw-dicom.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 egui-phosphor = "0.14"
 serde = { version = "1", features = ["derive"] }

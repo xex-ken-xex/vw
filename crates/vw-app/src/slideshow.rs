@@ -186,6 +186,8 @@ pub struct Playback {
     pub loader_slot: u64,
     pub frames: Vec<PathBuf>,
     pub clock: Clock,
+    /// 再生の速さ。シネならファイルの速さ、それ以外は設定の速さで始める。
+    pub fps: f32,
     /// 読み込み済みの画像（位置ごと）。表示した後も、この先また出すうちは持っておく。
     /// 短い並びをループすると同じ画像をすぐまた出すので、出すたびに読み直さないため。
     pub cache: BTreeMap<usize, Frame>,
@@ -198,12 +200,13 @@ pub struct Playback {
 }
 
 impl Playback {
-    pub fn new(slot: u64, loader_slot: u64, frames: Vec<PathBuf>, clock: Clock) -> Self {
+    pub fn new(slot: u64, loader_slot: u64, frames: Vec<PathBuf>, clock: Clock, fps: f32) -> Self {
         Self {
             slot,
             loader_slot,
             frames,
             clock,
+            fps,
             cache: BTreeMap::new(),
             pending: HashMap::new(),
             failed: HashSet::new(),
@@ -321,7 +324,7 @@ mod tests {
 
     fn playback(fps: f32, frame_bytes: usize) -> Playback {
         let clock = Clock::new(0, 100, EndMode::Loop, fps, Instant::now());
-        let mut pb = Playback::new(1, 2, Vec::new(), clock);
+        let mut pb = Playback::new(1, 2, Vec::new(), clock, 10.0);
         pb.frame_bytes = frame_bytes;
         pb
     }

@@ -1,8 +1,9 @@
 //! デコーダプラグインのインターフェースと、プラグインを束ねる [`Registry`]。
 
 use std::fmt;
+use std::io::Read as _;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::image::{Metadata, VwImage};
 
@@ -55,10 +56,62 @@ pub trait DecoderPlugin: Send + Sync {
     /// ファイル全体のバイト列をデコードする。
     fn decode(&self, data: &[u8]) -> Result<VwImage, DecodeError>;
 
+    /// ファイルに入っている画像（フレーム）の数。動画のような DICOM のシネは 1 ファイルに
+    /// 何百枚も入っている。既定は 1 枚。
+    fn frame_count(&self, _data: &[u8]) -> Result<usize, DecodeError> {
+        Ok(1)
+    }
+
+    /// `frame` 番目（0 始まり）のフレームをデコードする。既定は 1 枚だけの形式向け。
+    fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
+        match frame {
+            0 => self.decode(data),
+            _ => Err(DecodeError::Invalid(format!("no frame {frame}"))),
+        }
+    }
+
     /// 画素をデコードせずにメタデータだけ読む。
     /// 既定の実装は全体をデコードするので、速くできる形式は上書きする。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         self.decode(data).map(|img| img.metadata)
+    }
+}
+
+/// 中身で形式を判定するときに読む先頭のバイト数。DICOM の印（128 バイト目から）が入る長さ。
+const PROBE_BYTES: usize = 132;
+
+/// どのプラグインの拡張子でもないファイルのうち、先頭を読んで中身で判定するものを、拡張子
+/// （`.` を除いた部分、拡張子がなければ空文字列）に当てる正規表現で決める。大文字小文字は区別しない。
+///
+/// すべてのファイルを読まないのは、画像以外のファイルが多いフォルダやネットワークドライブで、
+/// フォルダを開くたびに全ファイルを開くと遅くなるため。
+#[derive(Debug, Clone)]
+pub struct ProbeExtensions(regex::Regex);
+
+impl ProbeExtensions {
+    /// 既定。拡張子なし、数字だけ（`IMG.0314` など）、dcm、dicom、ima。DICOM がよく使う名前。
+    pub const DEFAULT: &'static str = "^(|[0-9]+|dcm|dicom|ima)$";
+
+    pub fn new(pattern: &str) -> Result<Self, String> {
+        regex::RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .map(Self)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn matches(&self, path: &Path) -> bool {
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy())
+            .unwrap_or_default();
+        self.0.is_match(&ext)
+    }
+}
+
+impl Default for ProbeExtensions {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT).expect("the default pattern is valid")
     }
 }
 
@@ -68,6 +121,8 @@ pub trait DecoderPlugin: Send + Sync {
 #[derive(Clone, Default)]
 pub struct Registry {
     plugins: Vec<Arc<dyn DecoderPlugin>>,
+    /// 複製した `Registry` でも同じ設定を使うよう共有する。設定を変えたらすぐ全体に効かせるため。
+    probe: Arc<RwLock<ProbeExtensions>>,
 }
 
 impl Registry {
@@ -90,6 +145,38 @@ impl Registry {
         self.by_extension(path).is_some()
     }
 
+    /// 中身で判定する拡張子を変える。
+    pub fn set_probe_extensions(&self, probe: ProbeExtensions) {
+        *self.probe.write().unwrap_or_else(|e| e.into_inner()) = probe;
+    }
+
+    /// [`Self::supports_path`] に加えて、[`ProbeExtensions`] に当てはまるファイルは先頭を読んで
+    /// 中身で判定する。DICOM は `IM0001` や `*.IMA`、装置ごとの連番など、拡張子が当てに
+    /// ならない名前で保存されるため。拡張子で分かるファイルは開かないので、画像の多い
+    /// フォルダでは遅くならない。
+    pub fn supports_file(&self, path: &Path) -> bool {
+        if self.supports_path(path) {
+            return true;
+        }
+        if !self.needs_probe(path) {
+            return false;
+        }
+        let mut header = Vec::with_capacity(PROBE_BYTES);
+        let read = std::fs::File::open(path)
+            .and_then(|f| std::io::Read::take(f, PROBE_BYTES as u64).read_to_end(&mut header));
+        read.is_ok() && self.plugins.iter().any(|p| p.probe(&header))
+    }
+
+    /// 拡張子ではどのプラグインか分からず、中身を読んで判定するファイルか。
+    pub fn needs_probe(&self, path: &Path) -> bool {
+        self.by_extension(path).is_none()
+            && self
+                .probe
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .matches(path)
+    }
+
     fn by_extension(&self, path: &Path) -> Option<&Arc<dyn DecoderPlugin>> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         self.plugins
@@ -109,10 +196,27 @@ impl Registry {
 
     /// プラグインを選んでデコードし、画像と使ったプラグイン名を返す。
     pub fn decode_bytes(&self, path: &Path, data: &[u8]) -> Result<(VwImage, &str), DecodeError> {
+        self.decode_frame_bytes(path, data, 0)
+    }
+
+    /// [`Self::decode_bytes`] の、`frame` 番目のフレームを読む版。
+    pub fn decode_frame_bytes(
+        &self,
+        path: &Path,
+        data: &[u8],
+        frame: usize,
+    ) -> Result<(VwImage, &str), DecodeError> {
         let plugin = self
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
-        Ok((plugin.decode(data)?, plugin.name()))
+        Ok((plugin.decode_frame(data, frame)?, plugin.name()))
+    }
+
+    /// ファイルのフレーム数。対応するプラグインがなければエラー。
+    pub fn frame_count(&self, path: &Path, data: &[u8]) -> Result<usize, DecodeError> {
+        self.find(path, data)
+            .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?
+            .frame_count(data)
     }
 }
 
@@ -206,6 +310,61 @@ mod tests {
         };
         let m = plugin.read_metadata(b"AAA").unwrap();
         assert_eq!(m.get("AAA", "decoded"), Some("true"));
+    }
+
+    #[test]
+    fn single_image_formats_have_one_frame_and_reject_others() {
+        let r = registry();
+        let path = Path::new("x.aaa");
+        assert_eq!(r.frame_count(path, b"AAA").unwrap(), 1);
+        assert!(r.decode_frame_bytes(path, b"AAA", 0).is_ok());
+        assert!(matches!(
+            r.decode_frame_bytes(path, b"AAA", 1),
+            Err(DecodeError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn files_with_probed_extensions_are_recognised_by_their_content() {
+        let dir = std::env::temp_dir().join(format!("vw-core-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, data: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, data).unwrap();
+            p
+        };
+        let no_extension = write("IM0001", b"BBB...");
+        let digits = write("IMG.0314", b"BBB...");
+        let ima = write("scan.0036.IMA", b"BBB...");
+        let other = write("scan.xyz", b"BBB...");
+        let text = write("README", b"hello");
+        let r = registry();
+        assert!(r.supports_file(&no_extension));
+        assert!(r.supports_file(&digits));
+        assert!(r.supports_file(&ima));
+        // 一覧にない拡張子は、中身が対応形式でも読まない。
+        assert!(!r.supports_file(&other));
+        assert!(!r.supports_file(&text));
+        // プラグインの拡張子なら中身は見ない。
+        assert!(r.supports_file(&dir.join("missing.aaa")));
+
+        r.clone()
+            .set_probe_extensions(ProbeExtensions::new("^xyz$").unwrap());
+        assert!(r.supports_file(&other));
+        assert!(!r.supports_file(&no_extension));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn probe_pattern_is_matched_against_the_extension_ignoring_case() {
+        let p = ProbeExtensions::default();
+        for yes in ["IM0001", "IMG.0314", "a.dcm", "a.DICOM", "PT.0036.IMA"] {
+            assert!(p.matches(Path::new(yes)), "{yes}");
+        }
+        for no in ["a.txt", "a.0314a", "a.dcm2"] {
+            assert!(!p.matches(Path::new(no)), "{no}");
+        }
+        assert!(ProbeExtensions::new("(").is_err());
     }
 
     #[test]

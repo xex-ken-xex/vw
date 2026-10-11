@@ -37,8 +37,9 @@ impl Default for DisplayParams {
 /// U8/U16 は 256 / 65536 要素の変換表（LUT）を先に作って引く。
 /// 画素ごとに浮動小数点で計算するより速く、16bit 画像でも表は 64KB で済むため。
 pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
+    let window = params.window.or(img.window);
     match &img.data {
-        PixelData::U8(v) => match params.window {
+        PixelData::U8(v) => match window {
             None => convert(img, params, |i| v[i], |i| v[i]),
             Some(win) => {
                 let lut = build_lut(256, win);
@@ -47,11 +48,11 @@ pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
         },
         PixelData::U16(v) => {
             let max = ((1u32 << img.significant_bits.clamp(1, 16)) - 1) as f32;
-            let lut = build_lut(65536, params.window.unwrap_or((0.0, max)));
+            let lut = build_lut(65536, window.unwrap_or((0.0, max)));
             convert(img, params, |i| lut[v[i] as usize], |i| (v[i] >> 8) as u8)
         }
         PixelData::F32(v) => {
-            let (lo, hi) = params.window.unwrap_or_else(|| min_max(v));
+            let (lo, hi) = window.unwrap_or_else(|| min_max(v));
             let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
             convert(
                 img,
@@ -270,6 +271,21 @@ mod tests {
         let d = to_display(&gray8(&[50, 100, 150, 200, 250]), &params);
         let grays: Vec<u8> = d.rgba.iter().step_by(4).copied().collect();
         assert_eq!(grays, vec![0, 0, 128, 255, 255]);
+    }
+
+    #[test]
+    fn window_suggested_by_the_file_is_used_unless_overridden() {
+        let mut img = gray8(&[100, 150, 200]);
+        img.window = Some((100.0, 200.0));
+        let d = to_display(&img, &DisplayParams::default());
+        let grays: Vec<u8> = d.rgba.iter().step_by(4).copied().collect();
+        assert_eq!(grays, vec![0, 128, 255]);
+        let params = DisplayParams {
+            window: Some((0.0, 255.0)),
+            ..Default::default()
+        };
+        let d = to_display(&img, &params);
+        assert_eq!(d.rgba[4], 150);
     }
 
     #[test]

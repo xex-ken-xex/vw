@@ -46,6 +46,7 @@ DisplayImage (RGBA8)
 
 - `name()` / `extensions()` / `probe(header)` / `decode(bytes)` / `read_metadata(bytes)`
 - `Registry` が中身（マジックナンバー）→ 拡張子の順でプラグインを選ぶ
+- ツリーに出すファイルは、拡張子でプラグインが決まるものはそのまま、決まらないもののうち設定 `dicom.probe_extensions`（拡張子に当てる正規表現。既定 `^(|[0-9]+|dcm|dicom|ima)$`）に合うものは先頭 132 バイトを読んで判定する。DICOM の名前は拡張子が当てにならないため
 
 現在は静的リンク（`crates/vw-app/src/main.rs` の `registry()` で登録）。
 トレイトはジェネリクスなしのオブジェクト安全な形にしてあり、後で C ABI を被せれば
@@ -57,8 +58,14 @@ DisplayImage (RGBA8)
 | --- | --- |
 | BMP | 自作（単純）または `image` の bmp |
 | JPEG | `zune-jpeg`（高速） |
-| DICOM | `dicom-object` + `dicom-pixeldata` |
+| DICOM | `dicom-object` + `dicom-pixeldata`（実装済み。純 Rust で済む非圧縮 / RLE / JPEG ベースラインのみ。JPEG 2000 / JPEG-LS は C ライブラリが要るので見送り） |
 | NEF / ARW | `rawler` または `rawloader` + デモザイク |
+
+### DICOM
+
+- ウィンドウ幅/レベルはファイルの値を `VwImage::window` に入れ、表示側の指定がなければそれを使う
+- マルチフレームは `file?frame=N` という仮のパスで 1 フレームずつ読む（`frames.rs`）。スロットの並び・キャッシュ・ラベルがパス単位なので、そのまま使える
+- ツリーは、開いたフォルダの DICOM らしいファイル（拡張子が dcm/dicom/dic か、上の正規表現に合うもの）のヘッダを別スレッドで読み、Study / Series Instance UID で「検査 > シリーズ」にまとめる（`series.rs`）。シリーズは Instance Number 順の 1 つの並びとしてスロットに出す
 
 ## 画面構成（SDI・シングルページ）
 

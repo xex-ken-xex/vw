@@ -95,6 +95,9 @@ pub struct VwImage {
     /// `U16` サンプルのうち意味のあるビット数（DICOM なら 12、RAW なら 14 など）。
     /// 表示時の階調の上限に使う。全ビットを使う場合は `data.bits_per_sample()` と同じ。
     pub significant_bits: u32,
+    /// ファイルが勧める表示の階調 `(黒, 白)`（DICOM のウィンドウ幅/レベルなど）。
+    /// 表示時に [`crate::DisplayParams::window`] の指定がなければこれを使う。
+    pub window: Option<(f32, f32)>,
     pub metadata: Metadata,
 }
 
@@ -124,6 +127,7 @@ impl VwImage {
             color,
             data,
             significant_bits,
+            window: None,
             metadata: Metadata::default(),
         })
     }
