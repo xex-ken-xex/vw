@@ -10,6 +10,7 @@ mod app;
 mod archive;
 mod autoload;
 mod copy;
+mod discard;
 mod export;
 mod fonts;
 mod frames;

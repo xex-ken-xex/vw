@@ -63,11 +63,12 @@ pub enum Action {
     ExportImages,
     ParentFolder,
     DevelopRaw,
+    TrashBadImages,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 48] = [
+    pub const ALL: [Action; 49] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -107,6 +108,7 @@ impl Action {
         Action::FilterBad,
         Action::FilterUnflagged,
         Action::ExportImages,
+        Action::TrashBadImages,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -169,6 +171,7 @@ impl Action {
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
+            Action::TrashBadImages => "trash_bad_images",
         }
     }
 
@@ -226,6 +229,7 @@ impl Action {
             Action::FilterBad => "Show only bad images",
             Action::FilterUnflagged => "Show only unflagged images",
             Action::ExportImages => "Export images...",
+            Action::TrashBadImages => "Move bad images to trash...",
             Action::ParentFolder => "Up one folder",
         }
     }
@@ -352,6 +356,8 @@ impl Action {
             Action::FilterBad => vec![KeyCombo::ctrl(ArrowDown).with(true, true, false)],
             Action::FilterUnflagged => vec![KeyCombo::ctrl(U).with(true, true, false)],
             Action::ExportImages => vec![KeyCombo::ctrl(E)],
+            // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
+            Action::TrashBadImages => vec![],
         }
     }
 }

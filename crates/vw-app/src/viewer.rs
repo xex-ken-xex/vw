@@ -225,6 +225,36 @@ const ZOOM_BUTTON: PointerButton = PointerButton::Secondary;
 /// タッチパッドは細かい量を何度も送ってくるので、1 回のイベントを 1 枚にはしない。
 /// 回す向きが変わったら、それまでの端数は捨てる。逆向きに回し始めたのに、
 /// 前の向きの端数を打ち消すまで反応しないのを避けるため。
+/// ヘッダの右側に並べる小さなボタン。マウスが乗ると濃くする。
+fn header_button(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    icon: &str,
+) -> egui::Response {
+    let response = ui.interact(rect, ui.id().with(id), Sense::click());
+    let visuals = ui.visuals();
+    let color = if response.hovered() {
+        visuals.strong_text_color()
+    } else {
+        visuals.weak_text_color()
+    };
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(12.0),
+        color,
+    );
+    response
+}
+
+/// 複数枚の並びの「何枚目 / 全部で何枚」。1 枚しかなければ出さない。
+pub fn page_text(seq: &Sequence) -> Option<String> {
+    (seq.paths.len() > 1).then(|| format!("{} / {}", seq.index + 1, seq.paths.len()))
+}
+
 pub fn wheel_steps(acc: &mut f32, delta: f32) -> isize {
     if delta == 0.0 {
         return 0;
@@ -520,30 +550,43 @@ impl Slot {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| tr(lang, "(empty)").into());
         let name = match &self.sequence {
-            Some(seq) if seq.kind == SequenceKind::Frames => {
-                let file = seq.folder.file_name().unwrap_or_default().to_string_lossy();
-                format!("{file}   {}/{}", seq.index + 1, seq.paths.len())
-            }
+            Some(seq) if seq.kind == SequenceKind::Frames => seq
+                .folder
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
             Some(Sequence {
-                title: Some(title),
-                index,
-                paths,
-                ..
-            }) => format!("{title}/{name}   {}/{}", index + 1, paths.len()),
+                title: Some(title), ..
+            }) => format!("{title}/{name}"),
             Some(seq) => {
                 let folder = seq
                     .folder
                     .file_name()
                     .map_or_else(|| seq.folder.to_string_lossy(), |n| n.to_string_lossy());
-                format!("{folder}/{name}   {}/{}", seq.index + 1, seq.paths.len())
+                format!("{folder}/{name}")
             }
             None => name,
         };
-        let label = if self.shown.is_some() {
-            format!("{name}   {:.0}%", base * self.zoom * 100.0)
-        } else {
-            name
-        };
+        if let Some(text) = self.sequence.as_ref().and_then(page_text) {
+            // ヘッダの名前の後ろに出すと、長い名前やフラグ・タグに隠れて読めなくなるので、画像の上に重ねる。
+            let galley = painter.layout_no_wrap(
+                text,
+                egui::FontId::proportional(13.0),
+                Color32::from_gray(230),
+            );
+            let pad = vec2(6.0, 2.0);
+            let pill = Rect::from_min_size(
+                pos2(
+                    body.right() - 6.0 - galley.size().x - 2.0 * pad.x,
+                    body.top() + 6.0,
+                ),
+                galley.size() + 2.0 * pad,
+            );
+            painter.rect_filled(pill, 3.0, Color32::from_black_alpha(150));
+            painter.galley(pill.min + pad, galley, Color32::from_gray(230));
+        }
+        let label = name;
         let text_color = if active {
             visuals.strong_text_color()
         } else {
@@ -620,6 +663,42 @@ impl Slot {
             );
             film.on_hover_text(tr(lang, "Developing RAW..."));
             labels_right = film_rect.left();
+        }
+
+        // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと
+        // ボタンを探しにくく、長い名前ではボタンが名前に重なるため。
+        if self.shown.is_some() {
+            let zoom = format!("{:.0}%", base * self.zoom * 100.0);
+            let actual_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
+            if header_button(ui, &painter, actual_rect, ("actual", self.id), "1:1")
+                .on_hover_text(tr(lang, "Actual size (100%)"))
+                .clicked()
+            {
+                self.actual_size();
+                out.clicked = true;
+            }
+            let fit_rect = actual_rect.translate(vec2(-(HEADER - 2.0), 0.0));
+            if header_button(
+                ui,
+                &painter,
+                fit_rect,
+                ("fit", self.id),
+                egui_phosphor::regular::FRAME_CORNERS,
+            )
+            .on_hover_text(tr(lang, "Fit image to slot"))
+            .clicked()
+            {
+                self.reset_view();
+                out.clicked = true;
+            }
+            let zoom = painter.text(
+                fit_rect.left_center() - vec2(2.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                zoom,
+                egui::FontId::proportional(13.0),
+                text_color,
+            );
+            labels_right = zoom.left();
         }
 
         // フラグとタグはヘッダの右端に出し、フラグはヘッダの下端の色の線でも示す。
@@ -775,6 +854,19 @@ mod tests {
         assert!(slot.is_closed_folder());
         slot.sequence = Some(Sequence::subtree(PathBuf::from("/photos/2026")));
         assert!(!slot.is_closed_folder());
+    }
+
+    #[test]
+    fn page_of_a_sequence_counts_from_one() {
+        let mut seq = Sequence::frames(PathBuf::from("/a.webp"), 12, None);
+        seq.index = 2;
+        assert_eq!(page_text(&seq).as_deref(), Some("3 / 12"));
+    }
+
+    #[test]
+    fn single_image_sequence_shows_no_page() {
+        let seq = Sequence::new(PathBuf::from("/photos"), PathBuf::from("/photos/a.png"));
+        assert_eq!(page_text(&seq), None);
     }
 
     #[test]
