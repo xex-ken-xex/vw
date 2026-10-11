@@ -47,6 +47,8 @@ pub struct ImageInfo {
     pub bits_per_sample: u32,
     pub significant_bits: u32,
     pub metadata: Metadata,
+    /// 現像すると作れる画像の大きさ（[`VwImage::develop_size`]）。
+    pub develop_size: Option<(u32, u32)>,
     pub plugin: String,
     /// ファイルに入っているフレームの数。フレームを指すパスで読んだときは 1。
     pub frames: usize,
@@ -59,16 +61,29 @@ pub struct ImageInfo {
 impl ImageInfo {
     /// フル解像度で持ったときの見込みバイト数（[`FullImage::bytes`] と同じ数え方）。
     pub fn full_bytes(&self) -> usize {
-        let pixels = self.width as usize * self.height as usize;
-        let sample = pixels * self.color.channels() * (self.bits_per_sample as usize).div_ceil(8);
-        // 描画用バッファは to_display と同じ整数倍の間引きで上限に収める。
-        let (w, h) = (self.width as usize, self.height as usize);
-        let step = w
-            .max(h)
-            .div_ceil(DisplayParams::default().max_side as usize)
-            .max(1);
-        sample + w.div_ceil(step) * h.div_ceil(step) * 4
+        estimate_bytes(
+            (self.width, self.height),
+            self.color.channels(),
+            self.bits_per_sample,
+        )
     }
+
+    /// 現像したときの見込みバイト数。現像した画像は 16bit の RGB。
+    pub fn developed_bytes(&self) -> Option<usize> {
+        self.develop_size.map(|size| estimate_bytes(size, 3, 16))
+    }
+}
+
+/// 幅 x 高さ `size` の画像と描画用バッファで使うバイト数（[`FullImage::bytes`] と同じ数え方）。
+fn estimate_bytes(size: (u32, u32), channels: usize, bits_per_sample: u32) -> usize {
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let sample = w * h * channels * (bits_per_sample as usize).div_ceil(8);
+    // 描画用バッファは to_display と同じ整数倍の間引きで上限に収める。
+    let step = w
+        .max(h)
+        .div_ceil(DisplayParams::default().max_side as usize)
+        .max(1);
+    sample + w.div_ceil(step) * h.div_ceil(step) * 4
 }
 
 fn image_bytes(img: &VwImage) -> usize {
@@ -91,6 +106,8 @@ pub struct Job {
     pub path: PathBuf,
     pub thumb: bool,
     pub full: bool,
+    /// 普通に読む代わりに現像する（[`develop`]）。`thumb` と `full` は見ない。
+    pub develop: bool,
 }
 
 /// 待っている要求と、取り消された要求。
@@ -169,7 +186,11 @@ fn worker(
                 q = cvar.wait(q).unwrap();
             }
         };
-        let result = load(registry, &job.path, job.thumb, job.full);
+        let result = if job.develop {
+            develop(registry, &job.path)
+        } else {
+            load(registry, &job.path, job.thumb, job.full)
+        };
         let sent = tx.send(LoadResult {
             slot: job.slot,
             request: job.request,
@@ -194,11 +215,47 @@ pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result
     let (image, plugin) = registry
         .decode_frame_bytes(&file, &bytes, frame.unwrap_or(0))
         .map_err(|e| e.to_string())?;
-    let plugin = plugin.to_owned();
     let frames = match frame {
         Some(_) => 1,
         None => registry.frame_count(&file, &bytes).unwrap_or(1),
     };
+    let t2 = Instant::now();
+    let times = (t1 - t0, t2 - t1);
+    Ok(finish(
+        image,
+        plugin,
+        frames,
+        bytes.len(),
+        times,
+        thumb,
+        full,
+    ))
+}
+
+/// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。フル解像度の画像だけを返す。
+pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
+    let t0 = Instant::now();
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let t1 = Instant::now();
+    let (image, plugin) = registry
+        .develop_bytes(path, &bytes)
+        .map_err(|e| e.to_string())?;
+    let t2 = Instant::now();
+    let times = (t1 - t0, t2 - t1);
+    Ok(finish(image, plugin, 1, bytes.len(), times, false, true))
+}
+
+/// デコードした画像から、要る分の縮小画像・描画用バッファと情報を作る。
+/// `times` は読み込みとデコードにかかった時間。
+fn finish(
+    image: VwImage,
+    plugin: &str,
+    frames: usize,
+    file_size: usize,
+    (read, decode): (Duration, Duration),
+    thumb: bool,
+    full: bool,
+) -> Loaded {
     let t2 = Instant::now();
     let d = display::to_display(&image, &DisplayParams::default());
     let thumb = thumb.then(|| color_image(&display::shrink(&d, THUMB_SIDE)));
@@ -211,18 +268,19 @@ pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result
         bits_per_sample: image.data.bits_per_sample(),
         significant_bits: image.significant_bits,
         metadata: image.metadata.clone(),
-        plugin,
+        develop_size: image.develop_size,
+        plugin: plugin.to_owned(),
         frames,
-        file_size: bytes.len() as u64,
-        read: t1 - t0,
-        decode: t2 - t1,
+        file_size: file_size as u64,
+        read,
+        decode,
         convert: t3 - t2,
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),
         display,
     });
-    Ok(Loaded { info, thumb, full })
+    Loaded { info, thumb, full }
 }
 
 fn color_image(d: &DisplayImage) -> ColorImage {
@@ -309,6 +367,29 @@ mod tests {
         assert!(err.contains("no plugin"), "{err}");
     }
 
+    #[test]
+    fn image_that_cannot_be_developed_is_an_error() {
+        let dir = TempDir::new();
+        let path = dir.path().join("a.png");
+        write_png(&path, 1, 1, &[1, 2, 3]);
+        let Err(err) = develop(&png_registry(), &path) else {
+            panic!("a PNG has nothing to develop");
+        };
+        assert!(err.contains("cannot be developed"), "{err}");
+    }
+
+    #[test]
+    fn developed_size_estimate_assumes_16bit_rgb() {
+        let dir = TempDir::new();
+        let path = dir.path().join("a.png");
+        write_png(&path, 1, 1, &[1, 2, 3]);
+        let mut info = load(&png_registry(), &path, true, false).unwrap().info;
+        assert_eq!(info.developed_bytes(), None);
+        info.develop_size = Some((10, 20));
+        // 10 x 20 画素 x RGB x 2 バイトと、描画用の RGBA 8bit。
+        assert_eq!(info.developed_bytes(), Some(10 * 20 * 3 * 2 + 10 * 20 * 4));
+    }
+
     fn job(request: u64, path: &Path) -> Job {
         Job {
             slot: 0,
@@ -316,6 +397,7 @@ mod tests {
             path: path.to_owned(),
             thumb: true,
             full: false,
+            develop: false,
         }
     }
 

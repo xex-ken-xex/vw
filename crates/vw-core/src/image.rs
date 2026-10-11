@@ -99,6 +99,9 @@ pub struct VwImage {
     /// 表示時に [`crate::DisplayParams::window`] の指定がなければこれを使う。
     pub window: Option<(f32, f32)>,
     pub metadata: Metadata,
+    /// [`crate::DecoderPlugin::develop`] で、この画像の代わりに作れる画像の大きさ `(幅, 高さ)`。
+    /// カメラ RAW の埋め込みプレビューを表示したときの、センサーの大きさ（向きは補正後）。
+    pub develop_size: Option<(u32, u32)>,
 }
 
 impl VwImage {
@@ -129,6 +132,7 @@ impl VwImage {
             significant_bits,
             window: None,
             metadata: Metadata::default(),
+            develop_size: None,
         })
     }
 }

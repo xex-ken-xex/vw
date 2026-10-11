@@ -1,16 +1,17 @@
 //! カメラ RAW（Nikon NEF・Sony ARW・富士フイルム RAF など）のデコーダプラグイン。
 //!
 //! RAW に埋め込まれたプレビュー JPEG を表示する。センサーのデータを現像するのは、
-//! プレビューがないときだけ。
+//! プレビューがないときと、[`DecoderPlugin::develop`] を頼まれたとき（拡大したときや操作で）。
 //!
 //! 毎回現像しないのは、4500 万画素級の RAW の現像には 1 枚で数秒かかり、フォルダを
 //! 開いたときのサムネイルやスライドショーに間に合わないため。プレビュー JPEG は
 //! カメラが自分で現像したもので、多くの機種ではセンサーと同じ大きさで入っている。
 
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use rawler::decoders::{Decoder, RawDecodeParams, RawMetadata};
 use rawler::formats::tiff::{Rational, SRational};
-use rawler::imgop::develop::RawDevelop;
+use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
+use rawler::imgop::srgb::{srgb_apply_gamma, srgb_invert_gamma};
 use rawler::rawsource::RawSource;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
@@ -46,20 +47,38 @@ impl DecoderPlugin for RawPlugin {
         let decoder = decoder_for(&source)?;
         let params = RawDecodeParams::default();
         let raw_metadata = decoder.raw_metadata(&source, &params).ok();
-        let (mut img, shown) = match decoder.preview_image(&source, &params) {
-            Ok(Some(preview)) => (from_dynamic(preview)?, Shown::Preview),
-            _ => (
-                develop(decoder.as_ref(), &source, &params)?,
-                Shown::Developed,
+        let orientation = orientation(raw_metadata.as_ref());
+        match decoder.preview_image(&source, &params) {
+            Ok(Some(preview)) => {
+                let mut img = from_dynamic(preview)?;
+                img.metadata = metadata(raw_metadata.as_ref(), Some(Shown::Preview));
+                img.apply_orientation(orientation.into());
+                img.develop_size = sensor_size(decoder.as_ref(), &source, &params, orientation);
+                Ok(img)
+            }
+            _ => developed(
+                decoder.as_ref(),
+                &source,
+                &params,
+                raw_metadata.as_ref(),
+                None,
             ),
-        };
-        let orientation = raw_metadata
-            .as_ref()
-            .and_then(|m| m.exif.orientation)
-            .unwrap_or(1);
-        img.metadata = metadata(raw_metadata.as_ref(), Some(shown));
-        img.apply_orientation(orientation.into());
-        Ok(img)
+        }
+    }
+
+    fn develop(&self, data: &[u8]) -> Result<VwImage, DecodeError> {
+        let source = RawSource::new_from_slice(data);
+        let decoder = decoder_for(&source)?;
+        let params = RawDecodeParams::default();
+        let raw_metadata = decoder.raw_metadata(&source, &params).ok();
+        let preview = decoder.preview_image(&source, &params).ok().flatten();
+        developed(
+            decoder.as_ref(),
+            &source,
+            &params,
+            raw_metadata.as_ref(),
+            preview.as_ref(),
+        )
     }
 
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
@@ -81,20 +100,50 @@ enum Shown {
     Developed,
 }
 
-/// センサーのデータを現像する。プレビューがあっても現像したいとき用。
-pub fn develop_bytes(data: &[u8]) -> Result<VwImage, DecodeError> {
-    let source = RawSource::new_from_slice(data);
-    let decoder = decoder_for(&source)?;
-    let params = RawDecodeParams::default();
-    let raw_metadata = decoder.raw_metadata(&source, &params).ok();
-    let mut img = develop(decoder.as_ref(), &source, &params)?;
-    let orientation = raw_metadata
-        .as_ref()
-        .and_then(|m| m.exif.orientation)
-        .unwrap_or(1);
-    img.metadata = metadata(raw_metadata.as_ref(), Some(Shown::Developed));
-    img.apply_orientation(orientation.into());
+/// センサーのデータを現像し、メタデータと向きを整えた画像。
+/// `preview` があれば、明るさをそれに合わせる（[`brightness_gain`]）。
+fn developed(
+    decoder: &dyn Decoder,
+    source: &RawSource,
+    params: &RawDecodeParams,
+    raw_metadata: Option<&RawMetadata>,
+    preview: Option<&DynamicImage>,
+) -> Result<VwImage, DecodeError> {
+    let mut img = develop(decoder, source, params, preview)?;
+    img.metadata = metadata(raw_metadata, Some(Shown::Developed));
+    img.apply_orientation(orientation(raw_metadata).into());
     Ok(img)
+}
+
+/// EXIF の向き（1〜8）。分からなければ 1。
+fn orientation(raw_metadata: Option<&RawMetadata>) -> u16 {
+    raw_metadata.and_then(|m| m.exif.orientation).unwrap_or(1)
+}
+
+/// 現像したときのおおよその大きさ（向きは補正後）。センサーのデータは展開せずに、
+/// 大きさだけ読む。
+///
+/// 現像の結果と 1 画素単位では一致しないことがある（富士フイルムの一部の機種は現像で
+/// 45 度回す）。使い道が「プレビューより精細か」の判断とメモリの見積もりなので、
+/// 正確な大きさのために現像はしない。
+fn sensor_size(
+    decoder: &dyn Decoder,
+    source: &RawSource,
+    params: &RawDecodeParams,
+    orientation: u16,
+) -> Option<(u32, u32)> {
+    let raw = decoder.raw_image(source, params, true).ok()?;
+    let (w, h) = raw
+        .crop_area
+        .or(raw.active_area)
+        .map_or((raw.width, raw.height), |r| (r.d.w, r.d.h));
+    let (w, h) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    // 5〜8 は 90 度回す向き。
+    Some(if (5..=8).contains(&orientation) {
+        (h, w)
+    } else {
+        (w, h)
+    })
 }
 
 /// センサーのデータを現像し、16bit の RGB にする。
@@ -102,14 +151,94 @@ fn develop(
     decoder: &dyn Decoder,
     source: &RawSource,
     params: &RawDecodeParams,
+    preview: Option<&DynamicImage>,
 ) -> Result<VwImage, DecodeError> {
     let raw = decoder.raw_image(source, params, false).map_err(invalid)?;
-    let developed = RawDevelop::default()
-        .develop_intermediate(&raw)
-        .map_err(invalid)?
+    // sRGB のガンマは、明るさを合わせてから自分で掛ける。明るさは光の量に比例する
+    // ガンマ前の値で掛け合わせないと、色の比が崩れるため。
+    let mut steps = RawDevelop::default();
+    steps.steps.retain(|s| *s != ProcessingStep::SRgb);
+    let mut linear = steps.develop_intermediate(&raw).map_err(invalid)?;
+    let gain = preview.map_or(1.0, |p| {
+        brightness_gain(median_luminance_of_preview(p), median_luminance(&linear))
+    });
+    let encode = |v: f32| srgb_apply_gamma((v * gain).clamp(0.0, 1.0));
+    match &mut linear {
+        Intermediate::Monochrome(p) => p.for_each(encode),
+        Intermediate::ThreeColor(p) => p.for_each(|v| v.map(encode)),
+        Intermediate::FourColor(p) => p.for_each(|v| v.map(encode)),
+    }
+    let developed = linear
         .to_dynamic_image()
         .ok_or_else(|| DecodeError::Invalid("developed image has no pixels".into()))?;
     from_dynamic(developed)
+}
+
+/// 中央値を測るのに使う画素の数の目安。全画素を使わないのは、数千万画素を並べ替えると
+/// 現像の時間が目に見えて延びるため。間引いても中央値はほとんど変わらない。
+const LUMINANCE_SAMPLES: usize = 100_000;
+
+/// 現像した画像に掛ける明るさの倍率。カメラのプレビューの明るさ（中間の明るさ）に合わせる。
+///
+/// 合わせるのは、rawler の現像はトーンカーブを掛けないのでカメラの JPEG より暗くなり、
+/// 拡大したときにプレビューから差し替わると急に暗くなって見えるため。さらに古い機種では
+/// rawler の白レベルが合わず、何倍も暗くなることがある（Sony A300 など）。
+/// 平均ではなく中央値で合わせるのは、空や照明のような一部の明るい所に引きずられないため。
+/// 倍率に上限と下限を付けるのは、真っ暗なプレビューなどで極端な倍率になるのを防ぐため。
+fn brightness_gain(preview_median: f32, developed_median: f32) -> f32 {
+    const RANGE: std::ops::RangeInclusive<f32> = 1.0 / 16.0..=16.0;
+    if preview_median <= 0.0 || developed_median <= 0.0 {
+        return 1.0;
+    }
+    (preview_median / developed_median).clamp(*RANGE.start(), *RANGE.end())
+}
+
+/// 光の量に比例する（ガンマ前の）輝度。
+fn luminance([r, g, b]: [f32; 3]) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn median(mut values: Vec<f32>) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mid = values.len() / 2;
+    *values.select_nth_unstable_by(mid, f32::total_cmp).1
+}
+
+/// 現像した（ガンマ前の）画像の輝度の中央値。
+fn median_luminance(linear: &Intermediate) -> f32 {
+    let samples: Vec<f32> = match linear {
+        Intermediate::Monochrome(p) => {
+            let step = (p.data.len() / LUMINANCE_SAMPLES).max(1);
+            p.data.iter().step_by(step).copied().collect()
+        }
+        Intermediate::ThreeColor(p) => {
+            let step = (p.data.len() / LUMINANCE_SAMPLES).max(1);
+            p.data.iter().step_by(step).map(|&v| luminance(v)).collect()
+        }
+        Intermediate::FourColor(p) => {
+            let step = (p.data.len() / LUMINANCE_SAMPLES).max(1);
+            let rgb = |[r, g, b, _]: [f32; 4]| luminance([r, g, b]);
+            p.data.iter().step_by(step).map(|&v| rgb(v)).collect()
+        }
+    };
+    median(samples)
+}
+
+/// プレビュー（sRGB）の、ガンマを外した輝度の中央値。
+fn median_luminance_of_preview(preview: &DynamicImage) -> f32 {
+    let (w, h) = preview.dimensions();
+    let pixels = w as usize * h as usize;
+    let step = (pixels / LUMINANCE_SAMPLES).max(1);
+    let samples = (0..pixels)
+        .step_by(step)
+        .map(|i| {
+            let [r, g, b, _] = preview.get_pixel(i as u32 % w, i as u32 / w).0;
+            luminance([r, g, b].map(|c| srgb_invert_gamma(f32::from(c) / 255.0)))
+        })
+        .collect();
+    median(samples)
 }
 
 /// `image` の画像を vw の形にする。8bit と 16bit はそのまま、それ以外は 8bit か 16bit に寄せる。
@@ -225,6 +354,27 @@ fn trim(x: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn developed_image_is_brightened_to_the_preview() {
+        assert_eq!(brightness_gain(0.2, 0.05), 4.0);
+        assert_eq!(brightness_gain(0.1, 0.2), 0.5);
+    }
+
+    #[test]
+    fn brightness_gain_is_bounded() {
+        assert_eq!(brightness_gain(0.9, 0.0001), 16.0);
+        assert_eq!(brightness_gain(0.0, 0.2), 1.0);
+        assert_eq!(brightness_gain(0.2, 0.0), 1.0);
+    }
+
+    #[test]
+    fn median_luminance_of_preview_undoes_the_srgb_gamma() {
+        // sRGB の 188 は、光の量ではおよそ半分。
+        let gray = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([188; 3])));
+        let m = median_luminance_of_preview(&gray);
+        assert!((m - 0.5).abs() < 0.01, "{m}");
+    }
 
     #[test]
     fn probe_accepts_fujifilm_raf_only() {

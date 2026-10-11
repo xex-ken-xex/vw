@@ -61,7 +61,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 22] = [
+const ITEMS: [Item; 23] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -138,6 +138,13 @@ const ITEMS: [Item; 22] = [
         title: "Keep zoom when stepping",
         description: "Keep the zoom and position when moving to the previous or next image in a slot that holds several images (a folder, frames or a series). DICOM images always keep them.",
         widget: keep_view_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.develop_on_zoom",
+        title: "Develop RAW when zoomed in",
+        description: "Camera RAW files first show the preview JPEG embedded by the camera. When it is shown larger than the preview, develop the sensor data for more detail (takes a few seconds). Developing is always available from the right-click menu.",
+        widget: develop_on_zoom_widget,
     },
     Item {
         section: Section::Tree,
@@ -407,6 +414,11 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 
 fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.keep_view, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn develop_on_zoom_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.viewer.develop_on_zoom, tr(lang, "Enabled"))
         .changed()
 }
 

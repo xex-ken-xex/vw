@@ -24,7 +24,7 @@ use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
 use crate::labels::{Flag, LabelStore};
 use crate::layout::{self, SlotLayout};
-use crate::loader::{FullImage, Job, Loaded, Loader};
+use crate::loader::{FullImage, ImageInfo, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
 use crate::series::{Scan, SeriesIndex};
@@ -522,6 +522,7 @@ impl VwApp {
             path,
             thumb: true,
             full,
+            develop: false,
         });
     }
 
@@ -1236,6 +1237,7 @@ impl VwApp {
                 path: pb.frames[i].clone(),
                 thumb: !full,
                 full,
+                develop: false,
             });
         }
         let finished = step.finished && pb.clock.shown();
@@ -1271,6 +1273,7 @@ impl VwApp {
             thumb: frame.texture,
             info: frame.info,
             full: None,
+            developed: false,
         });
     }
 
@@ -2567,6 +2570,7 @@ impl VwApp {
             Action::ParentFolder => self.parent_folder(ctx),
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
+            Action::DevelopRaw => self.develop_slot(self.active),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => {
@@ -2863,6 +2867,7 @@ impl VwApp {
                 self.slots[index].full_request = None;
                 match r.result {
                     Ok(loaded) => {
+                        self.receive_developed(index, &r.path, &loaded.info);
                         if let Some(full) = loaded.full {
                             self.attach_full(ctx, index, full);
                         }
@@ -2871,6 +2876,27 @@ impl VwApp {
                 }
             }
         }
+    }
+
+    /// 現像した画像が届いたら、表示中の画像の情報（大きさ・メタデータ）を差し替える。
+    /// 現像し直した（捨てたあと読み直した）ときは同じなので、ログを出さずに済ませる。
+    fn receive_developed(&mut self, index: usize, path: &Path, info: &ImageInfo) {
+        let Some(shown) = &mut self.slots[index].shown else {
+            return;
+        };
+        if !shown.developed || shown.info.develop_size.is_none() {
+            return;
+        }
+        shown.info = info.clone();
+        self.log.info(format!(
+            "{}: developed {}x{} | read {} / develop {} / convert {}",
+            path.display(),
+            info.width,
+            info.height,
+            ms(info.read),
+            ms(info.decode),
+            ms(info.convert),
+        ));
     }
 
     /// スロットで開いた画像の読み込み結果を受け取る。
@@ -2938,6 +2964,7 @@ impl VwApp {
             thumb,
             info: loaded.info,
             full: None,
+            developed: false,
         });
         s.error = None;
         // 同じ画像の読み直し（上書きされたとき）は、拡大している場所を見続けられるよう倍率と位置を保つ。
@@ -3024,16 +3051,7 @@ impl VwApp {
                 shown.full = None;
             }
             if plan.request.contains(&s.id) {
-                let request = self.next_id;
-                self.next_id += 1;
-                s.full_request = Some((request, shown.info.full_bytes()));
-                self.loader.request(Job {
-                    slot: s.id,
-                    request,
-                    path: shown.path.clone(),
-                    thumb: false,
-                    full: true,
-                });
+                request_full(&self.loader, &mut self.next_id, s);
             }
         }
     }
@@ -3091,7 +3109,7 @@ impl VwApp {
                 }
             });
             ui.menu_button(tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 4] = [
+                let groups: [&[Action]; 5] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -3101,6 +3119,7 @@ impl VwApp {
                         Action::ZoomIn,
                         Action::ZoomOut,
                     ],
+                    &[Action::DevelopRaw],
                 ];
                 for (i, group) in groups.into_iter().enumerate() {
                     if i > 0 {
@@ -3519,6 +3538,26 @@ impl VwApp {
         self.copied(ctx, what);
     }
 
+    /// スロットのカメラ RAW を現像し、届いたら埋め込みプレビューと差し替える。
+    /// 現像できない画像と、現像を頼んだあとの画像では何もしない。
+    fn develop_slot(&mut self, index: usize) {
+        let s = &mut self.slots[index];
+        let Some(shown) = &mut s.shown else {
+            return;
+        };
+        if shown.info.develop_size.is_none() || shown.developed {
+            return;
+        }
+        shown.developed = true;
+        self.log
+            .info(format!("{}: developing...", shown.path.display()));
+        // 読み込み中のプレビューは要らなくなる。届くと現像の結果を待たずにそれを出してしまう。
+        if let Some((request, _)) = s.full_request.take() {
+            self.loader.cancel(request);
+        }
+        request_full(&self.loader, &mut self.next_id, s);
+    }
+
     /// スロットの画像を元の解像度でコピーする。
     /// フル解像度の画像を捨ててあったときは読み直し、届いたときにコピーする。
     fn copy_image(&mut self, ctx: &egui::Context, index: usize) {
@@ -3529,16 +3568,7 @@ impl VwApp {
         let Some(full) = &shown.full else {
             s.copy_when_full = true;
             if s.full_request.is_none() {
-                let request = self.next_id;
-                self.next_id += 1;
-                s.full_request = Some((request, shown.info.full_bytes()));
-                self.loader.request(Job {
-                    slot: s.id,
-                    request,
-                    path: shown.path.clone(),
-                    thumb: false,
-                    full: true,
-                });
+                request_full(&self.loader, &mut self.next_id, s);
             }
             return;
         };
@@ -3717,6 +3747,10 @@ impl VwApp {
             }
             if resp.copy {
                 self.copy_image(ui.ctx(), i);
+            }
+            if resp.develop || (resp.wants_develop && self.settings.settings.viewer.develop_on_zoom)
+            {
+                self.develop_slot(i);
             }
             if resp.close {
                 close = Some(i);
@@ -4086,6 +4120,28 @@ fn texture_options() -> TextureOptions {
 }
 
 /// ログ用のミリ秒表記。
+/// スロットの表示中の画像のフル解像度を読み始める。現像を頼んだ画像は現像する。
+fn request_full(loader: &Loader, next_id: &mut u64, s: &mut Slot) {
+    let Some(shown) = &s.shown else {
+        return;
+    };
+    let request = *next_id;
+    *next_id += 1;
+    let bytes = match shown.developed {
+        true => shown.info.developed_bytes(),
+        false => None,
+    };
+    s.full_request = Some((request, bytes.unwrap_or_else(|| shown.info.full_bytes())));
+    loader.request(Job {
+        slot: s.id,
+        request,
+        path: shown.path.clone(),
+        thumb: false,
+        full: true,
+        develop: shown.developed,
+    });
+}
+
 fn ms(d: Duration) -> String {
     format!("{:.1} ms", d.as_secs_f64() * 1000.0)
 }

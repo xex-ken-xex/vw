@@ -25,6 +25,9 @@ pub struct Shown {
     pub info: ImageInfo,
     /// フル解像度の画像。縮小画像では足りない大きさで表示するときだけ持つ（[`crate::memory`]）。
     pub full: Option<Full>,
+    /// フル解像度の画像を、普通に読む代わりに現像して作る（カメラ RAW）。
+    /// 現像を頼んだときに立て、捨てたフル解像度の画像を読み直すときも現像する。
+    pub developed: bool,
 }
 
 pub struct Full {
@@ -180,6 +183,10 @@ pub struct SlotResponse {
     pub copy: bool,
     /// 縮小画像では足りない大きさで表示している。
     pub wants_full: bool,
+    /// フル解像度の画像でも足りない大きさで表示していて、現像すれば精細になる。
+    pub wants_develop: bool,
+    /// 右クリックメニューで「現像」が選ばれた。
+    pub develop: bool,
     /// ダブルクリックされた（最大化の切り替え）。
     pub toggle_maximize: bool,
     /// ホイールで送る枚数。負なら前へ。
@@ -255,6 +262,16 @@ pub fn zoom_at(zoom: f32, pan: Vec2, factor: f32, base: f32, cursor: Option<Vec2
 /// 縮小画像がそのまま元の画素なので要らない。
 pub fn needs_full(shown_side: f32, thumb_side: usize, image_side: u32) -> bool {
     image_side as usize > thumb_side && shown_side > thumb_side as f32
+}
+
+/// 長辺 `shown_side`（物理ピクセル）で表示するのに、長辺 `image_side` の画像では画素が
+/// 足りず、現像すると長辺 `developed_side` の、より大きな画像になるか。
+///
+/// 現像しても大きくならない（プレビューがセンサーと同じ大きさの）ときに自動で現像しないのは、
+/// 現像に数秒かかるうえ、vw の現像はカメラのプレビューよりノイズ処理などが素朴で、
+/// 見た目がよくなるとは限らないため。そういうときは操作で現像する。
+pub fn needs_develop(shown_side: f32, image_side: u32, developed_side: u32) -> bool {
+    developed_side > image_side && shown_side > image_side as f32
 }
 
 /// このフレームのホイールの縦の回転量（論理ピクセル、上に回すと正）。
@@ -400,6 +417,18 @@ impl Slot {
                     out.copy = true;
                     ui.close();
                 }
+                let developable = self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|s| s.info.develop_size.is_some() && !s.developed);
+                if developable
+                    && ui
+                        .button(tr(lang, "Develop RAW from sensor data"))
+                        .clicked()
+                {
+                    out.develop = true;
+                    ui.close();
+                }
             });
         }
         out.toggle_maximize = response.double_clicked();
@@ -432,11 +461,13 @@ impl Slot {
             let size = vec2(shown.info.width as f32, shown.info.height as f32) * scale;
             let img_rect = Rect::from_center_size(body.center() + self.pan, size);
             let [tw, th] = shown.thumb.size();
-            out.wants_full = needs_full(
-                size.max_elem() * ui.ctx().pixels_per_point(),
-                tw.max(th),
-                shown.info.width.max(shown.info.height),
-            );
+            let shown_side = size.max_elem() * ui.ctx().pixels_per_point();
+            let image_side = shown.info.width.max(shown.info.height);
+            out.wants_full = needs_full(shown_side, tw.max(th), image_side);
+            out.wants_develop = shown
+                .info
+                .develop_size
+                .is_some_and(|(w, h)| needs_develop(shown_side, image_side, w.max(h)));
             ui.painter_at(body).image(
                 shown.texture().id(),
                 img_rect,
@@ -684,6 +715,18 @@ mod tests {
     fn image_just_over_the_thumbnail_size_needs_full_resolution() {
         // 513 px は半分の 257 px に縮小されるので、それより大きく出すなら元が要る。
         assert!(needs_full(300.0, 257, 513));
+    }
+
+    #[test]
+    fn raw_is_developed_when_shown_larger_than_its_small_preview() {
+        // Sony A300: プレビューは 1616 px、現像すると 3872 px。
+        assert!(!needs_develop(1600.0, 1616, 3872));
+        assert!(needs_develop(1700.0, 1616, 3872));
+    }
+
+    #[test]
+    fn raw_whose_preview_is_full_size_is_not_developed_by_zooming() {
+        assert!(!needs_develop(20000.0, 4256, 4256));
     }
 
     #[test]
