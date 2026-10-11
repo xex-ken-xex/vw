@@ -17,6 +17,7 @@ pub fn png_registry() -> Registry {
 pub fn all_registry() -> Registry {
     let mut r = png_registry();
     r.register(Arc::new(vw_jpeg::JpegPlugin));
+    r.register(Arc::new(vw_webp::WebpPlugin::default()));
     r.register(Arc::new(vw_dicom::DicomPlugin));
     r
 }

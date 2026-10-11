@@ -14,6 +14,7 @@
 //! GUI を差し替えたり、コマンドライン変換ツールから使ったりできるようにするため。
 
 pub mod display;
+pub mod exif;
 pub mod image;
 pub mod plugin;
 

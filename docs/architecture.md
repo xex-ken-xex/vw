@@ -4,7 +4,7 @@
 
 - Linux / Windows で動く、起動と表示が速い画像ビューワ
 - 対応予定形式: BMP, JPEG, PNG, Nikon RAW (NEF), Sony RAW (ARW)
-- 形式ごとの対応はプラグインとして追加する（PNG、JPEG に対応済み）
+- 形式ごとの対応はプラグインとして追加する（PNG、JPEG、WebP に対応済み）
 
 ## 技術選定
 
@@ -14,6 +14,7 @@
 | GUI | egui (eframe, glow バックエンド) | 即時モードで軽量、起動が速い、パネル構成が簡単。wgpu ではなく OpenGL (glow) を使い起動コストを抑える |
 | PNG | `png` クレート | 純 Rust、16bit をそのまま取り出せる |
 | JPEG | `zune-jpeg` + `kamadak-exif` | 純 Rust で速い。EXIF の向きはデコード時に画素を並べ替えて直す（縮小画像や幅・高さを見た目の向きで扱えるように） |
+| WebP | `image-webp` | 純 Rust。アニメーションはフレームごとに 1 枚として返し（`frame_count` / `decode_frame`）、アプリはマルチフレームのファイルと同じく 1 スロットに並べる。フレームは前のフレームに重ね描きするので、途中まで描いたデコーダと直前の 16 フレームをプラグインが覚え、順に送るときに先頭からやり直さない |
 
 Electron 系（VSCode そのもの）は起動が重いので採用しない。見た目のレイアウトだけ VSCode に寄せる。
 

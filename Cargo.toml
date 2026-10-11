@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vw-core", "crates/vw-png", "crates/vw-jpeg", "crates/vw-dicom", "crates/vw-app"]
+members = ["crates/vw-core", "crates/vw-png", "crates/vw-jpeg", "crates/vw-webp", "crates/vw-dicom", "crates/vw-app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 vw-core = { path = "crates/vw-core" }
 vw-png = { path = "crates/vw-png" }
 vw-jpeg = { path = "crates/vw-jpeg" }
+vw-webp = { path = "crates/vw-webp" }
 vw-dicom = { path = "crates/vw-dicom" }
 
 [profile.release]

@@ -1291,10 +1291,17 @@ impl VwApp {
             if ui.button(glyph).on_hover_text(tip).clicked() {
                 action = Some(BarAction::TogglePlay);
             }
-            let current_fps = self
-                .playback
-                .as_ref()
-                .map_or(viewer.slideshow_fps, |pb| pb.fps);
+            // 止まっているときも、再生したら使う速さ（シネやアニメーションならファイルの速さ）を出す。
+            let current_fps = self.playback.as_ref().map_or_else(
+                || {
+                    self.slots
+                        .get(self.active)
+                        .and_then(|s| s.sequence.as_ref())
+                        .and_then(|q| q.fps)
+                        .unwrap_or(viewer.slideshow_fps)
+                },
+                |pb| pb.fps,
+            );
             let mut fps = current_fps;
             let r = ui.add(fps_input(&mut fps));
             if r.changed() || r.drag_stopped() {
@@ -1357,6 +1364,14 @@ impl VwApp {
                 viewer.slideshow_fps = fps;
                 if let Some(pb) = &mut self.playback {
                     pb.fps = fps;
+                }
+                // 止まっているときに変えた速さも、シネやアニメーションのファイルの速さより優先する。
+                let seq = self
+                    .slots
+                    .get_mut(self.active)
+                    .and_then(|s| s.sequence.as_mut());
+                if let Some(q) = seq.filter(|q| q.fps.is_some()) {
+                    q.fps = Some(fps);
                 }
                 if !save {
                     self.restart_clock();
@@ -3956,11 +3971,12 @@ fn keeps_view(
     enabled && seq.paths.iter().any(|p| p == previous) && seq.paths.iter().any(|p| p == next)
 }
 
-/// シネのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を優先し、
-/// なければ推奨の表示速度か Cine Rate を使う。
+/// シネやアニメーションのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を
+/// 優先し、なければ推奨の表示速度か Cine Rate を使う。DICOM でなければアニメーションの
+/// 1 フレームの平均の表示時間を使う。
 fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
-    let number = |key| {
-        let v = metadata.get("DICOM", key)?;
+    let number = |group, key| {
+        let v = metadata.get(group, key)?;
         // 複数値（`33.3\33.3`）なら最初の値。
         v.split('\\')
             .next()?
@@ -3969,10 +3985,11 @@ fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
             .ok()
             .filter(|x| *x > 0.0)
     };
-    number("Frame time (ms)")
+    number("DICOM", "Frame time (ms)")
         .map(|ms| 1000.0 / ms)
-        .or_else(|| number("Recommended frame rate"))
-        .or_else(|| number("Cine rate"))
+        .or_else(|| number("DICOM", "Recommended frame rate"))
+        .or_else(|| number("DICOM", "Cine rate"))
+        .or_else(|| number("Animation", "Frame time (ms)").map(|ms| 1000.0 / ms))
 }
 
 /// 絞り込みの名前。タグはそのまま（翻訳しない）。
@@ -4116,6 +4133,13 @@ mod tests {
         m.push("DICOM", "Frame time (ms)", "33.333\\33.333");
         assert!((frame_rate(&m).unwrap() - 30.0).abs() < 0.01);
         assert_eq!(frame_rate(&vw_core::Metadata::default()), None);
+    }
+
+    #[test]
+    fn animation_frame_rate_comes_from_the_average_frame_time() {
+        let mut m = vw_core::Metadata::default();
+        m.push("Animation", "Frame time (ms)", "50.0");
+        assert_eq!(frame_rate(&m), Some(20.0));
     }
 
     #[test]
