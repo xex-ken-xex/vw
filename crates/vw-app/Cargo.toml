@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 notify = { version = "8", default-features = false }
 serde_json = "1"
+regex = "1"
 # 検索カタログの日時を書く。地方時の扱い（clock）は使わないので std だけ。
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 # ごみ箱へ送る。chrono は送ったものを一覧する API にしか要らない。

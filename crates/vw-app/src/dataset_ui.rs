@@ -1,6 +1,7 @@
 //! データセットの登録・編集・更新のダイアログ。フォルダ以下を調べるのは別スレッドで行い、
 //! 進み具合を出す。暗号化されたアーカイブに当たったら、調べる側を止めてパスワードを聞く。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
@@ -11,6 +12,7 @@ use eframe::egui;
 use vw_core::Registry;
 
 use crate::catalog::{self, Catalog, Info, Progress, Report};
+use crate::dataset_search::Index;
 use crate::i18n::{tr, tr1};
 use crate::log::Log;
 use crate::settings::Language;
@@ -42,6 +44,10 @@ pub struct DatasetDialog {
     error: Option<String>,
     job: Option<ScanJob>,
     password: Option<PasswordAsk>,
+    /// 他のデータセットで使っているタグ。表記ゆれを減らすため候補に出す。
+    known_tags: Vec<String>,
+    /// 項目ごとの、他のデータセットで使っている値。
+    known_values: BTreeMap<String, Vec<String>>,
 }
 
 struct ScanJob {
@@ -63,10 +69,12 @@ struct PasswordAsk {
 }
 
 impl DatasetDialog {
-    /// `fields` は設定で足した項目。カタログにしかない項目もその後ろに出す。
+    /// `fields` は設定で足した項目。カタログにしかない項目もその後ろに出す。`known` は
+    /// Datasets 画面で集めたデータセットの一覧で、タグと項目の値の候補に使う。
     pub fn open(
         request: Request,
         fields: &[String],
+        known: Option<&Index>,
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
@@ -84,6 +92,8 @@ impl DatasetDialog {
             error: None,
             job: None,
             password: None,
+            known_tags: known.map(Index::tags).unwrap_or_default(),
+            known_values: known.map(Index::field_values).unwrap_or_default(),
             dir,
             kind,
         };
@@ -104,6 +114,10 @@ impl DatasetDialog {
             dialog.start(registry, ctx);
         }
         dialog
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     fn fill(&mut self, c: Catalog) {
@@ -316,15 +330,31 @@ impl DatasetDialog {
                 );
                 ui.end_row();
                 ui.label(tr(lang, "Tags"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.tags)
-                        .hint_text(tr(lang, "Separate with commas"))
-                        .desired_width(340.0),
-                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.tags)
+                            .hint_text(tr(lang, "Separate with commas"))
+                            .desired_width(340.0),
+                    );
+                    if let Some(tag) = pick(ui, "dataset-tag-choices", &self.known_tags) {
+                        let mut tags = self.tags.trim().trim_end_matches(',').to_owned();
+                        if !tags.is_empty() {
+                            tags.push_str(", ");
+                        }
+                        tags.push_str(&tag);
+                        self.tags = tags;
+                    }
+                });
                 ui.end_row();
                 for (key, value) in &mut self.fields {
                     ui.label(key.as_str());
-                    ui.add(egui::TextEdit::singleline(value).desired_width(340.0));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(value).desired_width(340.0));
+                        let known = self.known_values.get(key).map_or(&[][..], Vec::as_slice);
+                        if let Some(v) = pick(ui, ("dataset-field-choices", key.as_str()), known) {
+                            *value = v;
+                        }
+                    });
                     ui.end_row();
                 }
             });
@@ -455,4 +485,31 @@ impl DatasetDialog {
             }
         }
     }
+}
+
+/// 今ある値から選ぶボタン。値がなければ出さない。
+fn pick(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    values: &[String],
+) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut chosen = None;
+    ui.push_id(id, |ui| {
+        ui.menu_button(egui_phosphor::regular::CARET_DOWN, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for v in values {
+                        if ui.button(v).clicked() {
+                            chosen = Some(v.clone());
+                            ui.close();
+                        }
+                    }
+                });
+        });
+    });
+    chosen
 }
