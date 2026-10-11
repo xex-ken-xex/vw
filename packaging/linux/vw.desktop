@@ -6,6 +6,7 @@ GenericName[ja]=画像ビューワ
 Comment=Fast image viewer
 Comment[ja]=高速な画像ビューワ
 Exec=vw %F
+Icon=vw
 Terminal=false
 Categories=Graphics;Viewer;
 MimeType=image/png;image/jpeg;image/webp;image/x-nikon-nef;image/x-nikon-nrw;image/x-sony-arw;image/x-sony-sr2;image/x-sony-srf;image/x-fuji-raf;image/x-canon-cr2;image/x-canon-cr3;image/x-adobe-dng;

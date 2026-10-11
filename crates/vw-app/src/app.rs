@@ -18,11 +18,12 @@ use vw_core::{ColorModel, Registry};
 use crate::archive::{self, Archives};
 use crate::autoload::{FolderLoad, Question};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
+use crate::discard::{self, TrashJob};
 use crate::export::{self, CopyJob, Filter, ListFormat, Matcher};
 use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo};
-use crate::labels::{Flag, LabelStore};
+use crate::labels::{Flag, Label, LabelStore};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
@@ -174,6 +175,9 @@ pub struct VwApp {
     /// ツリー・画像送り・フォルダの読み込み・スライドショーで対象にする画像。
     filter: Filter,
     export: Option<ExportDialog>,
+    /// ごみ箱へ送るか確かめている悪いフラグの画像。
+    pending_trash: Option<discard::Pending>,
+    trash_job: Option<TrashJob>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
@@ -274,6 +278,34 @@ pub fn wrap_step(pos: usize, len: usize, delta: isize) -> usize {
     (pos as isize + delta).rem_euclid(len as isize) as usize
 }
 
+/// `active` から `delta` 個先の画像のスロット（`images` が `true` のもの）。フォルダや空の
+/// スロットは飛ばす。`wrap` なら端で反対側に回り込み、そうでなければ端で止まる。
+/// 進める先がなければ `None`。
+pub fn image_slot_step(images: &[bool], active: usize, delta: isize, wrap: bool) -> Option<usize> {
+    let len = images.len() as isize;
+    let dir = delta.signum();
+    let mut pos = active as isize;
+    for _ in 0..delta.unsigned_abs() {
+        let mut next = pos;
+        loop {
+            next += dir;
+            if wrap {
+                next = next.rem_euclid(len);
+            } else if !(0..len).contains(&next) {
+                return (pos != active as isize).then_some(pos as usize);
+            }
+            if next == pos {
+                return (pos != active as isize).then_some(pos as usize);
+            }
+            if images[next as usize] {
+                break;
+            }
+        }
+        pos = next;
+    }
+    (pos != active as isize).then_some(pos as usize)
+}
+
 /// `removed` 番目のスロットを閉じた後の、アクティブなスロットの添字。
 /// アクティブより前が閉じられたら 1 つ詰め、アクティブ自身なら同じ位置（なければ末尾）を選ぶ。
 pub fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
@@ -353,13 +385,17 @@ impl VwApp {
 
         // 引数のフォルダはツリーの先頭に開いた状態で置き、ファイルはそれぞれ別のスロットで開く。
         // ファイルだけが渡されたときは、その親フォルダをツリーに出して前後の画像を辿りやすくする。
-        let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
-            initial.into_iter().partition(|p| p.is_dir());
+        // ZIP はフォルダとして扱う（「プログラムから開く」で ZIP を渡されることがあるため）。
+        let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) = initial
+            .into_iter()
+            .partition(|p| p.is_dir() || archive::is_zip(p));
         let first_dir = dirs.into_iter().next();
-        let root = first_dir.clone().or_else(|| {
+        let root = first_dir.clone().filter(|d| d.is_dir()).or_else(|| {
             files
                 .first()
-                .and_then(|f| f.parent().map(Path::to_path_buf))
+                .or(first_dir.as_ref())?
+                .parent()
+                .map(Path::to_path_buf)
         });
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
@@ -422,6 +458,8 @@ impl VwApp {
             tagging: false,
             filter: Filter::All,
             export: None,
+            pending_trash: None,
+            trash_job: None,
         };
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
         // ファイルを開くのが目的なので、前回のフォルダには移らない。
@@ -431,8 +469,7 @@ impl VwApp {
             (None, false) => None,
         };
         if let Some(dir) = start_dir {
-            let into = app.settings.settings.tree.load_into;
-            app.cd(&cc.egui_ctx, dir, into);
+            app.open_folder(&cc.egui_ctx, dir);
         }
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
@@ -822,6 +859,10 @@ impl VwApp {
                 if slot.path.is_none() {
                     // 合う画像がなかった。読み込み中のまま残さない。
                     slot.loading = false;
+                    if slot.sequence.as_ref().is_some_and(|s| s.paths.is_empty()) {
+                        // 画像が 1 枚もないフォルダは、空の並び（「1/0」）ではなくフォルダの姿に戻す。
+                        slot.sequence = None;
+                    }
                 }
                 self.log.info(format!(
                     "Loaded {} images from {}",
@@ -895,6 +936,105 @@ impl VwApp {
             }
             Err(e) => self.log.error(format!("Cannot move or copy: {e}")),
         }
+    }
+
+    /// 今いるフォルダの悪いフラグの画像を集め、ごみ箱へ送ってよいか尋ねる。
+    /// サブフォルダまで辿らないのは、見えていない画像まで消してしまわないため。
+    fn ask_trash_bad(&mut self) {
+        let lang = self.lang();
+        let Some(dir) = self.current.clone() else {
+            self.log
+                .warn(tr(lang, "Select a folder in the tree first."));
+            return;
+        };
+        if self.archives.mount_of(&dir).is_some() {
+            self.log
+                .warn(format!("{}: files in a ZIP are read-only", dir.display()));
+            return;
+        }
+        let bad = Filter::Flag(Some(Flag::Bad));
+        let matcher = Matcher {
+            filter: &bad,
+            labels: &self.labels,
+        };
+        let order = self.settings.settings.tree.order();
+        let files = export::collect(&dir, false, self.loader.registry(), order, &matcher);
+        if files.is_empty() {
+            self.log.info(format!("No bad images in {}", dir.display()));
+            return;
+        }
+        self.pending_trash = Some(discard::Pending { dir, files });
+    }
+
+    fn trash_dialog(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending_trash else {
+            return;
+        };
+        let lang = self.lang();
+        let (names, rest) = pending.preview(10);
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("trash_question")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(tr1(
+                lang,
+                "Move {} bad images to the trash?",
+                &pending.files.len().to_string(),
+            ));
+            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+            ui.add_space(4.0);
+            for name in names {
+                ui.label(name);
+            }
+            if rest > 0 {
+                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Move to trash")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(yes) = answer else {
+            return;
+        };
+        if let Some(pending) = self.pending_trash.take().filter(|_| yes) {
+            let ctx = ctx.clone();
+            self.trash_job = Some(TrashJob::start(pending.files, move || {
+                ctx.request_repaint()
+            }));
+        }
+    }
+
+    /// ごみ箱へ送り終えた画像のラベルを消し、結果をログに出す。スロットは
+    /// フォルダの監視が消えた画像として閉じる。
+    fn finish_trash_job(&mut self) {
+        let Some(outcomes) = self.trash_job.as_ref().and_then(TrashJob::poll) else {
+            return;
+        };
+        self.trash_job = None;
+        let mut moved = 0;
+        for (file, result) in outcomes {
+            match result {
+                Ok(()) => {
+                    moved += 1;
+                    if let Err(e) = self.labels.set(&file, Label::default()) {
+                        self.log.error(format!("{}: {e}", file.display()));
+                    }
+                }
+                Err(e) => self
+                    .log
+                    .error(format!("Cannot move {} to the trash: {e}", file.display())),
+            }
+        }
+        self.log
+            .info(format!("Moved {moved} bad images to the trash"));
     }
 
     /// ドロップした画像を移してよいか尋ねる。
@@ -1421,6 +1561,26 @@ impl VwApp {
         if self.maximized.is_some() {
             self.maximized = Some(self.slots[self.active].id);
         }
+    }
+
+    /// 画像のスロット（フォルダや空のスロットでないもの）だけを辿って、アクティブなスロットを移す。
+    /// 進めたら `true`。← → はスロットの中身を差し替えずにこれで移る。差し替えると、並んだ別の
+    /// スロットと同じ画像になったり、どのスロットに何があったか分からなくなったりするため。
+    /// スロットの中の画像はホイールで送る。
+    fn step_image_slot(&mut self, delta: isize, wrap: bool) -> bool {
+        let images: Vec<bool> = self
+            .slots
+            .iter()
+            .map(|s| s.folder.is_none() && s.path.is_some())
+            .collect();
+        let Some(next) = image_slot_step(&images, self.active, delta, wrap) else {
+            return false;
+        };
+        self.active = next;
+        if self.maximized.is_some() {
+            self.maximized = Some(self.slots[next].id);
+        }
+        true
     }
 
     /// `index` 番目のスロットの最大化を切り替える。
@@ -2381,9 +2541,7 @@ impl VwApp {
         }
         let slot = &self.slots[self.active];
         if slot.sequence.is_none() && self.slots.len() > 1 {
-            if self.active + 1 < self.slots.len() {
-                self.step_slot(1);
-            }
+            self.step_image_slot(1, false);
             return;
         }
         let at_end = match &slot.sequence {
@@ -2505,11 +2663,11 @@ impl VwApp {
         match action {
             Action::PreviousImage => {
                 self.stop_playback();
-                self.step_active(-1);
+                self.step_image_slot(-1, true);
             }
             Action::NextImage => {
                 self.stop_playback();
-                self.step_active(1);
+                self.step_image_slot(1, true);
             }
             Action::ToggleTagging => self.tagging ^= true,
             Action::FilterAll => self.set_filter(ctx, Filter::All),
@@ -2517,6 +2675,7 @@ impl VwApp {
             Action::FilterBad => self.set_filter(ctx, Filter::Flag(Some(Flag::Bad))),
             Action::FilterUnflagged => self.set_filter(ctx, Filter::Flag(None)),
             Action::ExportImages => self.open_export(),
+            Action::TrashBadImages => self.ask_trash_bad(),
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -3200,6 +3359,9 @@ impl VwApp {
         if self.menu_item(ui, Action::ExportImages, None) {
             chosen = Some(Action::ExportImages);
         }
+        if self.menu_item(ui, Action::TrashBadImages, None) {
+            chosen = Some(Action::TrashBadImages);
+        }
         chosen
     }
 
@@ -3820,7 +3982,9 @@ impl VwApp {
                     self.active = i;
                     self.step_active(delta);
                 }
-                WheelStep::Slot => self.step_slot(delta),
+                WheelStep::Slot => {
+                    self.step_image_slot(delta, true);
+                }
                 WheelStep::Nothing => {}
             }
         }
@@ -4000,6 +4164,8 @@ impl eframe::App for VwApp {
         self.toast_ui(&ctx);
         self.folder_load_dialog(&ctx);
         self.move_dialog(&ctx);
+        self.trash_dialog(&ctx);
+        self.finish_trash_job();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);
         self.select_dropped_image();
@@ -4211,6 +4377,28 @@ mod tests {
         let mut m = vw_core::Metadata::default();
         m.push("Animation", "Frame time (ms)", "50.0");
         assert_eq!(frame_rate(&m), Some(20.0));
+    }
+
+    #[test]
+    fn stepping_image_slots_skips_folder_slots() {
+        // フォルダ, フォルダ, 画像, 画像, 画像
+        let images = [false, false, true, true, true];
+        assert_eq!(image_slot_step(&images, 2, 1, true), Some(3));
+        assert_eq!(image_slot_step(&images, 2, -1, true), Some(4));
+        assert_eq!(image_slot_step(&images, 4, 1, true), Some(2));
+    }
+
+    #[test]
+    fn stepping_image_slots_without_wrap_stops_at_the_last_image() {
+        let images = [false, true, true];
+        assert_eq!(image_slot_step(&images, 2, 1, false), None);
+        assert_eq!(image_slot_step(&images, 1, -1, false), None);
+        assert_eq!(image_slot_step(&images, 1, 5, false), Some(2));
+    }
+
+    #[test]
+    fn stepping_image_slots_with_no_other_image_does_nothing() {
+        assert_eq!(image_slot_step(&[false, true, false], 1, 1, true), None);
     }
 
     #[test]

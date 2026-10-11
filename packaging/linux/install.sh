@@ -10,16 +10,18 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 bin_dir="$HOME/.local/bin"
 app_dir="$HOME/.local/share/applications"
+icon_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  rm -f "$bin_dir/vw" "$app_dir/vw.desktop"
+  rm -f "$bin_dir/vw" "$app_dir/vw.desktop" "$icon_dir/vw.png"
   command -v update-desktop-database >/dev/null && update-desktop-database "$app_dir" || true
   echo "vw を削除しました"
   exit 0
 fi
 
-mkdir -p "$bin_dir" "$app_dir"
+mkdir -p "$bin_dir" "$app_dir" "$icon_dir"
 install -m 755 "$here/vw" "$bin_dir/vw"
+install -m 644 "$here/vw.png" "$icon_dir/vw.png"
 # Exec を絶対パスにする。~/.local/bin が PATH に入っていない環境でもアプリ一覧から起動できるように。
 sed "s|^Exec=vw |Exec=$bin_dir/vw |" "$here/vw.desktop" > "$app_dir/vw.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$app_dir" || true

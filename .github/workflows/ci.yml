@@ -58,7 +58,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/vw
-          cp target/release/vw README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt packaging/linux/vw.desktop packaging/linux/install.sh dist/vw/
+          cp target/release/vw README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
       - name: Package (Windows)
         if: runner.os == 'Windows'
