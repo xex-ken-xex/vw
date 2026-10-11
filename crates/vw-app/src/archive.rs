@@ -200,9 +200,14 @@ impl Drop for Archives {
 }
 
 /// ツリーでフォルダのように開けるアーカイブ（ZIP と 7z）か。
+///
+/// 名前だけでなく、フォルダでないことも見る。データセットの取り出しで ZIP の中身を
+/// `data.zip` という名前のフォルダに置くので、名前だけではそのフォルダをアーカイブとして
+/// 開こうとしてしまうため。
 pub fn is_archive(path: &Path) -> bool {
     path.extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("7z"))
+        && !path.is_dir()
 }
 
 const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
@@ -352,7 +357,10 @@ fn each_in_7z(
 
 /// 中身を書き写す。`std::io::copy` を使わないのは、読めなかったのか書けなかったのかを
 /// 同じ `io::Error` で返すため。
-fn copy_entry(data: &mut dyn std::io::Read, target: &mut std::fs::File) -> Result<(), EntryError> {
+pub(crate) fn copy_entry(
+    data: &mut dyn std::io::Read,
+    target: &mut std::fs::File,
+) -> Result<(), EntryError> {
     use std::io::Write as _;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -620,5 +628,14 @@ mod tests {
         assert!(is_archive(Path::new("a.ZIP")));
         assert!(is_archive(Path::new("a.7Z")));
         assert!(!is_archive(Path::new("a.png")));
+    }
+
+    #[test]
+    fn a_folder_named_like_an_archive_is_a_folder() {
+        let tmp = TempDir::new();
+        let dir = tmp.path().join("data.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(!is_archive(&dir));
     }
 }

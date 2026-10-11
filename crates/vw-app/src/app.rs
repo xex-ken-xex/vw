@@ -130,6 +130,8 @@ pub struct VwApp {
     datasets: crate::datasets_screen::DatasetsScreen,
     /// 「すべて更新」で順に更新するデータセット。
     dataset_queue: Vec<PathBuf>,
+    /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
+    outer_to_update: Option<PathBuf>,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -447,6 +449,7 @@ impl VwApp {
             show_datasets: false,
             datasets: Default::default(),
             dataset_queue: Vec::new(),
+            outer_to_update: None,
             log,
             started,
             first_frame: true,
@@ -1012,10 +1015,87 @@ impl VwApp {
         let lang = self.settings.settings.appearance.language;
         if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
             let dir = dialog.dir().to_path_buf();
+            self.outer_to_update = dialog.outer().map(Path::to_path_buf);
             self.dataset_dialog = None;
             self.datasets.refresh(&dir);
             self.next_queued_update(ctx);
         }
+    }
+
+    /// 取り出した先を含むデータセットを更新するか聞く。外側のデータセットは、更新するまで
+    /// 取り出したファイルを含まないため。
+    fn outer_update_dialog(&mut self, ctx: &egui::Context) {
+        let Some(outer) = &self.outer_to_update else {
+            return;
+        };
+        if self.dataset_dialog.is_some() {
+            return;
+        }
+        let lang = self.settings.settings.appearance.language;
+        let name = crate::catalog::load(outer)
+            .map(|c| c.name)
+            .unwrap_or_else(|_| outer.display().to_string());
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("outer_dataset_update")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(tr1(
+                lang,
+                "The files were extracted into the dataset \"{}\". Update it now?",
+                &name,
+            ));
+            ui.weak(tr(
+                lang,
+                "Until it is updated, its search catalog does not include the extracted files.",
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Update")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Later")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        if let Some(update) = answer {
+            if let Some(outer) = self.outer_to_update.take() {
+                if update {
+                    self.open_dataset_dialog(ctx, crate::dataset_ui::Request::Update(outer));
+                }
+            }
+        }
+    }
+
+    /// Datasets 画面から、データセットのフォルダへ移ってファイルを読み込む。検索カタログにあるのに
+    /// 見つからないファイルはログに出し、更新を促す。
+    fn show_dataset(&mut self, ctx: &egui::Context, dir: PathBuf) {
+        self.show_datasets = false;
+        let into = self.settings.settings.tree.load_into;
+        self.cd(ctx, dir.clone(), into);
+        let Some(entry) = self
+            .datasets
+            .index()
+            .and_then(|i| i.entries.iter().find(|e| e.dir == dir))
+        else {
+            return;
+        };
+        let missing = crate::dataset_extract::missing(&dir, &entry.catalog);
+        if missing.is_empty() {
+            return;
+        }
+        const SHOWN: usize = 5;
+        let mut list = missing[..missing.len().min(SHOWN)].join(", ");
+        if missing.len() > SHOWN {
+            list.push_str(", ...");
+        }
+        let name = entry.catalog.name.clone();
+        self.log.warn(format!(
+            "Dataset \"{name}\": {} files in the search catalog are missing ({list}). Update the dataset.",
+            missing.len()
+        ));
     }
 
     /// 「すべて更新」で残っているデータセットを、前のものが終わるたびに 1 つずつ更新する。
@@ -4244,6 +4324,12 @@ impl eframe::App for VwApp {
             let action = self.datasets.ui(ui, lang, &dataset.roots, &dataset.fields);
             match action {
                 Some(crate::datasets_screen::Action::Close) => self.show_datasets = false,
+                Some(crate::datasets_screen::Action::Show(dir)) => {
+                    self.show_dataset(&ctx, dir);
+                }
+                Some(crate::datasets_screen::Action::Extract(dir)) => {
+                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Extract(dir));
+                }
                 Some(crate::datasets_screen::Action::Edit(dir)) => {
                     self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Edit(dir));
                 }
@@ -4254,6 +4340,7 @@ impl eframe::App for VwApp {
             }
             self.next_queued_update(&ctx);
             self.dataset_window(&ctx);
+            self.outer_update_dialog(&ctx);
             self.password_dialog(&ctx);
             return;
         }
@@ -4357,6 +4444,7 @@ impl eframe::App for VwApp {
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
         self.dataset_window(&ctx);
+        self.outer_update_dialog(&ctx);
         self.finish_trash_job();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);

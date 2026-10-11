@@ -1,4 +1,4 @@
-//! データセットの登録・編集・更新のダイアログ。フォルダ以下を調べるのは別スレッドで行い、
+//! データセットの登録・編集・更新・取り出しのダイアログ。フォルダ以下を調べるのは別スレッドで行い、
 //! 進み具合を出す。暗号化されたアーカイブに当たったら、調べる側を止めてパスワードを聞く。
 
 use std::collections::BTreeMap;
@@ -11,18 +11,20 @@ use std::time::Duration;
 use eframe::egui;
 use vw_core::Registry;
 
-use crate::catalog::{self, Catalog, Info, Progress, Report};
+use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped};
+use crate::dataset_extract;
 use crate::dataset_search::Index;
-use crate::i18n::{tr, tr1};
+use crate::i18n::{tr, tr1, tr_text};
 use crate::log::Log;
 use crate::settings::Language;
 
-/// ツリーの右クリックメニューから頼まれること。
+/// ツリーの右クリックメニューや Datasets 画面から頼まれること。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     Register(PathBuf),
     Edit(PathBuf),
     Update(PathBuf),
+    Extract(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -30,6 +32,7 @@ enum Kind {
     Register,
     Edit,
     Update,
+    Extract,
 }
 
 pub struct DatasetDialog {
@@ -48,11 +51,22 @@ pub struct DatasetDialog {
     known_tags: Vec<String>,
     /// 項目ごとの、他のデータセットで使っている値。
     known_values: BTreeMap<String, Vec<String>>,
+    /// 取り出しの出力先。
+    dest: String,
+    /// 取り出した先を含むデータセット。取り出し後に更新するか聞くため。
+    outer: Option<PathBuf>,
+}
+
+/// 調べ終わった結果。取り出しなら、写した数と写せなかったものも持つ。
+struct Outcome {
+    report: Report,
+    copied: Option<usize>,
+    failed: Vec<Skipped>,
 }
 
 struct ScanJob {
     progress: Arc<Progress>,
-    result: Receiver<Result<Report, String>>,
+    result: Receiver<Result<Outcome, String>>,
     asks: Receiver<PasswordRequest>,
 }
 
@@ -82,6 +96,7 @@ impl DatasetDialog {
             Request::Register(d) => (d, Kind::Register),
             Request::Edit(d) => (d, Kind::Edit),
             Request::Update(d) => (d, Kind::Update),
+            Request::Extract(d) => (d, Kind::Extract),
         };
         let mut dialog = Self {
             name: String::new(),
@@ -94,6 +109,8 @@ impl DatasetDialog {
             password: None,
             known_tags: known.map(Index::tags).unwrap_or_default(),
             known_values: known.map(Index::field_values).unwrap_or_default(),
+            dest: default_destination(&dir),
+            outer: None,
             dir,
             kind,
         };
@@ -111,13 +128,19 @@ impl DatasetDialog {
             }
         }
         if kind == Kind::Update && dialog.error.is_none() {
-            dialog.start(registry, ctx);
+            dialog.start(registry, ctx, Language::English);
         }
         dialog
     }
 
+    /// 調べたデータセットのフォルダ。取り出しが終わった後は出力先。
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// 取り出した先を含むデータセット。取り出しが終わったときだけ。
+    pub fn outer(&self) -> Option<&Path> {
+        self.outer.as_deref()
     }
 
     fn fill(&mut self, c: Catalog) {
@@ -159,7 +182,15 @@ impl DatasetDialog {
         }
     }
 
-    fn start(&mut self, registry: &Registry, ctx: &egui::Context) {
+    fn start(&mut self, registry: &Registry, ctx: &egui::Context, lang: Language) {
+        let dest = PathBuf::from(self.dest.trim());
+        if self.kind == Kind::Extract {
+            if let Err(e) = dataset_extract::check_destination(&self.dir, &dest) {
+                self.error = Some(tr_text(lang, &e));
+                return;
+            }
+        }
+        let kind = self.kind;
         let progress = Arc::new(Progress::default());
         let (done, result) = channel();
         let (ask, asks) = channel();
@@ -182,16 +213,37 @@ impl DatasetDialog {
                 repaint.request_repaint();
                 answer.recv().ok().flatten()
             };
-            let report = catalog::scan(
-                &dir,
-                info,
-                previous.as_ref(),
-                &registry,
-                &worker_progress,
-                &mut ask_password,
-            )
-            .and_then(|r| catalog::save(&dir, &r.catalog).map(|()| r));
-            let _ = done.send(report);
+            let outcome = match (kind, &previous) {
+                (Kind::Extract, Some(source)) => dataset_extract::extract(
+                    &dir,
+                    source,
+                    &dest,
+                    info,
+                    &registry,
+                    &worker_progress,
+                    &mut ask_password,
+                )
+                .map(|x| Outcome {
+                    report: x.report,
+                    copied: Some(x.copied),
+                    failed: x.failed,
+                }),
+                _ => catalog::scan(
+                    &dir,
+                    info,
+                    previous.as_ref(),
+                    &registry,
+                    &worker_progress,
+                    &mut ask_password,
+                )
+                .and_then(|r| catalog::save(&dir, &r.catalog).map(|()| r))
+                .map(|report| Outcome {
+                    report,
+                    copied: None,
+                    failed: Vec::new(),
+                }),
+            };
+            let _ = done.send(outcome);
             ctx.request_repaint();
         });
         self.job = Some(ScanJob {
@@ -225,6 +277,7 @@ impl DatasetDialog {
             Kind::Register => tr(lang, "Register as dataset"),
             Kind::Edit => tr(lang, "Edit dataset"),
             Kind::Update => tr(lang, "Update dataset"),
+            Kind::Extract => tr(lang, "Extract dataset"),
         };
         let mut open = true;
         let mut run = false;
@@ -241,6 +294,27 @@ impl DatasetDialog {
                 ui.set_max_width(480.0);
                 ui.label(egui::RichText::new(self.dir.display().to_string()).monospace());
                 ui.add_space(4.0);
+                if self.kind == Kind::Extract {
+                    ui.add_enabled_ui(!running, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Destination"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.dest)
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .changed()
+                            {
+                                self.error = None;
+                            }
+                        });
+                        ui.weak(tr(
+                            lang,
+                            "An empty or new folder. The files are copied with their folders, and the search catalog is rebuilt there.",
+                        ));
+                    });
+                    ui.add_space(4.0);
+                }
                 ui.add_enabled_ui(!running && self.kind != Kind::Update, |ui| {
                     self.inputs_ui(ui, lang);
                 });
@@ -289,6 +363,14 @@ impl DatasetDialog {
                                     ))
                                     .clicked();
                             }
+                            Kind::Extract => {
+                                run = ui
+                                    .add_enabled(
+                                        ok && !self.dest.trim().is_empty(),
+                                        egui::Button::new(tr(lang, "Extract")),
+                                    )
+                                    .clicked();
+                            }
                             Kind::Update => {}
                         });
                     }
@@ -309,7 +391,7 @@ impl DatasetDialog {
             return !self.save_info(log);
         }
         if run {
-            self.start(registry, ctx);
+            self.start(registry, ctx, lang);
         }
         true
     }
@@ -402,11 +484,33 @@ impl DatasetDialog {
         self.job = None;
         self.password = None;
         match result {
-            Ok(report) => {
+            Ok(Outcome {
+                report,
+                copied: Some(copied),
+                failed,
+            }) => {
+                let dest = PathBuf::from(self.dest.trim());
+                log.info(format!(
+                    "Dataset \"{}\" extracted: {copied} files from {} to {}",
+                    self.name.trim(),
+                    self.dir.display(),
+                    dest.display()
+                ));
+                for f in &failed {
+                    log.warn(format!("Dataset \"{}\": not copied: {f}", self.name.trim()));
+                }
+                for p in &report.catalog.skipped {
+                    log.warn(format!("Dataset \"{}\": {p}", report.catalog.name));
+                }
+                self.outer = dataset_extract::outer_dataset(&dest);
+                self.dir = dest;
+                Some(true)
+            }
+            Ok(Outcome { report, .. }) => {
                 let c = &report.catalog;
                 let verb = match self.kind {
                     Kind::Register => "registered",
-                    Kind::Edit | Kind::Update => "updated",
+                    Kind::Edit | Kind::Update | Kind::Extract => "updated",
                 };
                 log.info(format!(
                     "Dataset \"{}\" {verb}: {} files ({} added, {} removed, {} changed) in {}",
@@ -421,6 +525,15 @@ impl DatasetDialog {
                     log.warn(format!("Dataset \"{}\": {p}", c.name));
                 }
                 Some(true)
+            }
+            Err(e) if e == "Cancelled" && self.kind == Kind::Extract => {
+                // 写した分は消さない。出力先を人が選んだので、消してよいものか分からないため。
+                log.info(tr1(
+                    lang,
+                    "Stopped extracting. The files already copied remain in {}.",
+                    self.dest.trim(),
+                ));
+                Some(false)
             }
             Err(e) if e == "Cancelled" => {
                 log.info(tr1(
@@ -485,6 +598,26 @@ impl DatasetDialog {
             }
         }
     }
+}
+
+/// 取り出しの出力先の初期値。元のデータセットの隣の、まだないフォルダ。
+fn default_destination(dir: &Path) -> String {
+    let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return String::new();
+    };
+    let candidate = |n: usize| {
+        let suffix = if n == 1 {
+            String::new()
+        } else {
+            format!("-{n}")
+        };
+        dir.with_file_name(format!("{name}-extract{suffix}"))
+    };
+    let mut n = 1;
+    while candidate(n).exists() {
+        n += 1;
+    }
+    candidate(n).display().to_string()
 }
 
 /// 今ある値から選ぶボタン。値がなければ出さない。
