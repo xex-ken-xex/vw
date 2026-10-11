@@ -112,10 +112,10 @@ impl Default for Viewer {
     fn default() -> Self {
         Self {
             background: String::new(),
-            full_image_limit_mb: 4096,
+            full_image_limit_mb: 256,
             layout: SlotLayout::Auto,
-            custom_layout: SlotLayout::grid(3, 2),
-            slideshow_fps: 10.0,
+            custom_layout: SlotLayout::grid(6, 6),
+            slideshow_fps: 30.0,
             slideshow_end: EndMode::Loop,
             keep_view: true,
             develop_raw: true,
@@ -129,8 +129,8 @@ impl Default for Viewer {
 #[serde(rename_all = "snake_case")]
 pub enum HeaderClick {
     /// 選ぶだけで開閉しない。コピーしようとして選ぶたびに閉じてしまわないようにする。
-    #[default]
     Select,
+    #[default]
     SelectAndToggle,
 }
 
@@ -205,9 +205,9 @@ pub struct Tree {
 impl Default for Tree {
     fn default() -> Self {
         Self {
-            sort: SortKey::default(),
-            sort_descending: false,
-            confirm_every: true,
+            sort: SortKey::Modified,
+            sort_descending: true,
+            confirm_every: false,
             confirm_chunk: 500,
             load_into: LoadInto::default(),
             other_load_modifier: LoadModifier::default(),
@@ -711,7 +711,7 @@ mod tests {
         s.appearance.language = Language::Japanese;
         s.appearance.ui_scale = 1.25;
         s.viewer.background = "#202020".into();
-        s.behavior.header_click = HeaderClick::SelectAndToggle;
+        s.behavior.header_click = HeaderClick::Select;
         s.behavior.auto_reload = false;
         s.labels.tags = vec!["cat".into(), "dog".into()];
         s.labels.advance = false;
@@ -724,9 +724,9 @@ mod tests {
         s.viewer.keep_view = false;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
-        s.tree.sort = SortKey::Modified;
-        s.tree.sort_descending = true;
-        s.tree.confirm_every = false;
+        s.tree.sort = SortKey::NameString;
+        s.tree.sort_descending = false;
+        s.tree.confirm_every = true;
         s.tree.confirm_chunk = 200;
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
@@ -802,10 +802,10 @@ mod tests {
     }
 
     #[test]
-    fn full_image_memory_limit_is_4gb_by_default() {
+    fn full_image_memory_limit_is_256mb_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert_eq!(s.viewer.full_image_limit_mb, 4096);
-        assert_eq!(s.viewer.full_image_limit_bytes(), 4 << 30);
+        assert_eq!(s.viewer.full_image_limit_mb, 256);
+        assert_eq!(s.viewer.full_image_limit_bytes(), 256 << 20);
     }
 
     #[test]
@@ -828,21 +828,21 @@ mod tests {
         let (s, problems) =
             Settings::from_toml("[viewer]\nlayout = \"0x3\"\ncustom_layout = \"auto\"\n").unwrap();
         assert_eq!(s.viewer.layout, SlotLayout::Auto);
-        assert_eq!(s.viewer.custom_layout, SlotLayout::grid(3, 2));
+        assert_eq!(s.viewer.custom_layout, SlotLayout::grid(6, 6));
         assert_eq!(problems.len(), 2, "{problems:?}");
     }
 
     #[test]
-    fn slideshow_starts_at_10_fps_looping() {
+    fn slideshow_starts_at_30_fps_looping() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert_eq!(s.viewer.slideshow_fps, 10.0);
+        assert_eq!(s.viewer.slideshow_fps, 30.0);
         assert_eq!(s.viewer.slideshow_end, EndMode::Loop);
     }
 
     #[test]
     fn out_of_range_fps_falls_back_to_default() {
         let (s, problems) = Settings::from_toml("[viewer]\nslideshow_fps = 500.0\n").unwrap();
-        assert_eq!(s.viewer.slideshow_fps, 10.0);
+        assert_eq!(s.viewer.slideshow_fps, 30.0);
         assert_eq!(problems.len(), 1);
     }
 
@@ -856,38 +856,38 @@ mod tests {
     #[test]
     fn too_small_memory_limit_falls_back_to_default() {
         let (s, problems) = Settings::from_toml("[viewer]\nfull_image_limit_mb = 10\n").unwrap();
-        assert_eq!(s.viewer.full_image_limit_mb, 4096);
+        assert_eq!(s.viewer.full_image_limit_mb, 256);
         assert_eq!(problems.len(), 1);
     }
 
     #[test]
-    fn tree_is_sorted_by_name_with_numbers_by_value_by_default() {
+    fn tree_is_sorted_newest_first_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert_eq!(s.tree.order(), SortOrder::default());
-        assert_eq!(s.tree.sort, SortKey::NameNatural);
-        assert!(!s.tree.sort_descending);
+        assert_eq!(s.tree.sort, SortKey::Modified);
+        assert!(s.tree.sort_descending);
     }
 
     #[test]
     fn tree_sort_reads_key_and_direction() {
         let (s, problems) =
-            Settings::from_toml("[tree]\nsort = \"modified\"\nsort_descending = true\n").unwrap();
-        assert_eq!(s.tree.sort, SortKey::Modified);
-        assert!(s.tree.sort_descending);
+            Settings::from_toml("[tree]\nsort = \"name_string\"\nsort_descending = false\n")
+                .unwrap();
+        assert_eq!(s.tree.sort, SortKey::NameString);
+        assert!(!s.tree.sort_descending);
         assert!(problems.is_empty());
     }
 
     #[test]
     fn unknown_tree_sort_falls_back_to_default() {
         let (s, problems) = Settings::from_toml("[tree]\nsort = \"size\"\n").unwrap();
-        assert_eq!(s.tree.sort, SortKey::NameNatural);
+        assert_eq!(s.tree.sort, SortKey::Modified);
         assert_eq!(problems.len(), 1);
     }
 
     #[test]
-    fn folder_loads_confirm_every_500_images_by_default() {
+    fn folder_loads_do_not_stop_to_confirm_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert!(s.tree.confirm_every);
+        assert!(!s.tree.confirm_every);
         assert_eq!(s.tree.confirm_chunk, 500);
     }
 
@@ -909,9 +909,9 @@ mod tests {
     }
 
     #[test]
-    fn header_click_selects_only_by_default() {
+    fn header_click_selects_and_toggles_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert_eq!(s.behavior.header_click, HeaderClick::Select);
+        assert_eq!(s.behavior.header_click, HeaderClick::SelectAndToggle);
     }
 
     #[test]
@@ -944,17 +944,16 @@ mod tests {
     }
 
     #[test]
-    fn header_click_can_also_toggle() {
-        let (s, problems) =
-            Settings::from_toml("[behavior]\nheader_click = \"select_and_toggle\"\n").unwrap();
-        assert_eq!(s.behavior.header_click, HeaderClick::SelectAndToggle);
+    fn header_click_can_select_only() {
+        let (s, problems) = Settings::from_toml("[behavior]\nheader_click = \"select\"\n").unwrap();
+        assert_eq!(s.behavior.header_click, HeaderClick::Select);
         assert!(problems.is_empty());
     }
 
     #[test]
-    fn unknown_header_click_falls_back_to_select() {
+    fn unknown_header_click_falls_back_to_the_default() {
         let (s, problems) = Settings::from_toml("[behavior]\nheader_click = \"toggle\"\n").unwrap();
-        assert_eq!(s.behavior.header_click, HeaderClick::Select);
+        assert_eq!(s.behavior.header_click, HeaderClick::SelectAndToggle);
         assert_eq!(problems.len(), 1);
     }
 
