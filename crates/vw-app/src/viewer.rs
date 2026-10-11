@@ -66,6 +66,8 @@ pub enum SequenceKind {
     Frames,
     /// DICOM の 1 シリーズのファイル（[`crate::series`]）。
     Series,
+    /// フォルダのスロットを開いて読んだ、サブフォルダまで含めた画像。
+    Subtree,
 }
 
 impl Sequence {
@@ -92,6 +94,18 @@ impl Sequence {
         }
     }
 
+    /// フォルダのスロットの中身（サブフォルダまで含めた画像）。最初は空で、読み込みが足していく。
+    pub fn subtree(folder: PathBuf) -> Self {
+        Self {
+            folder,
+            kind: SequenceKind::Subtree,
+            paths: Vec::new(),
+            index: 0,
+            fps: None,
+            title: None,
+        }
+    }
+
     /// フォルダ `folder` にある DICOM の 1 シリーズ。
     pub fn series(folder: PathBuf, title: String, files: Vec<PathBuf>) -> Self {
         Self {
@@ -111,6 +125,9 @@ pub struct Slot {
     /// 配列の添字ではなくこれを使う。
     pub id: u64,
     pub path: Option<PathBuf>,
+    /// フォルダのスロットなら、そのフォルダ（または ZIP）。cd したフォルダの中のサブフォルダを
+    /// エクスプローラのように並べるためのもので、中身を開くまではアイコンと名前だけを出す。
+    pub folder: Option<PathBuf>,
     /// フォルダスロットなら、そのフォルダの画像の並び。普通のスロットは `None` で、
     /// 前後の画像はその都度同じフォルダから探す。
     pub sequence: Option<Sequence>,
@@ -164,6 +181,8 @@ pub struct SlotResponse {
     pub toggle_maximize: bool,
     /// ホイールで送る枚数。負なら前へ。
     pub step: isize,
+    /// フォルダのスロットの「このフォルダへ移動」が押された。
+    pub open_folder: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -255,10 +274,16 @@ fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
 }
 
 impl Slot {
+    /// 中身をまだ開いていないフォルダのスロット。
+    pub fn is_closed_folder(&self) -> bool {
+        self.folder.is_some() && self.sequence.is_none() && self.path.is_none() && !self.loading
+    }
+
     pub fn new(id: u64) -> Self {
         Self {
             id,
             path: None,
+            folder: None,
             sequence: None,
             from_folder: false,
             request: 0,
@@ -341,6 +366,10 @@ impl Slot {
         }
         if self.shown.is_some() {
             response.context_menu(|ui| {
+                if ui.button(tr(lang, "Fit image to slot")).clicked() {
+                    self.reset_view();
+                    ui.close();
+                }
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.copy = true;
                     ui.close();
@@ -388,6 +417,31 @@ impl Slot {
                 Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+        } else if let Some(folder) = self.folder.as_ref().filter(|_| self.is_closed_folder()) {
+            let zip = crate::archive::is_zip(folder);
+            let icon = if zip {
+                egui_phosphor::regular::FILE_ZIP
+            } else {
+                egui_phosphor::regular::FOLDER
+            };
+            let size = (body.height() * 0.4).clamp(16.0, 96.0);
+            painter.text(
+                body.center(),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(size),
+                visuals.weak_text_color(),
+            );
+            // ZIP はダブルクリックで展開してその中へ移るので、中の画像を出す案内は出さない。
+            if !zip && body.height() > 120.0 {
+                painter.text(
+                    body.center_bottom() - vec2(0.0, 8.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    tr(lang, "Double-click to show the images inside"),
+                    egui::FontId::proportional(12.0),
+                    Color32::GRAY,
+                );
+            }
         } else {
             let msg = if self.loading {
                 "Loading..."
@@ -412,6 +466,7 @@ impl Slot {
         let name = self
             .path
             .as_ref()
+            .or(self.folder.as_ref().filter(|_| self.is_closed_folder()))
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| tr(lang, "(empty)").into());
@@ -476,6 +531,27 @@ impl Slot {
             close_color,
         );
         out.close = close.on_hover_text(tr(lang, "Close slot")).clicked();
+        // フォルダへ移る印は、マウスが乗っているスロットにだけ出す。並んだスロットのすべてに
+        // 出すと、画像のヘッダが印で埋まって名前が読みにくくなるため。
+        let mut labels_right = close_rect.left();
+        if self.folder.is_some() && ui.rect_contains_pointer(rect) {
+            let open_rect = close_rect.translate(vec2(-(HEADER - 2.0), 0.0));
+            let open = ui.interact(open_rect, ui.id().with(("open", self.id)), Sense::click());
+            let open_color = if open.hovered() {
+                visuals.strong_text_color()
+            } else {
+                visuals.weak_text_color()
+            };
+            painter.text(
+                open_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::ARROW_SQUARE_IN,
+                egui::FontId::proportional(14.0),
+                open_color,
+            );
+            out.open_folder = open.on_hover_text(tr(lang, "Open this folder")).clicked();
+            labels_right = open_rect.left();
+        }
 
         // フラグとタグはヘッダの右端に出し、フラグはヘッダの下端の色の線でも示す。
         // 縮小したマス目でも、どの画像にフラグが付いているか一目で分かるように。
@@ -489,7 +565,7 @@ impl Slot {
             );
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             let pos = pos2(
-                close_rect.left() - 6.0 - galley.size().x,
+                labels_right - 6.0 - galley.size().x,
                 header.center().y - galley.size().y / 2.0,
             );
             painter.galley(pos, galley, text_color);
@@ -621,6 +697,15 @@ mod tests {
         };
         assert_eq!(wheel_delta(&[wheel(false)], 500.0), -WHEEL_STEP);
         assert_eq!(wheel_delta(&[wheel(true)], 500.0), 0.0);
+    }
+
+    #[test]
+    fn folder_slot_stays_closed_until_its_images_are_loaded() {
+        let mut slot = Slot::new(1);
+        slot.folder = Some(PathBuf::from("/photos/2026"));
+        assert!(slot.is_closed_folder());
+        slot.sequence = Some(Sequence::subtree(PathBuf::from("/photos/2026")));
+        assert!(!slot.is_closed_folder());
     }
 
     #[test]

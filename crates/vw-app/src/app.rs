@@ -27,15 +27,13 @@ use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
 use crate::log::{Level, Log};
 use crate::memory;
-use crate::settings::{
-    parse_hex_color, FolderAction, HeaderClick, Language, LoadInto, OnLoadFolder, SettingsStore,
-    TreeMode,
-};
+use crate::series::{Scan, SeriesIndex};
+use crate::settings::{parse_hex_color, HeaderClick, Language, LoadInto, SettingsStore};
 use crate::settings_ui::{fps_input, layout_title, SettingsUi};
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
 use crate::theme;
-use crate::tree::{self, FolderClicks, FolderTree, TreeAction};
+use crate::tree::{self, FolderTree, TreeAction};
 use crate::viewer::{Full, Sequence, SequenceKind, Shown, Slot, SlotLook, KEY_ZOOM_FACTOR};
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
@@ -136,8 +134,14 @@ pub struct VwApp {
     frame: u64,
     /// 画像フィールドの大きさ（物理ピクセル）。読み込むときにフル解像度が要りそうかの見積もりに使う。
     images_area: Option<egui::Vec2>,
-    /// 画像自動展開モードで読み込み中のフォルダ。
+    /// cd しているフォルダ。スロットにはその中のフォルダと画像を並べる。
+    current: Option<PathBuf>,
+    /// cd したフォルダの画像の読み込み。
     folder_load: Option<FolderLoad>,
+    /// 開いたフォルダのスロットの中身の読み込みと、そのスロットの番号。
+    explores: Vec<(u64, FolderLoad)>,
+    /// フォルダの DICOM の検査とシリーズ。ツリーと、cd したフォルダのスロットの両方で使う。
+    series: SeriesIndex,
     /// 画像領域いっぱいに出しているスロットの番号。
     maximized: Option<u64>,
     /// 読み込み中のフォルダの入れ方。
@@ -150,7 +154,7 @@ pub struct VwApp {
     last_dropped: u64,
     /// フォルダの監視。自動リロードが無効なら `None`。
     watcher: Option<FolderWatcher>,
-    /// 画像自動展開モードで読み込んだフォルダと入れ方。画像がなかったフォルダも監視して、
+    /// cd したフォルダと、画像の入れ方。画像がなかったフォルダも監視して、
     /// 後から来た画像をスロットに足すために覚えておく。
     loaded_folders: Vec<(PathBuf, LoadInto)>,
     /// ツリーで開いた ZIP。
@@ -342,7 +346,8 @@ impl VwApp {
         // ファイルだけが渡されたときは、その親フォルダをツリーに出して前後の画像を辿りやすくする。
         let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) =
             initial.into_iter().partition(|p| p.is_dir());
-        let root = dirs.into_iter().next().or_else(|| {
+        let first_dir = dirs.into_iter().next();
+        let root = first_dir.clone().or_else(|| {
             files
                 .first()
                 .and_then(|f| f.parent().map(Path::to_path_buf))
@@ -388,7 +393,10 @@ impl VwApp {
             toast: None,
             frame: 0,
             images_area: None,
+            current: None,
             folder_load: None,
+            explores: Vec::new(),
+            series: SeriesIndex::default(),
             maximized: None,
             load_into: LoadInto::Images,
             load_slots_from: 0,
@@ -403,6 +411,17 @@ impl VwApp {
             filter: Filter::All,
             export: None,
         };
+        // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
+        // ファイルを開くのが目的なので、前回のフォルダには移らない。
+        let start_dir = match (&first_dir, files.is_empty()) {
+            (Some(dir), _) => Some(dir.clone()),
+            (None, true) => saved.current.filter(|d| d.is_dir()),
+            (None, false) => None,
+        };
+        if let Some(dir) = start_dir {
+            let into = app.settings.settings.tree.load_into;
+            app.cd(&cc.egui_ctx, dir, into);
+        }
         for (i, f) in files.into_iter().enumerate() {
             if i > 0 {
                 app.add_slot();
@@ -423,6 +442,7 @@ impl VwApp {
     fn close_all_slots(&mut self) {
         self.maximized = None;
         self.loaded_folders.clear();
+        self.explores.clear();
         for s in std::mem::take(&mut self.slots) {
             self.cancel_requests(&s);
         }
@@ -444,6 +464,7 @@ impl VwApp {
     fn close_slot(&mut self, index: usize) {
         let slot = self.slots.remove(index);
         self.cancel_requests(&slot);
+        self.explores.retain(|(id, _)| *id != slot.id);
         if self.maximized == Some(slot.id) {
             self.maximized = None;
         }
@@ -471,23 +492,6 @@ impl VwApp {
         self.start_load(self.active, path, full);
     }
 
-    /// アクティブなスロットに DICOM のシリーズを出す。1 ファイルだけのシリーズは普通に開く。
-    /// マルチフレームのファイルなら、それがフレームの並びになる。
-    fn open_series(&mut self, folder: PathBuf, title: String, files: Vec<PathBuf>) {
-        let [first, ..] = files.as_slice() else {
-            return;
-        };
-        let first = first.clone();
-        if files.len() > 1 {
-            let slot = &mut self.slots[self.active];
-            slot.from_folder = false;
-            slot.sequence = Some(Sequence::series(folder, title, files));
-        } else {
-            self.slots[self.active].sequence = None;
-        }
-        self.open_in_active(first);
-    }
-
     /// `index` 番目のスロットで `path` を読み込み始める。
     fn start_load(&mut self, index: usize, path: PathBuf, full: bool) {
         let request = self.next_id;
@@ -509,33 +513,201 @@ impl VwApp {
         });
     }
 
-    /// フォルダの画像をスロットに読み込み始める（画像自動展開モード）。
-    /// 前の読み込みが続いていれば、そこで打ち切る。
-    fn load_folder(&mut self, ctx: &egui::Context, path: PathBuf, into: LoadInto) {
+    /// フォルダ `path` へ移る。スロットを閉じて、中のサブフォルダと ZIP をフォルダのスロットとして並べ、
+    /// DICOM のシリーズと画像をその後ろに読み込んでいく。前の読み込みが続いていれば、そこで打ち切る。
+    fn cd(&mut self, ctx: &egui::Context, path: PathBuf, into: LoadInto) {
         let tree = self.settings.settings.tree.clone();
-        if tree.on_load_other_folder == OnLoadFolder::Replace {
-            self.close_all_slots();
-        }
+        let registry = self.loader.registry().clone();
+        self.finish_folder_load();
+        self.close_all_slots();
+        self.tree.reveal(&path, &registry);
+        self.current = Some(path.clone());
         self.load_into = into;
-        self.loaded_folders.retain(|(p, _)| *p != path);
         self.loaded_folders.push((path.clone(), into));
-        // 末尾の空のスロットは読み込みで使い回すので、この読み込みのスロットに含める。
+        let listing = tree::list_folder(&path, &registry, tree.order());
+        for folder in listing.folders.into_iter().chain(listing.archives) {
+            let index = self.push_slot();
+            self.slots[index].folder = Some(folder);
+        }
+        self.scan_series(ctx, &path, &listing.images);
+        self.group_series();
+        self.active = 0;
         let last = &self.slots[self.slots.len() - 1];
-        self.load_slots_from = if last.path.is_none() && !last.loading {
+        self.load_slots_from = if is_blank(last) {
             last.id
         } else {
             self.next_id
         };
-        self.log.info(format!("Loading folder {}", path.display()));
+        self.log.info(format!("Opened folder {}", path.display()));
         let ctx = ctx.clone();
         self.folder_load = Some(FolderLoad::start(
             path,
-            self.loader.registry().clone(),
+            registry,
             tree.order(),
+            false,
             tree.confirm_every,
             tree.confirm_chunk as usize,
             move || ctx.request_repaint(),
         ));
+    }
+
+    /// 末尾の空のスロットを使うか、なければ足して、その添字を返す。
+    fn push_slot(&mut self) -> usize {
+        if !is_blank(&self.slots[self.slots.len() - 1]) {
+            self.slots.push(Slot::new(self.next_id));
+            self.next_id += 1;
+        }
+        self.slots.len() - 1
+    }
+
+    /// `dir` の DICOM らしいファイルのヘッダを、まだ読んでいなければ読み始める。
+    fn scan_series(&mut self, ctx: &egui::Context, dir: &Path, images: &[PathBuf]) {
+        if !matches!(self.series.scan(dir), Scan::NotStarted) {
+            return;
+        }
+        let registry = self.loader.registry().clone();
+        let extensions = tree::dicom_extensions(&registry);
+        let files: Vec<PathBuf> = images
+            .iter()
+            .filter(|p| tree::may_be_dicom(&registry, extensions, p))
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let ctx = ctx.clone();
+        self.series
+            .start(dir.to_path_buf(), files, registry, move || {
+                ctx.request_repaint()
+            });
+    }
+
+    /// cd したフォルダの DICOM のシリーズ（2 枚以上のもの）。ヘッダを読み終えていなければ空。
+    fn current_series(&self) -> Vec<crate::series::Series> {
+        let Some(dir) = &self.current else {
+            return Vec::new();
+        };
+        match self.series.scan(dir) {
+            Scan::Done(studies) => studies
+                .iter()
+                .flat_map(|s| s.series.iter())
+                .filter(|q| q.files.len() > 1)
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// cd したフォルダの DICOM のシリーズを、1 シリーズ 1 スロットにまとめる。
+    /// シリーズの画像を 1 枚ずつ並べたスロットは閉じる。CT は 1 シリーズが数百枚あり、
+    /// 1 枚 1 スロットではスロットがそれで埋まってしまうため。
+    ///
+    /// ヘッダを読み終えるのは画像を並べ始めた後のことが多いので、読み終えたときにも呼ぶ。
+    fn group_series(&mut self) {
+        let Some(dir) = self.current.clone() else {
+            return;
+        };
+        let active_id = self.slots[self.active].id;
+        let mut first_new = None;
+        for series in self.current_series() {
+            let has_slot = self.slots.iter().any(|s| {
+                s.sequence
+                    .as_ref()
+                    .is_some_and(|q| q.kind == SequenceKind::Series && q.paths == series.files)
+            });
+            if has_slot {
+                continue;
+            }
+            for index in (0..self.slots.len()).rev() {
+                let slot = &self.slots[index];
+                if slot.from_folder && slot.path.as_ref().is_some_and(|p| series.files.contains(p))
+                {
+                    self.close_slot(index);
+                }
+            }
+            // フォルダのスロットと、先に作ったシリーズのスロットの後ろに挟む。
+            let at = self
+                .slots
+                .iter()
+                .rposition(|s| s.folder.is_some() || s.sequence.is_some())
+                .map_or(0, |i| i + 1);
+            if !self.slots.get(at).is_some_and(is_blank) {
+                self.insert_folder_slot(at);
+            }
+            let slot = &mut self.slots[at];
+            slot.from_folder = false;
+            let first = series.files[0].clone();
+            slot.sequence = Some(Sequence::series(dir.clone(), series.title(), series.files));
+            let full = self.cell_needs_full();
+            self.start_load(at, first, full);
+            first_new.get_or_insert(self.slots[at].id);
+        }
+        // 見ていた画像のスロットがシリーズにまとめられて消えたら、最初のシリーズを見せる。
+        let alive = |id| self.slots.iter().position(|s| s.id == id);
+        if alive(active_id).is_none() {
+            if let Some(index) = first_new.and_then(alive) {
+                self.active = index;
+            }
+        }
+    }
+
+    /// フォルダのスロットを開く。サブフォルダまで含めた画像をそのスロットに読み込む
+    /// （サブフォルダがあれば先に確認する）。ZIP はその中へ移る。
+    fn explore(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(folder) = self.slots[index].folder.clone() else {
+            return;
+        };
+        if archive::is_zip(&folder) {
+            self.open_folder(ctx, folder);
+            return;
+        }
+        let tree = self.settings.settings.tree.clone();
+        let slot = &mut self.slots[index];
+        slot.sequence = Some(Sequence::subtree(folder.clone()));
+        slot.loading = true;
+        let id = slot.id;
+        let ctx = ctx.clone();
+        let load = FolderLoad::start(
+            folder,
+            self.loader.registry().clone(),
+            tree.order(),
+            true,
+            tree.confirm_every,
+            tree.confirm_chunk as usize,
+            move || ctx.request_repaint(),
+        );
+        self.explores.push((id, load));
+    }
+
+    /// フォルダ（または ZIP）の中へ移る。ZIP は展開してから移る。
+    fn open_folder(&mut self, ctx: &egui::Context, folder: PathBuf) {
+        if archive::is_zip(&folder) {
+            self.mount(ctx, &folder);
+            return;
+        }
+        let tree = &self.settings.settings.tree;
+        let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
+        let into = if other {
+            tree.load_into.other()
+        } else {
+            tree.load_into
+        };
+        self.cd(ctx, folder, into);
+    }
+
+    /// 1 つ上のフォルダへ移る。展開した ZIP のルートからは、ZIP のあるフォルダへ戻る。
+    fn parent_folder(&mut self, ctx: &egui::Context) {
+        let Some(current) = self.current.clone() else {
+            return;
+        };
+        let parent = match self.archives.mount_of(&current) {
+            Some(mount) if mount.dir == current => mount.zip.parent().map(Path::to_path_buf),
+            _ => current.parent().map(Path::to_path_buf),
+        };
+        if let Some(parent) = parent {
+            let into = self.settings.settings.tree.load_into;
+            self.cd(ctx, parent, into);
+        }
     }
 
     /// 読み込み中のフォルダで見つかった画像を、末尾のスロットに足していく。
@@ -545,23 +717,30 @@ impl VwApp {
         };
         let paths = load.take_ready();
         let finished = load.finished();
+        let root = load.root.clone();
         let matcher = Matcher {
             filter: &self.filter,
             labels: &self.labels,
         };
-        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| matcher.matches(p)).collect();
+        let in_series: HashSet<PathBuf> = if paths.is_empty() {
+            HashSet::new()
+        } else {
+            self.current_series()
+                .into_iter()
+                .flat_map(|q| q.files)
+                .collect()
+        };
+        let paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| matcher.matches(p) && !in_series.contains(p))
+            .collect();
         if !paths.is_empty() {
             // 先にスロットを全部足してから枠の大きさを見積もる。1 枚ずつ見積もると、
             // スロットが少ない最初のうちだけフル解像度を読んでしまうため。
-            let last = &self.slots[self.slots.len() - 1];
-            let mut reuse_last = last.path.is_none() && !last.loading;
+            let mut reuse_last = is_blank(&self.slots[self.slots.len() - 1]);
             let mut targets = Vec::with_capacity(paths.len());
-            let root = load.root.clone();
             for path in paths {
                 let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                // 1 枚 1 スロットで読むときも、サブフォルダの画像はフォルダごとに 1 つのスロット
-                // （塊）にまとめる。全部をばらばらに並べると、どの画像がどのフォルダのものか
-                // 分からなくなるため。
                 let chunk = self.load_into == LoadInto::Folders || folder != root;
                 if chunk {
                     let last = self.slots.last_mut().expect("there is always a slot");
@@ -595,6 +774,53 @@ impl VwApp {
         }
     }
 
+    /// 開いたフォルダのスロットに、見つかった画像を足していく。
+    fn pump_explores(&mut self) {
+        let full = self.cell_needs_full();
+        let mut i = 0;
+        while i < self.explores.len() {
+            let (id, load) = &mut self.explores[i];
+            let id = *id;
+            let paths = load.take_ready();
+            let finished = load.finished();
+            let Some(index) = self.slots.iter().position(|s| s.id == id) else {
+                self.explores.remove(i);
+                continue;
+            };
+            let matcher = self.matcher();
+            let slot = &self.slots[index];
+            let first = (slot.path.is_none())
+                .then(|| paths.iter().position(|p| matcher.matches(p)))
+                .flatten();
+            let seq = self.slots[index]
+                .sequence
+                .as_mut()
+                .expect("explored slots have a sequence");
+            let offset = seq.paths.len();
+            seq.paths.extend(paths);
+            if let Some(at) = first {
+                seq.index = offset + at;
+                let path = seq.paths[offset + at].clone();
+                self.start_load(index, path, full);
+            }
+            if finished {
+                let (_, load) = self.explores.remove(i);
+                let slot = &mut self.slots[index];
+                if slot.path.is_none() {
+                    // 合う画像がなかった。読み込み中のまま残さない。
+                    slot.loading = false;
+                }
+                self.log.info(format!(
+                    "Loaded {} images from {}",
+                    load.loaded,
+                    load.root.display()
+                ));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     fn finish_folder_load(&mut self) {
         if let Some(load) = self.folder_load.take() {
             self.log.info(format!(
@@ -607,7 +833,28 @@ impl VwApp {
 
     /// 読み込み中のフォルダの確認（サブフォルダも読むか、次の区切りまで続けるか）。
     fn folder_load_dialog(&mut self, ctx: &egui::Context) {
-        let Some(load) = &self.folder_load else {
+        // cd したフォルダの読み込みを先に、次に開いたフォルダのスロットを開いた順に尋ねる。
+        let asking = if self
+            .folder_load
+            .as_ref()
+            .and_then(FolderLoad::question)
+            .is_some()
+        {
+            Some(None)
+        } else {
+            self.explores
+                .iter()
+                .position(|(_, l)| l.question().is_some())
+                .map(Some)
+        };
+        let Some(which) = asking else {
+            return;
+        };
+        let load = match which {
+            None => self.folder_load.as_ref(),
+            Some(i) => Some(&self.explores[i].1),
+        };
+        let Some(load) = load else {
             return;
         };
         let Some(question) = load.question() else {
@@ -661,14 +908,26 @@ impl VwApp {
         let Some(yes) = answer else {
             return;
         };
-        let Some(load) = &mut self.folder_load else {
+        let load = match which {
+            None => self.folder_load.as_mut(),
+            Some(i) => Some(&mut self.explores[i].1),
+        };
+        let Some(load) = load else {
             return;
         };
         match question {
             Question::Subfolders => load.answer_subfolders(yes),
             Question::More => {
                 if !load.answer_more(yes) {
-                    self.finish_folder_load();
+                    match which {
+                        None => self.finish_folder_load(),
+                        Some(i) => {
+                            let (id, _) = self.explores.remove(i);
+                            if let Some(slot) = self.slots.iter_mut().find(|s| s.id == id) {
+                                slot.loading &= slot.path.is_some();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1045,7 +1304,7 @@ impl VwApp {
             if let Some(seq) = slot
                 .sequence
                 .as_ref()
-                .filter(|q| q.kind == SequenceKind::Folder)
+                .filter(|q| matches!(q.kind, SequenceKind::Folder | SequenceKind::Subtree))
             {
                 dirs.insert(seq.folder.clone());
             } else if let Some(dir) = slot.path.as_deref().and_then(Path::parent) {
@@ -1084,11 +1343,11 @@ impl VwApp {
             ctx.request_repaint_after(watch::QUIET);
         }
         if !changes.is_empty() {
-            self.apply_changes(changes);
+            self.apply_changes(ctx, changes);
         }
     }
 
-    fn apply_changes(&mut self, changes: Vec<watch::Change>) {
+    fn apply_changes(&mut self, ctx: &egui::Context, changes: Vec<watch::Change>) {
         let registry = self.loader.registry().clone();
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut created = HashSet::new();
@@ -1131,6 +1390,7 @@ impl VwApp {
         }
         for dir in &dirs {
             self.tree.refresh(dir, &registry);
+            self.series.forget(dir);
             let count =
                 |set: &HashSet<PathBuf>| set.iter().filter(|p| p.parent() == Some(dir)).count();
             let (new, gone) = (count(&created), count(&removed));
@@ -1140,6 +1400,12 @@ impl VwApp {
                     dir.display()
                 ));
             }
+        }
+        if let Some(current) = self.current.clone().filter(|c| dirs.contains(c)) {
+            self.sync_folder_slots(&current, &registry);
+            let images =
+                tree::list_folder(&current, &registry, self.settings.settings.tree.order()).images;
+            self.scan_series(ctx, &current, &images);
         }
         // フォルダを読み込み中は、スロットの並びを読み込みのほうに任せる。並びを読み直すと、
         // まだ読み込みが足していない画像と重なるため。
@@ -1184,13 +1450,42 @@ impl VwApp {
                 }
                 continue;
             }
+            // 開いたフォルダのスロットはサブフォルダの画像も持つので、フォルダを読み直して並べ直す
+            // ことはせず、増えた画像を後ろに足し、消えた画像を除くだけにする。
+            if let Some(seq) = slot
+                .sequence
+                .as_mut()
+                .filter(|q| q.kind == SequenceKind::Subtree)
+            {
+                seq.paths.retain(|p| !removed.contains(p));
+                let mut new: Vec<&PathBuf> = created
+                    .iter()
+                    .filter(|p| p.starts_with(&seq.folder) && !seq.paths.contains(p))
+                    .collect();
+                new.sort();
+                seq.paths.extend(new.into_iter().cloned());
+                match seq.paths.iter().position(|p| *p == current) {
+                    Some(at) => {
+                        seq.index = at;
+                        if modified.contains(&current) {
+                            loads.push((index, current));
+                        }
+                    }
+                    None if !seq.paths.is_empty() => {
+                        seq.index = seq.index.min(seq.paths.len() - 1);
+                        loads.push((index, seq.paths[seq.index].clone()));
+                    }
+                    None => {}
+                }
+                continue;
+            }
             let Some(dir) = current.parent().filter(|d| dirs.iter().any(|x| x == d)) else {
                 continue;
             };
             // 同じフォルダの画像を出しているスロットが多くても、フォルダは 1 回だけ読む。
             let paths = siblings
                 .entry(dir.to_path_buf())
-                .or_insert_with(|| tree::list_folder(dir, &registry, order).1);
+                .or_insert_with(|| tree::list_folder(dir, &registry, order).images);
             if paths.is_empty() {
                 continue;
             }
@@ -1215,6 +1510,48 @@ impl VwApp {
         let full = self.cell_needs_full();
         for (index, path) in loads {
             self.start_load(index, path, full);
+        }
+    }
+
+    /// cd したフォルダのサブフォルダと ZIP のスロットを、フォルダの今の中身に合わせる。
+    /// 消えたもののスロットは閉じ、新しいものはフォルダのスロットの最後に足す。
+    fn sync_folder_slots(&mut self, current: &Path, registry: &Registry) {
+        let listing = tree::list_folder(current, registry, self.settings.settings.tree.order());
+        let wanted: Vec<PathBuf> = listing
+            .folders
+            .into_iter()
+            .chain(listing.archives)
+            .collect();
+        for index in (0..self.slots.len()).rev() {
+            let gone = self.slots[index]
+                .folder
+                .as_ref()
+                .is_some_and(|f| !wanted.contains(f));
+            if gone {
+                self.close_slot(index);
+            }
+        }
+        for folder in wanted {
+            if self
+                .slots
+                .iter()
+                .any(|s| s.folder.as_ref() == Some(&folder))
+            {
+                continue;
+            }
+            let at = self
+                .slots
+                .iter()
+                .rposition(|s| s.folder.is_some())
+                .map_or(0, |i| i + 1);
+            if self.slots.get(at).is_some_and(is_blank) {
+                self.slots[at].folder = Some(folder);
+            } else {
+                self.insert_folder_slot(at);
+                let slot = &mut self.slots[at];
+                slot.from_folder = false;
+                slot.folder = Some(folder);
+            }
         }
     }
 
@@ -1248,7 +1585,7 @@ impl VwApp {
         }
         let order = self.settings.settings.tree.order();
         let new: Vec<PathBuf> = tree::list_folder(dir, registry, order)
-            .1
+            .images
             .into_iter()
             .filter(|p| created.contains(p))
             .collect();
@@ -1265,16 +1602,15 @@ impl VwApp {
             }
             return;
         }
-        let empty = |s: &Slot| s.path.is_none() && !s.loading;
         // 最後の画像か、まだ何も出していないスロットを見ていたなら、新しい画像に移る。
         let follow = match last {
             Some(last) => self.active == last || self.shows_one_slot(),
-            None => empty(&self.slots[self.active]),
+            None => is_blank(&self.slots[self.active]),
         };
         let followed_id = self.slots[self.active].id;
         let mut index = last.map_or(self.slots.len(), |l| l + 1);
         // 読み込みで使い回すのと同じく、末尾の空のスロットは新しい画像に使う。
-        if last.is_none() && empty(&self.slots[self.slots.len() - 1]) {
+        if last.is_none() && is_blank(&self.slots[self.slots.len() - 1]) {
             index -= 1;
             self.slots[index].from_folder = true;
         } else {
@@ -1310,18 +1646,12 @@ impl VwApp {
     /// 読み込んだ時点で空だったフォルダに画像が来たら、フォルダスロットを作って最新の画像を出す。
     fn add_folder_slot(&mut self, dir: &Path, registry: &Registry) {
         let order = self.settings.settings.tree.order();
-        let paths = tree::list_folder(dir, registry, order).1;
+        let paths = tree::list_folder(dir, registry, order).images;
         let Some(newest) = paths.last().cloned() else {
             return;
         };
-        let last = self.slots.len() - 1;
-        let reuse = self.slots[last].path.is_none() && !self.slots[last].loading;
-        let follow = self.slots[self.active].path.is_none();
-        if !reuse {
-            self.slots.push(Slot::new(self.next_id));
-            self.next_id += 1;
-        }
-        let index = self.slots.len() - 1;
+        let follow = is_blank(&self.slots[self.active]);
+        let index = self.push_slot();
         let mut seq = Sequence::new(dir.to_path_buf(), newest.clone());
         seq.index = paths.len() - 1;
         seq.paths = paths;
@@ -1366,7 +1696,7 @@ impl VwApp {
         for root in roots {
             let matcher = self.matcher();
             let wanted: Vec<PathBuf> = tree::list_folder(&root, &registry, order)
-                .1
+                .images
                 .into_iter()
                 .filter(|p| matcher.matches(p))
                 .collect();
@@ -1417,24 +1747,15 @@ impl VwApp {
                 rest.push(slot);
             }
         }
-        // 前に全部隠れていたフォルダは、読み込みのときと同じくサブフォルダの塊より前に並べる。
-        // 塊もなければ末尾の空のスロットから並べる。
+        // 前に全部隠れていたときは、cd したときと同じくフォルダとシリーズのスロットの後ろに並べる。
+        // 末尾の空のスロットがあれば、そこから並べる。
         let at = *at.get_or_insert_with(|| {
-            let chunk = rest.iter().position(|s| {
-                s.sequence
-                    .as_ref()
-                    .is_some_and(|q| q.folder.starts_with(root))
-            });
-            if let Some(chunk) = chunk {
-                return chunk;
-            }
-            let empty = rest
-                .last()
-                .is_some_and(|s| s.path.is_none() && !s.loading && s.sequence.is_none());
-            if empty && !wanted.is_empty() {
+            if rest.last().is_some_and(is_blank) && !wanted.is_empty() {
                 rest.pop();
             }
-            rest.len()
+            rest.iter()
+                .rposition(|s| s.folder.is_some() || s.sequence.is_some())
+                .map_or(0, |i| i + 1)
         });
         let mut new = Vec::with_capacity(wanted.len());
         let mut loads = Vec::new();
@@ -1490,14 +1811,11 @@ impl VwApp {
         }
     }
 
-    /// ツリーで選んだフォルダ（ファイルならそのフォルダ）を対象に、書き出しの画面を開く。
+    /// cd したフォルダ（なければアクティブな画像のフォルダ）を対象に、書き出しの画面を開く。
     fn open_export(&mut self) {
-        let root = self.tree_selected().and_then(|p| {
-            if p.is_dir() {
-                Some(p)
-            } else {
-                p.parent().map(Path::to_path_buf)
-            }
+        let root = self.current.clone().or_else(|| {
+            self.active_image()
+                .and_then(|p| p.parent().map(Path::to_path_buf))
         });
         let Some(root) = root else {
             self.log
@@ -1720,19 +2038,35 @@ impl VwApp {
         }
     }
 
-    /// ツリーで選んでいる項目。アクティブなスロットの画像にする。
-    ///
-    /// ツリーでクリックしたフォルダを選択にしないのは、開閉のたびに選択がフォルダへ移り、
-    /// ツリーの選択とスロットの画像が食い違ってしまうため。フォルダのパスは右クリックでコピーできる。
-    fn tree_selected(&self) -> Option<PathBuf> {
+    /// アクティブなスロットの画像。
+    fn active_image(&self) -> Option<PathBuf> {
         self.slots[self.active].path.clone()
+    }
+
+    /// ツリーで DICOM のシリーズを選んだ。そのフォルダへ移り、シリーズのスロットを選ぶ。
+    fn show_series(&mut self, ctx: &egui::Context, folder: PathBuf, files: &[PathBuf]) {
+        if self.current.as_ref() != Some(&folder) {
+            let into = self.settings.settings.tree.load_into;
+            self.cd(ctx, folder, into);
+        }
+        let found = self.slots.iter().position(|s| match &s.sequence {
+            Some(q) => q.kind == SequenceKind::Series && q.paths == files,
+            None => s.path.as_ref().is_some_and(|p| files.contains(p)),
+        });
+        if let Some(index) = found {
+            self.active = index;
+            if self.maximized.is_some() {
+                self.maximized = Some(self.slots[index].id);
+            }
+        }
     }
 
     /// ZIP をツリーで開く。展開は別スレッドで行い、終わったら [`Self::receive_archives`] で
     /// ルートに足す。
     fn mount(&mut self, ctx: &egui::Context, zip: &Path) {
-        if self.archives.mounted_zip(zip).is_some() {
-            self.log.info(format!("{} is already open", zip.display()));
+        if let Some(mount) = self.archives.mounted_zip(zip) {
+            let (dir, into) = (mount.dir.clone(), self.settings.settings.tree.load_into);
+            self.cd(ctx, dir, into);
             return;
         }
         let ctx = ctx.clone();
@@ -1741,13 +2075,16 @@ impl VwApp {
         }
     }
 
-    fn receive_archives(&mut self) {
+    /// 展開し終えた ZIP をツリーのルートに足し、その中へ移る。
+    fn receive_archives(&mut self, ctx: &egui::Context) {
         for event in self.archives.poll() {
             match event {
                 archive::Event::Mounted { mount, files } => {
                     self.log
                         .info(format!("Opened {} ({files} files)", mount.zip.display()));
                     self.tree.add_mounted_root(mount.dir.clone(), mount.name());
+                    let into = self.settings.settings.tree.load_into;
+                    self.cd(ctx, mount.dir, into);
                 }
                 archive::Event::Failed { zip, error } => {
                     self.log
@@ -1758,8 +2095,22 @@ impl VwApp {
     }
 
     /// 展開した ZIP を閉じる。中の画像を出しているスロットも閉じる。展開したファイルを消すので、
-    /// スロットに残しておいても読み直せなくなるため。
-    fn unmount(&mut self, dir: &Path) {
+    /// スロットに残しておいても読み直せなくなるため。ZIP の中にいたら、ZIP のあるフォルダへ戻る。
+    fn unmount(&mut self, ctx: &egui::Context, dir: &Path) {
+        if self.current.as_deref().is_some_and(|c| c.starts_with(dir)) {
+            let back = self
+                .archives
+                .mount_of(dir)
+                .and_then(|m| m.zip.parent())
+                .map(Path::to_path_buf);
+            self.finish_folder_load();
+            self.close_all_slots();
+            self.current = None;
+            if let Some(back) = back {
+                let into = self.settings.settings.tree.load_into;
+                self.cd(ctx, back, into);
+            }
+        }
         for index in (0..self.slots.len()).rev() {
             let slot = &self.slots[index];
             let inside = slot.path.as_deref().is_some_and(|p| p.starts_with(dir))
@@ -1792,7 +2143,7 @@ impl VwApp {
 
     /// フラグを付ける・外す。
     fn flag(&mut self, flag: Flag) {
-        let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
+        let Some(path) = self.active_image().filter(|p| !p.is_dir()) else {
             return;
         };
         if !self.labelable(&path) {
@@ -1823,7 +2174,7 @@ impl VwApp {
             ));
             return;
         };
-        let Some(path) = self.tree_selected().filter(|p| !p.is_dir()) else {
+        let Some(path) = self.active_image().filter(|p| !p.is_dir()) else {
             return;
         };
         if !self.labelable(&path) {
@@ -2030,7 +2381,13 @@ impl VwApp {
                     self.active = layout::page_step(layout, self.slots.len(), self.active, delta);
                 }
             }
-            Action::ToggleMaximize => self.toggle_maximize(self.active),
+            // フォルダのスロットで Enter を押したらその中へ移る。別の操作にしないのは、キーの
+            // 割り当てが操作ごとに重ならない決まりで、同じ Enter を両方に割り当てられないため。
+            Action::ToggleMaximize => match self.slots[self.active].folder.clone() {
+                Some(folder) => self.open_folder(ctx, folder),
+                None => self.toggle_maximize(self.active),
+            },
+            Action::ParentFolder => self.parent_folder(ctx),
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
@@ -2102,6 +2459,7 @@ impl VwApp {
         self.probe_extensions = dicom.probe_extensions.clone();
         let registry = self.loader.registry().clone();
         registry.set_probe_extensions(dicom.probe());
+        self.tree.forget_peeks();
         for dir in self.tree.open_paths() {
             self.tree.refresh(&dir, &registry);
         }
@@ -2205,6 +2563,11 @@ impl VwApp {
         let state = AppState {
             window,
             open_folders: self.tree.open_paths(),
+            // 展開した ZIP の中は終了時に消えるので、次回そこへは戻れない。
+            current: self
+                .current
+                .clone()
+                .filter(|c| self.archives.mount_of(c).is_none()),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {
@@ -2508,6 +2871,10 @@ impl VwApp {
                     if self.menu_item(ui, action, None) {
                         chosen = Some(action);
                     }
+                }
+                ui.separator();
+                if self.menu_item(ui, Action::ParentFolder, None) {
+                    chosen = Some(Action::ParentFolder);
                 }
                 ui.separator();
                 if self.menu_item(ui, Action::Quit, None) {
@@ -3001,7 +3368,7 @@ impl VwApp {
         match self.focus {
             Focus::MetadataText => {}
             Focus::Tree => {
-                if let Some(p) = self.tree_selected() {
+                if let Some(p) = self.current.clone() {
                     self.copy_text(
                         ctx,
                         p.display().to_string(),
@@ -3087,10 +3454,12 @@ impl VwApp {
         let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
         let mut close = None;
         let mut maximize = None;
+        let mut explore = None;
+        let mut open_folder = None;
         let mut step = None;
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
-        let hint = empty_slot_hint(&self.settings.settings.tree);
+        let hint = empty_slot_hint(self.current.is_some());
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
             if !view.range.contains(&i) {
@@ -3106,10 +3475,10 @@ impl VwApp {
                 ),
                 cell,
             );
-            let empty_hint = if self.slots[i].sequence.is_some() {
-                "No images match the filter"
-            } else {
-                hint
+            let empty_hint = match &self.slots[i].sequence {
+                Some(seq) if seq.paths.is_empty() => "No image",
+                Some(_) => "No images match the filter",
+                None => hint,
             };
             let label = self.slots[i]
                 .path
@@ -3145,7 +3514,14 @@ impl VwApp {
                 close = Some(i);
             }
             if resp.toggle_maximize {
-                maximize = Some(i);
+                if self.slots[i].is_closed_folder() {
+                    explore = Some(i);
+                } else {
+                    maximize = Some(i);
+                }
+            }
+            if resp.open_folder {
+                open_folder = self.slots[i].folder.clone();
             }
             if resp.step != 0 {
                 step = Some((i, resp.step));
@@ -3162,8 +3538,15 @@ impl VwApp {
             );
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
-        if let Some(i) = close {
+        if let Some(folder) = open_folder {
+            let ctx = ui.ctx().clone();
+            self.open_folder(&ctx, folder);
+        } else if let Some(i) = close {
             self.close_slot(i);
+        } else if let Some(i) = explore {
+            let ctx = ui.ctx().clone();
+            self.active = i;
+            self.explore(&ctx, i);
         } else if let Some(i) = maximize {
             self.toggle_maximize(i);
         } else if let Some((i, delta)) = step {
@@ -3203,8 +3586,12 @@ impl eframe::App for VwApp {
         self.restore_window(&ctx);
         self.track_window(&ctx);
         self.receive(&ctx);
-        self.receive_archives();
+        self.receive_archives(&ctx);
         self.pump_folder_load();
+        self.pump_explores();
+        if self.series.poll() {
+            self.group_series();
+        }
         self.watch_folders(&ctx);
         for problem in self.labels.take_problems() {
             self.log.error(problem);
@@ -3281,67 +3668,39 @@ impl eframe::App for VwApp {
                         );
                         panel_header(ui, &text);
                     }
-                    // フレームを出しているときは、そのファイルを選択として見せる。
-                    let selected = self.tree_selected().map(|p| frames::file_of(&p));
-                    let t = &self.settings.settings.tree;
-                    let how = FolderClicks {
-                        mode: t.mode,
-                        action: t.folder_action,
-                        double_click: t.double_click(),
-                    };
-                    let action = egui::ScrollArea::both()
+                    // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
+                    let active_image = self.active_image().map(|p| frames::file_of(&p));
+                    let drawn = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                            let matcher = Matcher {
-                                filter: &self.filter,
-                                labels: &self.labels,
-                            };
                             self.tree.ui(
                                 ui,
-                                self.loader.registry(),
-                                tree::Marks {
-                                    labels: &self.labels,
-                                    show_file: &|p| matcher.matches(p),
+                                tree::Context {
+                                    registry: self.loader.registry(),
+                                    series: &self.series,
+                                    current: self.current.as_deref(),
+                                    active_image: active_image.as_deref(),
+                                    lang,
                                 },
-                                selected.as_deref(),
-                                lang,
-                                how,
                             )
                         })
                         .inner;
-                    let Some(action) = action else {
+                    let ctx = ui.ctx().clone();
+                    for (dir, files) in drawn.scans {
+                        let registry = self.loader.registry().clone();
+                        let wake = ctx.clone();
+                        self.series
+                            .start(dir, files, registry, move || wake.request_repaint());
+                    }
+                    let Some(action) = drawn.action else {
                         return;
                     };
-                    let ctx = ui.ctx().clone();
                     match action {
-                        TreeAction::Open(p) => self.open_in_active(p),
-                        TreeAction::Add(p) => {
-                            self.add_slot();
-                            self.open_in_active(p);
-                        }
-                        TreeAction::Select => {}
+                        TreeAction::Cd(p) => self.open_folder(&ctx, p),
                         TreeAction::Mount(zip) => self.mount(&ctx, &zip),
-                        TreeAction::Unmount(dir) => self.unmount(&dir),
-                        TreeAction::Series {
-                            folder,
-                            title,
-                            files,
-                            add,
-                        } => {
-                            if add {
-                                self.add_slot();
-                            }
-                            self.open_series(folder, title, files);
-                        }
-                        TreeAction::Load(p) => {
-                            let tree = &self.settings.settings.tree;
-                            let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
-                            let into = if other {
-                                tree.load_into.other()
-                            } else {
-                                tree.load_into
-                            };
-                            self.load_folder(&ctx, p, into);
+                        TreeAction::Unmount(dir) => self.unmount(&ctx, &dir),
+                        TreeAction::Series { folder, files } => {
+                            self.show_series(&ctx, folder, &files)
                         }
                         TreeAction::Copy(p) => {
                             let what = format!("path {}", p.display());
@@ -3435,14 +3794,17 @@ fn menu_title(action: Action) -> &'static str {
 }
 
 /// 空のスロットに出す案内。ツリーのモードとフォルダの操作に合わせる。
-fn empty_slot_hint(tree: &crate::settings::Tree) -> &'static str {
-    match (tree.mode, tree.folder_action) {
-        (TreeMode::Normal, _) => "Select an image in the folder tree (Ctrl+click adds a slot)",
-        (TreeMode::AutoLoad, FolderAction::ShiftClick) => {
-            "Shift+click a folder in the tree to load its images"
-        }
-        (TreeMode::AutoLoad, _) => "Double-click a folder in the tree to load its images",
+fn empty_slot_hint(in_folder: bool) -> &'static str {
+    if in_folder {
+        "No images or folders here"
+    } else {
+        "Click a folder in the tree to show its contents"
     }
+}
+
+/// 何も出しておらず、何の役目もないスロット。フォルダの中身を並べるときに使い回す。
+fn is_blank(slot: &Slot) -> bool {
+    slot.path.is_none() && !slot.loading && slot.folder.is_none() && slot.sequence.is_none()
 }
 
 /// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。

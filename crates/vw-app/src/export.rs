@@ -76,11 +76,11 @@ pub fn collect(
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let (dirs, files) = tree::list_folder(&dir, registry, order);
-        out.extend(files.into_iter().filter(|f| matcher.matches(f)));
+        let listing = tree::list_folder(&dir, registry, order);
+        out.extend(listing.images.into_iter().filter(|f| matcher.matches(f)));
         if recursive {
             // 深さ優先で、ツリーで上にあるフォルダから辿るよう逆順に積む。
-            stack.extend(dirs.into_iter().rev());
+            stack.extend(listing.folders.into_iter().rev());
         }
     }
     out

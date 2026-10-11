@@ -40,6 +40,8 @@ pub struct AppState {
     pub window: Option<WindowState>,
     /// 開いていたフォルダ。
     pub open_folders: Vec<PathBuf>,
+    /// cd していたフォルダ。
+    pub current: Option<PathBuf>,
 }
 
 /// 起動時にウインドウをどう置くか。
@@ -81,10 +83,12 @@ impl AppState {
         let mut r = Reader::new(&table);
         let window = read_window(&mut r);
         let open_folders = r.get::<Vec<PathBuf>>("tree", "open").unwrap_or_default();
+        let current = r.get::<PathBuf>("tree", "current");
         (
             Self {
                 window,
                 open_folders,
+                current,
             },
             r.problems,
         )
@@ -115,6 +119,9 @@ impl AppState {
             .filter_map(|p| p.to_str().map(str::to_owned))
             .collect();
         tree.insert("open".into(), toml::Value::try_from(open).unwrap());
+        if let Some(current) = self.current.as_ref().and_then(|p| p.to_str()) {
+            tree.insert("current".into(), current.into());
+        }
         root.insert("tree".into(), tree.into());
         toml::to_string(&root).expect("state is always representable in TOML")
     }
@@ -350,6 +357,7 @@ mod tests {
         let state = AppState {
             window: Some(window(vec![monitor(0, 1920), monitor(1920, 2560)])),
             open_folders: vec![PathBuf::from("/home/ken"), PathBuf::from("/home/ken/写真")],
+            current: Some(PathBuf::from("/home/ken/写真")),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -361,6 +369,7 @@ mod tests {
         let state = AppState {
             window: Some(w),
             open_folders: vec![],
+            current: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -414,6 +423,7 @@ mod tests {
         let state = AppState {
             window: None,
             open_folders: vec![dir.path().to_path_buf()],
+            current: None,
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));
