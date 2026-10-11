@@ -1,0 +1,25 @@
+# cargo-about の設定。配布物に同梱する THIRD-PARTY-LICENSES.txt を作る。
+# ここに無いライセンスの依存が入ると生成が失敗する。採用前に条件を確かめるための関所として使う。
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "IJG",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

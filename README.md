@@ -24,6 +24,7 @@ Linux / Windows 向けの、起動と表示が速い画像ビューワです。R
 - [画面と操作](#画面と操作)
 - [困ったとき](#困ったとき)
 - [開発とビルド](#開発とビルド)
+- [ライセンス](#ライセンス)
 
 ---
 
@@ -383,3 +384,10 @@ CI（GitHub Actions）が Linux と Windows でチェック・テスト・ビル
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+## ライセンス
+
+vw は [MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) のどちらかを選んで使えます（`MIT OR Apache-2.0`）。
+無償で、改変・再配布・商用利用ができます。どちらのライセンスでも、vw は現状のまま提供され、いかなる保証もありません。作者は vw の利用によって生じた損害に責任を負いません。
+
+vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。

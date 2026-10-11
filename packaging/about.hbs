@@ -1,0 +1,14 @@
+vw が使っているほかのソフトウェアのライセンス
+Third-party licenses of the software used by vw
+
+{{#each licenses}}
+================================================================================
+{{name}} ({{id}})
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} <{{crate.repository}}>{{/if}}
+{{/each}}
+--------------------------------------------------------------------------------
+{{{text}}}
+
+{{/each}}
