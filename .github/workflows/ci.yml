@@ -35,6 +35,11 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Collect third-party licenses
+        run: cargo about generate -c packaging/about.toml packaging/about.hbs --workspace -o THIRD-PARTY-LICENSES.txt
 
       - name: Check setup scripts
         if: runner.os == 'Linux'
@@ -53,14 +58,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/vw
-          cp target/release/vw README.md packaging/linux/vw.desktop packaging/linux/install.sh dist/vw/
+          cp target/release/vw README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt packaging/linux/vw.desktop packaging/linux/install.sh dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/vw | Out-Null
-          Copy-Item target/release/vw.exe, README.md dist/vw/
+          Copy-Item target/release/vw.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt dist/vw/
           Compress-Archive -Path dist/vw -DestinationPath dist/${{ matrix.package }}
       - uses: actions/upload-artifact@v4
         with:
