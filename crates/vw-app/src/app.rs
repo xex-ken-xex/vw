@@ -180,6 +180,8 @@ pub struct VwApp {
     /// 最後に止めたスライドショーで飛ばしたコマ数。再生バーに出し続ける。
     /// 止めたスライドショーの時計。止めた後も、直近のコマ落ちの数が消えるまで再生バーに出すため。
     stopped_clock: Option<Clock>,
+    /// 再生バーの「ファイルの速さ」。シネやアニメーションをファイルに書かれた速さで再生する。
+    use_file_speed: bool,
     /// フォルダの監視。自動リロードが無効なら `None`。
     watcher: Option<FolderWatcher>,
     /// cd したフォルダと、画像の入れ方。画像がなかったフォルダも監視して、
@@ -235,6 +237,7 @@ enum TagClick {
 enum BarAction {
     TogglePlay,
     Fps { fps: f32, save: bool },
+    FileSpeed(bool),
     End(EndMode),
 }
 
@@ -475,6 +478,7 @@ impl VwApp {
             load_slots_from: 0,
             playback: None,
             stopped_clock: None,
+            use_file_speed: true,
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
@@ -1487,12 +1491,7 @@ impl VwApp {
             self.toggle_maximize(self.active);
         }
         let v = &self.settings.settings.viewer;
-        // シネはファイルに書かれた速さで再生する。撮影時の速さで見ないと動きの評価を誤るため。
-        let fps = self.slots[self.active]
-            .sequence
-            .as_ref()
-            .and_then(|q| q.fps)
-            .unwrap_or(v.slideshow_fps);
+        let fps = self.playback_fps();
         let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now());
         let loader_slot = self.next_id;
         self.next_id += 1;
@@ -1620,6 +1619,22 @@ impl VwApp {
         });
     }
 
+    /// 選んでいるスロットのファイルに書かれた速さ（シネやアニメーション）。
+    fn file_fps(&self) -> Option<f32> {
+        self.slots
+            .get(self.active)
+            .and_then(|s| s.sequence.as_ref())
+            .and_then(|q| q.fps)
+    }
+
+    /// 再生に使う速さ。「ファイルの速さ」が入っていて、ファイルに速さが書かれていればその速さ。
+    /// シネを既定でファイルの速さにするのは、撮影時の速さで見ないと動きの評価を誤るため。
+    fn playback_fps(&self) -> f32 {
+        self.file_fps()
+            .filter(|_| self.use_file_speed)
+            .unwrap_or(self.settings.settings.viewer.slideshow_fps)
+    }
+
     /// 最大化したスロットの下の再生バー。
     fn play_bar(&self, ui: &mut egui::Ui) -> Option<BarAction> {
         let lang = self.lang();
@@ -1637,19 +1652,36 @@ impl VwApp {
             if ui.button(glyph).on_hover_text(tip).clicked() {
                 action = Some(BarAction::TogglePlay);
             }
-            // 止まっているときも、再生したら使う速さ（シネやアニメーションならファイルの速さ）を出す。
-            let current_fps = self.playback.as_ref().map_or_else(
-                || {
-                    self.slots
-                        .get(self.active)
-                        .and_then(|s| s.sequence.as_ref())
-                        .and_then(|q| q.fps)
-                        .unwrap_or(viewer.slideshow_fps)
-                },
-                |pb| pb.fps,
-            );
+            let file_fps = self.file_fps();
+            let mut use_file = self.use_file_speed;
+            let r = ui
+                .add_enabled(
+                    file_fps.is_some(),
+                    egui::Checkbox::new(&mut use_file, tr(lang, "File speed")),
+                )
+                .on_hover_text(tr(
+                    lang,
+                    "Play at the speed written in the file. Changing the FPS turns this off.",
+                ))
+                .on_disabled_hover_text(tr(lang, "This file has no speed information."));
+            if r.changed() {
+                action = Some(BarAction::FileSpeed(use_file));
+            }
+            // 止まっているときも、再生したら使う速さを出す。
+            let current_fps = self.playback.as_ref().map_or_else(|| self.playback_fps(), |pb| pb.fps);
+            let following_file = file_fps.is_some() && self.use_file_speed;
             let mut fps = current_fps;
-            let r = ui.add(fps_input(&mut fps));
+            // ファイルの速さで再生するときは、手で変えられることは残しつつ、数字を薄く出す。
+            // 入力を無効にしないのは、そこで速さを変えればチェックが外れて、その速さになるようにするため。
+            let r = ui
+                .scope(|ui| {
+                    if following_file {
+                        let weak = ui.visuals().weak_text_color();
+                        ui.visuals_mut().override_text_color = Some(weak);
+                    }
+                    ui.add(fps_input(&mut fps))
+                })
+                .inner;
             if r.changed() || r.drag_stopped() {
                 // ドラッグ中は再生にだけ反映し、ファイルには離したときに書く。
                 let save = !r.dragged();
@@ -1714,21 +1746,23 @@ impl VwApp {
             BarAction::TogglePlay => return self.run(ctx, Action::TogglePlay),
             BarAction::Fps { fps, save } => {
                 viewer.slideshow_fps = fps;
+                self.use_file_speed = false;
                 if let Some(pb) = &mut self.playback {
                     pb.fps = fps;
-                }
-                // 止まっているときに変えた速さも、シネやアニメーションのファイルの速さより優先する。
-                let seq = self
-                    .slots
-                    .get_mut(self.active)
-                    .and_then(|s| s.sequence.as_mut());
-                if let Some(q) = seq.filter(|q| q.fps.is_some()) {
-                    q.fps = Some(fps);
                 }
                 if !save {
                     self.restart_clock();
                     return;
                 }
+            }
+            BarAction::FileSpeed(on) => {
+                self.use_file_speed = on;
+                let fps = self.playback_fps();
+                if let Some(pb) = &mut self.playback {
+                    pb.fps = fps;
+                }
+                self.restart_clock();
+                return;
             }
             BarAction::End(mode) => viewer.slideshow_end = mode,
         }
