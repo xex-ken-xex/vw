@@ -96,6 +96,8 @@ struct Out {
 pub enum TreeAction {
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
+    /// フォルダを OS のファイラで開く（右クリックメニュー）。
+    OpenInFileManager(PathBuf),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
@@ -438,12 +440,16 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
     });
 }
 
-/// フォルダの右クリックメニュー。パスのコピーと、データセットの登録・編集・更新。
+/// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
 fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
     use crate::dataset_ui::Request;
     r.context_menu(|ui| {
         if ui.button(tr(lang, "Copy")).clicked() {
             *out = Some(TreeAction::Copy(path.to_owned()));
+            ui.close();
+        }
+        if ui.button(tr(lang, "Open in file manager")).clicked() {
+            *out = Some(TreeAction::OpenInFileManager(path.to_owned()));
             ui.close();
         }
         ui.separator();

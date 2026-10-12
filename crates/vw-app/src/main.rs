@@ -22,6 +22,7 @@ mod frames;
 mod i18n;
 mod keymap;
 mod labels;
+mod launch;
 mod layout;
 mod loader;
 mod log;

@@ -625,7 +625,7 @@ impl SettingsStore {
         if !path.exists() {
             self.save()?;
         }
-        launch(&path).map_err(|e| format!("{}: {e}", path.display()))
+        crate::launch::open_file(&path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// テスト用: 次の [`Self::reload_if_changed`] で必ずファイルを確かめる。
@@ -643,28 +643,6 @@ fn backup_path(path: &Path) -> PathBuf {
 
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
-}
-
-#[cfg(windows)]
-fn launch(path: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    // cmd の start は拡張子に関連付けられたアプリで開く。CREATE_NO_WINDOW で
-    // cmd 自身の黒い窓を出さない。関連付けがなければ Windows が「アプリを選択」を出す。
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(drop)
-}
-
-#[cfg(not(windows))]
-fn launch(path: &Path) -> std::io::Result<()> {
-    std::process::Command::new("xdg-open")
-        .arg(path)
-        .spawn()
-        .map(drop)
 }
 
 #[cfg(test)]
