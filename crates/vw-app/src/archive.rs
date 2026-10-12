@@ -5,7 +5,9 @@
 //! フォルダと同じに扱える。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// 展開したまま残った一時フォルダを消すまでの時間。vw が異常終了すると後片付けできないので、
@@ -73,6 +75,14 @@ pub enum EntryError {
 struct Pending {
     mount: Mount,
     done: Receiver<Result<usize, ArchiveError>>,
+    progress: Arc<Count>,
+}
+
+/// 展開の進み具合（項目の数）。
+#[derive(Default)]
+struct Count {
+    done: AtomicUsize,
+    total: AtomicUsize,
 }
 
 /// 開いている ZIP の一覧。
@@ -126,12 +136,31 @@ impl Archives {
         };
         let (tx, rx) = channel();
         let (from, to) = (mount.zip.clone(), mount.dir.clone());
+        let progress = Arc::new(Count::default());
+        let count = progress.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(extract(&from, &to, password.as_deref()));
+            let _ = tx.send(extract(&from, &to, password.as_deref(), &count));
             wake();
         });
-        self.pending.push(Pending { mount, done: rx });
+        self.pending.push(Pending {
+            mount,
+            done: rx,
+            progress,
+        });
         true
+    }
+
+    /// 展開中のものの進み具合（済んだ項目, 全部の項目）。展開中のものがなければ `None`。
+    pub fn progress(&self) -> Option<(usize, usize)> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(self.pending.iter().fold((0, 0), |(done, total), p| {
+            (
+                done + p.progress.done.load(Ordering::Relaxed),
+                total + p.progress.total.load(Ordering::Relaxed),
+            )
+        }))
     }
 
     /// 展開が終わったものを受け取る。
@@ -213,9 +242,18 @@ pub fn is_archive(path: &Path) -> bool {
 const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
 
 /// `archive` を `dir` に展開し、展開したファイルの数を返す。
-fn extract(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usize, ArchiveError> {
+fn extract(
+    archive: &Path,
+    dir: &Path,
+    password: Option<&str>,
+    count: &Count,
+) -> Result<usize, ArchiveError> {
     std::fs::create_dir_all(dir)?;
+    if let Some(n) = entry_count(archive, password) {
+        count.total.store(n, Ordering::Relaxed);
+    }
     for_each_entry(archive, password, |relative, data| {
+        count.done.fetch_add(1, Ordering::Relaxed);
         let out = dir.join(relative);
         let Some(data) = data else {
             return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
@@ -229,6 +267,17 @@ fn extract(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usize, 
             Err(e) => Err(EntryError::Other(e.to_string())),
         }
     })
+}
+
+/// `archive` の項目（フォルダも含む）の数。進み具合を出すためだけに使うので、読めなければ `None`。
+fn entry_count(archive: &Path, password: Option<&str>) -> Option<usize> {
+    let file = std::fs::File::open(archive).ok()?;
+    if let Ok(zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
+        return Some(zip.len());
+    }
+    let key = password.map_or_else(sevenz_rust2::Password::empty, sevenz_rust2::Password::from);
+    let reader = sevenz_rust2::ArchiveReader::open(archive, key).ok()?;
+    Some(reader.archive().files.len())
 }
 
 /// `archive`（ZIP か 7z）の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
@@ -511,13 +560,19 @@ mod tests {
             let zip = tmp.path().join("secret.zip");
             write_encrypted_zip(&zip, "open sesame", aes);
             let out = tmp.path().join("out");
-            assert_eq!(extract(&zip, &out, None), Err(ArchiveError::NeedsPassword));
             assert_eq!(
-                extract(&zip, &out, Some("wrong")),
+                extract(&zip, &out, None, &Count::default()),
+                Err(ArchiveError::NeedsPassword)
+            );
+            assert_eq!(
+                extract(&zip, &out, Some("wrong"), &Count::default()),
                 Err(ArchiveError::WrongPassword),
                 "aes = {aes}"
             );
-            assert_eq!(extract(&zip, &out, Some("open sesame")), Ok(1));
+            assert_eq!(
+                extract(&zip, &out, Some("open sesame"), &Count::default()),
+                Ok(1)
+            );
             assert_eq!(std::fs::read(out.join("secret.png")).unwrap(), [7; 4096]);
         }
     }
@@ -543,12 +598,24 @@ mod tests {
     }
 
     #[test]
+    fn extracting_counts_every_entry_for_the_progress_line() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("photos.7z");
+        write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
+        let count = Count::default();
+        extract(&archive, &tmp.path().join("out"), None, &count).unwrap();
+        let total = count.total.load(Ordering::Relaxed);
+        assert!(total >= 2, "{total}");
+        assert_eq!(count.done.load(Ordering::Relaxed), total);
+    }
+
+    #[test]
     fn seven_zip_is_extracted_with_its_folders() {
         let tmp = TempDir::new();
         let archive = tmp.path().join("photos.7z");
         write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
         let out = tmp.path().join("out");
-        assert_eq!(extract(&archive, &out, None), Ok(2));
+        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(2));
         assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
     }
 
@@ -559,14 +626,17 @@ mod tests {
         write_7z(&archive, &[("a.png", &[1; 4096])], Some("pw"));
         let out = tmp.path().join("out");
         assert_eq!(
-            extract(&archive, &out, None),
+            extract(&archive, &out, None, &Count::default()),
             Err(ArchiveError::NeedsPassword)
         );
         assert_eq!(
-            extract(&archive, &out, Some("nope")),
+            extract(&archive, &out, Some("nope"), &Count::default()),
             Err(ArchiveError::WrongPassword)
         );
-        assert_eq!(extract(&archive, &out, Some("pw")), Ok(1));
+        assert_eq!(
+            extract(&archive, &out, Some("pw"), &Count::default()),
+            Ok(1)
+        );
     }
 
     #[test]
@@ -595,7 +665,7 @@ mod tests {
         let zip = tmp.path().join("evil.zip");
         write_zip(&zip, &[("../escaped.txt", b"x"), ("ok.png", b"y")]);
         let out = tmp.path().join("out");
-        assert_eq!(extract(&zip, &out, None).unwrap(), 1);
+        assert_eq!(extract(&zip, &out, None, &Count::default()).unwrap(), 1);
         assert!(!tmp.path().join("escaped.txt").exists());
     }
 

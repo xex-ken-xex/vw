@@ -150,6 +150,15 @@ impl DatasetDialog {
         self.outer.as_deref()
     }
 
+    /// 調べている・取り出している最中なら、その進み具合（済んだ数, 全部の数）。
+    pub fn progress(&self) -> Option<(usize, usize)> {
+        let job = self.job.as_ref()?;
+        Some((
+            job.progress.done.load(Ordering::Relaxed),
+            job.progress.total.load(Ordering::Relaxed),
+        ))
+    }
+
     /// 取り出しが終わった出力先。
     pub fn extracted_to(&self) -> Option<&Path> {
         self.extracted_to.as_deref()

@@ -207,6 +207,9 @@ pub struct VwApp {
     watcher_failed: bool,
 }
 
+/// 処理中を示す、ウィンドウの一番下の線の太さ。
+const ACTIVITY_LINE: f32 = 2.0;
+
 /// 再生バーの高さ。タグ付けモードのバーも同じ高さにする。
 const PLAY_BAR: f32 = 30.0;
 
@@ -2413,6 +2416,56 @@ impl VwApp {
         }
     }
 
+    /// ZIP の展開・データセットの読み込みや取り出し・書き出しの進み具合（0〜1）。何もしていなければ `None`。
+    fn activity(&self) -> Option<f32> {
+        let jobs = [
+            self.archives.progress(),
+            self.dataset_dialog.as_ref().and_then(|d| d.progress()),
+            self.export
+                .as_ref()
+                .and_then(|d| d.job.as_ref())
+                .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
+        ];
+        let mut busy = false;
+        let mut fraction: f32 = 1.0;
+        for (done, total) in jobs.into_iter().flatten() {
+            busy = true;
+            // 一番遅れているものに合わせる。合計で出すと、終わりかけのものに隠れて
+            // 長い処理がもうすぐ終わるように見えてしまうため。
+            fraction = fraction.min(done as f32 / total.max(1) as f32);
+        }
+        busy.then_some(fraction.clamp(0.0, 1.0))
+    }
+
+    /// ウィンドウの一番下の細い線。処理中は灰色の上を赤い線が右へ伸び、普段は背景と同じ色で見えない。
+    ///
+    /// 状態バーや進み具合のダイアログにしないのは、ZIP の展開は裏で頻繁に動くので、
+    /// そのたびに画面の配置が変わったり作業を遮ったりしないようにするため。
+    fn activity_line(&self, ui: &mut egui::Ui) {
+        let activity = self.activity();
+        egui::Panel::bottom("activity")
+            .frame(egui::Frame::NONE)
+            .exact_size(ACTIVITY_LINE)
+            .resizable(false)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                let painter = ui.painter();
+                let Some(fraction) = activity else {
+                    painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
+                    return;
+                };
+                painter.rect_filled(rect, 0.0, theme::ACTIVITY_TRACK);
+                let mut done = rect;
+                done.set_width(rect.width() * fraction);
+                painter.rect_filled(done, 0.0, theme::ACTIVITY);
+            });
+        if activity.is_some() {
+            // 展開は終わるまで知らせてこないので、線を進めるために描き直す。
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
     /// cd したフォルダ（なければアクティブな画像のフォルダ）を対象に、書き出しの画面を開く。
     fn open_export(&mut self) {
         let root = self.current.clone().or_else(|| {
@@ -4395,6 +4448,7 @@ impl eframe::App for VwApp {
         self.run_hotkeys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        self.activity_line(ui);
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
