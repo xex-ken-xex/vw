@@ -34,6 +34,17 @@ pub fn tr1(lang: Language, en: &'static str, arg: &str) -> String {
 }
 
 const JA: &[(&str, &str)] = &[
+    // vw について
+    ("Help", "ヘルプ"),
+    ("About vw", "vw について"),
+    ("Fast image viewer", "高速画像ビューワ"),
+    ("Author", "作者"),
+    ("License", "ライセンス"),
+    ("Third-party licenses...", "サードパーティのライセンス..."),
+    (
+        "THIRD-PARTY-LICENSES.txt is not next to vw (it comes with the release zip).",
+        "vw と同じフォルダに THIRD-PARTY-LICENSES.txt がありません（配布の zip に入っています）。",
+    ),
     // 画素の変換の図
     ("Pixel pipeline", "画素の変換"),
     ("Pixel pipeline...", "画素の変換..."),

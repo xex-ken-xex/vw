@@ -132,6 +132,7 @@ pub struct VwApp {
     send_job: Option<crate::dicom_send::Job>,
     /// 画素の変換の図のウインドウ。
     pipeline: crate::pipeline_view::PipelineView,
+    about: crate::about::About,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
@@ -472,6 +473,7 @@ impl VwApp {
             settings,
             settings_ui: SettingsUi::default(),
             send_job: None,
+            about: Default::default(),
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
                 view.restore_node_positions(&saved.pipeline_nodes);
@@ -3517,6 +3519,7 @@ impl VwApp {
             Action::TrashBadImages => self.ask_trash_bad(),
             Action::CancelSending => self.cancel_send(),
             Action::TogglePixelPipeline => self.toggle_pipeline(),
+            Action::ShowAbout => self.about.open = true,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -4210,6 +4213,11 @@ impl VwApp {
                             chosen = Some(action);
                         }
                     }
+                }
+            });
+            ui.menu_button(tr(lang, "Help"), |ui| {
+                if self.menu_item(ui, Action::ShowAbout, None) {
+                    chosen = Some(Action::ShowAbout);
                 }
             });
         });
@@ -5045,6 +5053,10 @@ impl eframe::App for VwApp {
         self.activity_line(ui);
         self.send_ui(&ctx);
         self.pipeline_ui(&ctx);
+        if let Some(e) = self.about.ui(&ctx, self.lang()) {
+            self.log
+                .error(format!("Third-party licenses: cannot open {e}"));
+        }
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
