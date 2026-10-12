@@ -91,6 +91,9 @@ pub struct Viewer {
     pub layout: SlotLayout,
     /// メニューの「カスタム」で選ぶマス目。`auto` は選べない（既定の項目にあるため）。
     pub custom_layout: SlotLayout,
+    /// 自動レイアウトで並べるマス目の上限。超える数のスロットはページに分ける。
+    /// 大量に読み込んでも 1 枠が小さくなりすぎないようにするため。
+    pub auto_layout_max: SlotLayout,
     /// スライドショーの速さ。再生バーで最後に使った値を覚える。
     pub slideshow_fps: f32,
     pub slideshow_end: EndMode,
@@ -117,6 +120,7 @@ impl Default for Viewer {
             full_image_limit_mb: 256,
             layout: SlotLayout::Auto,
             custom_layout: SlotLayout::grid(6, 6),
+            auto_layout_max: SlotLayout::grid(6, 6),
             slideshow_fps: 30.0,
             slideshow_end: EndMode::Loop,
             slideshow_drop_window_secs: 5,
@@ -351,6 +355,14 @@ impl Settings {
                     "must be COLSxROWS",
                 )
                 .unwrap_or(d.viewer.custom_layout),
+            auto_layout_max: r
+                .get_valid(
+                    "viewer",
+                    "auto_layout_max",
+                    |v: &SlotLayout| *v != SlotLayout::Auto,
+                    "must be COLSxROWS",
+                )
+                .unwrap_or(d.viewer.auto_layout_max),
             slideshow_fps: r
                 .get_valid(
                     "viewer",
@@ -868,6 +880,15 @@ mod tests {
         assert!(problems.is_empty());
         assert_eq!(s.viewer.layout, SlotLayout::grid(2, 2));
         assert_eq!(s.viewer.custom_layout, SlotLayout::grid(4, 1));
+    }
+
+    #[test]
+    fn auto_layout_max_is_read_as_cols_x_rows_and_rejects_auto() {
+        let (s, _) = Settings::from_toml("[viewer]\nauto_layout_max = \"4x3\"\n").unwrap();
+        assert_eq!(s.viewer.auto_layout_max, SlotLayout::grid(4, 3));
+        let (s, problems) = Settings::from_toml("[viewer]\nauto_layout_max = \"auto\"\n").unwrap();
+        assert_eq!(s.viewer.auto_layout_max, SlotLayout::grid(6, 6));
+        assert!(!problems.is_empty());
     }
 
     #[test]

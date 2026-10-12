@@ -375,14 +375,20 @@ const JA: &[(&str, &str)] = &[
     ("None", "なし"),
     ("Slot layout", "スロットのレイアウト"),
     (
-        "How slots are arranged. Auto fits every slot on one page; a fixed grid shows the rest on further pages (Page Up / Page Down).",
-        "スロットの並べ方。自動はすべてのスロットを 1 ページに並べます。列 x 行を決めると、入りきらない分は次のページに回ります（Page Up / Page Down で送ります）。",
+        "How slots are arranged. Auto fits every slot on one page up to the Auto layout maximum; a fixed grid shows the rest on further pages (Page Up / Page Down).",
+        "スロットの並べ方。自動は自動レイアウトの最大までなら全スロットを 1 ページに並べます。列 x 行を決めると、入りきらない分は次のページに回ります（Page Up / Page Down で送ります）。",
     ),
     ("Custom layout", "カスタムレイアウト"),
     (
         "Columns x rows used by the Custom layout in the View menu.",
         "表示メニューの「カスタム」で使う 列 x 行。",
     ),
+    ("Auto layout maximum", "自動レイアウトの最大"),
+    (
+        "Largest grid (columns x rows) the Auto layout uses. More slots than this go on further pages, so slots do not get too small.",
+        "自動レイアウトで使う最大の 列 x 行。これを超える数のスロットは次のページに回し、スロットが小さくなりすぎないようにします。",
+    ),
+    ("{} slots", "{} スロット"),
     // データセット
     ("Datasets", "データセット"),
     ("Register as dataset", "データセットとして登録"),
