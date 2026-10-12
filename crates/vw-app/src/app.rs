@@ -220,6 +220,8 @@ enum ExportKind {
 /// 画像の書き出しの画面の状態。
 struct ExportDialog {
     root: PathBuf,
+    /// 画面に出す `root`。ZIP の中なら一時フォルダではなく ZIP のパスで見せる。
+    root_label: String,
     recursive: bool,
     kind: ExportKind,
     dest: String,
@@ -992,7 +994,7 @@ impl VwApp {
             labels: &self.labels,
         };
         let order = self.settings.settings.tree.order();
-        let files = export::collect(&dir, false, self.loader.registry(), order, &matcher);
+        let files = export::collect(&dir, false, self.loader.registry(), order, &matcher).images;
         if files.is_empty() {
             self.log.info(format!("No bad images in {}", dir.display()));
             return;
@@ -2422,9 +2424,21 @@ impl VwApp {
                 .warn(tr(self.lang(), "Select a folder in the tree first."));
             return;
         };
-        let name = root
-            .file_name()
-            .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned());
+        // ZIP の中は終了時に消える一時フォルダなので、出力先は ZIP の隣に置く。
+        let (name, beside) = match self.archives.mount_of(&root) {
+            Some(m) if m.dir == root => (
+                zip_stem(&m.zip),
+                m.zip.parent().unwrap_or(&m.zip).to_owned(),
+            ),
+            Some(m) => (
+                folder_name(&root),
+                m.zip.parent().unwrap_or(&m.zip).to_owned(),
+            ),
+            None => (
+                folder_name(&root),
+                root.parent().unwrap_or(&root).to_owned(),
+            ),
+        };
         let suffix = match &self.filter {
             Filter::All => "export".to_owned(),
             Filter::Flag(Some(Flag::Good)) => "good".to_owned(),
@@ -2432,8 +2446,16 @@ impl VwApp {
             Filter::Flag(None) => "unflagged".to_owned(),
             Filter::Tag(t) => t.clone(),
         };
-        let beside = root.parent().unwrap_or(&root);
+        let root_label = match self.archives.mount_of(&root) {
+            Some(m) => m
+                .zip
+                .join(root.strip_prefix(&m.dir).unwrap_or(Path::new("")))
+                .display()
+                .to_string(),
+            None => root.display().to_string(),
+        };
         self.export = Some(ExportDialog {
+            root_label,
             dest: beside
                 .join(format!("{name}-{suffix}"))
                 .display()
@@ -2471,7 +2493,7 @@ impl VwApp {
                     .num_columns(2)
                     .show(ui, |ui| {
                         ui.label(tr(lang, "Folder"));
-                        ui.label(dialog.root.display().to_string());
+                        ui.label(&dialog.root_label);
                         ui.end_row();
                         ui.label("");
                         ui.checkbox(&mut dialog.recursive, tr(lang, "Include subfolders"));
@@ -2570,7 +2592,14 @@ impl VwApp {
         let dialog = self.export.as_mut().expect("checked above");
         match dialog.kind {
             ExportKind::List(format) => {
+                if !files.archives.is_empty() {
+                    self.log.warn(format!(
+                        "Export: the list leaves out {} ZIP / 7z files (open them to list their images)",
+                        files.archives.len()
+                    ));
+                }
                 let items: Vec<_> = files
+                    .images
                     .into_iter()
                     .map(|f| {
                         let label = self.labels.get(&f);
@@ -2590,7 +2619,8 @@ impl VwApp {
             ExportKind::Copy => {
                 let dest = PathBuf::from(dialog.dest.trim());
                 let mut taken = HashSet::new();
-                let pairs: Vec<_> = files
+                let mut items: Vec<_> = files
+                    .images
                     .into_iter()
                     .map(|f| {
                         let to = export::copy_target(
@@ -2600,16 +2630,45 @@ impl VwApp {
                             dialog.keep_structure,
                             &mut taken,
                         );
-                        (f, to)
+                        export::Copy::File { from: f, to }
                     })
                     .collect();
+                let images = items.len();
+                let archives = if self.filter.is_all() {
+                    files.archives.len()
+                } else {
+                    0
+                };
+                if self.filter.is_all() {
+                    // ファイルを先に写す。ZIP の中身を直下に置くときの番号付けで、
+                    // 先に決めておいたファイルの名前を横取りしないため。
+                    items.extend(files.archives.into_iter().map(|zip| {
+                        let (dir, flat) = match zip.strip_prefix(&dialog.root) {
+                            Ok(rel) if dialog.keep_structure => (dest.join(rel), false),
+                            _ => (dest.clone(), true),
+                        };
+                        export::Copy::Archive {
+                            archive: zip,
+                            dir,
+                            flat,
+                        }
+                    }));
+                } else if !files.archives.is_empty() {
+                    self.log.warn(format!(
+                        "Export: skipped {} ZIP / 7z files (images in them have no labels)",
+                        files.archives.len()
+                    ));
+                }
                 self.log.info(format!(
-                    "Export: copying {} images to {}",
-                    pairs.len(),
+                    "Export: copying {images} images and {archives} ZIP / 7z files to {}",
                     dest.display()
                 ));
                 let ctx = ctx.clone();
-                dialog.job = Some(CopyJob::start(pairs, move || ctx.request_repaint()));
+                dialog.job = Some(CopyJob::start(
+                    items,
+                    self.loader.registry().clone(),
+                    move || ctx.request_repaint(),
+                ));
             }
         }
     }
@@ -2626,12 +2685,11 @@ impl VwApp {
             return;
         }
         let failed = std::mem::take(&mut *job.failed.lock().unwrap());
-        let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
+        let copied = job.copied.load(std::sync::atomic::Ordering::Relaxed);
         dialog.job = None;
         self.log.info(format!(
-            "Export: copied {} of {} images",
-            done - failed.len(),
-            done
+            "Export: copied {copied} images ({} not copied)",
+            failed.len()
         ));
         for e in failed {
             self.log.error(format!("Export: {e}"));
@@ -4667,6 +4725,18 @@ fn color_name(c: ColorModel) -> &'static str {
         ColorModel::Rgb => "RGB",
         ColorModel::Rgba => "RGBA",
     }
+}
+
+/// 書き出し先の名前の元。
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned())
+}
+
+/// 書き出し先の名前の元。`data.zip` の中なら `data-export` のように拡張子を除く。
+fn zip_stem(zip: &Path) -> String {
+    zip.file_stem()
+        .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

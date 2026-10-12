@@ -492,8 +492,7 @@ fn rfc3339(t: std::time::SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{all_registry, png_registry, write_png, TempDir};
-    use std::io::Write as _;
+    use crate::test_util::{all_registry, png_bytes, png_registry, write_png, write_zip, TempDir};
 
     fn no_password(_: &Path, _: bool) -> Option<String> {
         None
@@ -512,26 +511,6 @@ mod tests {
             &Progress::default(),
             &mut no_password,
         )
-    }
-
-    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
-        let tmp = TempDir::new();
-        let p = tmp.path().join("a.png");
-        write_png(&p, w, h, &vec![0; (w * h * 3) as usize]);
-        std::fs::read(p).unwrap()
-    }
-
-    fn write_zip(path: &Path, entries: &[(&str, &[u8])], password: Option<&str>) {
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
-        for (name, data) in entries {
-            let mut options = zip::write::SimpleFileOptions::default();
-            if let Some(pw) = password {
-                options = options.with_aes_encryption(zip::AesMode::Aes256, pw);
-            }
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(data).unwrap();
-        }
-        zip.finish().unwrap();
     }
 
     fn values_of<'a>(c: &'a Catalog, file: &str, kind: &str, key: &str) -> Vec<&'a str> {

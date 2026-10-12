@@ -280,8 +280,7 @@ pub fn outer_dataset(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, write_png, TempDir};
-    use std::io::Write as _;
+    use crate::test_util::{png_bytes, png_registry, write_png, write_zip, TempDir};
 
     fn no_password(_: &Path, _: bool) -> Option<String> {
         None
@@ -306,26 +305,6 @@ mod tests {
         .unwrap();
         catalog::save(dir, &r.catalog).unwrap();
         r.catalog
-    }
-
-    fn png_bytes() -> Vec<u8> {
-        let tmp = TempDir::new();
-        let p = tmp.path().join("a.png");
-        write_png(&p, 2, 2, &[0; 12]);
-        std::fs::read(p).unwrap()
-    }
-
-    fn write_zip(path: &Path, entries: &[(&str, &[u8])], password: Option<&str>) {
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
-        for (name, data) in entries {
-            let mut options = zip::write::SimpleFileOptions::default();
-            if let Some(pw) = password {
-                options = options.with_aes_encryption(zip::AesMode::Aes256, pw);
-            }
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(data).unwrap();
-        }
-        zip.finish().unwrap();
     }
 
     fn run(
@@ -362,7 +341,7 @@ mod tests {
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
         write_png(&src.join("a.png"), 2, 2, &[0; 12]);
-        write_zip(&src.join("z.zip"), &[("b.png", &png_bytes())], None);
+        write_zip(&src.join("z.zip"), &[("b.png", &png_bytes(2, 2))], None);
         let c = register(&src, &mut no_password);
         let dest = tmp.path().join("out");
         let registry = png_registry();
@@ -419,7 +398,7 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         write_png(&src.join("a.png"), 2, 2, &[0; 12]);
         write_png(&src.join("b.png"), 2, 2, &[0; 12]);
-        write_zip(&src.join("z.zip"), &[("c.png", &png_bytes())], None);
+        write_zip(&src.join("z.zip"), &[("c.png", &png_bytes(2, 2))], None);
         let c = register(&src, &mut no_password);
         let dest = tmp.path().join("out");
         std::fs::create_dir_all(dest.join("z.zip")).unwrap();
@@ -440,7 +419,7 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(src.join("sub")).unwrap();
-        let png = png_bytes();
+        let png = png_bytes(2, 2);
         write_zip(
             &src.join("sub/data.zip"),
             &[("s1/a.png", &png), ("b.png", &png)],
@@ -460,7 +439,11 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
-        write_zip(&src.join("s.zip"), &[("a.png", &png_bytes())], Some("pw"));
+        write_zip(
+            &src.join("s.zip"),
+            &[("a.png", &png_bytes(2, 2))],
+            Some("pw"),
+        );
         let c = register(&src, &mut |_, _| Some("pw".into()));
         let dest = tmp.path().join("out");
         let mut asked = 0;
@@ -481,7 +464,11 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
-        write_zip(&src.join("s.zip"), &[("a.png", &png_bytes())], Some("pw"));
+        write_zip(
+            &src.join("s.zip"),
+            &[("a.png", &png_bytes(2, 2))],
+            Some("pw"),
+        );
         let c = register(&src, &mut |_, _| Some("pw".into()));
         let dest = tmp.path().join("out");
 
@@ -543,7 +530,7 @@ mod tests {
         let dir = tmp.path();
         write_png(&dir.join("a.png"), 2, 2, &[0; 12]);
         write_png(&dir.join("b.png"), 2, 2, &[0; 12]);
-        write_zip(&dir.join("z.zip"), &[("c.png", &png_bytes())], None);
+        write_zip(&dir.join("z.zip"), &[("c.png", &png_bytes(2, 2))], None);
         let c = register(dir, &mut no_password);
         std::fs::remove_file(dir.join("b.png")).unwrap();
         std::fs::remove_file(dir.join("z.zip")).unwrap();

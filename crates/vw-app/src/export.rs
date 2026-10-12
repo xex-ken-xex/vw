@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use vw_core::Registry;
 
+use crate::archive::{self, ArchiveError, EntryError};
 use crate::labels::{Flag, Label, LabelStore};
 use crate::sort::SortOrder;
 use crate::tree;
@@ -65,20 +66,31 @@ impl Matcher<'_> {
     }
 }
 
-/// `root` の画像のうち条件に合うものを、ツリーと同じ順で集める。`recursive` ならサブフォルダも辿る。
+/// [`collect`] で集めたもの。
+#[derive(Debug, Default, PartialEq)]
+pub struct Collected {
+    pub images: Vec<PathBuf>,
+    /// 辿ったフォルダにある ZIP / 7z。中の画像にはラベルがないので、条件で絞らずに全部集める。
+    pub archives: Vec<PathBuf>,
+}
+
+/// `root` の画像のうち条件に合うものを、ツリーと同じ順で集める。`recursive` ならサブフォルダと、
+/// その途中にある ZIP / 7z も辿る。
 pub fn collect(
     root: &Path,
     recursive: bool,
     registry: &Registry,
     order: SortOrder,
     matcher: &Matcher,
-) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+) -> Collected {
+    let mut out = Collected::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let listing = tree::list_folder(&dir, registry, order);
-        out.extend(listing.images.into_iter().filter(|f| matcher.matches(f)));
+        out.images
+            .extend(listing.images.into_iter().filter(|f| matcher.matches(f)));
         if recursive {
+            out.archives.extend(listing.archives);
             // 深さ優先で、ツリーで上にあるフォルダから辿るよう逆順に積む。
             stack.extend(listing.folders.into_iter().rev());
         }
@@ -179,39 +191,71 @@ pub fn copy_target(
     target
 }
 
+/// コピーするもの。
+pub enum Copy {
+    File {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// ZIP / 7z の中の画像を `dir` へ。`flat` なら中のフォルダ構成を捨てて `dir` の直下に置く。
+    Archive {
+        archive: PathBuf,
+        dir: PathBuf,
+        flat: bool,
+    },
+}
+
 /// 別スレッドでのコピーの進み具合。
 pub struct CopyJob {
     pub total: usize,
     pub done: Arc<AtomicUsize>,
+    /// 写せた画像の数。ZIP は中の画像を 1 枚ずつ数える。
+    pub copied: Arc<AtomicUsize>,
     pub failed: Arc<std::sync::Mutex<Vec<String>>>,
     pub finished: Arc<AtomicBool>,
     pub cancel: Arc<AtomicBool>,
 }
 
 impl CopyJob {
-    /// `pairs`（元, 先）をコピーし始める。大きな画像を何百枚もコピーすると数十秒かかるので、
+    /// `items` をコピーし始める。大きな画像を何百枚もコピーすると数十秒かかるので、
     /// 画面を止めないよう別スレッドで行う。既にあるファイルは上書きしない。
-    pub fn start(pairs: Vec<(PathBuf, PathBuf)>, repaint: impl Fn() + Send + 'static) -> Self {
+    pub fn start(
+        items: Vec<Copy>,
+        registry: Registry,
+        repaint: impl Fn() + Send + 'static,
+    ) -> Self {
         let job = Self {
-            total: pairs.len(),
+            total: items.len(),
             done: Arc::default(),
+            copied: Arc::default(),
             failed: Arc::default(),
             finished: Arc::default(),
             cancel: Arc::default(),
         };
-        let (done, failed, finished, cancel) = (
+        let (done, copied, failed, finished, cancel) = (
             job.done.clone(),
+            job.copied.clone(),
             job.failed.clone(),
             job.finished.clone(),
             job.cancel.clone(),
         );
         std::thread::spawn(move || {
-            for (from, to) in pairs {
+            for item in items {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                if let Err(e) = copy_one(&from, &to) {
-                    failed.lock().unwrap().push(e);
+                match item {
+                    Copy::File { from, to } => match copy_one(&from, &to) {
+                        Ok(()) => {
+                            copied.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => failed.lock().unwrap().push(e),
+                    },
+                    Copy::Archive { archive, dir, flat } => {
+                        let result = unpack_images(&archive, &dir, flat, &registry, &cancel);
+                        copied.fetch_add(result.copied, Ordering::Relaxed);
+                        failed.lock().unwrap().extend(result.failed);
+                    }
                 }
                 done.fetch_add(1, Ordering::Relaxed);
                 repaint();
@@ -234,10 +278,79 @@ fn copy_one(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::copy(from, to).map(|_| ()).map_err(fail)
 }
 
+#[derive(Debug, Default)]
+struct Unpacked {
+    copied: usize,
+    failed: Vec<String>,
+}
+
+/// `archive` の中の画像を `dir` へ書き出す。
+///
+/// パスワードは尋ねない。書き出しは別スレッドで何十もの ZIP を順に処理するので、途中で
+/// 1 つずつ尋ねると終わるまで画面の前を離れられなくなるため。暗号化された ZIP は
+/// ツリーで開いて（パスワードを入れて）から、その中で書き出してもらう。
+fn unpack_images(
+    archive: &Path,
+    dir: &Path,
+    flat: bool,
+    registry: &Registry,
+    cancel: &AtomicBool,
+) -> Unpacked {
+    let mut out = Unpacked::default();
+    let result = archive::for_each_entry(archive, None, |inner, data| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EntryError::Other("Cancelled".into()));
+        }
+        let Some(data) = data else {
+            return Ok(());
+        };
+        if !registry.supports_path(inner) && !registry.needs_probe(inner) {
+            return Ok(());
+        }
+        let mut bytes = Vec::new();
+        data.read_to_end(&mut bytes).map_err(EntryError::Read)?;
+        if registry.find(inner, &bytes).is_none() {
+            return Ok(());
+        }
+        let target = if flat {
+            free_name(dir, inner.file_name().unwrap_or_default())
+        } else {
+            dir.join(inner)
+        };
+        match write_new(&target, &bytes) {
+            Ok(()) => out.copied += 1,
+            Err(e) => out.failed.push(format!("{}: {e}", target.display())),
+        }
+        Ok(())
+    });
+    match result {
+        Ok(_) => {}
+        Err(ArchiveError::NeedsPassword | ArchiveError::WrongPassword) => out.failed.push(format!(
+            "{}: password-protected. Open it in the tree and export from inside it.",
+            archive.display()
+        )),
+        Err(ArchiveError::Other(e)) => out.failed.push(format!("{}: {e}", archive.display())),
+    }
+    out
+}
+
+fn write_new(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create_new(target)?.write_all(bytes)
+}
+
+/// `dir` の中で、まだ使われていない `name`（重なれば `name-1.png` のように番号を付ける）。
+fn free_name(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let mut taken = HashSet::new();
+    copy_target(Path::new(""), Path::new(name), dir, false, &mut taken)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, TempDir};
+    use crate::test_util::{png_bytes, png_registry, write_zip, TempDir};
 
     fn label(flag: Option<Flag>, tags: &[&str]) -> Label {
         Label {
@@ -366,8 +479,91 @@ mod tests {
         };
         let order = SortOrder::default();
         let flat = collect(dir.path(), false, &png_registry(), order, &matcher);
-        assert_eq!(flat, std::slice::from_ref(&top));
+        assert_eq!(flat.images, std::slice::from_ref(&top));
         let all = collect(dir.path(), true, &png_registry(), order, &matcher);
-        assert_eq!(all, [top, deep]);
+        assert_eq!(all.images, [top, deep]);
+    }
+
+    fn copy_all(items: Vec<Copy>) -> CopyJob {
+        let job = CopyJob::start(items, png_registry(), || {});
+        while !job.finished.load(Ordering::Relaxed) {
+            std::thread::yield_now();
+        }
+        job
+    }
+
+    #[test]
+    fn collect_lists_archives_in_subfolders_only_when_recursive() {
+        let dir = TempDir::new();
+        let sub = dir.mkdir("sub");
+        let zip = sub.join("data.zip");
+        write_zip(&zip, &[("a.png", &png_bytes(2, 2))], None);
+        let filter = Filter::All;
+        let labels = LabelStore::new(None);
+        let matcher = Matcher {
+            filter: &filter,
+            labels: &labels,
+        };
+        let order = SortOrder::default();
+        let flat = collect(dir.path(), false, &png_registry(), order, &matcher);
+        assert!(flat.archives.is_empty());
+        let all = collect(dir.path(), true, &png_registry(), order, &matcher);
+        assert_eq!(all.archives, [zip]);
+    }
+
+    #[test]
+    fn images_in_an_archive_go_under_a_folder_named_like_it() {
+        let src = TempDir::new();
+        let dest = TempDir::new();
+        let zip = src.path().join("data.zip");
+        let png = png_bytes(2, 2);
+        write_zip(
+            &zip,
+            &[("day1/a.png", &png), ("notes.txt", b"not an image")],
+            None,
+        );
+        let job = copy_all(vec![Copy::Archive {
+            archive: zip,
+            dir: dest.path().join("data.zip"),
+            flat: false,
+        }]);
+        assert_eq!(job.copied.load(Ordering::Relaxed), 1);
+        assert!(dest.path().join("data.zip/day1/a.png").is_file());
+        assert!(!dest.path().join("data.zip/notes.txt").exists());
+    }
+
+    #[test]
+    fn flattened_archive_images_are_numbered_beside_existing_files() {
+        let src = TempDir::new();
+        let dest = TempDir::new();
+        dest.touch("a.png");
+        let zip = src.path().join("data.zip");
+        let png = png_bytes(2, 2);
+        write_zip(&zip, &[("x/a.png", &png), ("y/a.png", &png)], None);
+        let job = copy_all(vec![Copy::Archive {
+            archive: zip,
+            dir: dest.path().to_path_buf(),
+            flat: true,
+        }]);
+        assert_eq!(job.copied.load(Ordering::Relaxed), 2);
+        assert!(dest.path().join("a-1.png").is_file());
+        assert!(dest.path().join("a-2.png").is_file());
+    }
+
+    #[test]
+    fn a_password_protected_archive_is_reported_and_not_copied() {
+        let src = TempDir::new();
+        let dest = TempDir::new();
+        let zip = src.path().join("secret.zip");
+        write_zip(&zip, &[("a.png", &png_bytes(2, 2))], Some("vw"));
+        let job = copy_all(vec![Copy::Archive {
+            archive: zip,
+            dir: dest.path().join("secret.zip"),
+            flat: false,
+        }]);
+        assert_eq!(job.copied.load(Ordering::Relaxed), 0);
+        let failed = job.failed.lock().unwrap();
+        assert!(failed[0].contains("password-protected"), "{failed:?}");
+        assert!(!dest.path().join("secret.zip").exists());
     }
 }

@@ -25,6 +25,29 @@ pub fn all_registry() -> Registry {
     r
 }
 
+/// 小さな 8bit RGB の PNG のバイト列。
+pub fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+    let tmp = TempDir::new();
+    let p = tmp.path().join("a.png");
+    write_png(&p, w, h, &vec![0; (w * h * 3) as usize]);
+    std::fs::read(p).unwrap()
+}
+
+/// `entries`（中のパス, 中身）の ZIP を書く。`password` があれば AES で暗号化する。
+pub fn write_zip(path: &Path, entries: &[(&str, &[u8])], password: Option<&str>) {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    for (name, data) in entries {
+        let mut options = zip::write::SimpleFileOptions::default();
+        if let Some(pw) = password {
+            options = options.with_aes_encryption(zip::AesMode::Aes256, pw);
+        }
+        zip.start_file(*name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
 /// 8bit RGB の PNG を書き出す。
 pub fn write_png(path: &Path, w: u32, h: u32, rgb: &[u8]) {
     let file = std::fs::File::create(path).unwrap();
