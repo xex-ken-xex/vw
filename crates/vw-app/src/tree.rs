@@ -140,7 +140,17 @@ impl Node {
             if r.clicked() {
                 out.action = Some(TreeAction::Mount(self.path.clone()));
             }
-            copy_menu(&r, &self.path, lang, &mut out.action);
+            r.context_menu(|ui| {
+                if ui.button(tr(lang, "Copy")).clicked() {
+                    out.action = Some(TreeAction::Copy(self.path.clone()));
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Open in file manager")).clicked() {
+                    let folder = self.path.parent().unwrap_or(&self.path).to_owned();
+                    out.action = Some(TreeAction::OpenInFileManager(folder));
+                    ui.close();
+                }
+            });
             return;
         }
         let dataset = self.is_dataset(view, out);
@@ -229,6 +239,10 @@ impl Node {
             label.context_menu(|ui| {
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.action = Some(TreeAction::Copy(self.path.clone()));
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Open in file manager")).clicked() {
+                    out.action = Some(TreeAction::OpenInFileManager(self.path.clone()));
                     ui.close();
                 }
                 if ui.button(tr(lang, "Close ZIP")).clicked() {
@@ -428,16 +442,6 @@ fn without_toggle(
         label(ui)
     })
     .inner
-}
-
-/// 右クリックメニュー。選んだ項目のフルパスをコピーする。
-fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
-    r.context_menu(|ui| {
-        if ui.button(tr(lang, "Copy")).clicked() {
-            *out = Some(TreeAction::Copy(path.to_owned()));
-            ui.close();
-        }
-    });
 }
 
 /// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
