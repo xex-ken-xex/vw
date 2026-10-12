@@ -132,6 +132,8 @@ pub struct VwApp {
     dataset_queue: Vec<PathBuf>,
     /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
     outer_to_update: Option<PathBuf>,
+    /// 最後にデータセットを取り出した出力先の親フォルダ。次の出力先の初期値に使う。
+    last_extract_dir: Option<PathBuf>,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -453,6 +455,7 @@ impl VwApp {
             datasets: Default::default(),
             dataset_queue: Vec::new(),
             outer_to_update: None,
+            last_extract_dir: saved.extract_dir.clone(),
             log,
             started,
             first_frame: true,
@@ -1007,9 +1010,19 @@ impl VwApp {
             request,
             &self.settings.settings.dataset.fields,
             self.datasets.index(),
+            &self.extract_base(),
             self.loader.registry(),
             ctx,
         ));
+    }
+
+    /// 取り出しの出力先を置く場所。前に取り出した場所がまだあればそこ、なければユーザーフォルダ。
+    fn extract_base(&self) -> PathBuf {
+        self.last_extract_dir
+            .clone()
+            .filter(|d| d.is_dir())
+            .or_else(std::env::home_dir)
+            .unwrap_or_default()
     }
 
     fn dataset_window(&mut self, ctx: &egui::Context) {
@@ -1020,6 +1033,10 @@ impl VwApp {
         if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
             let dir = dialog.dir().to_path_buf();
             self.outer_to_update = dialog.outer().map(Path::to_path_buf);
+            if let Some(dest) = dialog.extracted_to() {
+                self.datasets.refresh(dest);
+                self.last_extract_dir = dest.parent().map(Path::to_path_buf);
+            }
             self.dataset_dialog = None;
             self.datasets.refresh(&dir);
             self.next_queued_update(ctx);
@@ -3181,6 +3198,7 @@ impl VwApp {
                 .current
                 .clone()
                 .filter(|c| self.archives.mount_of(c).is_none()),
+            extract_dir: self.last_extract_dir.clone(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {

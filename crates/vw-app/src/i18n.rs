@@ -400,9 +400,11 @@ const JA: &[(&str, &str)] = &[
     ("Extract dataset", "データセットの取り出し"),
     ("Destination", "出力先"),
     (
-        "An empty or new folder. The files are copied with their folders, and the search catalog is rebuilt there.",
-        "空のフォルダか、まだないフォルダ。ファイルはフォルダ構成のまま写し、そこで検索カタログを作り直します。",
+        "The files are copied with their folders. Files that already exist there are not overwritten.",
+        "ファイルはフォルダ構成のまま写します。同じ名前のファイルがあれば上書きしません。",
     ),
+    ("Register the destination as a dataset", "出力先をデータセットとして登録する"),
+    ("The destination is already a dataset.", "出力先はすでにデータセットです。"),
     ("Extract", "取り出す"),
     ("Extract...", "取り出し..."),
     ("Show", "表示"),
@@ -421,7 +423,6 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Enter the full path of the destination folder.", "出力先のフォルダをフルパスで入れてください。"),
     ("The destination is inside the dataset being extracted.", "出力先が、取り出すデータセットの中にあります。"),
-    ("The destination folder is not empty.", "出力先のフォルダが空ではありません。"),
     ("The destination is not a folder.", "出力先がフォルダではありません。"),
     (
         "Read all files again and rebuild the search catalog.",

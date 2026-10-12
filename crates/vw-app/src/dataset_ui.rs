@@ -11,7 +11,7 @@ use std::time::Duration;
 use eframe::egui;
 use vw_core::Registry;
 
-use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped};
+use crate::catalog::{self, Catalog, Info, Progress, Report};
 use crate::dataset_extract;
 use crate::dataset_search::Index;
 use crate::i18n::{tr, tr1, tr_text};
@@ -53,15 +53,18 @@ pub struct DatasetDialog {
     known_values: BTreeMap<String, Vec<String>>,
     /// 取り出しの出力先。
     dest: String,
+    /// 取り出した先をデータセットとして登録するか。
+    register_extracted: bool,
     /// 取り出した先を含むデータセット。取り出し後に更新するか聞くため。
     outer: Option<PathBuf>,
+    /// 取り出しが終わった出力先。
+    extracted_to: Option<PathBuf>,
 }
 
-/// 調べ終わった結果。取り出しなら、写した数と写せなかったものも持つ。
-struct Outcome {
-    report: Report,
-    copied: Option<usize>,
-    failed: Vec<Skipped>,
+/// 別スレッドでの処理の結果。
+enum Outcome {
+    Scanned(Report),
+    Extracted(dataset_extract::Extracted),
 }
 
 struct ScanJob {
@@ -84,11 +87,13 @@ struct PasswordAsk {
 
 impl DatasetDialog {
     /// `fields` は設定で足した項目。カタログにしかない項目もその後ろに出す。`known` は
-    /// Datasets 画面で集めたデータセットの一覧で、タグと項目の値の候補に使う。
+    /// Datasets 画面で集めたデータセットの一覧で、タグと項目の値の候補に使う。`extract_base` は
+    /// 取り出しの出力先を置く場所の初期値。
     pub fn open(
         request: Request,
         fields: &[String],
         known: Option<&Index>,
+        extract_base: &Path,
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
@@ -109,7 +114,9 @@ impl DatasetDialog {
             password: None,
             known_tags: known.map(Index::tags).unwrap_or_default(),
             known_values: known.map(Index::field_values).unwrap_or_default(),
-            dest: default_destination(&dir),
+            dest: default_destination(&dir, extract_base),
+            extracted_to: None,
+            register_extracted: false,
             outer: None,
             dir,
             kind,
@@ -133,7 +140,7 @@ impl DatasetDialog {
         dialog
     }
 
-    /// 調べたデータセットのフォルダ。取り出しが終わった後は出力先。
+    /// 調べたデータセットのフォルダ。
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -141,6 +148,11 @@ impl DatasetDialog {
     /// 取り出した先を含むデータセット。取り出しが終わったときだけ。
     pub fn outer(&self) -> Option<&Path> {
         self.outer.as_deref()
+    }
+
+    /// 取り出しが終わった出力先。
+    pub fn extracted_to(&self) -> Option<&Path> {
+        self.extracted_to.as_deref()
     }
 
     fn fill(&mut self, c: Catalog) {
@@ -191,6 +203,7 @@ impl DatasetDialog {
             }
         }
         let kind = self.kind;
+        let register = self.register_extracted;
         let progress = Arc::new(Progress::default());
         let (done, result) = channel();
         let (ask, asks) = channel();
@@ -218,16 +231,11 @@ impl DatasetDialog {
                     &dir,
                     source,
                     &dest,
-                    info,
-                    &registry,
+                    register.then_some((info, &registry)),
                     &worker_progress,
                     &mut ask_password,
                 )
-                .map(|x| Outcome {
-                    report: x.report,
-                    copied: Some(x.copied),
-                    failed: x.failed,
-                }),
+                .map(Outcome::Extracted),
                 _ => catalog::scan(
                     &dir,
                     info,
@@ -237,11 +245,7 @@ impl DatasetDialog {
                     &mut ask_password,
                 )
                 .and_then(|r| catalog::save(&dir, &r.catalog).map(|()| r))
-                .map(|report| Outcome {
-                    report,
-                    copied: None,
-                    failed: Vec::new(),
-                }),
+                .map(Outcome::Scanned),
             };
             let _ = done.send(outcome);
             ctx.request_repaint();
@@ -310,14 +314,21 @@ impl DatasetDialog {
                         });
                         ui.weak(tr(
                             lang,
-                            "An empty or new folder. The files are copied with their folders, and the search catalog is rebuilt there.",
+                            "The files are copied with their folders. Files that already exist there are not overwritten.",
                         ));
+                        ui.checkbox(
+                            &mut self.register_extracted,
+                            tr(lang, "Register the destination as a dataset"),
+                        );
                     });
-                    ui.add_space(4.0);
+                    if self.register_extracted {
+                        ui.add_enabled_ui(!running, |ui| self.inputs_ui(ui, lang));
+                    }
+                } else {
+                    ui.add_enabled_ui(!running && self.kind != Kind::Update, |ui| {
+                        self.inputs_ui(ui, lang);
+                    });
                 }
-                ui.add_enabled_ui(!running && self.kind != Kind::Update, |ui| {
-                    self.inputs_ui(ui, lang);
-                });
                 if let Some(e) = &self.error {
                     ui.add_space(4.0);
                     ui.colored_label(ui.visuals().error_fg_color, e);
@@ -484,29 +495,35 @@ impl DatasetDialog {
         self.job = None;
         self.password = None;
         match result {
-            Ok(Outcome {
-                report,
-                copied: Some(copied),
-                failed,
-            }) => {
+            Ok(Outcome::Extracted(x)) => {
                 let dest = PathBuf::from(self.dest.trim());
                 log.info(format!(
-                    "Dataset \"{}\" extracted: {copied} files from {} to {}",
+                    "Dataset \"{}\" extracted: {} files from {} to {}",
                     self.name.trim(),
+                    x.copied,
                     self.dir.display(),
                     dest.display()
                 ));
-                for f in &failed {
+                for f in &x.failed {
                     log.warn(format!("Dataset \"{}\": not copied: {f}", self.name.trim()));
                 }
-                for p in &report.catalog.skipped {
-                    log.warn(format!("Dataset \"{}\": {p}", report.catalog.name));
+                if let Some(report) = &x.registered {
+                    let c = &report.catalog;
+                    log.info(format!(
+                        "Dataset \"{}\" registered: {} files in {}",
+                        c.name,
+                        c.files.len(),
+                        dest.display()
+                    ));
+                    for p in &c.skipped {
+                        log.warn(format!("Dataset \"{}\": {p}", c.name));
+                    }
                 }
                 self.outer = dataset_extract::outer_dataset(&dest);
-                self.dir = dest;
+                self.extracted_to = Some(dest);
                 Some(true)
             }
-            Ok(Outcome { report, .. }) => {
+            Ok(Outcome::Scanned(report)) => {
                 let c = &report.catalog;
                 let verb = match self.kind {
                     Kind::Register => "registered",
@@ -600,8 +617,8 @@ impl DatasetDialog {
     }
 }
 
-/// 取り出しの出力先の初期値。元のデータセットの隣の、まだないフォルダ。
-fn default_destination(dir: &Path) -> String {
+/// 取り出しの出力先の初期値。`base` の下の、データセットのフォルダと同じ名前のまだないフォルダ。
+fn default_destination(dir: &Path, base: &Path) -> String {
     let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
         return String::new();
     };
@@ -611,7 +628,7 @@ fn default_destination(dir: &Path) -> String {
         } else {
             format!("-{n}")
         };
-        dir.with_file_name(format!("{name}-extract{suffix}"))
+        base.join(format!("{name}{suffix}"))
     };
     let mut n = 1;
     while candidate(n).exists() {
