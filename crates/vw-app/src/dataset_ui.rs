@@ -24,7 +24,8 @@ pub enum Request {
     Register(PathBuf),
     Edit(PathBuf),
     Update(PathBuf),
-    Extract(PathBuf),
+    /// 取り出す。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
+    Extract(PathBuf, Option<Vec<String>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,6 +60,10 @@ pub struct DatasetDialog {
     outer: Option<PathBuf>,
     /// 取り出しが終わった出力先。
     extracted_to: Option<PathBuf>,
+    /// 検索で当たったファイル（カタログのパス）。取り出しを検索から頼まれたときだけ。
+    hits: Option<Vec<String>>,
+    /// 当たったファイルだけを取り出すか。
+    only_hits: bool,
 }
 
 /// 別スレッドでの処理の結果。
@@ -97,11 +102,11 @@ impl DatasetDialog {
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
-        let (dir, kind) = match request {
-            Request::Register(d) => (d, Kind::Register),
-            Request::Edit(d) => (d, Kind::Edit),
-            Request::Update(d) => (d, Kind::Update),
-            Request::Extract(d) => (d, Kind::Extract),
+        let (dir, kind, hits) = match request {
+            Request::Register(d) => (d, Kind::Register, None),
+            Request::Edit(d) => (d, Kind::Edit, None),
+            Request::Update(d) => (d, Kind::Update, None),
+            Request::Extract(d, hits) => (d, Kind::Extract, hits),
         };
         let mut dialog = Self {
             name: String::new(),
@@ -118,6 +123,8 @@ impl DatasetDialog {
             extracted_to: None,
             register_extracted: false,
             outer: None,
+            only_hits: hits.is_some(),
+            hits,
             dir,
             kind,
         };
@@ -218,7 +225,10 @@ impl DatasetDialog {
         let (ask, asks) = channel();
         let info = self.info();
         let dir = self.dir.clone();
-        let previous = self.previous.clone();
+        let previous = match (&self.previous, &self.hits) {
+            (Some(c), Some(hits)) if self.only_hits => Some(dataset_extract::only(c, hits)),
+            _ => self.previous.clone(),
+        };
         let registry = registry.clone();
         let worker_progress = progress.clone();
         let ctx = ctx.clone();
@@ -325,6 +335,16 @@ impl DatasetDialog {
                             lang,
                             "The files are copied with their folders. Files that already exist there are not overwritten.",
                         ));
+                        if let (Some(hits), Some(c)) = (&self.hits, &self.previous) {
+                            ui.checkbox(
+                                &mut self.only_hits,
+                                tr1(
+                                    lang,
+                                    "Extract only the files found by the search ({})",
+                                    &format!("{} / {}", hits.len(), c.files.len()),
+                                ),
+                            );
+                        }
                         ui.checkbox(
                             &mut self.register_extracted,
                             tr(lang, "Register the destination as a dataset"),

@@ -16,7 +16,10 @@ pub enum Action {
     Close,
     /// データセットのフォルダへ移ってファイルを読み込む。
     Show(PathBuf),
-    Extract(PathBuf),
+    /// データセットの中の、検索で当たったファイル（カタログのパス）だけをスロットに並べる。
+    ShowFiles(PathBuf, Vec<String>),
+    /// 取り出す。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
+    Extract(PathBuf, Option<Vec<String>>),
     Edit(PathBuf),
     /// 並べたデータセットを順に更新する。
     Update(Vec<PathBuf>),
@@ -372,6 +375,13 @@ impl DatasetsScreen {
         let dir = self.selected.as_ref()?;
         let entry = index.entries.iter().find(|e| &e.dir == dir)?;
         let c = &entry.catalog;
+        // 絞り込んだときだけ。すべてのファイルが当たったときは、データセットを開くのと同じため。
+        let hits: Option<Vec<String>> = self
+            .hits
+            .iter()
+            .find(|h| index.entries[h.entry].dir == *dir)
+            .filter(|h| h.narrowed)
+            .map(|h| h.files.iter().map(|&f| c.files[f].path.clone()).collect());
         let mut action = None;
         egui::Panel::right("dataset_detail")
             .default_size(300.0)
@@ -394,9 +404,21 @@ impl DatasetsScreen {
                             action = Some(Action::Show(entry.dir.clone()));
                         }
                         if ui.button(tr(lang, "Extract...")).clicked() {
-                            action = Some(Action::Extract(entry.dir.clone()));
+                            action = Some(Action::Extract(entry.dir.clone(), hits.clone()));
                         }
                     });
+                    if let Some(hits) = &hits {
+                        if ui
+                            .button(tr1(lang, "Show the {} files found", &hits.len().to_string()))
+                            .on_hover_text(tr(
+                                lang,
+                                "Show only the files that meet the search conditions, one slot each.",
+                            ))
+                            .clicked()
+                        {
+                            action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
+                        }
+                    }
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "Edit...")).clicked() {
                             action = Some(Action::Edit(entry.dir.clone()));
@@ -434,6 +456,16 @@ impl DatasetsScreen {
                                 ui.end_row();
                             }
                         });
+                    if let Some(hits) = &hits {
+                        ui.separator();
+                        egui::CollapsingHeader::new(tr1(
+                            lang,
+                            "Files found ({})",
+                            &hits.len().to_string(),
+                        ))
+                        .default_open(true)
+                        .show(ui, |ui| hit_list(ui, hits));
+                    }
                     if !c.skipped.is_empty() {
                         ui.separator();
                         egui::CollapsingHeader::new(tr1(
@@ -472,7 +504,7 @@ impl DatasetsScreen {
                     .cloned()
                     .unwrap_or_default()
                     .to_lowercase(),
-                Column::Hits => format!("{:012}", h.files),
+                Column::Hits => format!("{:012}", h.files.len()),
                 Column::Location => e.dir.display().to_string(),
             }
         };
@@ -540,7 +572,7 @@ impl DatasetsScreen {
                         for f in field_names {
                             ui.label(e.catalog.fields.get(f).map_or("", String::as_str));
                         }
-                        ui.label(format!("{} / {}", h.files, e.catalog.files.len()));
+                        ui.label(format!("{} / {}", h.files.len(), e.catalog.files.len()));
                         ui.label(egui::RichText::new(e.dir.display().to_string()).weak());
                         ui.end_row();
                     }
@@ -598,6 +630,20 @@ fn target_combo(
                 {
                     *target = choice;
                 }
+            }
+        });
+}
+
+/// 当たったファイルのパス。数万件あっても重くならないよう、見えている行だけを描く。
+fn hit_list(ui: &mut egui::Ui, hits: &[String]) {
+    let row = ui.text_style_height(&egui::TextStyle::Body);
+    egui::ScrollArea::vertical()
+        .id_salt("dataset-hits")
+        .max_height(320.0)
+        .show_rows(ui, row, hits.len(), |ui, range| {
+            for path in &hits[range] {
+                ui.add(egui::Label::new(egui::RichText::new(path).monospace()).truncate())
+                    .on_hover_text(path);
             }
         });
 }

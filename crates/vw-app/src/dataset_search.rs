@@ -196,11 +196,14 @@ pub struct Query {
     pub conditions: Vec<Condition>,
 }
 
-/// 当たったデータセットと、条件に合うファイルの数。
+/// 当たったデータセットと、条件に合うファイル（カタログの `files` の添字）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub entry: usize,
-    pub files: usize,
+    pub files: Vec<usize>,
+    /// ファイルの条件（メタデータの条件か、データセットの情報に見つからなかった語）があって、
+    /// ファイルを絞り込んだか。絞り込んでいなければ `files` はデータセットのすべてのファイル。
+    pub narrowed: bool,
 }
 
 /// 値の比べ方を前もって用意したもの。正規表現を値ごとに作り直さないため。
@@ -280,8 +283,12 @@ pub fn search(index: &Index, query: &Query) -> Result<Vec<Hit>, String> {
     }
     let mut hits = Vec::new();
     for (i, e) in index.entries.iter().enumerate() {
-        if let Some(files) = evaluate(&e.catalog, &checks) {
-            hits.push(Hit { entry: i, files });
+        if let Some((files, narrowed)) = evaluate(&e.catalog, &checks) {
+            hits.push(Hit {
+                entry: i,
+                files,
+                narrowed,
+            });
         }
     }
     Ok(hits)
@@ -314,9 +321,9 @@ fn condition_check(c: &Condition) -> Result<Check, String> {
     })
 }
 
-/// 当たればファイルの数を返す。メタデータの条件があれば、そのすべてに合うファイルの数。
-///
-fn evaluate(c: &Catalog, checks: &[Check]) -> Option<usize> {
+/// 当たれば、条件に合うファイルの添字と、ファイルで絞り込んだかを返す。メタデータの条件が
+/// あれば、そのすべてに合うファイルだけ。
+fn evaluate(c: &Catalog, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
     let mut wanted: Vec<Vec<bool>> = Vec::new();
     for check in checks {
         match check {
@@ -357,20 +364,22 @@ fn evaluate(c: &Catalog, checks: &[Check]) -> Option<usize> {
         }
     }
     if wanted.is_empty() {
-        return Some(c.files.len());
+        return Some(((0..c.files.len()).collect(), false));
     }
-    let files = c
+    let files: Vec<usize> = c
         .files
         .iter()
-        .filter(|f| {
+        .enumerate()
+        .filter(|(_, f)| {
             wanted.iter().all(|ok| {
                 f.meta
                     .iter()
                     .any(|&i| ok.get(i as usize).copied().unwrap_or(false))
             })
         })
-        .count();
-    (files > 0).then_some(files)
+        .map(|(i, _)| i)
+        .collect();
+    (!files.is_empty()).then_some((files, true))
 }
 
 /// キーの一致。DICOM のタグは番号（`0010,0020`）のほか名前（`PatientID`）でも指せる。
@@ -462,7 +471,7 @@ mod tests {
         search(index, query)
             .unwrap()
             .into_iter()
-            .map(|h| (index.entries[h.entry].catalog.name.clone(), h.files))
+            .map(|h| (index.entries[h.entry].catalog.name.clone(), h.files.len()))
             .collect()
     }
 
@@ -522,6 +531,36 @@ mod tests {
             names(&i, &q),
             [("CT kernels".into(), 1), ("Mixed".into(), 1)]
         );
+    }
+
+    #[test]
+    fn hits_list_the_files_that_meet_the_metadata_conditions() {
+        let i = sample();
+        let q = Query {
+            conditions: vec![cond(meta("dicom", "0008,0060"), Op::Equals, "CT")],
+            ..Query::default()
+        };
+        let hits = search(&i, &q).unwrap();
+        let paths = |h: &Hit| -> Vec<String> {
+            let c = &i.entries[h.entry].catalog;
+            h.files.iter().map(|&f| c.files[f].path.clone()).collect()
+        };
+        assert_eq!(paths(&hits[0]), ["0.dcm", "1.dcm"]);
+        assert_eq!(paths(&hits[1]), ["0.dcm"]);
+        assert!(hits.iter().all(|h| h.narrowed));
+    }
+
+    #[test]
+    fn dataset_conditions_alone_keep_every_file() {
+        let i = sample();
+        let q = Query {
+            text: "march".into(),
+            conditions: vec![cond(Target::Name, Op::Contains, "mixed")],
+        };
+        let hits = search(&i, &q).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].files, [0, 1, 2]);
+        assert!(!hits[0].narrowed);
     }
 
     #[test]

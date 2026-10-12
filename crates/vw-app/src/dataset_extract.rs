@@ -76,6 +76,15 @@ pub fn extract(
     })
 }
 
+/// カタログ `c` のうち、`paths`（カタログのパス）のファイルだけを残したもの。検索で当たった
+/// ファイルだけを取り出すときに、[`extract`] に渡す。
+pub fn only(c: &Catalog, paths: &[String]) -> Catalog {
+    let paths: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut out = c.clone();
+    out.files.retain(|f| paths.contains(f.path.as_str()));
+    out
+}
+
 /// 検索カタログにあるファイルを写し、写せた数と写せなかったものを返す。
 fn copy_files(
     source: &Path,
@@ -237,7 +246,7 @@ fn unpack(
 
 /// 検索カタログの相対パス（`/` 区切り）を、フォルダの中を指すパスにする。「..」や絶対パスで
 /// 外を指すものは `None`。手で書き換えられた検索カタログで、出力先の外に書かないため。
-fn enclosed(path: &str) -> Option<PathBuf> {
+pub fn enclosed(path: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in path.split('/') {
         let mut c = Path::new(part).components();
@@ -333,6 +342,32 @@ mod tests {
         assert_eq!(x.copied, 2);
         assert!(x.failed.is_empty());
         assert!(!catalog::exists_in(&dest));
+    }
+
+    #[test]
+    fn extracting_only_some_files_copies_just_those_including_inside_archives() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_png(&src.join("hit.png"), 2, 2, &[0; 12]);
+        write_png(&src.join("miss.png"), 2, 2, &[0; 12]);
+        let png = png_bytes(2, 2);
+        write_zip(
+            &src.join("z.zip"),
+            &[("in.png", &png), ("out.png", &png)],
+            None,
+        );
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+
+        let hits = ["hit.png".to_owned(), "z.zip!/in.png".to_owned()];
+        let x = run(&src, &only(&c, &hits), &dest, &mut no_password).unwrap();
+
+        assert_eq!(x.copied, 2);
+        assert!(dest.join("hit.png").is_file());
+        assert!(dest.join("z.zip/in.png").is_file());
+        assert!(!dest.join("miss.png").exists());
+        assert!(!dest.join("z.zip/out.png").exists());
     }
 
     #[test]
