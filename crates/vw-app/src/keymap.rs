@@ -72,6 +72,8 @@ pub enum Action {
     FullscreenNextFolder,
     FullscreenPreviousFolder,
     FullscreenPause,
+    TogglePixelProbe,
+    DeleteProbePoint,
 }
 
 /// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
@@ -84,7 +86,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 57] = [
+    pub const ALL: [Action; 59] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -108,6 +110,8 @@ impl Action {
         Action::Layout3x3,
         Action::Layout4x4,
         Action::LayoutCustom,
+        Action::TogglePixelProbe,
+        Action::DeleteProbePoint,
         Action::ToggleTagging,
         Action::FlagGood,
         Action::FlagBad,
@@ -204,6 +208,8 @@ impl Action {
             Action::FullscreenNextFolder => "fullscreen_next_folder",
             Action::FullscreenPreviousFolder => "fullscreen_previous_folder",
             Action::FullscreenPause => "fullscreen_pause",
+            Action::TogglePixelProbe => "toggle_pixel_probe",
+            Action::DeleteProbePoint => "delete_probe_point",
         }
     }
 
@@ -271,6 +277,8 @@ impl Action {
             Action::FullscreenNextFolder => "Fullscreen: next folder",
             Action::FullscreenPreviousFolder => "Fullscreen: previous folder",
             Action::FullscreenPause => "Fullscreen: pause/resume",
+            Action::TogglePixelProbe => "Pixel probe on/off",
+            Action::DeleteProbePoint => "Delete selected probe point",
         }
     }
 
@@ -416,6 +424,8 @@ impl Action {
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
+            Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
+            Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],
             Action::FullscreenExit => vec![KeyCombo::plain(Escape)],
             Action::FullscreenNext => vec![KeyCombo::plain(ArrowRight)],
             Action::FullscreenPrevious => vec![KeyCombo::plain(ArrowLeft)],

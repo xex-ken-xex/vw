@@ -28,6 +28,7 @@ mod layout;
 mod loader;
 mod log;
 mod memory;
+mod probe;
 mod series;
 mod settings;
 mod settings_ui;

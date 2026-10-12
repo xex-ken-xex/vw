@@ -15,6 +15,7 @@ use vw_core::VwImage;
 use crate::i18n::tr;
 use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
+use crate::probe::{self, Mark};
 use crate::settings::Language;
 
 /// 表示中の画像。縮小画像のテクスチャと、ログ・メタデータ表示用の情報を持つ。
@@ -164,6 +165,10 @@ pub struct Slot {
     wheel: f32,
     /// 直前に描いた画像部分の大きさ。キー操作で倍率を変えるときに使う。
     last_body: Option<Vec2>,
+    /// 画素値を確かめる十字の印。ファイルには書かず、スロットを閉じると消える。
+    pub marks: Vec<Mark>,
+    /// 選んでいる十字（[`Slot::marks`] の添字）。
+    selected_mark: Option<usize>,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -175,6 +180,8 @@ pub struct SlotLook<'a> {
     pub empty_hint: &'static str,
     /// 表示中の画像のフラグとタグ。
     pub label: &'a Label,
+    /// 画素値の確認ツールを使っている（クリックで十字を置き、カーソル位置の値を出す）。
+    pub probe: bool,
 }
 
 /// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
@@ -199,6 +206,8 @@ pub struct SlotResponse {
     pub open_folder: bool,
     /// フォルダのスロットに画像がドロップされた。
     pub dropped: Option<PathBuf>,
+    /// 右クリックメニューで十字の値のコピーが選ばれた。コピーする文字。
+    pub copy_text: Option<String>,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -218,6 +227,10 @@ pub const KEY_ZOOM_FACTOR: f32 = 1.25;
 const PAN_BUTTON: PointerButton = PointerButton::Primary;
 /// 上下のドラッグで拡大縮小するマウスボタン。
 const ZOOM_BUTTON: PointerButton = PointerButton::Secondary;
+/// 十字の腕の長さ（論理ピクセル）。
+const MARK_ARM: f32 = 8.0;
+/// 十字をクリックで選べる距離（論理ピクセル）。
+const MARK_HIT: f32 = 8.0;
 
 /// ホイールの回転量 `delta`（論理ピクセル、上に回すと正）を `acc` に足し、
 /// 1 段分たまるごとに送る枚数を返す。上に回すと前（負）、下に回すと次（正）。
@@ -346,7 +359,47 @@ impl Slot {
             pan: Vec2::ZERO,
             wheel: 0.0,
             last_body: None,
+            marks: Vec::new(),
+            selected_mark: None,
         }
+    }
+
+    /// 表示中の画像に置いた十字のうち、選んでいるもの。
+    fn selected_shown_mark(&self) -> Option<&Mark> {
+        let shown = self.shown.as_ref()?;
+        self.selected_mark
+            .and_then(|i| self.marks.get(i))
+            .filter(|m| m.path == shown.path)
+    }
+
+    /// 十字の位置の値。元の画像を読み込み中なら `None`。
+    fn mark_value(&self, mark: &Mark) -> Option<String> {
+        let shown = self.shown.as_ref()?;
+        let full = shown.full.as_ref()?;
+        let values = probe::sample(&full.image, &shown.info.metadata, mark.x, mark.y)?;
+        Some(probe::value_text(
+            full.image.color,
+            &shown.info.metadata,
+            &values,
+        ))
+    }
+
+    /// 選んでいる十字をコピーするときの文字。
+    pub fn selected_mark_text(&self) -> Option<String> {
+        let mark = self.selected_shown_mark()?;
+        let value = self.mark_value(mark);
+        Some(probe::clipboard_text(mark.x, mark.y, value.as_deref()))
+    }
+
+    /// 選んでいる十字を消す。消したら `true`。
+    pub fn delete_selected_mark(&mut self) -> bool {
+        if self.selected_shown_mark().is_none() {
+            return false;
+        }
+        if let Some(i) = self.selected_mark.take() {
+            self.marks.remove(i);
+        }
+        true
     }
 
     /// 枠の中心を動かさずに `factor` 倍する。
@@ -382,6 +435,50 @@ impl Slot {
         fit_scale(body.size(), vec2(s.info.width as f32, s.info.height as f32))
     }
 
+    /// 表示中の画像に置いた十字と、その値を描く。
+    fn draw_marks(&self, ui: &egui::Ui, body: Rect, mark_pos: &dyn Fn(&Mark) -> Pos2) {
+        let Some(shown) = &self.shown else { return };
+        let painter = ui.painter_at(body);
+        let selected = self.selected_shown_mark();
+        for mark in self.marks.iter().filter(|m| m.path == shown.path) {
+            let at = mark_pos(mark);
+            let color = if selected == Some(mark) {
+                ui.visuals().selection.stroke.color
+            } else {
+                Color32::from_rgb(255, 210, 0)
+            };
+            // 明るい画像でも暗い画像でも見えるよう、黒い縁を付けて描く。
+            for (width, c) in [(3.0, Color32::from_black_alpha(180)), (1.0, color)] {
+                let stroke = egui::Stroke::new(width, c);
+                painter.line_segment([at - vec2(MARK_ARM, 0.0), at + vec2(MARK_ARM, 0.0)], stroke);
+                painter.line_segment([at - vec2(0.0, MARK_ARM), at + vec2(0.0, MARK_ARM)], stroke);
+            }
+            let value = self.mark_value(mark);
+            let galley = painter.layout_no_wrap(
+                probe::mark_label(mark.x, mark.y, value.as_deref()),
+                egui::FontId::proportional(12.0),
+                color,
+            );
+            let pad = vec2(4.0, 1.0);
+            let size = galley.size() + 2.0 * pad;
+            let gap = MARK_ARM + 3.0;
+            // ふだんは右上に出し、枠の端で切れるときは反対側に回す。
+            let x = if at.x + gap + size.x <= body.right() {
+                at.x + gap
+            } else {
+                at.x - gap - size.x
+            };
+            let y = if at.y - gap - size.y >= body.top() {
+                at.y - gap - size.y
+            } else {
+                at.y + gap
+            };
+            let pill = Rect::from_min_size(pos2(x, y), size);
+            painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
+            painter.galley(pill.min + pad, galley, color);
+        }
+    }
+
     /// `rect` の範囲にスロットを描き、操作を処理する。
     pub fn ui(
         &mut self,
@@ -395,6 +492,7 @@ impl Slot {
             lang,
             empty_hint,
             label: image_label,
+            probe: probing,
         } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
@@ -430,30 +528,6 @@ impl Slot {
             out.dropped = response
                 .dnd_release_payload::<DraggedFile>()
                 .map(|f| f.0.clone());
-        }
-        if self.shown.is_some() {
-            response.context_menu(|ui| {
-                if ui.button(tr(lang, "Fit image to slot")).clicked() {
-                    self.reset_view();
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Copy")).clicked() {
-                    out.copy = true;
-                    ui.close();
-                }
-                let developable = self
-                    .shown
-                    .as_ref()
-                    .is_some_and(|s| s.info.develop_size.is_some() && !s.developed);
-                if developable
-                    && ui
-                        .button(tr(lang, "Develop RAW from sensor data"))
-                        .clicked()
-                {
-                    out.develop = true;
-                    ui.close();
-                }
-            });
         }
         out.toggle_maximize = response.double_clicked();
         if response.hovered() {
@@ -496,6 +570,73 @@ impl Slot {
                 Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+
+            let pixel_at = |p: Pos2| {
+                let v = (p - img_rect.min) / scale;
+                let inside = v.x >= 0.0
+                    && v.y >= 0.0
+                    && (v.x as u32) < shown.info.width
+                    && (v.y as u32) < shown.info.height;
+                inside.then_some((v.x as u32, v.y as u32))
+            };
+            let mark_pos =
+                |m: &Mark| img_rect.min + vec2(m.x as f32 + 0.5, m.y as f32 + 0.5) * scale;
+            let pointer = response.interact_pointer_pos();
+            let hit = pointer.and_then(|p| {
+                self.marks
+                    .iter()
+                    .position(|m| m.path == shown.path && mark_pos(m).distance(p) <= MARK_HIT)
+            });
+            if response.clicked() {
+                if !probing {
+                    self.selected_mark = None;
+                } else if let Some(i) = hit {
+                    self.selected_mark = Some(i);
+                } else if let Some((x, y)) = pointer.and_then(pixel_at) {
+                    self.marks.push(Mark {
+                        path: shown.path.clone(),
+                        x,
+                        y,
+                    });
+                    self.selected_mark = Some(self.marks.len() - 1);
+                }
+            }
+            if response.secondary_clicked() {
+                if let Some(i) = hit {
+                    self.selected_mark = Some(i);
+                }
+            }
+            let has_marks = self.marks.iter().any(|m| m.path == shown.path);
+            // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
+            out.wants_full |= has_marks || (probing && response.hovered());
+            self.draw_marks(ui, body, &mark_pos);
+            if probing {
+                let hover = response.hover_pos().and_then(pixel_at);
+                if let Some((x, y)) = hover {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    let value = self.mark_value(&Mark {
+                        path: shown.path.clone(),
+                        x,
+                        y,
+                    });
+                    let text = match value {
+                        Some(v) => format!("x {x}, y {y}   {v}"),
+                        None => format!("x {x}, y {y}"),
+                    };
+                    let galley = painter.layout_no_wrap(
+                        text,
+                        egui::FontId::proportional(13.0),
+                        Color32::from_gray(230),
+                    );
+                    let pad = vec2(6.0, 2.0);
+                    let pill = Rect::from_min_size(
+                        body.left_bottom() + vec2(6.0, -6.0 - galley.size().y - 2.0 * pad.y),
+                        galley.size() + 2.0 * pad,
+                    );
+                    painter.rect_filled(pill, 3.0, Color32::from_black_alpha(150));
+                    painter.galley(pill.min + pad, galley, Color32::from_gray(230));
+                }
+            }
         } else if let Some(folder) = self.folder.as_ref().filter(|_| self.is_closed_folder()) {
             let zip = crate::archive::is_archive(folder);
             let icon = if zip {
@@ -539,6 +680,46 @@ impl Slot {
             );
         }
 
+        if self.shown.is_some() {
+            let mark_text = self.selected_mark_text();
+            let mut delete_mark = false;
+            response.context_menu(|ui| {
+                if let Some(text) = &mark_text {
+                    if ui.button(tr(lang, "Copy point value")).clicked() {
+                        out.copy_text = Some(text.clone());
+                        ui.close();
+                    }
+                    if ui.button(tr(lang, "Delete point")).clicked() {
+                        delete_mark = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                }
+                if ui.button(tr(lang, "Fit image to slot")).clicked() {
+                    self.reset_view();
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Copy")).clicked() {
+                    out.copy = true;
+                    ui.close();
+                }
+                let developable = self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|s| s.info.develop_size.is_some() && !s.developed);
+                if developable
+                    && ui
+                        .button(tr(lang, "Develop RAW from sensor data"))
+                        .clicked()
+                {
+                    out.develop = true;
+                    ui.close();
+                }
+            });
+            if delete_mark {
+                self.delete_selected_mark();
+            }
+        }
         // ヘッダ: ファイル名、表示倍率、閉じるボタン。
         // ヘッダ全体のクリック判定を閉じるボタンより先に登録する。egui では後から登録した
         // 判定が上に来るので、逆にすると閉じるボタンが押せなくなる。
