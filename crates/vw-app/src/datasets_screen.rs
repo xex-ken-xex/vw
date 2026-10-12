@@ -20,6 +20,8 @@ pub enum Action {
     Edit(PathBuf),
     /// 並べたデータセットを順に更新する。
     Update(Vec<PathBuf>),
+    /// 検索カタログを探し直す。
+    Reload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,11 +65,13 @@ impl Default for DatasetsScreen {
 }
 
 impl DatasetsScreen {
-    /// 画面を開いた。まだ一度も探していなければ探し始める。
+    /// 画面を開いた。開くたびに探し直す。
+    ///
+    /// 前に探した結果を使い回さないのは、画面を閉じている間にエクスプローラなどで
+    /// カタログを消したり足したりしても、開き直せば反映されるようにするため。
+    /// 探している間は前の結果を出しておくので、開いた直後に一覧が空になることはない。
     pub fn opened(&mut self, roots: &[String], ctx: &egui::Context) {
-        if self.index.is_none() && self.loading.is_none() {
-            self.reload(roots, ctx);
-        }
+        self.reload(roots, ctx);
     }
 
     /// データセットのフォルダ以下を別スレッドで探し直す。ネットワークドライブでは数秒かかるため。
@@ -100,6 +104,11 @@ impl DatasetsScreen {
             return;
         };
         if let Ok(index) = rx.try_recv() {
+            if let Some(dir) = &self.selected {
+                if !index.entries.iter().any(|e| &e.dir == dir) {
+                    self.selected = None;
+                }
+            }
             self.index = Some(index);
             self.loading = None;
             self.searched = None;
@@ -167,9 +176,15 @@ impl DatasetsScreen {
                 {
                     self.advanced ^= true;
                 }
-                if ui.button(tr(lang, "Reload")).clicked() {
-                    let ctx = ui.ctx().clone();
-                    self.reload(roots, &ctx);
+                if ui
+                    .button(format!("{} {}", icon::ARROW_CLOCKWISE, tr(lang, "Reload")))
+                    .on_hover_text(tr(
+                        lang,
+                        "Look for search catalogs again, to show catalogs added or deleted outside vw.",
+                    ))
+                    .clicked()
+                {
+                    action = Some(Action::Reload);
                 }
                 let shown: Vec<PathBuf> = self.hit_dirs();
                 if ui
@@ -649,4 +664,58 @@ fn key_menu(
                 });
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::{self, Catalog};
+
+    fn wait_for_index(screen: &mut DatasetsScreen) -> &Index {
+        while screen.loading.is_some() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            screen.poll();
+        }
+        screen.index().expect("discovery finished")
+    }
+
+    #[test]
+    fn reopening_the_screen_drops_a_catalog_deleted_meanwhile() {
+        let tmp = crate::test_util::TempDir::new();
+        let dir = tmp.mkdir("set");
+        let c = Catalog {
+            name: "set".into(),
+            ..Catalog::default()
+        };
+        catalog::save(&dir, &c).unwrap();
+        let roots = [tmp.path().display().to_string()];
+        let ctx = egui::Context::default();
+        let mut screen = DatasetsScreen {
+            selected: Some(dir.clone()),
+            ..DatasetsScreen::default()
+        };
+
+        screen.opened(&roots, &ctx);
+        assert_eq!(wait_for_index(&mut screen).entries.len(), 1);
+        assert_eq!(screen.selected.as_deref(), Some(dir.as_path()));
+
+        std::fs::remove_file(catalog::path_in(&dir)).unwrap();
+        screen.opened(&roots, &ctx);
+        assert!(wait_for_index(&mut screen).entries.is_empty());
+        assert_eq!(screen.selected, None);
+    }
+
+    #[test]
+    fn reopening_the_screen_finds_a_catalog_added_meanwhile() {
+        let tmp = crate::test_util::TempDir::new();
+        let roots = [tmp.path().display().to_string()];
+        let ctx = egui::Context::default();
+        let mut screen = DatasetsScreen::default();
+        screen.opened(&roots, &ctx);
+        assert!(wait_for_index(&mut screen).entries.is_empty());
+
+        catalog::save(&tmp.mkdir("new"), &Catalog::default()).unwrap();
+        screen.opened(&roots, &ctx);
+        assert_eq!(wait_for_index(&mut screen).entries.len(), 1);
+    }
 }

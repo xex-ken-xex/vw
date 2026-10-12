@@ -1872,6 +1872,21 @@ impl VwApp {
         };
     }
 
+    /// フォルダを OS のファイラで開く。展開した ZIP の中なら、ZIP のあるフォルダを開く。
+    ///
+    /// 展開先そのものを開かないのは、そこが vw の一時フォルダで、消したり足したりしても
+    /// ZIP には戻らず、vw を閉じれば消えてしまうため。
+    fn open_in_file_manager(&mut self, dir: &Path) {
+        let target = match self.archives.mount_of(dir) {
+            Some(m) => m.zip.parent().unwrap_or(dir).to_path_buf(),
+            None => dir.to_path_buf(),
+        };
+        if let Err(e) = crate::launch::open_folder(&target) {
+            self.log
+                .error(format!("Cannot open {}: {e}", target.display()));
+        }
+    }
+
     /// レイアウトを変えて設定に保存する。最大化は解く（変えた結果が見えるように）。
     fn set_layout(&mut self, ctx: &egui::Context, layout: SlotLayout) {
         self.maximized = None;
@@ -3060,6 +3075,7 @@ impl VwApp {
             self.show_settings = false;
             self.datasets
                 .opened(&self.settings.settings.dataset.roots, ctx);
+            self.tree.forget_peeks();
         }
     }
 
@@ -4588,6 +4604,11 @@ impl eframe::App for VwApp {
                 Some(crate::datasets_screen::Action::Update(dirs)) => {
                     self.dataset_queue.extend(dirs);
                 }
+                Some(crate::datasets_screen::Action::Reload) => {
+                    self.datasets.reload(&dataset.roots, &ctx);
+                    // ツリーのデータセットの色も、カタログの有無に合わせて付け直す。
+                    self.tree.forget_peeks();
+                }
                 None => {}
             }
             self.next_queued_update(&ctx);
@@ -4660,6 +4681,10 @@ impl eframe::App for VwApp {
                         }
                         TreeAction::Drop { file, dir } => {
                             self.drop_file(&ctx, file, dir);
+                            return;
+                        }
+                        TreeAction::OpenInFileManager(p) => {
+                            self.open_in_file_manager(&p);
                             return;
                         }
                         TreeAction::Copy(p) => {

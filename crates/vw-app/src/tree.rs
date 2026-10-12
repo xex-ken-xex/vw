@@ -96,6 +96,8 @@ struct Out {
 pub enum TreeAction {
     /// フルパスをコピーする（右クリックメニュー）。
     Copy(PathBuf),
+    /// フォルダを OS のファイラで開く（右クリックメニュー）。
+    OpenInFileManager(PathBuf),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
@@ -438,12 +440,16 @@ fn copy_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<T
     });
 }
 
-/// フォルダの右クリックメニュー。パスのコピーと、データセットの登録・編集・更新。
+/// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
 fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
     use crate::dataset_ui::Request;
     r.context_menu(|ui| {
         if ui.button(tr(lang, "Copy")).clicked() {
             *out = Some(TreeAction::Copy(path.to_owned()));
+            ui.close();
+        }
+        if ui.button(tr(lang, "Open in file manager")).clicked() {
+            *out = Some(TreeAction::OpenInFileManager(path.to_owned()));
             ui.close();
         }
         ui.separator();
@@ -542,7 +548,7 @@ pub fn has_tree_children(dir: &Path, registry: &Registry) -> bool {
     let dicom_extensions = dicom_extensions(registry);
     let mut probes = 0;
     for e in rd.flatten() {
-        if e.file_name().to_string_lossy().starts_with('.') {
+        if is_hidden_name(&e.file_name().to_string_lossy()) {
             continue;
         }
         let path = e.path();
@@ -736,8 +742,22 @@ impl FolderTree {
     }
 }
 
+/// ツリーとスロットに出さない名前。ドットで始まる隠しファイル・フォルダと、ゴミ箱。
+pub fn is_hidden_name(name: &str) -> bool {
+    name.starts_with('.') || is_recycle_bin(name)
+}
+
+/// Windows がドライブごとに作るゴミ箱のフォルダ。中身は消したファイルの残骸で、
+/// 名前も元と違う（$R1A2B3C.png など）ため、見せても探しても役に立たない。
+/// Linux のゴミ箱（.Trash-1000 や ~/.local/share/Trash）はドットで始まるので隠しとして除かれる。
+pub fn is_recycle_bin(name: &str) -> bool {
+    ["$RECYCLE.BIN", "RECYCLER", "RECYCLED"]
+        .iter()
+        .any(|bin| name.eq_ignore_ascii_case(bin))
+}
+
 /// フォルダの直下を、フォルダ → ファイルの順、それぞれ `order` の順で返す。
-/// ドットで始まる隠しファイル・フォルダと、対応していない形式のファイルは除く。
+/// 隠すもの（[`is_hidden_name`]）と、対応していない形式のファイルは除く。
 /// 読めないフォルダ（権限がないなど）は空として扱い、ツリー全体の表示は止めない。
 fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
     let Ok(rd) = std::fs::read_dir(path) else {
@@ -747,7 +767,7 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
+            if is_hidden_name(&name) {
                 return None;
             }
             let path = e.path();
@@ -1058,6 +1078,24 @@ mod tests {
         let with_zip = TempDir::new();
         with_zip.touch("scans.zip");
         assert!(has_tree_children(with_zip.path(), &all_registry()));
+    }
+
+    #[test]
+    fn recycle_bins_are_not_listed_in_any_letter_case() {
+        let dir = TempDir::new();
+        dir.mkdir("$RECYCLE.BIN");
+        dir.mkdir("$Recycle.Bin2");
+        dir.mkdir("recycler");
+        dir.mkdir("photos");
+        let nodes = list_dir(dir.path(), &png_registry(), SortOrder::default());
+        assert_eq!(names(&nodes), ["$Recycle.Bin2", "photos"]);
+    }
+
+    #[test]
+    fn folder_with_only_a_recycle_bin_is_a_leaf() {
+        let dir = TempDir::new();
+        dir.mkdir("$RECYCLE.BIN");
+        assert!(!has_tree_children(dir.path(), &all_registry()));
     }
 
     #[test]

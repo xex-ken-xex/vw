@@ -459,6 +459,11 @@ const JA: &[(&str, &str)] = &[
     ("Search names, memos, tags, fields and metadata", "名前・メモ・タグ・項目・メタデータを検索"),
     ("Advanced", "詳細"),
     ("Reload", "再読み込み"),
+    ("Open in file manager", "フォルダを開く"),
+    (
+        "Look for search catalogs again, to show catalogs added or deleted outside vw.",
+        "検索カタログを探し直します。vw の外でカタログを足したり消したりしたときに使います。",
+    ),
     ("Update all", "すべて更新"),
     ("Read all files of the datasets shown again and rebuild their search catalogs.", "表示中のデータセットの全ファイルを読み直し、検索カタログを作り直します。"),
     ("Add dataset folders in Settings > Datasets.", "設定 > データセット でデータセットのフォルダを追加してください。"),
