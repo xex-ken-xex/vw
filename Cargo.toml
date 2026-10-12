@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/vw-core", "crates/vw-png", "crates/vw-jpeg", "crates/vw-bmp", "crates/vw-webp", "crates/vw-gif", "crates/vw-tiff", "crates/vw-raw", "crates/vw-dicom", "crates/vw-app"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
