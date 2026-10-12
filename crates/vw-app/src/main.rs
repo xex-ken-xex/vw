@@ -29,6 +29,8 @@ mod layout;
 mod loader;
 mod log;
 mod memory;
+mod pipeline_view;
+mod pixel_pipeline;
 mod probe;
 mod series;
 mod settings;

@@ -212,6 +212,8 @@ pub struct SlotResponse {
     pub copy_text: Option<String>,
     /// 右クリックメニューで送信先が選ばれた。
     pub send: Option<crate::dicom_send::Choice>,
+    /// 右クリックメニューで「画素の変換」が選ばれた。
+    pub pipeline: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -726,6 +728,10 @@ impl Slot {
                     .is_some_and(|s| s.info.plugin == "DICOM");
                 if dicom {
                     ui.separator();
+                    if ui.button(tr(lang, "Pixel pipeline...")).clicked() {
+                        out.pipeline = true;
+                        ui.close();
+                    }
                     out.send = crate::dicom_send::menu(ui, lang, destinations);
                 }
             });

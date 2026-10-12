@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use dicom_core::value::PixelFragmentSequence;
+use dicom_core::value::{DataSetSequence, PixelFragmentSequence};
 use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
@@ -156,6 +156,67 @@ impl Synth {
     pub fn instance(mut self, uid: &str, number: i32) -> Self {
         self.put_str(tags::SOP_INSTANCE_UID, VR::UI, uid);
         self.put_str(tags::INSTANCE_NUMBER, VR::IS, &number.to_string());
+        self
+    }
+
+    /// 任意の文字の属性。
+    pub fn text(mut self, tag: Tag, vr: VR, value: &str) -> Self {
+        self.put_str(tag, vr, value);
+        self
+    }
+
+    /// 符号付き 16bit のフレームを並べたマルチフレーム。
+    pub fn frames_i16(self, frames: &[&[i16]]) -> Self {
+        let n = frames.len().to_string();
+        self.pixels_i16(&frames.concat())
+            .text(tags::NUMBER_OF_FRAMES, VR::IS, &n)
+    }
+
+    /// Enhanced 形式の、フレームごとの Rescale とウィンドウ。組は (slope, intercept, center, width)。
+    pub fn per_frame_values(mut self, frames: &[(f64, f64, f64, f64)]) -> Self {
+        let ds =
+            |tag: Tag, v: f64| DataElement::new(tag, VR::DS, PrimitiveValue::from(v.to_string()));
+        let items = frames
+            .iter()
+            .map(|&(slope, intercept, center, width)| {
+                let transform = InMemDicomObject::from_element_iter([
+                    ds(tags::RESCALE_SLOPE, slope),
+                    ds(tags::RESCALE_INTERCEPT, intercept),
+                    DataElement::new(tags::RESCALE_TYPE, VR::LO, PrimitiveValue::from("HU")),
+                ]);
+                let voi = InMemDicomObject::from_element_iter([
+                    ds(tags::WINDOW_CENTER, center),
+                    ds(tags::WINDOW_WIDTH, width),
+                ]);
+                InMemDicomObject::from_element_iter([
+                    DataElement::new(
+                        tags::PIXEL_VALUE_TRANSFORMATION_SEQUENCE,
+                        VR::SQ,
+                        DataSetSequence::from(vec![transform]),
+                    ),
+                    DataElement::new(
+                        tags::FRAME_VOILUT_SEQUENCE,
+                        VR::SQ,
+                        DataSetSequence::from(vec![voi]),
+                    ),
+                ])
+            })
+            .collect::<Vec<_>>();
+        self.obj.put(DataElement::new(
+            tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(items),
+        ));
+        self
+    }
+
+    /// 中身が空の項目を 1 つ持つシーケンス。あるかどうかだけを見る属性（Modality LUT Sequence など）用。
+    pub fn empty_sequence(mut self, tag: Tag) -> Self {
+        self.obj.put(DataElement::new(
+            tag,
+            VR::SQ,
+            DataSetSequence::from(vec![InMemDicomObject::new_empty()]),
+        ));
         self
     }
 

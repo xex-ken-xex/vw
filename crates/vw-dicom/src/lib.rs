@@ -22,6 +22,7 @@ use dicom_pixeldata::{
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
 pub mod net;
+pub mod pipeline;
 pub mod synth;
 
 /// 128 バイトのプリアンブルの後ろに置かれる印。

@@ -7,6 +7,7 @@
 //! 位置と大きさは物理ピクセルで持つ。論理ピクセル（DPI で割った値）で持つと、
 //! 拡大率の違うモニタをまたいだときに、どのモニタの拡大率で割った値か曖昧になるため。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::toml_reader::Reader;
@@ -46,6 +47,19 @@ pub struct AppState {
     pub extract_dir: Option<PathBuf>,
     /// 最後に全画面スライドショーを始めた起点のフォルダ。
     pub fullscreen_root: Option<PathBuf>,
+    /// 画素の変換の図で動かしたノードの位置。鍵は `形式.ノード`（例 `gray.voi`）。
+    pub pipeline_nodes: BTreeMap<String, [f32; 2]>,
+}
+
+/// `[pipeline_nodes]` を読む。読めない項目だけを捨てる（位置はなくても既定の並びに戻るだけ）。
+fn read_pipeline_nodes(r: &mut Reader<'_>) -> BTreeMap<String, [f32; 2]> {
+    let Some(section) = r.section("pipeline_nodes") else {
+        return BTreeMap::new();
+    };
+    section
+        .keys()
+        .filter_map(|key| Some((key.clone(), r.get::<[f32; 2]>("pipeline_nodes", key)?)))
+        .collect()
 }
 
 /// 起動時にウインドウをどう置くか。
@@ -90,6 +104,7 @@ impl AppState {
         let current = r.get::<PathBuf>("tree", "current");
         let extract_dir = r.get::<PathBuf>("dataset", "extract_dir");
         let fullscreen_root = r.get::<PathBuf>("fullscreen", "root");
+        let pipeline_nodes = read_pipeline_nodes(&mut r);
         (
             Self {
                 window,
@@ -97,6 +112,7 @@ impl AppState {
                 current,
                 extract_dir,
                 fullscreen_root,
+                pipeline_nodes,
             },
             r.problems,
         )
@@ -140,6 +156,14 @@ impl AppState {
             let mut fullscreen = toml::Table::new();
             fullscreen.insert("root".into(), dir.into());
             root.insert("fullscreen".into(), fullscreen.into());
+        }
+        if !self.pipeline_nodes.is_empty() {
+            let nodes: toml::Table = self
+                .pipeline_nodes
+                .iter()
+                .map(|(k, v)| (k.clone(), toml::Value::try_from(v).unwrap()))
+                .collect();
+            root.insert("pipeline_nodes".into(), nodes.into());
         }
         toml::to_string(&root).expect("state is always representable in TOML")
     }
@@ -378,6 +402,7 @@ mod tests {
             current: Some(PathBuf::from("/home/ken/写真")),
             extract_dir: Some(PathBuf::from("/home/ken/評価")),
             fullscreen_root: Some(PathBuf::from("/home/ken/撮影")),
+            pipeline_nodes: [("gray.voi".to_owned(), [560.0, -20.5])].into(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -392,6 +417,7 @@ mod tests {
             current: None,
             extract_dir: None,
             fullscreen_root: None,
+            pipeline_nodes: BTreeMap::new(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -448,6 +474,7 @@ mod tests {
             current: None,
             extract_dir: None,
             fullscreen_root: None,
+            pipeline_nodes: BTreeMap::new(),
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));

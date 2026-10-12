@@ -350,6 +350,30 @@ pub fn cover_side(long: u32, side: u32) -> u32 {
     long.div_ceil(n)
 }
 
+/// 既定の表示（ファイルの値）での描画用バッファを、テクスチャの大きさ `size` で作る。
+pub fn default_color_image(image: &VwImage, size: [usize; 2]) -> ColorImage {
+    let d = display::to_display(image, &DisplayParams::default());
+    let d = display::shrink(&d, size[0].max(size[1]) as u32);
+    fit_color_image(color_image(&d), size)
+}
+
+/// `image` をテクスチャの大きさ `size` に合わせる。読み込みで間引いたテクスチャ
+/// （テクスチャの大きさの上限や全画面）に差し替えるとき用で、最も近い画素を取る。
+pub fn fit_color_image(image: ColorImage, size: [usize; 2]) -> ColorImage {
+    if image.size == size {
+        return image;
+    }
+    let [w, h] = size;
+    let [sw, sh] = image.size;
+    let pixels = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w * sw / w.max(1), i / w * sh / h.max(1));
+            image.pixels[y * sw + x]
+        })
+        .collect();
+    ColorImage::new(size, pixels)
+}
+
 fn color_image(d: &DisplayImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([d.width as usize, d.height as usize], &d.rgba)
 }
