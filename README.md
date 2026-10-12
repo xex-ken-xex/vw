@@ -33,7 +33,7 @@ vw でできることは、大きく分けて 3 つです。
 | BMP | 1〜32bit、パレット / RLE / ビットフィールド、上下逆の BMP も |
 | カメラ RAW | Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF（Canon CR2 / CR3、DNG も読めます）。まずカメラが埋め込んだプレビューを表示し、続けて裏でセンサーのデータを現像して、精細な画像に差し替えます |
 | ZIP / 7z | 中の画像を、フォルダと同じように開けます。パスワード付き（ZIP は ZipCrypto と AES、7z は AES）も可 |
-| TIFF | 予定 |
+| TIFF | 1〜16bit の整数と 32bit の実数、グレー / RGB / アルファ / パレット / CMYK、白黒の FAX 圧縮（CCITT G3 / G4）、LZW / Deflate / PackBits / JPEG 圧縮、タイル、BigTIFF。複数ページは全ページを 1 つのスロットに並べ、ホイールでページを送る（縮小版のページは除く）。向きのタグを反映し、カメラや作成ソフトの情報を表示 |
 
 ---
 
@@ -122,7 +122,7 @@ cd vw
 `install.sh` は次のことを行います（管理者権限は使いません）。
 
 - `vw` を `~/.local/bin/vw` に置く
-- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・GIF・BMP・カメラ RAW の「別のアプリケーションで開く」に出るようにする
+- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・GIF・BMP・TIFF・カメラ RAW の「別のアプリケーションで開く」に出るようにする
 
 インストールせずに、展開したフォルダで `./vw` を実行して使うこともできます。
 
@@ -965,6 +965,7 @@ crates/
   vw-bmp/    BMP プラグイン
   vw-webp/   WebP プラグイン
   vw-gif/    GIF プラグイン
+  vw-tiff/   TIFF プラグイン
   vw-raw/    カメラ RAW プラグイン（rawler、LGPL-2.1）
   vw-app/    アプリ本体（実行ファイル vw）
 docs/        設計資料と README の画像
