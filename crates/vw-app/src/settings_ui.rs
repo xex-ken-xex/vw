@@ -64,7 +64,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 26] = [
+const ITEMS: [Item; 27] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -111,7 +111,7 @@ const ITEMS: [Item; 26] = [
         section: Section::Viewer,
         key: "viewer.layout",
         title: "Slot layout",
-        description: "How slots are arranged. Auto fits every slot on one page; a fixed grid shows the rest on further pages (Page Up / Page Down).",
+        description: "How slots are arranged. Auto fits every slot on one page up to the Auto layout maximum; a fixed grid shows the rest on further pages (Page Up / Page Down).",
         widget: layout_widget,
     },
     Item {
@@ -120,6 +120,13 @@ const ITEMS: [Item; 26] = [
         title: "Custom layout",
         description: "Columns x rows used by the Custom layout in the View menu.",
         widget: custom_layout_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.auto_layout_max",
+        title: "Auto layout maximum",
+        description: "Largest grid (columns x rows) the Auto layout uses. More slots than this go on further pages, so slots do not get too small.",
+        widget: auto_layout_max_widget,
     },
     Item {
         section: Section::Viewer,
@@ -328,8 +335,9 @@ fn layout_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     s.viewer.layout != before
 }
 
-fn custom_layout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
-    let SlotLayout::Grid { mut cols, mut rows } = s.viewer.custom_layout else {
+/// 列数と行数の入力欄。変えたら `true`。
+fn grid_input(layout: &mut SlotLayout, ui: &mut egui::Ui) -> bool {
+    let SlotLayout::Grid { mut cols, mut rows } = *layout else {
         return false;
     };
     let side = 1..=SlotLayout::MAX_SIDE;
@@ -341,11 +349,21 @@ fn custom_layout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
             c.changed() || r.changed()
         })
         .inner;
-    if !changed {
+    if changed {
+        *layout = SlotLayout::grid(cols, rows);
+    }
+    changed
+}
+
+fn auto_layout_max_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    grid_input(&mut s.viewer.auto_layout_max, ui)
+}
+
+fn custom_layout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let old = s.viewer.custom_layout;
+    if !grid_input(&mut s.viewer.custom_layout, ui) {
         return false;
     }
-    let old = s.viewer.custom_layout;
-    s.viewer.custom_layout = SlotLayout::grid(cols, rows);
     // カスタムを選んでいる間は、マス目を変えたらすぐ画面に反映する。
     if s.viewer.layout == old {
         s.viewer.layout = s.viewer.custom_layout;

@@ -51,7 +51,7 @@ impl Default for DatasetsScreen {
             index: None,
             loading: None,
             query: Query::default(),
-            advanced: false,
+            advanced: true,
             hits: Vec::new(),
             error: None,
             searched: None,

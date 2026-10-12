@@ -1817,12 +1817,20 @@ impl VwApp {
         let maximized = self
             .maximized
             .and_then(|id| self.slots.iter().position(|s| s.id == id));
-        layout::view(
-            self.settings.settings.viewer.layout,
-            self.slots.len(),
-            self.active,
-            maximized,
-        )
+        layout::view(self.layout(), self.slots.len(), self.active, maximized)
+    }
+
+    /// 今のスロットの数で使うマス目。自動レイアウトは上限の設定の中で決まる。
+    fn layout(&self) -> SlotLayout {
+        let viewer = &self.settings.settings.viewer;
+        viewer
+            .layout
+            .resolve(self.slots.len(), viewer.auto_layout_max)
+    }
+
+    /// ページを `delta` だけ送り、そのページの先頭のスロットをアクティブにする。
+    fn step_page(&mut self, delta: isize) {
+        self.active = layout::page_step(self.layout(), self.slots.len(), self.active, delta);
     }
 
     /// アクティブなスロットを `delta` だけ前後に移す。最大化中は最大化するスロットも移す。
@@ -3120,8 +3128,7 @@ impl VwApp {
             Action::PreviousPage | Action::NextPage => {
                 let delta = if action == Action::NextPage { 1 } else { -1 };
                 if self.maximized.is_none() {
-                    let layout = self.settings.settings.viewer.layout;
-                    self.active = layout::page_step(layout, self.slots.len(), self.active, delta);
+                    self.step_page(delta);
                 }
             }
             // フォルダのスロットで Enter を押したらその中へ移る。別の操作にしないのは、キーの
@@ -4252,6 +4259,48 @@ impl VwApp {
         ctx.request_repaint_after(toast.until - now);
     }
 
+    /// スロットがページに分かれているときに、画像フィールドの右下に出すページの帯。
+    /// スロットの総数、今のページとページ数、前後のページへのボタンを並べる。
+    /// 押されたボタンの向き（-1 か 1）を返す。
+    fn page_bar(&self, ctx: &egui::Context, area: Rect, view: &layout::View) -> Option<isize> {
+        let lang = self.lang();
+        let total = tr1(lang, "{} slots", &self.slots.len().to_string());
+        egui::Area::new(egui::Id::new("page_bar"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(area.right_bottom() - vec2(6.0, 6.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .inner_margin(egui::Margin::symmetric(4, 1))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(egui::RichText::new(total).small().weak());
+                            let previous = ui
+                                .small_button(egui_phosphor::regular::CARET_LEFT)
+                                .on_hover_text(tr(lang, "Previous page"));
+                            ui.label(
+                                egui::RichText::new(format!("{} / {}", view.page + 1, view.pages))
+                                    .small(),
+                            );
+                            let next = ui
+                                .small_button(egui_phosphor::regular::CARET_RIGHT)
+                                .on_hover_text(tr(lang, "Next page"));
+                            if previous.clicked() {
+                                Some(-1)
+                            } else if next.clicked() {
+                                Some(1)
+                            } else {
+                                None
+                            }
+                        })
+                        .inner
+                    })
+                    .inner
+            })
+            .inner
+    }
+
     /// スロットをグリッドに並べて描く。
     ///
     /// egui の Grid ウィジェットを使わず矩形を自分で割り当てるのは、Grid が中身の大きさに
@@ -4371,15 +4420,44 @@ impl VwApp {
                 step = Some((i, resp.step));
             }
         }
+        let mut filler_clicked = None;
+        if !maximized && self.settings.settings.viewer.layout != SlotLayout::Auto {
+            for cell_index in view.range.len()..cols * rows {
+                let (c, r) = (cell_index % cols, cell_index / cols);
+                let (x0, x1) = layout::cell_span(area.min.x, area.width(), cols, c, pixel);
+                let (y0, y1) = layout::cell_span(area.min.y, area.height(), rows, r, pixel);
+                let rect = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
+                // 空いたマスにも本物のスロットを置かず、描くときだけの空のスロットにする。
+                // 本物にすると、スロットの数が増えてページ数や自動レイアウトのマス目が変わり、
+                // ← → で辿る先にも混ざるため。クリックされたマスだけ本物にする。
+                let mut filler = Slot::new(u64::MAX - cell_index as u64);
+                let resp = filler.ui(
+                    ui,
+                    rect,
+                    false,
+                    SlotLook {
+                        background,
+                        lang,
+                        empty_hint: hint,
+                        label: &Default::default(),
+                    },
+                );
+                if resp.clicked {
+                    filler_clicked = Some(view.range.start + cell_index);
+                }
+            }
+        }
+        if let Some(index) = filler_clicked {
+            while self.slots.len() <= index {
+                self.add_slot();
+            }
+            self.active = index;
+            self.set_focus(ui.ctx(), Focus::Images);
+        }
         if view.pages > 1 {
-            let text = format!("{} / {}", view.page + 1, view.pages);
-            ui.painter().text(
-                area.right_bottom() - vec2(8.0, 6.0),
-                egui::Align2::RIGHT_BOTTOM,
-                text,
-                egui::FontId::proportional(12.0),
-                ui.visuals().weak_text_color(),
-            );
+            if let Some(delta) = self.page_bar(ui.ctx(), area, &view) {
+                self.step_page(delta);
+            }
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
         if let Some((file, dir)) = dropped {

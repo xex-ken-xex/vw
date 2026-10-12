@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum SlotLayout {
-    /// スロットの数から、正方形に近いマス目を毎回決める。全スロットが 1 ページに入る。
+    /// スロットの数から、正方形に近いマス目を毎回決める。上限のマス目（設定）に入るうちは
+    /// 全スロットが 1 ページに入り、超えたら上限のマス目でページに分ける。
     #[default]
     Auto,
     /// 決まった列数と行数。入りきらないスロットは次のページに回す。
@@ -36,6 +37,26 @@ impl SlotLayout {
 
     pub const fn grid(cols: usize, rows: usize) -> Self {
         SlotLayout::Grid { cols, rows }
+    }
+
+    /// `n` 個のスロットを並べる決まったマス目にする。`Auto` は `max` の中で決める。
+    ///
+    /// `Auto` を上限つきのまま各関数に渡さずここで決まったマス目に直すのは、ページ分けや
+    /// ページ送りの計算を、指定のマス目と同じ 1 本の道筋にしておくため。
+    pub fn resolve(self, n: usize, max: SlotLayout) -> SlotLayout {
+        let (max_cols, max_rows) = match max {
+            SlotLayout::Grid { cols, rows } => (cols, rows),
+            SlotLayout::Auto => return SlotLayout::Auto,
+        };
+        match self {
+            SlotLayout::Grid { .. } => self,
+            SlotLayout::Auto if n > max_cols * max_rows => max,
+            SlotLayout::Auto => {
+                let (cols, _) = auto_dims(n);
+                let cols = cols.min(max_cols).max(n.max(1).div_ceil(max_rows));
+                SlotLayout::grid(cols, n.max(1).div_ceil(cols))
+            }
+        }
     }
 
     /// `n` 個のスロットを並べるときの (列数, 行数)。
@@ -200,6 +221,46 @@ mod tests {
         assert_eq!(auto_dims(4), (2, 2));
         assert_eq!(auto_dims(5), (3, 2));
         assert_eq!(auto_dims(10), (4, 3));
+    }
+
+    #[test]
+    fn auto_layout_within_the_maximum_is_the_plain_auto_grid() {
+        let max = SlotLayout::grid(6, 6);
+        for n in 1..=36 {
+            let (cols, rows) = auto_dims(n);
+            assert_eq!(
+                SlotLayout::Auto.resolve(n, max),
+                SlotLayout::grid(cols, rows)
+            );
+        }
+    }
+
+    #[test]
+    fn auto_layout_beyond_the_maximum_pages_with_the_maximum_grid() {
+        let max = SlotLayout::grid(6, 6);
+        let l = SlotLayout::Auto.resolve(100, max);
+        assert_eq!(l, max);
+        assert_eq!(l.page_count(100), 3);
+    }
+
+    #[test]
+    fn auto_layout_keeps_every_slot_on_one_page_inside_a_flat_maximum() {
+        let max = SlotLayout::grid(8, 2);
+        for n in 1..=16 {
+            let SlotLayout::Grid { cols, rows } = SlotLayout::Auto.resolve(n, max) else {
+                panic!("auto stays auto");
+            };
+            assert!(
+                cols <= 8 && rows <= 2 && cols * rows >= n,
+                "{n}: {cols}x{rows}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_layout_ignores_the_auto_maximum() {
+        let l = SlotLayout::grid(8, 8);
+        assert_eq!(l.resolve(100, SlotLayout::grid(2, 2)), l);
     }
 
     #[test]
