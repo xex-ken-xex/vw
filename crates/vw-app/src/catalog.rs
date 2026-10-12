@@ -269,7 +269,9 @@ fn walk(dir: &Path, registry: &Registry, out: &mut Vec<PathBuf>) -> Result<(), S
             continue;
         };
         if kind.is_dir() {
-            walk(&path, registry, out)?;
+            if !crate::tree::is_recycle_bin(&e.file_name().to_string_lossy()) {
+                walk(&path, registry, out)?;
+            }
         } else if kind.is_file() && (archive::is_archive(&path) || registry.supports_file(&path)) {
             out.push(path);
         }
@@ -521,6 +523,21 @@ mod tests {
             .filter(|(k, key2, _)| k == kind && key2 == key)
             .map(|(_, _, v)| v.as_str())
             .collect()
+    }
+
+    #[test]
+    fn images_in_the_recycle_bin_are_left_out_of_the_catalog() {
+        let tmp = TempDir::new();
+        write_png(&tmp.mkdir("$RECYCLE.BIN").join("$R1.png"), 2, 3, &[0; 18]);
+        write_png(&tmp.path().join("kept.png"), 2, 3, &[0; 18]);
+        let report = run(tmp.path(), None).unwrap();
+        let paths: Vec<_> = report
+            .catalog
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(paths, ["kept.png"]);
     }
 
     #[test]

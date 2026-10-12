@@ -54,7 +54,8 @@ impl Index {
             return;
         };
         for e in read.flatten() {
-            if e.file_type().is_ok_and(|t| t.is_dir()) {
+            let bin = crate::tree::is_recycle_bin(&e.file_name().to_string_lossy());
+            if !bin && e.file_type().is_ok_and(|t| t.is_dir()) {
                 self.walk(&e.path(), seen);
             }
         }
@@ -624,6 +625,16 @@ mod tests {
         };
         assert!(search(&i, &q(cond(Target::Name, Op::Regex, "("))).is_err());
         assert!(search(&i, &q(cond(meta("", "width"), Op::Range, "abc"))).is_err());
+    }
+
+    #[test]
+    fn discovery_skips_catalogs_in_the_recycle_bin() {
+        let tmp = crate::test_util::TempDir::new();
+        catalog::save(&tmp.mkdir("$RECYCLE.BIN/S-1-5/$R1"), &Catalog::default()).unwrap();
+        catalog::save(&tmp.mkdir("kept"), &Catalog::default()).unwrap();
+        let i = Index::discover(&[tmp.path().to_path_buf()]);
+        let found: Vec<_> = i.entries.iter().map(|e| e.dir.clone()).collect();
+        assert_eq!(found, [tmp.path().join("kept")]);
     }
 
     #[test]
