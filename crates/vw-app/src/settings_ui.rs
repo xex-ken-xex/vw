@@ -7,11 +7,11 @@ use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1};
-use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal};
+use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal, Scope};
 use crate::layout::SlotLayout;
 use crate::settings::{
-    parse_hex_color, HeaderClick, Labels, Language, LoadInto, LoadModifier, Settings, ThemeChoice,
-    Tree, Viewer,
+    parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
+    LoadModifier, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -24,18 +24,20 @@ enum Section {
     Behavior,
     Labels,
     Datasets,
+    Fullscreen,
     Dicom,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 8] = [
+    const ALL: [Section; 9] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
         Section::Behavior,
         Section::Labels,
         Section::Datasets,
+        Section::Fullscreen,
         Section::Dicom,
         Section::Keys,
     ];
@@ -48,6 +50,7 @@ impl Section {
             Section::Behavior => "Behavior",
             Section::Labels => "Flags and tags",
             Section::Datasets => "Datasets",
+            Section::Fullscreen => "Fullscreen slideshow",
             Section::Dicom => "Medical images (DICOM)",
             Section::Keys => "Keyboard shortcuts",
         }
@@ -64,7 +67,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 27] = [
+const ITEMS: [Item; 37] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -248,6 +251,76 @@ const ITEMS: [Item; 27] = [
         widget: dataset_fields_widget,
     },
     Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.mode",
+        title: "Mode",
+        description: "Show the images folder by folder, or keep showing the newest file under the folder and switch as soon as a new one arrives (for tethered shooting).",
+        widget: fullscreen_mode_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.sort",
+        title: "Sort by",
+        description: "Order of the folders and of the images in each folder.",
+        widget: fullscreen_sort_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.folders_descending",
+        title: "Folders descending",
+        description: "Go through the folders in reverse order (Z to A, newest first).",
+        widget: folders_descending_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.files_descending",
+        title: "Images descending",
+        description: "Show the images in each folder in reverse order (Z to A, newest first).",
+        widget: files_descending_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.interval_secs",
+        title: "Interval",
+        description: "Seconds before moving on to the next image. 0 moves only with the keys. Animations and multi-frame images play at the file's speed before moving on; with 0 only their first frame is shown.",
+        widget: interval_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.loop_at_end",
+        title: "Start over at the end",
+        description: "After the last image, go back to the first one instead of stopping.",
+        widget: loop_at_end_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.show_path",
+        title: "Show path",
+        description: "Show the path from the folder and the position in the folder at the bottom right.",
+        widget: show_path_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.path_color",
+        title: "Path color",
+        description: "Color of the path text (#RRGGBB).",
+        widget: path_color_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.path_opacity",
+        title: "Path opacity",
+        description: "Opacity of the path text (%).",
+        widget: path_opacity_widget,
+    },
+    Item {
+        section: Section::Fullscreen,
+        key: "fullscreen.path_size",
+        title: "Path text size",
+        description: "Size of the path text.",
+        widget: path_size_widget,
+    },
+    Item {
         section: Section::Dicom,
         key: "dicom.probe_extensions",
         title: "Extensions to check for DICOM",
@@ -255,6 +328,111 @@ const ITEMS: [Item; 27] = [
         widget: probe_extensions_widget,
     },
 ];
+
+fn fullscreen_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fullscreen.mode;
+    ui.horizontal(|ui| {
+        for mode in FullscreenMode::ALL {
+            ui.radio_value(&mut s.fullscreen.mode, mode, tr(lang, mode.title()));
+        }
+    });
+    s.fullscreen.mode != before
+}
+
+fn fullscreen_sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fullscreen.sort;
+    egui::ComboBox::from_id_salt("fullscreen_sort")
+        .selected_text(tr(lang, before.title()))
+        .show_ui(ui, |ui| {
+            for key in SortKey::ALL {
+                ui.selectable_value(&mut s.fullscreen.sort, key, tr(lang, key.title()));
+            }
+        });
+    s.fullscreen.sort != before
+}
+
+fn folders_descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fullscreen.folders_descending, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn files_descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fullscreen.files_descending, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn interval_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.fullscreen.interval_secs)
+            .range(Fullscreen::INTERVAL_RANGE)
+            .speed(0.1)
+            .max_decimals(1)
+            .suffix(tr(lang, " s")),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn loop_at_end_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fullscreen.loop_at_end, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn show_path_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fullscreen.show_path, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn path_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let mut color = parse_hex_color(&s.fullscreen.path_color).unwrap_or(Color32::GRAY);
+        if ui.color_edit_button_srgba(&mut color).changed() {
+            s.fullscreen.path_color =
+                format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+            changed = true;
+        }
+        let r =
+            ui.add(egui::TextEdit::singleline(&mut s.fullscreen.path_color).desired_width(80.0));
+        // 打ちかけの値（"#80" など）は保存しない。読み直したときに既定値へ戻されてしまうため。
+        if r.changed() && parse_hex_color(&s.fullscreen.path_color).is_some() {
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn path_opacity_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.fullscreen.path_opacity)
+            .range(Fullscreen::OPACITY_RANGE)
+            .suffix(" %"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn path_size_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.fullscreen.path_size)
+            .range(Fullscreen::PATH_SIZE_RANGE)
+            .speed(0.2)
+            .max_decimals(0),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+/// 全画面スライドショーの準備の画面に、設定画面と同じ項目を並べる。変わったら true。
+pub fn fullscreen_items_ui(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let lang = settings.appearance.language;
+    let mut changed = false;
+    for item in ITEMS.iter().filter(|i| i.section == Section::Fullscreen) {
+        item_frame(ui, |ui| {
+            title_line(ui, tr(lang, item.title), item.key);
+            ui.weak(tr(lang, item.description));
+            changed |= (item.widget)(settings, ui, lang);
+        });
+    }
+    changed
+}
 
 fn theme_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let before = s.appearance.theme;
@@ -859,14 +1037,17 @@ impl SettingsUi {
                 )
             })
             .collect();
-        let actions: Vec<Action> = if section == Section::Keys {
-            Action::ALL
-                .into_iter()
-                .filter(|a| self.action_matches(*a, &settings.keys, lang))
-                .collect()
-        } else {
-            Vec::new()
+        // 全画面スライドショーの間だけ働くキーは、その節に並べる。
+        let scope = match section {
+            Section::Keys => Some(Scope::Main),
+            Section::Fullscreen => Some(Scope::Fullscreen),
+            _ => None,
         };
+        let actions: Vec<Action> = Action::ALL
+            .into_iter()
+            .filter(|a| Some(a.scope()) == scope)
+            .filter(|a| self.action_matches(*a, &settings.keys, lang))
+            .collect();
         if items.is_empty() && actions.is_empty() {
             return false;
         }
@@ -934,7 +1115,9 @@ impl SettingsUi {
                     ui.weak(tr(lang, "No keys"));
                 }
                 for k in keys {
-                    let duplicated = duplicates.iter().any(|(c, _)| *c == k);
+                    let duplicated = duplicates
+                        .iter()
+                        .any(|(c, actions)| *c == k && actions.contains(&action));
                     let reserved = os_reserved(Os::CURRENT, k);
                     // 等幅にしない。アイコンフォントは本文（プロポーショナル）にしか組み込んでいないため。
                     let mut text = RichText::new(format!("{k}  {}", icon::X));

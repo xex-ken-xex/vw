@@ -65,11 +65,26 @@ pub enum Action {
     ParentFolder,
     DevelopRaw,
     TrashBadImages,
+    FullscreenSlideshow,
+    FullscreenExit,
+    FullscreenNext,
+    FullscreenPrevious,
+    FullscreenNextFolder,
+    FullscreenPreviousFolder,
+    FullscreenPause,
+}
+
+/// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
+/// ほかの操作が働かないので、← → などを普段の操作と同じキーに割り当てられるようにするため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Main,
+    Fullscreen,
 }
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 50] = [
+    pub const ALL: [Action; 57] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -79,6 +94,7 @@ impl Action {
         Action::ToggleMaximize,
         Action::ParentFolder,
         Action::TogglePlay,
+        Action::FullscreenSlideshow,
         Action::FitImage,
         Action::ActualSize,
         Action::ZoomIn,
@@ -120,6 +136,12 @@ impl Action {
         Action::ToggleLog,
         Action::ToggleSettings,
         Action::ToggleDatasets,
+        Action::FullscreenNext,
+        Action::FullscreenPrevious,
+        Action::FullscreenNextFolder,
+        Action::FullscreenPreviousFolder,
+        Action::FullscreenPause,
+        Action::FullscreenExit,
     ];
 
     /// 設定ファイルでの名前。
@@ -175,6 +197,13 @@ impl Action {
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
             Action::TrashBadImages => "trash_bad_images",
+            Action::FullscreenSlideshow => "fullscreen_slideshow",
+            Action::FullscreenExit => "fullscreen_exit",
+            Action::FullscreenNext => "fullscreen_next",
+            Action::FullscreenPrevious => "fullscreen_previous",
+            Action::FullscreenNextFolder => "fullscreen_next_folder",
+            Action::FullscreenPreviousFolder => "fullscreen_previous_folder",
+            Action::FullscreenPause => "fullscreen_pause",
         }
     }
 
@@ -235,6 +264,25 @@ impl Action {
             Action::ExportImages => "Export images...",
             Action::TrashBadImages => "Move bad images to trash...",
             Action::ParentFolder => "Up one folder",
+            Action::FullscreenSlideshow => "Fullscreen slideshow...",
+            Action::FullscreenExit => "Fullscreen: exit",
+            Action::FullscreenNext => "Fullscreen: next image",
+            Action::FullscreenPrevious => "Fullscreen: previous image",
+            Action::FullscreenNextFolder => "Fullscreen: next folder",
+            Action::FullscreenPreviousFolder => "Fullscreen: previous folder",
+            Action::FullscreenPause => "Fullscreen: pause/resume",
+        }
+    }
+
+    pub fn scope(self) -> Scope {
+        match self {
+            Action::FullscreenExit
+            | Action::FullscreenNext
+            | Action::FullscreenPrevious
+            | Action::FullscreenNextFolder
+            | Action::FullscreenPreviousFolder
+            | Action::FullscreenPause => Scope::Fullscreen,
+            _ => Scope::Main,
         }
     }
 
@@ -251,6 +299,10 @@ impl Action {
                 | Action::NextPage
                 | Action::ZoomIn
                 | Action::ZoomOut
+                | Action::FullscreenNext
+                | Action::FullscreenPrevious
+                | Action::FullscreenNextFolder
+                | Action::FullscreenPreviousFolder
         )
     }
 
@@ -363,6 +415,13 @@ impl Action {
             Action::ExportImages => vec![KeyCombo::ctrl(E)],
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
+            Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
+            Action::FullscreenExit => vec![KeyCombo::plain(Escape)],
+            Action::FullscreenNext => vec![KeyCombo::plain(ArrowRight)],
+            Action::FullscreenPrevious => vec![KeyCombo::plain(ArrowLeft)],
+            Action::FullscreenNextFolder => vec![KeyCombo::plain(ArrowDown)],
+            Action::FullscreenPreviousFolder => vec![KeyCombo::plain(ArrowUp)],
+            Action::FullscreenPause => vec![KeyCombo::plain(Space)],
         }
     }
 }
@@ -594,17 +653,17 @@ impl Keymap {
         self.bindings.get(&action).map_or(&[], Vec::as_slice)
     }
 
-    /// `combo` が割り当てられている操作。ファイルを手で編集して重複していたら、
+    /// 画面 `scope` で `combo` が割り当てられている操作。ファイルを手で編集して重複していたら、
     /// [`Action::ALL`] の順で先のものを返す。
-    pub fn action_for(&self, combo: KeyCombo) -> Option<Action> {
+    pub fn action_for(&self, scope: Scope, combo: KeyCombo) -> Option<Action> {
         Action::ALL
             .into_iter()
-            .find(|a| self.keys(*a).contains(&combo))
+            .find(|a| a.scope() == scope && self.keys(*a).contains(&combo))
     }
 
     /// `combo` を `action` に足す。別の操作に割り当て済みのキーは受け付けない。
     pub fn assign(&mut self, action: Action, combo: KeyCombo) -> Result<(), Refusal> {
-        match self.action_for(combo) {
+        match self.action_for(action.scope(), combo) {
             Some(a) if a == action => Err(Refusal::AlreadyAssigned),
             Some(a) => Err(Refusal::UsedBy(a)),
             None => {
@@ -630,17 +689,23 @@ impl Keymap {
         let keys = action
             .default_keys()
             .into_iter()
-            .filter(|k| self.action_for(*k).is_none_or(|a| a == action))
+            .filter(|k| {
+                self.action_for(action.scope(), *k)
+                    .is_none_or(|a| a == action)
+            })
             .collect();
         self.bindings.insert(action, keys);
     }
 
-    /// 2 つ以上の操作に割り当てられているキー。設定ファイルを手で編集したときに起こる。
+    /// 同じ画面の 2 つ以上の操作に割り当てられているキー。設定ファイルを手で編集したときに起こる。
     pub fn duplicates(&self) -> Vec<(KeyCombo, Vec<Action>)> {
         let mut seen: Vec<(KeyCombo, Vec<Action>)> = Vec::new();
         for a in Action::ALL {
             for k in self.keys(a) {
-                match seen.iter_mut().find(|(c, _)| c == k) {
+                let same = |(c, actions): &&mut (KeyCombo, Vec<Action>)| {
+                    c == k && actions[0].scope() == a.scope()
+                };
+                match seen.iter_mut().find(same) {
                     Some((_, actions)) => actions.push(a),
                     None => seen.push((*k, vec![a])),
                 }
@@ -650,8 +715,8 @@ impl Keymap {
         seen
     }
 
-    /// このフレームの入力イベントから、実行する操作を順に取り出す。
-    pub fn actions_in(&self, events: &[Event]) -> Vec<Action> {
+    /// このフレームの入力イベントから、画面 `scope` で実行する操作を順に取り出す。
+    pub fn actions_in(&self, scope: Scope, events: &[Event]) -> Vec<Action> {
         events
             .iter()
             .filter_map(|e| match e {
@@ -662,7 +727,7 @@ impl Keymap {
                     modifiers,
                     ..
                 } => self
-                    .action_for(KeyCombo::from_event(*key, *modifiers))
+                    .action_for(scope, KeyCombo::from_event(*key, *modifiers))
                     .filter(|a| !repeat || a.repeats()),
                 _ => None,
             })
@@ -814,12 +879,57 @@ mod tests {
     #[test]
     fn defaults_keep_the_original_navigation_keys() {
         let map = Keymap::default();
-        assert_eq!(map.action_for(combo("Right")), Some(Action::NextImage));
-        assert_eq!(map.action_for(combo("Space")), Some(Action::NextImage));
-        assert_eq!(map.action_for(combo("Left")), Some(Action::PreviousImage));
         assert_eq!(
-            map.action_for(combo("Ctrl+Comma")),
+            map.action_for(Scope::Main, combo("Right")),
+            Some(Action::NextImage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Space")),
+            Some(Action::NextImage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Left")),
+            Some(Action::PreviousImage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Ctrl+Comma")),
             Some(Action::ToggleSettings)
+        );
+    }
+
+    #[test]
+    fn fullscreen_keys_reuse_main_keys_without_clashing() {
+        let map = Keymap::default();
+        assert_eq!(
+            map.action_for(Scope::Fullscreen, combo("Right")),
+            Some(Action::FullscreenNext)
+        );
+        assert_eq!(
+            map.action_for(Scope::Fullscreen, combo("Up")),
+            Some(Action::FullscreenPreviousFolder)
+        );
+        assert_eq!(map.action_for(Scope::Main, combo("Escape")), None);
+        assert_eq!(map.action_for(Scope::Fullscreen, combo("Ctrl+Comma")), None);
+    }
+
+    #[test]
+    fn key_of_another_screen_can_be_assigned() {
+        let mut map = Keymap::default();
+        assert_eq!(map.assign(Action::FullscreenPause, combo("P")), Ok(()));
+        assert_eq!(
+            map.assign(Action::FullscreenNext, combo("Down")),
+            Err(Refusal::UsedBy(Action::FullscreenNextFolder))
+        );
+        assert!(map.duplicates().is_empty());
+    }
+
+    #[test]
+    fn key_events_become_actions_of_the_given_screen_only() {
+        let map = Keymap::default();
+        let events = [key_event(Key::ArrowRight, Modifiers::NONE, false)];
+        assert_eq!(
+            map.actions_in(Scope::Fullscreen, &events),
+            [Action::FullscreenNext]
         );
     }
 
@@ -831,8 +941,8 @@ mod tests {
     #[test]
     fn modifiers_must_match_exactly() {
         let map = Keymap::default();
-        assert_eq!(map.action_for(combo("Shift+Right")), None);
-        assert_eq!(map.action_for(combo("N")), None);
+        assert_eq!(map.action_for(Scope::Main, combo("Shift+Right")), None);
+        assert_eq!(map.action_for(Scope::Main, combo("N")), None);
     }
 
     #[test]
@@ -868,9 +978,12 @@ mod tests {
     fn unassigned_key_becomes_free_for_other_actions() {
         let mut map = Keymap::default();
         map.unassign(Action::NextImage, combo("Space"));
-        assert_eq!(map.action_for(combo("Space")), None);
+        assert_eq!(map.action_for(Scope::Main, combo("Space")), None);
         map.assign(Action::NewSlot, combo("Space")).unwrap();
-        assert_eq!(map.action_for(combo("Space")), Some(Action::NewSlot));
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Space")),
+            Some(Action::NewSlot)
+        );
     }
 
     #[test]
@@ -882,7 +995,10 @@ mod tests {
         assert!(!map.is_default(Action::NextImage));
         map.reset(Action::NextImage);
         assert_eq!(map.keys(Action::NextImage), [combo("Right")]);
-        assert_eq!(map.action_for(combo("Space")), Some(Action::NewSlot));
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Space")),
+            Some(Action::NewSlot)
+        );
     }
 
     fn load(text: &str) -> (Keymap, Vec<String>) {
@@ -896,18 +1012,36 @@ mod tests {
              previous_image = [\"Left\", \"PageUp\"]",
         );
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(map.action_for(combo("PageDown")), Some(Action::NextPage));
-        assert_eq!(map.action_for(combo("PageUp")), Some(Action::PreviousPage));
+        assert_eq!(
+            map.action_for(Scope::Main, combo("PageDown")),
+            Some(Action::NextPage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("PageUp")),
+            Some(Action::PreviousPage)
+        );
         assert!(map.is_default(Action::NextImage));
     }
 
     #[test]
     fn page_keys_page_and_arrows_step_images_by_default() {
         let map = Keymap::default();
-        assert_eq!(map.action_for(combo("PageDown")), Some(Action::NextPage));
-        assert_eq!(map.action_for(combo("Right")), Some(Action::NextImage));
-        assert_eq!(map.action_for(combo("Ctrl+Right")), Some(Action::NextSlot));
-        assert_eq!(map.action_for(combo("Enter")), Some(Action::ToggleMaximize));
+        assert_eq!(
+            map.action_for(Scope::Main, combo("PageDown")),
+            Some(Action::NextPage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Right")),
+            Some(Action::NextImage)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Ctrl+Right")),
+            Some(Action::NextSlot)
+        );
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Enter")),
+            Some(Action::ToggleMaximize)
+        );
     }
 
     #[test]
@@ -994,7 +1128,7 @@ mod tests {
             key_event(Key::Q, Modifiers::NONE, false),
         ];
         assert_eq!(
-            map.actions_in(&events),
+            map.actions_in(Scope::Main, &events),
             [Action::NextImage, Action::NewSlot]
         );
     }
@@ -1006,7 +1140,7 @@ mod tests {
             key_event(Key::ArrowRight, Modifiers::NONE, true),
             key_event(Key::Num4, Modifiers::CTRL, true),
         ];
-        assert_eq!(map.actions_in(&events), [Action::NextImage]);
+        assert_eq!(map.actions_in(Scope::Main, &events), [Action::NextImage]);
     }
 
     #[test]

@@ -192,6 +192,19 @@ impl FolderWatcher {
         problems
     }
 
+    /// `dir` を、その下のフォルダも含めて監視する。[`Self::set_dirs`] とは一緒に使わない
+    /// （`set_dirs` は渡されなかったフォルダの監視をやめるため）。
+    pub fn watch_recursive(&mut self, dir: &Path) -> Result<(), String> {
+        let Some(inner) = &mut self.inner else {
+            return Ok(());
+        };
+        inner
+            .watch(dir, RecursiveMode::Recursive)
+            .map_err(|e| format!("{}: not watched ({e})", dir.display()))?;
+        self.watched.insert(dir.to_path_buf());
+        Ok(())
+    }
+
     /// 届いた通知を取り込み、落ち着いた変化を返す。
     pub fn poll(&mut self, now: Instant) -> Vec<Change> {
         while let Ok(res) = self.rx.try_recv() {

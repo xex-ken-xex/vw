@@ -290,6 +290,79 @@ pub struct Dataset {
     pub fields: Vec<String>,
 }
 
+/// 全画面スライドショーの進め方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FullscreenMode {
+    /// 画像のあるフォルダを順に、その中の画像を順に見せる。
+    #[default]
+    Sequence,
+    /// 起点のフォルダ以下で最も新しいファイルを見せ、新しいファイルが来たら切り替える（テザー撮影）。
+    Newest,
+}
+
+impl FullscreenMode {
+    pub const ALL: [FullscreenMode; 2] = [FullscreenMode::Sequence, FullscreenMode::Newest];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FullscreenMode::Sequence => "In order",
+            FullscreenMode::Newest => "Follow the newest file",
+        }
+    }
+}
+
+/// 全画面スライドショー（[`crate::fullscreen`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fullscreen {
+    pub mode: FullscreenMode,
+    /// フォルダとファイルを並べる基準。
+    pub sort: SortKey,
+    pub folders_descending: bool,
+    pub files_descending: bool,
+    /// 次の画像へ自動で送るまでの秒数。0 なら自動では送らない。
+    pub interval_secs: f32,
+    /// 最後の画像の次は最初の画像に戻る。
+    pub loop_at_end: bool,
+    /// 右下にパスを出す。
+    pub show_path: bool,
+    /// パスの文字色（`#RRGGBB`）。
+    pub path_color: String,
+    /// パスの文字の不透明度（%）。
+    pub path_opacity: u32,
+    /// パスの文字の大きさ（ポイント）。
+    pub path_size: f32,
+}
+
+impl Fullscreen {
+    pub const INTERVAL_RANGE: std::ops::RangeInclusive<f32> = 0.0..=3600.0;
+    pub const OPACITY_RANGE: std::ops::RangeInclusive<u32> = 0..=100;
+    pub const PATH_SIZE_RANGE: std::ops::RangeInclusive<f32> = 6.0..=72.0;
+
+    pub fn path_text_color(&self) -> Color32 {
+        let rgb = parse_hex_color(&self.path_color).unwrap_or(Color32::GRAY);
+        let alpha = self.path_opacity.min(100) as f32 / 100.0;
+        Color32::from_rgba_unmultiplied(rgb.r(), rgb.g(), rgb.b(), (alpha * 255.0).round() as u8)
+    }
+}
+
+impl Default for Fullscreen {
+    fn default() -> Self {
+        Self {
+            mode: FullscreenMode::Sequence,
+            sort: SortKey::NameNatural,
+            folders_descending: false,
+            files_descending: false,
+            interval_secs: 0.0,
+            loop_at_end: false,
+            show_path: true,
+            path_color: "#808080".into(),
+            path_opacity: 50,
+            path_size: 14.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -299,6 +372,7 @@ pub struct Settings {
     pub labels: Labels,
     pub dicom: Dicom,
     pub dataset: Dataset,
+    pub fullscreen: Fullscreen,
     pub keys: Keymap,
 }
 
@@ -450,6 +524,54 @@ impl Settings {
                 )
                 .unwrap_or_else(|| d.dataset.fields.clone()),
         };
+        let fullscreen = Fullscreen {
+            mode: r.get("fullscreen", "mode").unwrap_or(d.fullscreen.mode),
+            sort: r.get("fullscreen", "sort").unwrap_or(d.fullscreen.sort),
+            folders_descending: r
+                .get("fullscreen", "folders_descending")
+                .unwrap_or(d.fullscreen.folders_descending),
+            files_descending: r
+                .get("fullscreen", "files_descending")
+                .unwrap_or(d.fullscreen.files_descending),
+            interval_secs: r
+                .get_valid(
+                    "fullscreen",
+                    "interval_secs",
+                    |v: &f32| Fullscreen::INTERVAL_RANGE.contains(v),
+                    "must be 0 to 3600",
+                )
+                .unwrap_or(d.fullscreen.interval_secs),
+            loop_at_end: r
+                .get("fullscreen", "loop_at_end")
+                .unwrap_or(d.fullscreen.loop_at_end),
+            show_path: r
+                .get("fullscreen", "show_path")
+                .unwrap_or(d.fullscreen.show_path),
+            path_color: r
+                .get_valid(
+                    "fullscreen",
+                    "path_color",
+                    |v: &String| parse_hex_color(v).is_some(),
+                    "must be #RRGGBB",
+                )
+                .unwrap_or_else(|| d.fullscreen.path_color.clone()),
+            path_opacity: r
+                .get_valid(
+                    "fullscreen",
+                    "path_opacity",
+                    |v: &u32| Fullscreen::OPACITY_RANGE.contains(v),
+                    "must be 0 to 100",
+                )
+                .unwrap_or(d.fullscreen.path_opacity),
+            path_size: r
+                .get_valid(
+                    "fullscreen",
+                    "path_size",
+                    |v: &f32| Fullscreen::PATH_SIZE_RANGE.contains(v),
+                    "must be 6 to 72",
+                )
+                .unwrap_or(d.fullscreen.path_size),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -469,6 +591,7 @@ impl Settings {
                 labels,
                 dicom,
                 dataset,
+                fullscreen,
                 keys,
             },
             problems,
@@ -756,6 +879,18 @@ mod tests {
         s.tree.confirm_chunk = 200;
         s.dataset.roots = vec!["/data/sets".into(), r"D:\test data".into()];
         s.dataset.fields = vec!["Source".into(), "入手元".into()];
+        s.fullscreen = Fullscreen {
+            mode: FullscreenMode::Newest,
+            sort: SortKey::Modified,
+            folders_descending: true,
+            files_descending: true,
+            interval_secs: 2.5,
+            loop_at_end: true,
+            show_path: false,
+            path_color: "#ffcc00".into(),
+            path_opacity: 80,
+            path_size: 20.0,
+        };
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -778,6 +913,30 @@ mod tests {
         assert!(s.dataset.fields.is_empty());
         assert_eq!(s.dataset.roots, ["/x"]);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn broken_fullscreen_values_fall_back_one_by_one() {
+        let (s, problems) = Settings::from_toml(
+            "[fullscreen]\ninterval_secs = -1\npath_color = \"grey\"\nloop_at_end = true\n",
+        )
+        .unwrap();
+        assert_eq!(s.fullscreen.interval_secs, 0.0);
+        assert_eq!(s.fullscreen.path_color, "#808080");
+        assert!(s.fullscreen.loop_at_end);
+        assert_eq!(problems.len(), 2);
+    }
+
+    #[test]
+    fn path_text_color_carries_the_opacity() {
+        let f = Fullscreen {
+            path_color: "#ff0000".into(),
+            path_opacity: 50,
+            ..Fullscreen::default()
+        };
+        let c = f.path_text_color();
+        assert_eq!(c.a(), 128);
+        assert_eq!(c.to_srgba_unmultiplied()[0], 255);
     }
 
     #[test]

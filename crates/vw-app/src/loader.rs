@@ -108,6 +108,9 @@ pub struct Job {
     pub full: bool,
     /// 普通に読む代わりに現像する（[`develop`]）。`thumb` と `full` は見ない。
     pub develop: bool,
+    /// `full` の描画用バッファを、縦横がこの大きさを下回らない範囲で縮める（[`cover_side`]）。
+    /// 全画面に出すだけの画像のために、画面より大きなテクスチャを作らないため。
+    pub fit_side: Option<u32>,
 }
 
 /// 待っている要求と、取り消された要求。
@@ -214,7 +217,7 @@ fn worker(
         let result = if job.develop {
             develop(registry, &job.path)
         } else {
-            load(registry, &job.path, job.thumb, job.full)
+            load_fit(registry, &job.path, job.thumb, job.full, job.fit_side)
         };
         let sent = tx.send(LoadResult {
             slot: job.slot,
@@ -229,9 +232,22 @@ fn worker(
     }
 }
 
+/// [`load_fit`] の縮めない版。
+#[cfg(test)]
+pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result<Loaded, String> {
+    load_fit(registry, path, thumb, full, None)
+}
+
 /// 1 枚を読み込む。ファイルは一度に全部読む。メモリマップにしないのは、
 /// 読み込み中にファイルが書き換えられると未定義動作になりうるため。
-pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result<Loaded, String> {
+/// `fit_side` があれば、フル解像度の描画用バッファをそれに合わせて縮める。
+pub fn load_fit(
+    registry: &Registry,
+    path: &Path,
+    thumb: bool,
+    full: bool,
+    fit_side: Option<u32>,
+) -> Result<Loaded, String> {
     let t0 = Instant::now();
     let (file, frame) =
         frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
@@ -254,6 +270,7 @@ pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result
         times,
         thumb,
         full,
+        fit_side,
     ))
 }
 
@@ -267,11 +284,21 @@ pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
         .map_err(|e| e.to_string())?;
     let t2 = Instant::now();
     let times = (t1 - t0, t2 - t1);
-    Ok(finish(image, plugin, 1, bytes.len(), times, true, true))
+    Ok(finish(
+        image,
+        plugin,
+        1,
+        bytes.len(),
+        times,
+        true,
+        true,
+        None,
+    ))
 }
 
 /// デコードした画像から、要る分の縮小画像・描画用バッファと情報を作る。
 /// `times` は読み込みとデコードにかかった時間。
+#[allow(clippy::too_many_arguments)]
 fn finish(
     image: VwImage,
     plugin: &str,
@@ -280,11 +307,18 @@ fn finish(
     (read, decode): (Duration, Duration),
     thumb: bool,
     full: bool,
+    fit_side: Option<u32>,
 ) -> Loaded {
     let t2 = Instant::now();
     let d = display::to_display(&image, &DisplayParams::default());
     let thumb = thumb.then(|| color_image(&display::shrink(&d, THUMB_SIDE)));
-    let full = full.then(|| color_image(&d));
+    let full = full.then(|| match fit_side {
+        Some(side) => color_image(&display::shrink(
+            &d,
+            cover_side(d.width.max(d.height), side),
+        )),
+        None => color_image(&d),
+    });
     let t3 = Instant::now();
     let info = ImageInfo {
         width: image.width,
@@ -306,6 +340,14 @@ fn finish(
         display,
     });
     Loaded { info, thumb, full }
+}
+
+/// 長辺 `long` の画像を、長辺が `side` を下回らない範囲で最も小さく整数倍で縮めたときの長辺。
+/// [`display::shrink`] に渡す上限に使う。`shrink` は上限以下に収めるので、`side` をそのまま
+/// 渡すと画面より小さくなり、全画面に引き伸ばしたときにぼやけるため。
+pub fn cover_side(long: u32, side: u32) -> u32 {
+    let n = (long / side.max(1)).max(1);
+    long.div_ceil(n)
 }
 
 fn color_image(d: &DisplayImage) -> ColorImage {
@@ -377,6 +419,23 @@ mod tests {
     }
 
     #[test]
+    fn fitted_full_image_stays_at_least_as_large_as_the_side() {
+        let dir = TempDir::new();
+        let path = dir.path().join("big.png");
+        write_png(&path, 1000, 10, &vec![9; 1000 * 10 * 3]);
+        let loaded = load_fit(&png_registry(), &path, false, true, Some(300)).unwrap();
+        // 1000 を 3 で割って 334。4 で割ると 250 で 300 を下回る。
+        assert_eq!(loaded.full.unwrap().display.size, [334, 4]);
+    }
+
+    #[test]
+    fn cover_side_does_not_shrink_images_smaller_than_the_side() {
+        assert_eq!(cover_side(200, 300), 200);
+        assert_eq!(cover_side(600, 300), 300);
+        assert_eq!(cover_side(899, 300), 450);
+    }
+
+    #[test]
     fn missing_file_is_an_error() {
         let dir = TempDir::new();
         assert!(load(&png_registry(), &dir.path().join("none.png"), true, false).is_err());
@@ -423,6 +482,7 @@ mod tests {
             thumb: true,
             full: false,
             develop: false,
+            fit_side: None,
         }
     }
 

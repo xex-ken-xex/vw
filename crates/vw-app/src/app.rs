@@ -22,7 +22,7 @@ use crate::discard::{self, TrashJob};
 use crate::export::{self, CopyJob, Filter, ListFormat, Matcher};
 use crate::frames;
 use crate::i18n::{tr, tr1};
-use crate::keymap::{Action, KeyCombo};
+use crate::keymap::{Action, KeyCombo, Scope};
 use crate::labels::{Flag, Label, LabelStore};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
@@ -128,6 +128,13 @@ pub struct VwApp {
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
     show_datasets: bool,
     datasets: crate::datasets_screen::DatasetsScreen,
+    /// 全画面スライドショーの準備の画面を出している（メインの領域を置き換える）。
+    show_fullscreen_setup: bool,
+    fullscreen_setup: crate::fullscreen::Setup,
+    /// 全画面スライドショーの最中。
+    fullscreen: Option<crate::fullscreen::Show>,
+    /// 最後に全画面スライドショーを始めた起点。次に準備の画面を開いたときの初期値。
+    last_fullscreen_root: Option<PathBuf>,
     /// 「すべて更新」で順に更新するデータセット。
     dataset_queue: Vec<PathBuf>,
     /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
@@ -458,6 +465,10 @@ impl VwApp {
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
+            show_fullscreen_setup: false,
+            fullscreen_setup: Default::default(),
+            fullscreen: None,
+            last_fullscreen_root: saved.fullscreen_root.clone(),
             dataset_queue: Vec::new(),
             outer_to_update: None,
             last_extract_dir: saved.extract_dir.clone(),
@@ -599,6 +610,7 @@ impl VwApp {
             thumb: true,
             full,
             develop: false,
+            fit_side: None,
         });
     }
 
@@ -1650,6 +1662,7 @@ impl VwApp {
                 thumb: !full,
                 full,
                 develop: false,
+                fit_side: None,
             });
         }
         let finished = step.finished && pb.clock.shown();
@@ -3116,6 +3129,7 @@ impl VwApp {
         self.show_datasets = !self.show_datasets;
         if self.show_datasets {
             self.show_settings = false;
+            self.show_fullscreen_setup = false;
             self.datasets
                 .opened(&self.settings.settings.dataset.roots, ctx);
             self.tree.forget_peeks();
@@ -3126,6 +3140,72 @@ impl VwApp {
         self.show_settings = !self.show_settings;
         if self.show_settings {
             self.settings_ui.opened();
+        }
+    }
+
+    fn toggle_fullscreen_setup(&mut self) {
+        self.show_fullscreen_setup = !self.show_fullscreen_setup;
+        if self.show_fullscreen_setup {
+            self.show_settings = false;
+            self.show_datasets = false;
+            self.fullscreen_setup.open(
+                self.last_fullscreen_root.as_deref(),
+                self.current.as_deref(),
+            );
+        }
+    }
+
+    fn start_fullscreen(&mut self, ctx: &egui::Context, root: PathBuf) {
+        self.stop_playback();
+        self.next_id += 1;
+        let (show, problems) = crate::fullscreen::Show::start(
+            root.clone(),
+            &self.settings.settings.fullscreen,
+            self.loader.registry(),
+            self.next_id,
+            ctx,
+        );
+        for p in problems {
+            self.log.error(p);
+        }
+        self.log
+            .info(format!("Fullscreen slideshow: {}", root.display()));
+        self.fullscreen = Some(show);
+        self.last_fullscreen_root = Some(root);
+        self.show_fullscreen_setup = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+    }
+
+    fn stop_fullscreen(&mut self, ctx: &egui::Context) {
+        if let Some(mut show) = self.fullscreen.take() {
+            show.stop(&self.loader);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+    }
+
+    /// 全画面スライドショーの 1 フレーム。
+    fn fullscreen_ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let lang = self.lang();
+        let Some(show) = &mut self.fullscreen else {
+            return;
+        };
+        let requests = egui::CentralPanel::no_frame()
+            .show(ui, |ui| {
+                show.ui(
+                    ui,
+                    &self.settings.settings.keys,
+                    &self.loader,
+                    &mut self.next_id,
+                    lang,
+                )
+            })
+            .inner;
+        if requests
+            .iter()
+            .any(|r| matches!(r, crate::fullscreen::Request::Exit))
+        {
+            self.stop_fullscreen(&ctx);
         }
     }
 
@@ -3182,6 +3262,14 @@ impl VwApp {
             Action::ToggleLog => self.fields.log ^= true,
             Action::ToggleSettings => self.toggle_settings(),
             Action::ToggleDatasets => self.toggle_datasets(ctx),
+            Action::FullscreenSlideshow => self.toggle_fullscreen_setup(),
+            // 全画面スライドショーの間だけ働く（[`crate::fullscreen::Show::ui`]）。
+            Action::FullscreenExit
+            | Action::FullscreenNext
+            | Action::FullscreenPrevious
+            | Action::FullscreenNextFolder
+            | Action::FullscreenPreviousFolder
+            | Action::FullscreenPause => {}
             Action::PreviousSlot => self.step_slot(-1),
             Action::NextSlot => self.step_slot(1),
             Action::PreviousPage | Action::NextPage => {
@@ -3233,13 +3321,21 @@ impl VwApp {
         } else {
             events
         };
-        for action in keys.actions_in(&events) {
+        for action in keys.actions_in(Scope::Main, &events) {
             // 設定画面の間は画像やパネルの操作をしない。見えていない画面が変わるのを避けるため。
             if self.show_settings && action != Action::ToggleSettings {
                 continue;
             }
             if self.show_datasets
                 && !matches!(action, Action::ToggleDatasets | Action::ToggleSettings)
+            {
+                continue;
+            }
+            if self.show_fullscreen_setup
+                && !matches!(
+                    action,
+                    Action::FullscreenSlideshow | Action::ToggleDatasets | Action::ToggleSettings
+                )
             {
                 continue;
             }
@@ -3339,7 +3435,8 @@ impl VwApp {
     /// 最小化・最大化していないときのウインドウの位置と大きさを覚えておく。
     /// 最大化中は最大化していることだけを覚え、戻したときの大きさは最大化前のものを残す。
     fn track_window(&mut self, ctx: &egui::Context) {
-        if self.restoring.is_some() {
+        // 全画面の大きさを覚えると、次の起動でウインドウが画面いっぱいの大きさで開いてしまう。
+        if self.restoring.is_some() || self.fullscreen.is_some() {
             return;
         }
         let (info, content) = ctx.input(|i| (i.viewport().clone(), i.content_rect()));
@@ -3384,6 +3481,7 @@ impl VwApp {
                 .clone()
                 .filter(|c| self.archives.mount_of(c).is_none()),
             extract_dir: self.last_extract_dir.clone(),
+            fullscreen_root: self.last_fullscreen_root.clone(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {
@@ -3464,6 +3562,16 @@ impl VwApp {
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(r) = self.loader.rx.try_recv() {
+            if let Some(show) = self
+                .fullscreen
+                .as_mut()
+                .filter(|f| f.loader_slot() == r.slot)
+            {
+                if let Some(problem) = show.receive(ctx, r.request, r.path, r.result) {
+                    self.log.error(problem);
+                }
+                continue;
+            }
             if let Some(pb) = self.playback.as_mut().filter(|pb| pb.loader_slot == r.slot) {
                 let Some(index) = pb.pending.remove(&r.request) else {
                     continue;
@@ -3759,6 +3867,9 @@ impl VwApp {
                     }
                 });
                 ui.separator();
+                if self.menu_item(ui, Action::FullscreenSlideshow, None) {
+                    chosen = Some(Action::FullscreenSlideshow);
+                }
                 if self.menu_item(ui, Action::ToggleDatasets, Some(self.show_datasets)) {
                     chosen = Some(Action::ToggleDatasets);
                 }
@@ -4584,6 +4695,10 @@ impl eframe::App for VwApp {
         }
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
+        if self.fullscreen.is_some() {
+            self.fullscreen_ui(ui);
+            return;
+        }
 
         // キー入力待ちのときは、押されたキーを割り当てに使い切る（ホットキーとして実行しない）。
         if self
@@ -4626,6 +4741,22 @@ impl eframe::App for VwApp {
             }
             // 外部のエディタでの書き換えを、ウィンドウに触れなくても拾えるようにする。
             ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+
+        if self.show_fullscreen_setup {
+            let current = self.current.clone();
+            let action =
+                self.fullscreen_setup
+                    .ui(ui, &mut self.settings.settings, current.as_deref());
+            match action {
+                Some(crate::fullscreen::SetupAction::Close) => self.show_fullscreen_setup = false,
+                Some(crate::fullscreen::SetupAction::Changed) => self.settings_changed(&ctx),
+                Some(crate::fullscreen::SetupAction::Start(root)) => {
+                    self.start_fullscreen(&ctx, root)
+                }
+                None => {}
+            }
             return;
         }
 
@@ -4792,7 +4923,7 @@ fn keeps_view(
 /// シネやアニメーションのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を
 /// 優先し、なければ推奨の表示速度か Cine Rate を使う。DICOM でなければアニメーションの
 /// 1 フレームの平均の表示時間を使う。
-fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
+pub(crate) fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
     let number = |group, key| {
         let v = metadata.get(group, key)?;
         // 複数値（`33.3\33.3`）なら最初の値。
@@ -4924,6 +5055,7 @@ fn request_full(loader: &Loader, next_id: &mut u64, s: &mut Slot) {
         thumb: false,
         full: true,
         develop: shown.developed,
+        fit_side: None,
     });
 }
 

@@ -303,7 +303,7 @@ pub fn needs_full(shown_side: f32, thumb_side: usize, image_side: u32) -> bool {
 /// egui の `smooth_scroll_delta` を使わないのは、回転量を数フレームに分けて届けるので、
 /// 1 目盛りで 1 枚送る判定がフレームの区切りでぶれるため。Ctrl 付きは egui が
 /// ズームとして扱うので数えない。
-fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
+pub fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
     events
         .iter()
         .filter_map(|e| match e {
