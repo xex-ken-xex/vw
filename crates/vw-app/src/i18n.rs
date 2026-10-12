@@ -81,6 +81,8 @@ const JA: &[(&str, &str)] = &[
     ("Move bad images to trash...", "悪い画像をごみ箱へ..."),
     ("Move {} bad images to the trash?", "悪いフラグの画像 {} 枚をごみ箱へ送りますか？"),
     ("...and {} more", "...ほか {} 枚"),
+    ("… and {} more", "… ほか {} 件"),
+    ("No values", "値がありません"),
     ("Move to trash", "ごみ箱へ送る"),
     ("{} is encrypted. Enter the password.", "{} は暗号化されています。パスワードを入力してください。"),
     ("Wrong password.", "パスワードが違います。"),

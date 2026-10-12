@@ -303,18 +303,23 @@ impl DatasetsScreen {
                             _ => &[],
                         };
                         if !choices.is_empty() {
-                            ui.menu_button(icon::CARET_DOWN, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(300.0)
-                                    .show(ui, |ui| {
-                                        for v in choices {
-                                            if ui.button(v).clicked() {
-                                                c.value.clone_from(v);
-                                                ui.close();
-                                            }
-                                        }
-                                    });
+                            ui.push_id(("dataset-values", i), |ui| {
+                                ui.menu_button(icon::CARET_DOWN, |ui| {
+                                    value_list(ui, lang, choices, &mut c.value)
+                                });
                             });
+                        } else if let (Target::Meta { kind, key }, Some(index)) =
+                            (&c.target, &self.index)
+                        {
+                            if !key.trim().is_empty() {
+                                ui.push_id(("dataset-values", i), |ui| {
+                                    // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
+                                    ui.menu_button(icon::CARET_DOWN, |ui| {
+                                        let values = index.meta_values(kind, key);
+                                        value_list(ui, lang, &values, &mut c.value);
+                                    });
+                                });
+                            }
                         }
                     }
                 }
@@ -578,6 +583,32 @@ fn target_combo(
                 {
                     *target = choice;
                 }
+            }
+        });
+}
+
+/// 条件の値の候補。選ぶと `value` に入れる。
+fn value_list(ui: &mut egui::Ui, lang: Language, values: &[String], value: &mut String) {
+    const MAX: usize = 500;
+    if values.is_empty() {
+        ui.weak(tr(lang, "No values"));
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(360.0)
+        .show(ui, |ui| {
+            for v in values.iter().take(MAX) {
+                if ui.selectable_label(v == value, v).clicked() {
+                    value.clone_from(v);
+                    ui.close();
+                }
+            }
+            if values.len() > MAX {
+                ui.weak(tr1(
+                    lang,
+                    "… and {} more",
+                    &(values.len() - MAX).to_string(),
+                ));
             }
         });
 }
