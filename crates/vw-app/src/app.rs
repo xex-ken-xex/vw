@@ -1100,6 +1100,49 @@ impl VwApp {
         }
     }
 
+    /// Datasets 画面から、データセット `dir` の検索で当たったファイル（カタログのパス）だけを
+    /// 1 件 1 スロットで並べる。
+    ///
+    /// フォルダへは移らない（cd すると、当たらなかったファイルも並んでしまう）。ZIP / 7z の中の
+    /// ファイルは並べない。開くには展開が要り、当たったファイルのためにアーカイブをいくつも展開すると
+    /// 待たされるため。その数はログに出し、取り出せば見られることを伝える。
+    fn show_dataset_files(&mut self, dir: &Path, files: &[String]) {
+        self.show_datasets = false;
+        self.finish_folder_load();
+        self.close_all_slots();
+        self.tree.reveal(dir, &self.loader.registry().clone());
+        self.current = None;
+        let (archived, on_disk): (Vec<&String>, Vec<&String>) = files
+            .iter()
+            .partition(|f| f.contains(crate::catalog::IN_ARCHIVE));
+        let paths: Vec<PathBuf> = on_disk
+            .into_iter()
+            .filter_map(|f| crate::dataset_extract::enclosed(f))
+            .map(|f| dir.join(f))
+            .collect();
+        for _ in 1..paths.len() {
+            self.slots.push(Slot::new(self.next_id));
+            self.next_id += 1;
+        }
+        // 先にスロットを全部足してから枠の大きさを見積もる（cd と同じ理由）。
+        let full = self.cell_needs_full();
+        for (i, path) in paths.into_iter().enumerate() {
+            self.start_load(i, path, full);
+        }
+        self.active = 0;
+        self.log.info(format!(
+            "Showing {} files found in the dataset {}",
+            files.len() - archived.len(),
+            dir.display()
+        ));
+        if !archived.is_empty() {
+            self.log.warn(format!(
+                "{} files found are inside ZIP / 7z files and are not shown. Extract them to see them.",
+                archived.len()
+            ));
+        }
+    }
+
     /// Datasets 画面から、データセットのフォルダへ移ってファイルを読み込む。検索カタログにあるのに
     /// 見つからないファイルはログに出し、更新を促す。
     fn show_dataset(&mut self, ctx: &egui::Context, dir: PathBuf) {
@@ -4595,8 +4638,11 @@ impl eframe::App for VwApp {
                 Some(crate::datasets_screen::Action::Show(dir)) => {
                     self.show_dataset(&ctx, dir);
                 }
-                Some(crate::datasets_screen::Action::Extract(dir)) => {
-                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Extract(dir));
+                Some(crate::datasets_screen::Action::ShowFiles(dir, files)) => {
+                    self.show_dataset_files(&dir, &files);
+                }
+                Some(crate::datasets_screen::Action::Extract(dir, hits)) => {
+                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Extract(dir, hits));
                 }
                 Some(crate::datasets_screen::Action::Edit(dir)) => {
                     self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Edit(dir));
