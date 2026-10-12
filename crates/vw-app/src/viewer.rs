@@ -182,6 +182,8 @@ pub struct SlotLook<'a> {
     pub label: &'a Label,
     /// 画素値の確認ツールを使っている（クリックで十字を置き、カーソル位置の値を出す）。
     pub probe: bool,
+    /// 右クリックの「送信 ▸」に並べる送信先の名前。
+    pub destinations: &'a [String],
 }
 
 /// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
@@ -208,6 +210,8 @@ pub struct SlotResponse {
     pub dropped: Option<PathBuf>,
     /// 右クリックメニューで十字の値のコピーが選ばれた。コピーする文字。
     pub copy_text: Option<String>,
+    /// 右クリックメニューで送信先が選ばれた。
+    pub send: Option<crate::dicom_send::Choice>,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -493,6 +497,7 @@ impl Slot {
             empty_hint,
             label: image_label,
             probe: probing,
+            destinations,
         } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
@@ -714,6 +719,14 @@ impl Slot {
                 {
                     out.develop = true;
                     ui.close();
+                }
+                let dicom = self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|s| s.info.plugin == "DICOM");
+                if dicom {
+                    ui.separator();
+                    out.send = crate::dicom_send::menu(ui, lang, destinations);
                 }
             });
             if delete_mark {
