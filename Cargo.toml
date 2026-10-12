@@ -27,3 +27,8 @@ strip = true
 # Image decoding is painfully slow unoptimized; keep dependencies fast in dev builds.
 [profile.dev.package."*"]
 opt-level = 3
+
+# Windows で拡大率の違うモニタ間をドラッグすると、ウインドウがちらつきながら伸び縮みを繰り返す
+# winit 0.30.13 の不具合を直した写し（vendor/winit/README-vw.md）。上流が直した版を出したら外す。
+[patch.crates-io]
+winit = { path = "vendor/winit" }
