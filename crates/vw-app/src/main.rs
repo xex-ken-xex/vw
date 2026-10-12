@@ -6,6 +6,7 @@
 // デバッグビルドで残すのは、panic メッセージなどを端末で読めるようにするため。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod app;
 mod archive;
 mod autoload;

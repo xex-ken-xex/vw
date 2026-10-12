@@ -1008,7 +1008,11 @@ git push origin v0.3.0
 
 ## ライセンス
 
+Copyright (c) 2026 vw contributors
+
+作者は xex（GitHub: [xex-ken-xex](https://github.com/xex-ken-xex)）です。ソースは https://github.com/xex-ken-xex/vw にあります。アプリの「ヘルプ」→「vw について」と、Windows の EXE のプロパティ（「詳細」タブ）にも同じ表示があります。
+
 vw は [MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) のどちらかを選んで使えます（`MIT OR Apache-2.0`）。
 無償で、改変・再配布・商用利用ができます。どちらのライセンスでも、vw は現状のまま提供され、いかなる保証もありません。作者は vw の利用によって生じた損害に責任を負いません。
 
-vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。
+vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります（「vw について」の「サードパーティのライセンス...」でも開けます）。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。

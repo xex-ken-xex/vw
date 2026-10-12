@@ -76,6 +76,7 @@ pub enum Action {
     TogglePixelProbe,
     DeleteProbePoint,
     TogglePixelPipeline,
+    ShowAbout,
 }
 
 /// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
@@ -88,7 +89,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 61] = [
+    pub const ALL: [Action; 62] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -144,6 +145,7 @@ impl Action {
         Action::ToggleLog,
         Action::ToggleSettings,
         Action::ToggleDatasets,
+        Action::ShowAbout,
         Action::FullscreenNext,
         Action::FullscreenPrevious,
         Action::FullscreenNextFolder,
@@ -207,6 +209,7 @@ impl Action {
             Action::TrashBadImages => "trash_bad_images",
             Action::CancelSending => "cancel_sending",
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
+            Action::ShowAbout => "show_about",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
             Action::FullscreenNext => "fullscreen_next",
@@ -277,6 +280,7 @@ impl Action {
             Action::TrashBadImages => "Move bad images to trash...",
             Action::CancelSending => "Cancel sending",
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
+            Action::ShowAbout => "About vw",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -433,6 +437,7 @@ impl Action {
             Action::TrashBadImages => vec![],
             Action::CancelSending => vec![],
             Action::TogglePixelPipeline => vec![],
+            Action::ShowAbout => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],
