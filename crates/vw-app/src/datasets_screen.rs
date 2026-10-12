@@ -46,6 +46,8 @@ pub struct DatasetsScreen {
     /// 結果を出したときの条件。変わったら出し直す。
     searched: Option<Query>,
     selected: Option<PathBuf>,
+    /// 前のフレームでポインタが乗っていた行。行の色はグリッドを描く前に決めるため。
+    hovered: Option<PathBuf>,
     sort: Column,
     descending: bool,
 }
@@ -61,6 +63,7 @@ impl Default for DatasetsScreen {
             error: None,
             searched: None,
             selected: None,
+            hovered: None,
             sort: Column::Location,
             descending: false,
         }
@@ -373,15 +376,17 @@ impl DatasetsScreen {
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
         let dir = self.selected.as_ref()?;
-        let entry = index.entries.iter().find(|e| &e.dir == dir)?;
-        let c = &entry.catalog;
-        // 絞り込んだときだけ。すべてのファイルが当たったときは、データセットを開くのと同じため。
-        let hits: Option<Vec<String>> = self
+        // 検索の結果に出ていないデータセットは、選んだままでも詳しく出さない。
+        let hit = self
             .hits
             .iter()
-            .find(|h| index.entries[h.entry].dir == *dir)
-            .filter(|h| h.narrowed)
-            .map(|h| h.files.iter().map(|&f| c.files[f].path.clone()).collect());
+            .find(|h| index.entries[h.entry].dir == *dir)?;
+        let entry = &index.entries[hit.entry];
+        let c = &entry.catalog;
+        // 絞り込んだときだけ。すべてのファイルが当たったときは、データセットを開くのと同じため。
+        let hits: Option<Vec<String>> = hit
+            .narrowed
+            .then(|| hit.files.iter().map(|&f| c.files[f].path.clone()).collect());
         let mut action = None;
         egui::Panel::right("dataset_detail")
             .default_size(300.0)
@@ -518,11 +523,28 @@ impl DatasetsScreen {
         let mut clicked = None;
         let mut show = None;
         let mut sort_by = None;
+        let mut hovered = None;
+        // 0 行目は見出し。
+        let row_of = |dir: Option<&PathBuf>| {
+            dir.and_then(|d| dirs.iter().position(|e| *e == d.as_path()))
+                .map(|i| i + 1)
+        };
+        let selected_row = row_of(self.selected.as_ref());
+        let hovered_row = row_of(self.hovered.as_ref());
+        let spacing = egui::vec2(16.0, 4.0);
         egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
             egui::Grid::new("datasets-table")
                 .num_columns(4 + field_names.len())
-                .striped(true)
-                .spacing([16.0, 4.0])
+                .with_row_color(move |row, style| {
+                    if Some(row) == selected_row {
+                        Some(style.visuals.selection.bg_fill)
+                    } else if Some(row) == hovered_row {
+                        Some(style.visuals.widgets.hovered.weak_bg_fill)
+                    } else {
+                        (row % 2 == 1).then_some(style.visuals.faint_bg_color)
+                    }
+                })
+                .spacing(spacing)
                 .show(ui, |ui| {
                     let mut header = |ui: &mut egui::Ui, title: &str, column: Column| {
                         let mark = match (self.sort == column, self.descending) {
@@ -559,22 +581,33 @@ impl DatasetsScreen {
                         } else {
                             0
                         };
-                        let selected = self.selected.as_ref() == Some(&e.dir);
                         let name = format!("{}{}", "    ".repeat(depth), e.catalog.name);
-                        let row = ui.selectable_label(selected, name);
+                        let first = ui.label(name).rect;
+                        ui.label(e.catalog.tags.join(", "));
+                        for f in field_names {
+                            ui.label(e.catalog.fields.get(f).map_or("", String::as_str));
+                        }
+                        ui.label(format!("{} / {}", h.files.len(), e.catalog.files.len()));
+                        let last = ui
+                            .label(egui::RichText::new(e.dir.display().to_string()).weak())
+                            .rect;
+                        ui.end_row();
+                        // セルの間のすき間も含めて、行のどこを押しても選べるようにする。
+                        let rect = first.union(last).expand2(spacing / 2.0);
+                        let row = ui.interact(
+                            rect,
+                            ui.id().with(("dataset-row", &e.dir)),
+                            egui::Sense::click(),
+                        );
+                        if row.hovered() {
+                            hovered = Some(e.dir.clone());
+                        }
                         if row.clicked() {
                             clicked = Some(e.dir.clone());
                         }
                         if row.double_clicked() {
                             show = Some(e.dir.clone());
                         }
-                        ui.label(e.catalog.tags.join(", "));
-                        for f in field_names {
-                            ui.label(e.catalog.fields.get(f).map_or("", String::as_str));
-                        }
-                        ui.label(format!("{} / {}", h.files.len(), e.catalog.files.len()));
-                        ui.label(egui::RichText::new(e.dir.display().to_string()).weak());
-                        ui.end_row();
                     }
                 });
         });
@@ -585,6 +618,10 @@ impl DatasetsScreen {
                 self.sort = column;
                 self.descending = false;
             }
+        }
+        if hovered != self.hovered {
+            self.hovered = hovered;
+            ui.ctx().request_repaint();
         }
         if let Some(dir) = clicked {
             self.selected = Some(dir);
@@ -637,15 +674,46 @@ fn target_combo(
 /// 当たったファイルのパス。数万件あっても重くならないよう、見えている行だけを描く。
 fn hit_list(ui: &mut egui::Ui, hits: &[String]) {
     let row = ui.text_style_height(&egui::TextStyle::Body);
+    let font = egui::TextStyle::Body.resolve(ui.style());
     egui::ScrollArea::vertical()
         .id_salt("dataset-hits")
         .max_height(320.0)
+        .auto_shrink([false, true])
         .show_rows(ui, row, hits.len(), |ui, range| {
             for path in &hits[range] {
-                ui.add(egui::Label::new(egui::RichText::new(path).monospace()).truncate())
-                    .on_hover_text(path);
+                let name = path.rsplit_once('/').map_or(path.as_str(), |(_, n)| n);
+                let width = ui.available_width();
+                let shown = tail_that_fits(name, |s| {
+                    ui.painter()
+                        .layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                        .size()
+                        .x
+                        <= width
+                });
+                ui.add(egui::Label::new(shown).extend()).on_hover_text(path);
             }
         });
+}
+
+/// `text` が `fits` に収まらなければ、頭を「…」にして末尾をできるだけ残す。
+///
+/// 連番のファイルは名前の違いが末尾に出るので、egui の省略（末尾を切る）は使わない。
+fn tail_that_fits(text: &str, fits: impl Fn(&str) -> bool) -> String {
+    if fits(text) {
+        return text.to_owned();
+    }
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let tail = |k: usize| format!("…{}", &text[starts[k]..]);
+    let (mut lo, mut hi) = (0, starts.len().saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if fits(&tail(mid)) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    tail(lo)
 }
 
 /// 条件の値の候補。選ぶと `value` に入れる。
@@ -723,6 +791,17 @@ mod tests {
             screen.poll();
         }
         screen.index().expect("discovery finished")
+    }
+
+    #[test]
+    fn long_names_keep_their_end_behind_an_ellipsis() {
+        let fits = |s: &str| s.chars().count() <= 8;
+        assert_eq!(tail_that_fits("a.png", fits), "a.png");
+        assert_eq!(tail_that_fits("scan-0001-0042.ima", fits), "…042.ima");
+        assert_eq!(
+            tail_that_fits("写真の名前がとても長い.jpg", fits),
+            "…も長い.jpg"
+        );
     }
 
     #[test]
