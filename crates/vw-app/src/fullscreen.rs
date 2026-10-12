@@ -1187,7 +1187,8 @@ mod tests {
     fn label_starts_at_the_root_folder_name() {
         let root = Path::new("/data/shoot");
         let label = relative_label(root, &root.join("day1").join("a.jpg"));
-        assert_eq!(label, Path::new("shoot/day1/a.jpg").display().to_string());
+        let expected = Path::new("shoot").join("day1").join("a.jpg");
+        assert_eq!(label, expected.display().to_string());
     }
 
     fn folder(dir: &str, files: &[&str]) -> Folder {
