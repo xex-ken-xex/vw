@@ -42,6 +42,8 @@ pub struct AppState {
     pub open_folders: Vec<PathBuf>,
     /// cd していたフォルダ。
     pub current: Option<PathBuf>,
+    /// 最後にデータセットを取り出した出力先の親フォルダ。
+    pub extract_dir: Option<PathBuf>,
 }
 
 /// 起動時にウインドウをどう置くか。
@@ -84,11 +86,13 @@ impl AppState {
         let window = read_window(&mut r);
         let open_folders = r.get::<Vec<PathBuf>>("tree", "open").unwrap_or_default();
         let current = r.get::<PathBuf>("tree", "current");
+        let extract_dir = r.get::<PathBuf>("dataset", "extract_dir");
         (
             Self {
                 window,
                 open_folders,
                 current,
+                extract_dir,
             },
             r.problems,
         )
@@ -123,6 +127,11 @@ impl AppState {
             tree.insert("current".into(), current.into());
         }
         root.insert("tree".into(), tree.into());
+        if let Some(dir) = self.extract_dir.as_ref().and_then(|p| p.to_str()) {
+            let mut dataset = toml::Table::new();
+            dataset.insert("extract_dir".into(), dir.into());
+            root.insert("dataset".into(), dataset.into());
+        }
         toml::to_string(&root).expect("state is always representable in TOML")
     }
 
@@ -358,6 +367,7 @@ mod tests {
             window: Some(window(vec![monitor(0, 1920), monitor(1920, 2560)])),
             open_folders: vec![PathBuf::from("/home/ken"), PathBuf::from("/home/ken/写真")],
             current: Some(PathBuf::from("/home/ken/写真")),
+            extract_dir: Some(PathBuf::from("/home/ken/評価")),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -370,6 +380,7 @@ mod tests {
             window: Some(w),
             open_folders: vec![],
             current: None,
+            extract_dir: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -424,6 +435,7 @@ mod tests {
             window: None,
             open_folders: vec![dir.path().to_path_buf()],
             current: None,
+            extract_dir: None,
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));

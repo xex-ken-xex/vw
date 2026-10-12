@@ -2,9 +2,11 @@
 //!
 //! 取り出しは、検索カタログにあるファイルを、データセットのフォルダからの相対パスのまま
 //! 出力先へ写す。ZIP / 7z の中のファイルは展開し、アーカイブと同じ名前のフォルダの下に置く。
-//! 写し終えたら出力先を新しいデータセットとして読み直す。
+//! 出力先をデータセットとして登録するのは、頼まれたときだけ。取り出した先は評価などに使う
+//! 作業用のフォルダであることが多く、検索カタログがあると検索の結果に紛れ込むため。
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
 
@@ -13,18 +15,17 @@ use vw_core::Registry;
 use crate::archive::{self, ArchiveError, EntryError};
 use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped, Source, IN_ARCHIVE};
 
-/// 取り出した結果。`failed` は写せなかったファイル（元から消えていたものなど）。
+/// 取り出した結果。`failed` は写せなかったファイル（元から消えていたもの、出力先に同じ名前が
+/// あったものなど）。
 #[derive(Debug)]
 pub struct Extracted {
-    pub report: Report,
     pub copied: usize,
     pub failed: Vec<Skipped>,
+    /// 出力先をデータセットとして登録したときの結果。
+    pub registered: Option<Report>,
 }
 
-/// 出力先として使えるか。空のフォルダか、まだないフォルダだけを受け付ける。
-///
-/// 中身のあるフォルダを許さないのは、出力先を読み直して新しい検索カタログを作るので、
-/// もとからあったファイルまで取り出したものとして入ってしまうため。
+/// 出力先として使えるか。中身のあるフォルダでもよい（同じ名前のファイルは上書きしない）。
 pub fn check_destination(source: &Path, dest: &Path) -> Result<(), String> {
     if dest.as_os_str().is_empty() || !dest.is_absolute() {
         return Err("Enter the full path of the destination folder.".into());
@@ -33,49 +34,45 @@ pub fn check_destination(source: &Path, dest: &Path) -> Result<(), String> {
     if dest.starts_with(source) {
         return Err("The destination is inside the dataset being extracted.".into());
     }
-    match std::fs::read_dir(dest) {
-        Ok(mut entries) => {
-            if entries.next().is_some() {
-                return Err("The destination folder is not empty.".into());
-            }
-            Ok(())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if dest.exists() {
-                Err("The destination is not a folder.".into())
-            } else {
-                Ok(())
-            }
-        }
-        Err(e) => Err(format!("{}: {e}", dest.display())),
+    if dest.exists() && !dest.is_dir() {
+        return Err("The destination is not a folder.".into());
     }
+    Ok(())
 }
 
-/// `source` のデータセット（検索カタログは `c`）を `dest` に取り出し、`dest` に新しい検索カタログを
-/// 作る。名前などは `info`、元のデータセットは `source` に記録する。
+/// `source` のデータセット（検索カタログは `c`）のファイルを `dest` に写す。`register` があれば、
+/// 写した後に `dest` をその名前などでデータセットとして登録し、元のデータセットを記録する。
 pub fn extract(
     source: &Path,
     c: &Catalog,
     dest: &Path,
-    info: Info,
-    registry: &Registry,
+    register: Option<(Info, &Registry)>,
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<Extracted, String> {
     check_destination(source, dest)?;
+    if register.is_some() && catalog::exists_in(dest) {
+        return Err("The destination is already a dataset.".into());
+    }
     std::fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let (copied, failed) = copy_files(source, c, dest, progress, ask_password)?;
-    progress.done.store(0, Ordering::Relaxed);
-    let mut report = catalog::scan(dest, info, None, registry, progress, ask_password)?;
-    report.catalog.source = Some(Source {
-        name: c.name.clone(),
-        path: source.display().to_string(),
-    });
-    catalog::save(dest, &report.catalog)?;
+    let registered = match register {
+        Some((info, registry)) => {
+            progress.done.store(0, Ordering::Relaxed);
+            let mut report = catalog::scan(dest, info, None, registry, progress, ask_password)?;
+            report.catalog.source = Some(Source {
+                name: c.name.clone(),
+                path: source.display().to_string(),
+            });
+            catalog::save(dest, &report.catalog)?;
+            Some(report)
+        }
+        None => None,
+    };
     Ok(Extracted {
-        report,
         copied,
         failed,
+        registered,
     })
 }
 
@@ -112,9 +109,9 @@ fn copy_files(
         }
         progress.step(archive);
         let result = unpack(source, dest, archive, &wanted, progress, ask_password);
-        let found =
+        let unpacked =
             match result {
-                Ok(found) => found,
+                Ok(u) => u,
                 Err(reason) => {
                     failed.extend(wanted.iter().map(|inner| {
                         catalog::skip(&format!("{archive}{IN_ARCHIVE}{inner}"), &reason)
@@ -124,14 +121,19 @@ fn copy_files(
                 }
             };
         for inner in &wanted {
-            if !found.contains(*inner) {
-                failed.push(catalog::skip(
-                    &format!("{archive}{IN_ARCHIVE}{inner}"),
-                    "not found in the archive",
-                ));
-            }
+            let reason = if unpacked.existing.contains(*inner) {
+                ALREADY_EXISTS
+            } else if !unpacked.copied.contains(*inner) {
+                "not found in the archive"
+            } else {
+                continue;
+            };
+            failed.push(catalog::skip(
+                &format!("{archive}{IN_ARCHIVE}{inner}"),
+                reason,
+            ));
         }
-        copied += found.len();
+        copied += unpacked.copied.len();
         progress.done.fetch_add(wanted.len(), Ordering::Relaxed);
     }
     if progress.cancelled() {
@@ -146,9 +148,21 @@ fn copy_file(source: &Path, dest: &Path, path: &str) -> Result<(), String> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    if target.exists() {
+        return Err(ALREADY_EXISTS.into());
+    }
     std::fs::copy(source.join(&relative), &target)
         .map(drop)
         .map_err(|e| e.to_string())
+}
+
+const ALREADY_EXISTS: &str = "already exists in the destination";
+
+/// アーカイブから展開したもの（中のパス）。`existing` は出力先に同じ名前があって写さなかったもの。
+#[derive(Default)]
+struct Unpacked {
+    copied: BTreeSet<String>,
+    existing: BTreeSet<String>,
 }
 
 /// アーカイブの中の `wanted` を `dest/<アーカイブの相対パス>/` の下に展開し、展開できたものを返す。
@@ -160,14 +174,14 @@ fn unpack(
     wanted: &BTreeSet<&str>,
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
-) -> Result<BTreeSet<String>, String> {
+) -> Result<Unpacked, String> {
     let relative = enclosed(archive).ok_or("unsafe path in the search catalog")?;
     let path = source.join(&relative);
     let root = dest.join(&relative);
     let mut password: Option<String> = None;
     loop {
         let mut written: Vec<PathBuf> = Vec::new();
-        let mut found = BTreeSet::new();
+        let mut out = Unpacked::default();
         let result = archive::for_each_entry(&path, password.as_deref(), |inner, data| {
             if progress.cancelled() {
                 return Err(EntryError::Other("Cancelled".into()));
@@ -183,15 +197,21 @@ fn unpack(
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| EntryError::Other(e.to_string()))?;
             }
-            let mut file =
-                std::fs::File::create(&target).map_err(|e| EntryError::Other(e.to_string()))?;
+            let mut file = match std::fs::File::create_new(&target) {
+                Ok(f) => f,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    out.existing.insert(name);
+                    return Ok(());
+                }
+                Err(e) => return Err(EntryError::Other(e.to_string())),
+            };
             written.push(target);
             archive::copy_entry(data, &mut file)?;
-            found.insert(name);
+            out.copied.insert(name);
             Ok(())
         });
         match result {
-            Ok(_) => return Ok(found),
+            Ok(_) => return Ok(out),
             Err(e) => {
                 for p in &written {
                     let _ = std::fs::remove_file(p);
@@ -260,8 +280,7 @@ pub fn outer_dataset(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, write_png, TempDir};
-    use std::io::Write as _;
+    use crate::test_util::{png_bytes, png_registry, write_png, write_zip, TempDir};
 
     fn no_password(_: &Path, _: bool) -> Option<String> {
         None
@@ -288,45 +307,17 @@ mod tests {
         r.catalog
     }
 
-    fn png_bytes() -> Vec<u8> {
-        let tmp = TempDir::new();
-        let p = tmp.path().join("a.png");
-        write_png(&p, 2, 2, &[0; 12]);
-        std::fs::read(p).unwrap()
-    }
-
-    fn write_zip(path: &Path, entries: &[(&str, &[u8])], password: Option<&str>) {
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
-        for (name, data) in entries {
-            let mut options = zip::write::SimpleFileOptions::default();
-            if let Some(pw) = password {
-                options = options.with_aes_encryption(zip::AesMode::Aes256, pw);
-            }
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(data).unwrap();
-        }
-        zip.finish().unwrap();
-    }
-
     fn run(
         source: &Path,
         c: &Catalog,
         dest: &Path,
         ask: &mut dyn FnMut(&Path, bool) -> Option<String>,
     ) -> Result<Extracted, String> {
-        extract(
-            source,
-            c,
-            dest,
-            info("copy"),
-            &png_registry(),
-            &Progress::default(),
-            ask,
-        )
+        extract(source, c, dest, None, &Progress::default(), ask)
     }
 
     #[test]
-    fn copies_files_keeping_relative_paths_and_writes_a_new_catalog() {
+    fn copies_files_keeping_relative_paths_without_a_catalog() {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(src.join("a/b")).unwrap();
@@ -341,12 +332,86 @@ mod tests {
         assert!(dest.join("a/b/deep.png").is_file());
         assert_eq!(x.copied, 2);
         assert!(x.failed.is_empty());
+        assert!(!catalog::exists_in(&dest));
+    }
+
+    #[test]
+    fn registering_the_destination_writes_a_catalog_that_names_the_source() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_png(&src.join("a.png"), 2, 2, &[0; 12]);
+        write_zip(&src.join("z.zip"), &[("b.png", &png_bytes(2, 2))], None);
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+        let registry = png_registry();
+
+        let x = extract(
+            &src,
+            &c,
+            &dest,
+            Some((info("copy"), &registry)),
+            &Progress::default(),
+            &mut no_password,
+        )
+        .unwrap();
+
+        assert_eq!(x.registered.unwrap().catalog.files.len(), 2);
         let saved = catalog::load(&dest).unwrap();
         assert_eq!(saved.name, "copy");
-        assert_eq!(saved.files.len(), 2);
+        let paths: Vec<&str> = saved.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["a.png", "z.zip/b.png"]);
         let source = saved.source.unwrap();
         assert_eq!(source.name, "orig");
         assert_eq!(source.path, src.display().to_string());
+    }
+
+    #[test]
+    fn registering_into_an_existing_dataset_folder_is_refused() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_png(&src.join("a.png"), 2, 2, &[0; 12]);
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        catalog::save(&dest, &Catalog::default()).unwrap();
+        let registry = png_registry();
+
+        let r = extract(
+            &src,
+            &c,
+            &dest,
+            Some((info("copy"), &registry)),
+            &Progress::default(),
+            &mut no_password,
+        );
+
+        assert!(r.is_err());
+        assert!(!dest.join("a.png").exists());
+    }
+
+    #[test]
+    fn files_already_in_the_destination_are_not_overwritten() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_png(&src.join("a.png"), 2, 2, &[0; 12]);
+        write_png(&src.join("b.png"), 2, 2, &[0; 12]);
+        write_zip(&src.join("z.zip"), &[("c.png", &png_bytes(2, 2))], None);
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("z.zip")).unwrap();
+        std::fs::write(dest.join("a.png"), b"mine").unwrap();
+        std::fs::write(dest.join("z.zip/c.png"), b"mine").unwrap();
+
+        let x = run(&src, &c, &dest, &mut no_password).unwrap();
+
+        assert_eq!(x.copied, 1);
+        let failed: Vec<&str> = x.failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(failed, ["a.png", "z.zip!/c.png"]);
+        assert_eq!(std::fs::read(dest.join("a.png")).unwrap(), b"mine");
+        assert_eq!(std::fs::read(dest.join("z.zip/c.png")).unwrap(), b"mine");
     }
 
     #[test]
@@ -354,7 +419,7 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(src.join("sub")).unwrap();
-        let png = png_bytes();
+        let png = png_bytes(2, 2);
         write_zip(
             &src.join("sub/data.zip"),
             &[("s1/a.png", &png), ("b.png", &png)],
@@ -367,9 +432,6 @@ mod tests {
 
         assert!(dest.join("sub/data.zip/s1/a.png").is_file());
         assert!(dest.join("sub/data.zip/b.png").is_file());
-        let saved = catalog::load(&dest).unwrap();
-        let paths: Vec<&str> = saved.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["sub/data.zip/b.png", "sub/data.zip/s1/a.png"]);
     }
 
     #[test]
@@ -377,7 +439,11 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
-        write_zip(&src.join("s.zip"), &[("a.png", &png_bytes())], Some("pw"));
+        write_zip(
+            &src.join("s.zip"),
+            &[("a.png", &png_bytes(2, 2))],
+            Some("pw"),
+        );
         let c = register(&src, &mut |_, _| Some("pw".into()));
         let dest = tmp.path().join("out");
         let mut asked = 0;
@@ -398,7 +464,11 @@ mod tests {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
-        write_zip(&src.join("s.zip"), &[("a.png", &png_bytes())], Some("pw"));
+        write_zip(
+            &src.join("s.zip"),
+            &[("a.png", &png_bytes(2, 2))],
+            Some("pw"),
+        );
         let c = register(&src, &mut |_, _| Some("pw".into()));
         let dest = tmp.path().join("out");
 
@@ -428,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn destination_must_be_empty_and_outside_the_source() {
+    fn destination_must_be_a_folder_outside_the_source() {
         let tmp = TempDir::new();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
@@ -440,7 +510,8 @@ mod tests {
         assert!(check_destination(&src, &empty).is_ok());
         assert!(check_destination(&src, &src.join("inner")).is_err());
         assert!(check_destination(&src, &src).is_err());
-        assert!(check_destination(tmp.path().join("other").as_path(), &src).is_err());
+        assert!(check_destination(tmp.path().join("other").as_path(), &src).is_ok());
+        assert!(check_destination(&empty, &src.join("x")).is_err());
         assert!(check_destination(&src, Path::new("relative")).is_err());
     }
 
@@ -459,7 +530,7 @@ mod tests {
         let dir = tmp.path();
         write_png(&dir.join("a.png"), 2, 2, &[0; 12]);
         write_png(&dir.join("b.png"), 2, 2, &[0; 12]);
-        write_zip(&dir.join("z.zip"), &[("c.png", &png_bytes())], None);
+        write_zip(&dir.join("z.zip"), &[("c.png", &png_bytes(2, 2))], None);
         let c = register(dir, &mut no_password);
         std::fs::remove_file(dir.join("b.png")).unwrap();
         std::fs::remove_file(dir.join("z.zip")).unwrap();

@@ -105,6 +105,27 @@ impl Index {
         names
     }
 
+    /// メタデータ `kind` / `key` の、今ある値（重複なし、空は除く）。種類やキーが空なら
+    /// 条件と同じくどれにでも合うとみなすが、値が多すぎて選べないので、キーがなければ出さない。
+    pub fn meta_values(&self, kind: &str, key: &str) -> Vec<String> {
+        let (kind, key) = (kind.trim().to_lowercase(), key.trim().to_lowercase());
+        if key.is_empty() {
+            return Vec::new();
+        }
+        let set: BTreeSet<&String> = self
+            .entries
+            .iter()
+            .flat_map(|e| &e.catalog.meta)
+            .filter(|(k, kk, v)| {
+                (kind.is_empty() || k.to_lowercase() == kind)
+                    && key_matches(kk, &key)
+                    && !v.is_empty()
+            })
+            .map(|(_, _, v)| v)
+            .collect();
+        set.into_iter().cloned().collect()
+    }
+
     /// 項目ごとの、今ある値（空は除く）。
     pub fn field_values(&self) -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -403,6 +424,15 @@ mod tests {
         };
         i.collect_keys();
         i
+    }
+
+    #[test]
+    fn meta_values_lists_each_value_of_a_key_once() {
+        let i = sample();
+        assert_eq!(i.meta_values("dicom", "0008,0060"), ["CT", "PT"]);
+        assert_eq!(i.meta_values("", "Modality"), ["CT", "PT"]);
+        assert_eq!(i.meta_values("DICOM", "0010,0020"), ["A", "B"]);
+        assert!(i.meta_values("dicom", "").is_empty());
     }
 
     fn sample() -> Index {

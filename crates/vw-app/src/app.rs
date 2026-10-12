@@ -132,6 +132,8 @@ pub struct VwApp {
     dataset_queue: Vec<PathBuf>,
     /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
     outer_to_update: Option<PathBuf>,
+    /// 最後にデータセットを取り出した出力先の親フォルダ。次の出力先の初期値に使う。
+    last_extract_dir: Option<PathBuf>,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -205,6 +207,9 @@ pub struct VwApp {
     watcher_failed: bool,
 }
 
+/// 処理中を示す、ウィンドウの一番下の線の太さ。
+const ACTIVITY_LINE: f32 = 2.0;
+
 /// 再生バーの高さ。タグ付けモードのバーも同じ高さにする。
 const PLAY_BAR: f32 = 30.0;
 
@@ -218,6 +223,8 @@ enum ExportKind {
 /// 画像の書き出しの画面の状態。
 struct ExportDialog {
     root: PathBuf,
+    /// 画面に出す `root`。ZIP の中なら一時フォルダではなく ZIP のパスで見せる。
+    root_label: String,
     recursive: bool,
     kind: ExportKind,
     dest: String,
@@ -453,6 +460,7 @@ impl VwApp {
             datasets: Default::default(),
             dataset_queue: Vec::new(),
             outer_to_update: None,
+            last_extract_dir: saved.extract_dir.clone(),
             log,
             started,
             first_frame: true,
@@ -989,7 +997,7 @@ impl VwApp {
             labels: &self.labels,
         };
         let order = self.settings.settings.tree.order();
-        let files = export::collect(&dir, false, self.loader.registry(), order, &matcher);
+        let files = export::collect(&dir, false, self.loader.registry(), order, &matcher).images;
         if files.is_empty() {
             self.log.info(format!("No bad images in {}", dir.display()));
             return;
@@ -1007,9 +1015,19 @@ impl VwApp {
             request,
             &self.settings.settings.dataset.fields,
             self.datasets.index(),
+            &self.extract_base(),
             self.loader.registry(),
             ctx,
         ));
+    }
+
+    /// 取り出しの出力先を置く場所。前に取り出した場所がまだあればそこ、なければユーザーフォルダ。
+    fn extract_base(&self) -> PathBuf {
+        self.last_extract_dir
+            .clone()
+            .filter(|d| d.is_dir())
+            .or_else(std::env::home_dir)
+            .unwrap_or_default()
     }
 
     fn dataset_window(&mut self, ctx: &egui::Context) {
@@ -1020,8 +1038,17 @@ impl VwApp {
         if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
             let dir = dialog.dir().to_path_buf();
             self.outer_to_update = dialog.outer().map(Path::to_path_buf);
+            if let Some(dest) = dialog.extracted_to().map(Path::to_path_buf) {
+                self.datasets.refresh(&dest);
+                self.tree.forget_peek(&dest);
+                if let Some(parent) = dest.parent() {
+                    self.tree.refresh(parent, self.loader.registry());
+                    self.last_extract_dir = Some(parent.to_path_buf());
+                }
+            }
             self.dataset_dialog = None;
             self.datasets.refresh(&dir);
+            self.tree.forget_peek(&dir);
             self.next_queued_update(ctx);
         }
     }
@@ -2394,6 +2421,56 @@ impl VwApp {
         }
     }
 
+    /// ZIP の展開・データセットの読み込みや取り出し・書き出しの進み具合（0〜1）。何もしていなければ `None`。
+    fn activity(&self) -> Option<f32> {
+        let jobs = [
+            self.archives.progress(),
+            self.dataset_dialog.as_ref().and_then(|d| d.progress()),
+            self.export
+                .as_ref()
+                .and_then(|d| d.job.as_ref())
+                .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
+        ];
+        let mut busy = false;
+        let mut fraction: f32 = 1.0;
+        for (done, total) in jobs.into_iter().flatten() {
+            busy = true;
+            // 一番遅れているものに合わせる。合計で出すと、終わりかけのものに隠れて
+            // 長い処理がもうすぐ終わるように見えてしまうため。
+            fraction = fraction.min(done as f32 / total.max(1) as f32);
+        }
+        busy.then_some(fraction.clamp(0.0, 1.0))
+    }
+
+    /// ウィンドウの一番下の細い線。処理中は灰色の上を赤い線が右へ伸び、普段は背景と同じ色で見えない。
+    ///
+    /// 状態バーや進み具合のダイアログにしないのは、ZIP の展開は裏で頻繁に動くので、
+    /// そのたびに画面の配置が変わったり作業を遮ったりしないようにするため。
+    fn activity_line(&self, ui: &mut egui::Ui) {
+        let activity = self.activity();
+        egui::Panel::bottom("activity")
+            .frame(egui::Frame::NONE)
+            .exact_size(ACTIVITY_LINE)
+            .resizable(false)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                let painter = ui.painter();
+                let Some(fraction) = activity else {
+                    painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
+                    return;
+                };
+                painter.rect_filled(rect, 0.0, theme::ACTIVITY_TRACK);
+                let mut done = rect;
+                done.set_width(rect.width() * fraction);
+                painter.rect_filled(done, 0.0, theme::ACTIVITY);
+            });
+        if activity.is_some() {
+            // 展開は終わるまで知らせてこないので、線を進めるために描き直す。
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
     /// cd したフォルダ（なければアクティブな画像のフォルダ）を対象に、書き出しの画面を開く。
     fn open_export(&mut self) {
         let root = self.current.clone().or_else(|| {
@@ -2405,9 +2482,21 @@ impl VwApp {
                 .warn(tr(self.lang(), "Select a folder in the tree first."));
             return;
         };
-        let name = root
-            .file_name()
-            .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned());
+        // ZIP の中は終了時に消える一時フォルダなので、出力先は ZIP の隣に置く。
+        let (name, beside) = match self.archives.mount_of(&root) {
+            Some(m) if m.dir == root => (
+                zip_stem(&m.zip),
+                m.zip.parent().unwrap_or(&m.zip).to_owned(),
+            ),
+            Some(m) => (
+                folder_name(&root),
+                m.zip.parent().unwrap_or(&m.zip).to_owned(),
+            ),
+            None => (
+                folder_name(&root),
+                root.parent().unwrap_or(&root).to_owned(),
+            ),
+        };
         let suffix = match &self.filter {
             Filter::All => "export".to_owned(),
             Filter::Flag(Some(Flag::Good)) => "good".to_owned(),
@@ -2415,8 +2504,17 @@ impl VwApp {
             Filter::Flag(None) => "unflagged".to_owned(),
             Filter::Tag(t) => t.clone(),
         };
-        let beside = root.parent().unwrap_or(&root);
+        let root_label = match self.archives.mount_of(&root) {
+            Some(m) => match root.strip_prefix(&m.dir) {
+                Ok(rel) if !rel.as_os_str().is_empty() => m.zip.join(rel),
+                _ => m.zip.clone(),
+            }
+            .display()
+            .to_string(),
+            None => root.display().to_string(),
+        };
         self.export = Some(ExportDialog {
+            root_label,
             dest: beside
                 .join(format!("{name}-{suffix}"))
                 .display()
@@ -2454,7 +2552,7 @@ impl VwApp {
                     .num_columns(2)
                     .show(ui, |ui| {
                         ui.label(tr(lang, "Folder"));
-                        ui.label(dialog.root.display().to_string());
+                        ui.label(&dialog.root_label);
                         ui.end_row();
                         ui.label("");
                         ui.checkbox(&mut dialog.recursive, tr(lang, "Include subfolders"));
@@ -2534,7 +2632,7 @@ impl VwApp {
         if run {
             self.run_export(ctx);
         }
-        self.finish_copy_job();
+        self.finish_copy_job(ctx);
     }
 
     /// 書き出しを始める。一覧はその場で書き、コピーは別スレッドで行う。
@@ -2553,7 +2651,14 @@ impl VwApp {
         let dialog = self.export.as_mut().expect("checked above");
         match dialog.kind {
             ExportKind::List(format) => {
+                if !files.archives.is_empty() {
+                    self.log.warn(format!(
+                        "Export: the list leaves out {} ZIP / 7z files (open them to list their images)",
+                        files.archives.len()
+                    ));
+                }
                 let items: Vec<_> = files
+                    .images
                     .into_iter()
                     .map(|f| {
                         let label = self.labels.get(&f);
@@ -2573,7 +2678,8 @@ impl VwApp {
             ExportKind::Copy => {
                 let dest = PathBuf::from(dialog.dest.trim());
                 let mut taken = HashSet::new();
-                let pairs: Vec<_> = files
+                let mut items: Vec<_> = files
+                    .images
                     .into_iter()
                     .map(|f| {
                         let to = export::copy_target(
@@ -2583,22 +2689,51 @@ impl VwApp {
                             dialog.keep_structure,
                             &mut taken,
                         );
-                        (f, to)
+                        export::Copy::File { from: f, to }
                     })
                     .collect();
+                let images = items.len();
+                let archives = if self.filter.is_all() {
+                    files.archives.len()
+                } else {
+                    0
+                };
+                if self.filter.is_all() {
+                    // ファイルを先に写す。ZIP の中身を直下に置くときの番号付けで、
+                    // 先に決めておいたファイルの名前を横取りしないため。
+                    items.extend(files.archives.into_iter().map(|zip| {
+                        let (dir, flat) = match zip.strip_prefix(&dialog.root) {
+                            Ok(rel) if dialog.keep_structure => (dest.join(rel), false),
+                            _ => (dest.clone(), true),
+                        };
+                        export::Copy::Archive {
+                            archive: zip,
+                            dir,
+                            flat,
+                        }
+                    }));
+                } else if !files.archives.is_empty() {
+                    self.log.warn(format!(
+                        "Export: skipped {} ZIP / 7z files (images in them have no labels)",
+                        files.archives.len()
+                    ));
+                }
                 self.log.info(format!(
-                    "Export: copying {} images to {}",
-                    pairs.len(),
+                    "Export: copying {images} images and {archives} ZIP / 7z files to {}",
                     dest.display()
                 ));
                 let ctx = ctx.clone();
-                dialog.job = Some(CopyJob::start(pairs, move || ctx.request_repaint()));
+                dialog.job = Some(CopyJob::start(
+                    items,
+                    self.loader.registry().clone(),
+                    move || ctx.request_repaint(),
+                ));
             }
         }
     }
 
     /// 終わったコピーの結果をログに出す。
-    fn finish_copy_job(&mut self) {
+    fn finish_copy_job(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.export else {
             return;
         };
@@ -2609,12 +2744,13 @@ impl VwApp {
             return;
         }
         let failed = std::mem::take(&mut *job.failed.lock().unwrap());
-        let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
+        let copied = job.copied.load(std::sync::atomic::Ordering::Relaxed);
         dialog.job = None;
+        // ログの欄はこの画面より先に描いているので、結果を出すにはもう一度描く。
+        ctx.request_repaint();
         self.log.info(format!(
-            "Export: copied {} of {} images",
-            done - failed.len(),
-            done
+            "Export: copied {copied} images ({} not copied)",
+            failed.len()
         ));
         for e in failed {
             self.log.error(format!("Export: {e}"));
@@ -3181,6 +3317,7 @@ impl VwApp {
                 .current
                 .clone()
                 .filter(|c| self.archives.mount_of(c).is_none()),
+            extract_dir: self.last_extract_dir.clone(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {
@@ -4149,7 +4286,13 @@ impl VwApp {
         }
         self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
         let (cols, rows) = (view.cols, view.rows);
-        let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
+        let pixel = 1.0 / ui.ctx().pixels_per_point();
+        // スロットの間の 1px は区切り線の色で見せる。
+        ui.painter().rect_filled(
+            area,
+            0.0,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        );
         let mut close = None;
         let mut maximize = None;
         let mut explore = None;
@@ -4167,13 +4310,9 @@ impl VwApp {
         }
         for (cell_index, i) in view.range.clone().enumerate() {
             let (c, r) = (cell_index % cols, cell_index / cols);
-            let rect = Rect::from_min_size(
-                pos2(
-                    area.min.x + c as f32 * cell.x,
-                    area.min.y + r as f32 * cell.y,
-                ),
-                cell,
-            );
+            let (x0, x1) = layout::cell_span(area.min.x, area.width(), cols, c, pixel);
+            let (y0, y1) = layout::cell_span(area.min.y, area.height(), rows, r, pixel);
+            let rect = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
             let empty_hint = match &self.slots[i].sequence {
                 Some(seq) if seq.paths.is_empty() => "No image",
                 Some(_) => "No images match the filter",
@@ -4186,7 +4325,7 @@ impl VwApp {
                 .unwrap_or_default();
             let resp = self.slots[i].ui(
                 ui,
-                rect.shrink(1.0),
+                rect,
                 i == self.active,
                 SlotLook {
                     background,
@@ -4319,6 +4458,7 @@ impl eframe::App for VwApp {
         self.run_hotkeys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        self.activity_line(ui);
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
@@ -4649,6 +4789,18 @@ fn color_name(c: ColorModel) -> &'static str {
         ColorModel::Rgb => "RGB",
         ColorModel::Rgba => "RGBA",
     }
+}
+
+/// 書き出し先の名前の元。
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned())
+}
+
+/// 書き出し先の名前の元。`data.zip` の中なら `data-export` のように拡張子を除く。
+fn zip_stem(zip: &Path) -> String {
+    zip.file_stem()
+        .map_or_else(|| "images".into(), |n| n.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
