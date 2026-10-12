@@ -34,6 +34,66 @@ pub fn tr1(lang: Language, en: &'static str, arg: &str) -> String {
 }
 
 const JA: &[(&str, &str)] = &[
+    // 画素の変換の図
+    ("Pixel pipeline", "画素の変換"),
+    ("Pixel pipeline...", "画素の変換..."),
+    ("Show/hide pixel pipeline", "画素の変換の表示/非表示"),
+    ("Stored values", "格納値"),
+    ("Modality LUT", "Modality LUT"),
+    ("Unit", "単位"),
+    ("VOI LUT", "VOI LUT"),
+    ("Presentation LUT", "Presentation LUT"),
+    ("Color space", "色空間"),
+    ("Display", "表示"),
+    ("8-bit RGB", "8 bit RGB"),
+    ("8-bit gray", "8 bit グレー"),
+    ("Allocated", "割り当て"),
+    ("stored", "格納"),
+    ("high bit", "最上位ビット"),
+    ("Signed integers", "符号付き整数"),
+    ("Unsigned integers", "符号なし整数"),
+    ("Already RGB", "RGB のまま"),
+    ("Palette lookup", "パレット表で色を引く"),
+    ("YCbCr to RGB", "YCbCr → RGB"),
+    ("Unknown", "不明"),
+    ("Back to the file value", "ファイルの値に戻す"),
+    ("Reset to file values", "すべてファイルの値に戻す"),
+    ("Fit to window", "ウインドウに合わせる"),
+    (
+        "Changed values are only shown, never written to the file. Closing the window goes back to the file values.",
+        "変えた値は表示だけに使い、ファイルには書きません。ウインドウを閉じるとファイルの値に戻ります。",
+    ),
+    (
+        "Drag the graph: sideways moves the center, up and down changes the width.",
+        "グラフを横にドラッグで中心、縦にドラッグで幅が変わります。",
+    ),
+    ("Invert (MONOCHROME1)", "反転（MONOCHROME1）"),
+    ("No unit", "単位なし"),
+    (
+        "No window in the file: the full range of values is used.",
+        "ファイルにウィンドウがないので、値の全範囲を使っています。",
+    ),
+    (
+        "Put a probe cross on the image to see its values at each step.",
+        "画像にプローブの十字を置くと、各段の値が出ます。",
+    ),
+    (
+        "The file has a Modality LUT Sequence, which vw does not apply yet. The slope and intercept below are used instead.",
+        "ファイルに Modality LUT Sequence がありますが、vw はまだ当てません。代わりに下のスロープと切片を使っています。",
+    ),
+    (
+        "The file has a VOI LUT Sequence, which vw does not apply yet. The window below is used instead.",
+        "ファイルに VOI LUT Sequence がありますが、vw はまだ当てません。代わりに下のウィンドウを使っています。",
+    ),
+    (
+        "The file has several windows; the first is used.",
+        "ファイルにウィンドウが複数あり、最初の組を使っています。",
+    ),
+    ("changed", "変更"),
+    ("default (no tag)", "既定値（タグなし）"),
+    ("from the file", "ファイル"),
+    ("per frame", "フレームごと"),
+    ("stored × slope + intercept", "格納値 × スロープ + 切片"),
     // メニュー
     ("File", "ファイル"),
     ("View", "表示"),

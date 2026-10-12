@@ -130,6 +130,8 @@ pub struct VwApp {
     settings_ui: SettingsUi,
     /// 他の機器への送信（数えている・確かめている・送っている）。一度に 1 つだけ。
     send_job: Option<crate::dicom_send::Job>,
+    /// 画素の変換の図のウインドウ。
+    pipeline: crate::pipeline_view::PipelineView,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
@@ -470,6 +472,11 @@ impl VwApp {
             settings,
             settings_ui: SettingsUi::default(),
             send_job: None,
+            pipeline: {
+                let mut view = crate::pipeline_view::PipelineView::default();
+                view.restore_node_positions(&saved.pipeline_nodes);
+                view
+            },
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -2520,6 +2527,64 @@ impl VwApp {
     }
 
     /// 右クリックの「送信 ▸」で選ばれたものを処理する。送るのは確かめてから。
+    fn toggle_pipeline(&mut self) {
+        if self.pipeline.open {
+            let changes = self.pipeline.close();
+            self.apply_pipeline(changes);
+        } else {
+            self.pipeline.open = true;
+        }
+    }
+
+    /// 画素の変換の図。アクティブなスロットの DICOM 画像を見せ、手で変えた値を表示に当てる。
+    fn pipeline_ui(&mut self, ctx: &egui::Context) {
+        if !self.pipeline.open {
+            return;
+        }
+        let lang = self.lang();
+        let target = self.slots.get(self.active).and_then(|slot| {
+            let shown = slot.shown.as_ref().filter(|s| s.info.plugin == "DICOM")?;
+            Some(crate::pipeline_view::Target {
+                path: &shown.path,
+                image: shown.full.as_ref().map(|f| &f.image),
+                marks: slot
+                    .marks
+                    .iter()
+                    .filter(|m| m.path == shown.path)
+                    .map(|m| (m.x, m.y))
+                    .collect(),
+            })
+        });
+        let changes = self.pipeline.ui(ctx, lang, target);
+        self.apply_pipeline(changes);
+    }
+
+    fn apply_pipeline(&mut self, changes: Vec<crate::pipeline_view::Change>) {
+        use crate::pipeline_view::Change;
+        for change in changes {
+            let path = match &change {
+                Change::Show(path, _) | Change::Restore(path) => path,
+            };
+            let full = self
+                .slots
+                .iter_mut()
+                .filter_map(|s| s.shown.as_mut())
+                .filter(|s| &s.path == path)
+                .find_map(|s| s.full.as_mut());
+            // 当てる前にスロットが別の画像へ移った、またはフル解像度の画像が捨てられたなら、
+            // 表示はもうファイルの値なので何もしない。
+            let Some(full) = full else {
+                continue;
+            };
+            let size = full.texture.size();
+            let image = match change {
+                Change::Show(_, image) => crate::loader::fit_color_image(image, size),
+                Change::Restore(_) => crate::loader::default_color_image(&full.image, size),
+            };
+            full.texture.set(image, texture_options());
+        }
+    }
+
     fn send_to(&mut self, choice: crate::dicom_send::Choice, targets: Vec<PathBuf>) {
         let targets = targets
             .into_iter()
@@ -3451,6 +3516,7 @@ impl VwApp {
             Action::ExportImages => self.open_export(),
             Action::TrashBadImages => self.ask_trash_bad(),
             Action::CancelSending => self.cancel_send(),
+            Action::TogglePixelPipeline => self.toggle_pipeline(),
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -3707,6 +3773,7 @@ impl VwApp {
                 .filter(|c| self.archives.mount_of(c).is_none()),
             extract_dir: self.last_extract_dir.clone(),
             fullscreen_root: self.last_fullscreen_root.clone(),
+            pipeline_nodes: self.pipeline.node_positions(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {
@@ -4090,6 +4157,10 @@ impl VwApp {
                     if self.menu_item(ui, action, Some(shown)) {
                         chosen = Some(action);
                     }
+                }
+                let pipeline = self.pipeline.open;
+                if self.menu_item(ui, Action::TogglePixelPipeline, Some(pipeline)) {
+                    chosen = Some(Action::TogglePixelPipeline);
                 }
                 ui.separator();
                 let maximized = self.maximized.is_some();
@@ -4795,10 +4866,18 @@ impl VwApp {
                     destinations: &destinations,
                 },
             );
+            if resp.pipeline {
+                self.active = i;
+                if !self.pipeline.open {
+                    self.toggle_pipeline();
+                }
+            }
+            // 変換の図は画素を読むので、開いている間はアクティブなスロットにフル解像度の画像を持たせる。
+            let pipeline_wants = self.pipeline.open && i == self.active;
             let slot = &mut self.slots[i];
-            slot.wants_full_now = resp.wants_full;
+            slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
-                if resp.wants_full {
+                if resp.wants_full || pipeline_wants {
                     full.last_used = self.frame;
                 }
             }
@@ -4965,6 +5044,7 @@ impl eframe::App for VwApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.activity_line(ui);
         self.send_ui(&ctx);
+        self.pipeline_ui(&ctx);
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
@@ -5254,6 +5334,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleSettings => "Settings",
         Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
+        Action::TogglePixelPipeline => "Pixel pipeline",
         other => other.title(),
     }
 }
