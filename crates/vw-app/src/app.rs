@@ -41,7 +41,7 @@ use crate::viewer::{
 };
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
-/// 左端のツール列のツール。Browse 以外はまだ機能がなく、押せない状態で置いてある。
+/// 左端のツール列のツール。Browse と PixelProbe 以外はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Browse,
@@ -81,7 +81,12 @@ impl Tool {
     }
 
     fn available(self) -> bool {
-        self == Tool::Browse
+        matches!(self, Tool::Browse | Tool::PixelProbe)
+    }
+
+    /// キーで切り替えられるツールの操作。
+    fn action(self) -> Option<Action> {
+        (self == Tool::PixelProbe).then_some(Action::TogglePixelProbe)
     }
 }
 
@@ -3220,6 +3225,16 @@ impl VwApp {
                 self.step_image_slot(1, true);
             }
             Action::ToggleTagging => self.tagging ^= true,
+            Action::TogglePixelProbe => {
+                self.tool = if self.tool == Tool::PixelProbe {
+                    Tool::Browse
+                } else {
+                    Tool::PixelProbe
+                };
+            }
+            Action::DeleteProbePoint => {
+                self.slots[self.active].delete_selected_mark();
+            }
             Action::FilterAll => self.set_filter(ctx, Filter::All),
             Action::FilterGood => self.set_filter(ctx, Filter::Flag(Some(Flag::Good))),
             Action::FilterBad => self.set_filter(ctx, Filter::Flag(Some(Flag::Bad))),
@@ -3499,9 +3514,13 @@ impl VwApp {
             for tool in Tool::ALL {
                 let button =
                     egui::Button::selectable(self.tool == tool, big(tool.icon())).min_size(size);
+                let tip = match tool.action() {
+                    Some(action) => self.with_key(tr(lang, tool.title()), action),
+                    None => tr(lang, tool.title()).to_owned(),
+                };
                 let r = ui
                     .add_enabled(tool.available(), button)
-                    .on_hover_text(tr(lang, tool.title()))
+                    .on_hover_text(tip)
                     .on_disabled_hover_text(format!(
                         "{}\n{}",
                         tr(lang, tool.title()),
@@ -4399,7 +4418,10 @@ impl VwApp {
                     self.copy_text(ctx, text, &format!("metadata {}", selection_name(&sel)));
                 }
             }
-            Focus::Images => self.copy_image(ctx, self.active),
+            Focus::Images => match self.slots[self.active].selected_mark_text() {
+                Some(text) => self.copy_text(ctx, text, "probe point"),
+                None => self.copy_image(ctx, self.active),
+            },
             Focus::Log => {
                 if let Some(text) = self.log_selected.and_then(|i| self.log.line_text(i)) {
                     self.copy_text(ctx, text, "log line");
@@ -4551,6 +4573,7 @@ impl VwApp {
                     lang,
                     empty_hint,
                     label: &label,
+                    probe: self.tool == Tool::PixelProbe,
                 },
             );
             let slot = &mut self.slots[i];
@@ -4566,6 +4589,9 @@ impl VwApp {
             }
             if resp.copy {
                 self.copy_image(ui.ctx(), i);
+            }
+            if let Some(text) = resp.copy_text {
+                self.copy_text(ui.ctx(), text, "probe point");
             }
             if resp.develop {
                 self.develop_slot(i);
@@ -4610,6 +4636,7 @@ impl VwApp {
                         lang,
                         empty_hint: hint,
                         label: &Default::default(),
+                        probe: false,
                     },
                 );
                 if resp.clicked {
