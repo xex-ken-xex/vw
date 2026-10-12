@@ -57,6 +57,7 @@ fn registry() -> Registry {
     registry.register(Arc::new(vw_bmp::BmpPlugin));
     registry.register(Arc::new(vw_webp::WebpPlugin::default()));
     registry.register(Arc::new(vw_gif::GifPlugin::default()));
+    registry.register(Arc::new(vw_tiff::TiffPlugin));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry

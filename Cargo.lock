@@ -3714,6 +3714,7 @@ dependencies = [
  "vw-jpeg",
  "vw-png",
  "vw-raw",
+ "vw-tiff",
  "vw-webp",
  "windows-sys 0.61.2",
  "winresource",
@@ -3782,6 +3783,14 @@ version = "0.3.1"
 dependencies = [
  "image",
  "rawler",
+ "vw-core",
+]
+
+[[package]]
+name = "vw-tiff"
+version = "0.3.1"
+dependencies = [
+ "tiff",
  "vw-core",
 ]
 

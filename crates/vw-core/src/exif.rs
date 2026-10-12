@@ -8,13 +8,22 @@ use crate::image::Metadata;
 /// 向き（Orientation、1〜8）を返す（なければ 1）。読めない EXIF は無視する。
 /// 画像が表示できることを優先し、EXIF の不備で開けなくはしないため。
 pub fn push_exif(m: &mut Metadata, raw: Vec<u8>) -> u32 {
+    push_exif_except(m, raw, &[])
+}
+
+/// [`push_exif`] の、タグ番号が `skip` のものを除く版。TIFF ファイルそのものを EXIF として
+/// 読むとき、画素の置き場所（StripOffsets など）の長い数の並びを出さないために使う。
+pub fn push_exif_except(m: &mut Metadata, raw: Vec<u8>, skip: &[u16]) -> u32 {
     let Ok(exif) = exif::Reader::new().read_raw(raw) else {
         return 1;
     };
     for f in exif.fields() {
         // メーカーノートは中身がメーカー独自の長いバイナリで、表示しても読めないため除く。
         // サムネイルの IFD は本体と同じタグ（幅や向き）を持ち、紛らわしいため除く。
-        if f.ifd_num == exif::In::THUMBNAIL || f.tag == exif::Tag::MakerNote {
+        if f.ifd_num == exif::In::THUMBNAIL
+            || f.tag == exif::Tag::MakerNote
+            || skip.contains(&f.tag.number())
+        {
             continue;
         }
         m.push("EXIF", f.tag.to_string(), value(f, &exif));

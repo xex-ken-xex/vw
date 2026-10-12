@@ -1,0 +1,10 @@
+[package]
+name = "vw-tiff"
+description = "TIFF decoder plugin for vw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+tiff = "0.11"
