@@ -3694,7 +3694,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vw"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "eframe",
@@ -3723,7 +3723,7 @@ dependencies = [
 
 [[package]]
 name = "vw-bmp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "vw-core",
  "zune-bmp",
@@ -3732,7 +3732,7 @@ dependencies = [
 
 [[package]]
 name = "vw-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kamadak-exif",
  "regex",
@@ -3740,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "vw-dicom"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "charls",
  "dicom-core",
@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "vw-gif"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gif",
  "vw-core",
@@ -3760,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "vw-jpeg"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "jpeg-encoder",
  "vw-core",
@@ -3770,7 +3770,7 @@ dependencies = [
 
 [[package]]
 name = "vw-png"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "png",
  "vw-core",
@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "vw-raw"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "image",
  "rawler",
@@ -3787,7 +3787,7 @@ dependencies = [
 
 [[package]]
 name = "vw-webp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "image-webp",
  "vw-core",
