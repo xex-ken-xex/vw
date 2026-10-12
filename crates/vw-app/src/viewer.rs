@@ -733,17 +733,16 @@ impl Slot {
             painter.rect_filled(strip, 0.0, crate::theme::flag_color(flag));
         }
 
-        let border = if active {
-            visuals.selection.stroke.color
-        } else {
-            visuals.widgets.noninteractive.bg_stroke.color
-        };
-        painter.rect_stroke(
-            rect.shrink(0.5),
-            0.0,
-            egui::Stroke::new(1.0, border),
-            egui::StrokeKind::Inside,
-        );
+        // 枠は選んでいるスロットだけに描く。スロットの間は並べる側が 1px 空けて区切り線の色で
+        // 見せるので、全部に枠を描くと区切りが 3px の太さになってしまうため。
+        if active {
+            painter.rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(1.0, visuals.selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+        }
         out
     }
 }

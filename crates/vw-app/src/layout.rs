@@ -116,6 +116,23 @@ pub fn page_step(layout: SlotLayout, n: usize, active: usize, delta: isize) -> u
     layout.page_range(target, n).start
 }
 
+/// `start` から長さ `len` を `n` 等分した `i` 番目の範囲（始まり, 終わり）。隣との間だけ
+/// 1 物理ピクセル（`pixel` ポイント）空け、両端には空けない。境目は物理ピクセルにそろえる。
+///
+/// 等分した幅をそのまま足していくと、境目が画素の途中に来て、間が 1px にならずににじむため、
+/// 境目ごとに丸める。
+pub fn cell_span(start: f32, len: f32, n: usize, i: usize, pixel: f32) -> (f32, f32) {
+    let edge = |k: usize| {
+        if k == n {
+            start + len
+        } else {
+            ((start + len * k as f32 / n as f32) / pixel).round() * pixel
+        }
+    };
+    let gap = if i + 1 < n { pixel } else { 0.0 };
+    (edge(i), (edge(i + 1) - gap).max(edge(i)))
+}
+
 /// `n` 枚を並べる、正方形に近く横長を優先したマス目の (列数, 行数)。
 pub fn auto_dims(n: usize) -> (usize, usize) {
     let n = n.max(1);
@@ -294,5 +311,24 @@ mod tests {
         for bad in ["", "0x2", "2x0", "9x1", "2x", "x2", "2*2", "grid"] {
             assert!(bad.parse::<SlotLayout>().is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn cells_leave_one_pixel_between_them_and_none_at_the_edges() {
+        let spans: Vec<_> = (0..3).map(|i| cell_span(10.0, 300.0, 3, i, 1.0)).collect();
+        assert_eq!(spans, [(10.0, 109.0), (110.0, 209.0), (210.0, 310.0)]);
+    }
+
+    #[test]
+    fn cell_edges_land_on_physical_pixels_when_scaled() {
+        let pixel = 1.0 / 1.25;
+        for i in 0..3 {
+            let (from, to) = cell_span(0.0, 100.0, 3, i, pixel);
+            for x in [from, to] {
+                let physical = x / pixel;
+                assert!((physical - physical.round()).abs() < 1e-3, "{x}");
+            }
+        }
+        assert_eq!(cell_span(0.0, 100.0, 3, 2, pixel).1, 100.0);
     }
 }

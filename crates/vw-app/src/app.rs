@@ -2505,11 +2505,12 @@ impl VwApp {
             Filter::Tag(t) => t.clone(),
         };
         let root_label = match self.archives.mount_of(&root) {
-            Some(m) => m
-                .zip
-                .join(root.strip_prefix(&m.dir).unwrap_or(Path::new("")))
-                .display()
-                .to_string(),
+            Some(m) => match root.strip_prefix(&m.dir) {
+                Ok(rel) if !rel.as_os_str().is_empty() => m.zip.join(rel),
+                _ => m.zip.clone(),
+            }
+            .display()
+            .to_string(),
             None => root.display().to_string(),
         };
         self.export = Some(ExportDialog {
@@ -2631,7 +2632,7 @@ impl VwApp {
         if run {
             self.run_export(ctx);
         }
-        self.finish_copy_job();
+        self.finish_copy_job(ctx);
     }
 
     /// 書き出しを始める。一覧はその場で書き、コピーは別スレッドで行う。
@@ -2732,7 +2733,7 @@ impl VwApp {
     }
 
     /// 終わったコピーの結果をログに出す。
-    fn finish_copy_job(&mut self) {
+    fn finish_copy_job(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.export else {
             return;
         };
@@ -2745,6 +2746,8 @@ impl VwApp {
         let failed = std::mem::take(&mut *job.failed.lock().unwrap());
         let copied = job.copied.load(std::sync::atomic::Ordering::Relaxed);
         dialog.job = None;
+        // ログの欄はこの画面より先に描いているので、結果を出すにはもう一度描く。
+        ctx.request_repaint();
         self.log.info(format!(
             "Export: copied {copied} images ({} not copied)",
             failed.len()
@@ -4283,7 +4286,13 @@ impl VwApp {
         }
         self.images_area = Some(area.size() * ui.ctx().pixels_per_point());
         let (cols, rows) = (view.cols, view.rows);
-        let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
+        let pixel = 1.0 / ui.ctx().pixels_per_point();
+        // スロットの間の 1px は区切り線の色で見せる。
+        ui.painter().rect_filled(
+            area,
+            0.0,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        );
         let mut close = None;
         let mut maximize = None;
         let mut explore = None;
@@ -4301,13 +4310,9 @@ impl VwApp {
         }
         for (cell_index, i) in view.range.clone().enumerate() {
             let (c, r) = (cell_index % cols, cell_index / cols);
-            let rect = Rect::from_min_size(
-                pos2(
-                    area.min.x + c as f32 * cell.x,
-                    area.min.y + r as f32 * cell.y,
-                ),
-                cell,
-            );
+            let (x0, x1) = layout::cell_span(area.min.x, area.width(), cols, c, pixel);
+            let (y0, y1) = layout::cell_span(area.min.y, area.height(), rows, r, pixel);
+            let rect = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
             let empty_hint = match &self.slots[i].sequence {
                 Some(seq) if seq.paths.is_empty() => "No image",
                 Some(_) => "No images match the filter",
@@ -4320,7 +4325,7 @@ impl VwApp {
                 .unwrap_or_default();
             let resp = self.slots[i].ui(
                 ui,
-                rect.shrink(1.0),
+                rect,
                 i == self.active,
                 SlotLook {
                     background,
