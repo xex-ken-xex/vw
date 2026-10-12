@@ -141,8 +141,9 @@ impl Node {
             copy_menu(&r, &self.path, lang, &mut out.action);
             return;
         }
+        let dataset = self.is_dataset(view, out);
         if !self.shows_children(view, out) {
-            let label = without_toggle(ui, |ui| self.label(ui, is_current));
+            let label = without_toggle(ui, |ui| self.label(ui, is_current, dataset));
             self.label_actions(&label, view, out);
             return;
         }
@@ -151,36 +152,53 @@ impl Node {
         let id = ui.make_persistent_id(&self.path);
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
         state.set_open(self.open);
-        let (toggle, header, _) =
-            state
-                .show_header(ui, |ui| self.label(ui, is_current))
-                .body(|ui| {
-                    let children = self
-                        .children
-                        .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
-                    let studies = dicom_studies(&self.path, children, view, out);
-                    for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
-                        child.ui(ui, view, out);
-                    }
-                    for study in &studies {
-                        study_ui(ui, &self.path, study, view, out);
-                    }
-                    if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
-                        ui.weak(tr(lang, "Reading DICOM headers…"));
-                    }
-                });
+        let (toggle, header, _) = state
+            .show_header(ui, |ui| self.label(ui, is_current, dataset))
+            .body(|ui| {
+                let children = self
+                    .children
+                    .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
+                let studies = dicom_studies(&self.path, children, view, out);
+                for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
+                    child.ui(ui, view, out);
+                }
+                for study in &studies {
+                    study_ui(ui, &self.path, study, view, out);
+                }
+                if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
+                    ui.weak(tr(lang, "Reading DICOM headers…"));
+                }
+            });
         if toggle.clicked() {
             self.open = !self.open;
         }
         self.label_actions(&header.inner, view, out);
     }
 
-    fn label(&self, ui: &mut egui::Ui, is_current: bool) -> egui::Response {
+    fn label(&self, ui: &mut egui::Ui, is_current: bool, dataset: bool) -> egui::Response {
         if self.mounted {
             let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
             ui.selectable_label(is_current, text)
+        } else if dataset {
+            let text = egui::RichText::new(self.name.as_str()).color(crate::theme::DATASET);
+            ui.selectable_label(is_current, text)
         } else {
             ui.selectable_label(is_current, self.name.as_str())
+        }
+    }
+
+    /// データセット（検索カタログのあるフォルダ）か。先読みで調べ、分かるまでは違うとする。
+    fn is_dataset(&self, view: &View, out: &mut Out) -> bool {
+        if self.mounted {
+            return false;
+        }
+        match view.peeks.get(&self.path) {
+            Some(Peek::Done { dataset, .. }) => *dataset,
+            Some(Peek::Asked) => false,
+            None => {
+                out.peeks.push(self.path.clone());
+                false
+            }
         }
     }
 
@@ -229,7 +247,7 @@ impl Node {
     fn shows_children(&self, view: &View, out: &mut Out) -> bool {
         let Some(children) = &self.children else {
             return match view.peeks.get(&self.path) {
-                Some(Peek::Done(has)) => *has,
+                Some(Peek::Done { children, .. }) => *children,
                 Some(Peek::Asked) => true,
                 None => {
                     out.peeks.push(self.path.clone());
@@ -452,16 +470,22 @@ fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option
 #[derive(Clone, Copy)]
 enum Peek {
     Asked,
-    Done(bool),
+    Done {
+        /// 開いたときに下へ出す項目があるか（[`has_tree_children`]）。
+        children: bool,
+        /// 検索カタログがある（データセットとして登録した）フォルダか。
+        dataset: bool,
+    },
 }
 
-/// フォルダの下に項目があるかを、裏のスレッドで 1 段だけ先読みする（[`has_tree_children`]）。
+/// フォルダの下に項目があるかと、データセットかを、裏のスレッドで 1 段だけ先読みする
+/// （[`has_tree_children`]）。
 ///
 /// スレッドを 1 本にして順に調べるのは、表示中のフォルダが多いときに、ネットワークドライブへ
 /// 同時にたくさん問い合わせて詰まらせないため。
 struct Peeker {
     requests: Sender<PathBuf>,
-    results: Receiver<(PathBuf, bool)>,
+    results: Receiver<(PathBuf, Peek)>,
     known: HashMap<PathBuf, Peek>,
 }
 
@@ -471,8 +495,11 @@ impl Peeker {
         let (done, results) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for dir in todo {
-                let has = has_tree_children(&dir, &registry);
-                if done.send((dir, has)).is_err() {
+                let peek = Peek::Done {
+                    children: has_tree_children(&dir, &registry),
+                    dataset: crate::catalog::exists_in(&dir),
+                };
+                if done.send((dir, peek)).is_err() {
                     break;
                 }
                 wake();
@@ -486,13 +513,16 @@ impl Peeker {
     }
 
     fn receive(&mut self) {
-        for (dir, has) in self.results.try_iter() {
-            self.known.insert(dir, Peek::Done(has));
+        for (dir, peek) in self.results.try_iter() {
+            self.known.insert(dir, peek);
         }
     }
 
     fn ask(&mut self, dirs: Vec<PathBuf>) {
         for dir in dirs {
+            if self.known.contains_key(&dir) {
+                continue;
+            }
             if self.requests.send(dir.clone()).is_ok() {
                 self.known.insert(dir, Peek::Asked);
             }
@@ -639,8 +669,8 @@ impl FolderTree {
         }
     }
 
-    /// `dir` の先読みの結果を捨て、次に描くときに調べ直す。
-    fn forget_peek(&mut self, dir: &Path) {
+    /// `dir` の先読みの結果を捨て、次に描くときに調べ直す。データセットとして登録したときにも使う。
+    pub fn forget_peek(&mut self, dir: &Path) {
         if let Some(p) = &mut self.peeker {
             p.known.remove(dir);
         }

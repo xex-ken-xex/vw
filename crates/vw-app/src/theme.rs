@@ -65,6 +65,9 @@ pub fn flag_color(flag: crate::labels::Flag) -> Color32 {
     }
 }
 
+/// データセット（検索カタログのあるフォルダ）の名前の色。ダーク・ライトのどちらでも読める濃さの青緑。
+pub const DATASET: Color32 = Color32::from_rgb(38, 166, 154);
+
 /// 処理中を示す線の、進んだ部分と残りの部分の色。
 pub const ACTIVITY: Color32 = Color32::from_rgb(229, 57, 53);
 pub const ACTIVITY_TRACK: Color32 = Color32::from_rgb(110, 110, 110);

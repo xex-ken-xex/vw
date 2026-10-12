@@ -1038,12 +1038,17 @@ impl VwApp {
         if !dialog.show(ctx, lang, self.loader.registry(), &mut self.log) {
             let dir = dialog.dir().to_path_buf();
             self.outer_to_update = dialog.outer().map(Path::to_path_buf);
-            if let Some(dest) = dialog.extracted_to() {
-                self.datasets.refresh(dest);
-                self.last_extract_dir = dest.parent().map(Path::to_path_buf);
+            if let Some(dest) = dialog.extracted_to().map(Path::to_path_buf) {
+                self.datasets.refresh(&dest);
+                self.tree.forget_peek(&dest);
+                if let Some(parent) = dest.parent() {
+                    self.tree.refresh(parent, self.loader.registry());
+                    self.last_extract_dir = Some(parent.to_path_buf());
+                }
             }
             self.dataset_dialog = None;
             self.datasets.refresh(&dir);
+            self.tree.forget_peek(&dir);
             self.next_queued_update(ctx);
         }
     }
