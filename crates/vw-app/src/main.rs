@@ -19,6 +19,7 @@ mod discard;
 mod export;
 mod fonts;
 mod frames;
+mod fullscreen;
 mod i18n;
 mod keymap;
 mod labels;

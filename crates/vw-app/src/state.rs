@@ -44,6 +44,8 @@ pub struct AppState {
     pub current: Option<PathBuf>,
     /// 最後にデータセットを取り出した出力先の親フォルダ。
     pub extract_dir: Option<PathBuf>,
+    /// 最後に全画面スライドショーを始めた起点のフォルダ。
+    pub fullscreen_root: Option<PathBuf>,
 }
 
 /// 起動時にウインドウをどう置くか。
@@ -87,12 +89,14 @@ impl AppState {
         let open_folders = r.get::<Vec<PathBuf>>("tree", "open").unwrap_or_default();
         let current = r.get::<PathBuf>("tree", "current");
         let extract_dir = r.get::<PathBuf>("dataset", "extract_dir");
+        let fullscreen_root = r.get::<PathBuf>("fullscreen", "root");
         (
             Self {
                 window,
                 open_folders,
                 current,
                 extract_dir,
+                fullscreen_root,
             },
             r.problems,
         )
@@ -131,6 +135,11 @@ impl AppState {
             let mut dataset = toml::Table::new();
             dataset.insert("extract_dir".into(), dir.into());
             root.insert("dataset".into(), dataset.into());
+        }
+        if let Some(dir) = self.fullscreen_root.as_ref().and_then(|p| p.to_str()) {
+            let mut fullscreen = toml::Table::new();
+            fullscreen.insert("root".into(), dir.into());
+            root.insert("fullscreen".into(), fullscreen.into());
         }
         toml::to_string(&root).expect("state is always representable in TOML")
     }
@@ -368,6 +377,7 @@ mod tests {
             open_folders: vec![PathBuf::from("/home/ken"), PathBuf::from("/home/ken/写真")],
             current: Some(PathBuf::from("/home/ken/写真")),
             extract_dir: Some(PathBuf::from("/home/ken/評価")),
+            fullscreen_root: Some(PathBuf::from("/home/ken/撮影")),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -381,6 +391,7 @@ mod tests {
             open_folders: vec![],
             current: None,
             extract_dir: None,
+            fullscreen_root: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -436,6 +447,7 @@ mod tests {
             open_folders: vec![dir.path().to_path_buf()],
             current: None,
             extract_dir: None,
+            fullscreen_root: None,
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));
