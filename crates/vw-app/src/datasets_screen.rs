@@ -463,13 +463,17 @@ impl DatasetsScreen {
                         });
                     if let Some(hits) = &hits {
                         ui.separator();
+                        // パネルの下まで使う。読めなかったファイルの見出しの分だけ空けておく。
+                        let row = ui.spacing().interact_size.y;
+                        let reserve = if c.skipped.is_empty() { 2.0 } else { 4.0 } * row;
+                        let height = (ui.available_height() - reserve).max(8.0 * row);
                         egui::CollapsingHeader::new(tr1(
                             lang,
                             "Files found ({})",
                             &hits.len().to_string(),
                         ))
                         .default_open(true)
-                        .show(ui, |ui| hit_list(ui, hits));
+                        .show(ui, |ui| hit_list(ui, hits, height));
                     }
                     if !c.skipped.is_empty() {
                         ui.separator();
@@ -672,12 +676,12 @@ fn target_combo(
 }
 
 /// 当たったファイルのパス。数万件あっても重くならないよう、見えている行だけを描く。
-fn hit_list(ui: &mut egui::Ui, hits: &[String]) {
+fn hit_list(ui: &mut egui::Ui, hits: &[String], height: f32) {
     let row = ui.text_style_height(&egui::TextStyle::Body);
     let font = egui::TextStyle::Body.resolve(ui.style());
     egui::ScrollArea::vertical()
         .id_salt("dataset-hits")
-        .max_height(320.0)
+        .max_height(height)
         .auto_shrink([false, true])
         .show_rows(ui, row, hits.len(), |ui, range| {
             for path in &hits[range] {
