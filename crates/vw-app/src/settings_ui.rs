@@ -6,7 +6,7 @@
 use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
-use crate::i18n::{tr, tr1};
+use crate::i18n::{tr, tr1, tr_text};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal, Scope};
 use crate::layout::SlotLayout;
 use crate::settings::{
@@ -26,11 +26,12 @@ enum Section {
     Datasets,
     Fullscreen,
     Dicom,
+    DicomSend,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 9] = [
+    const ALL: [Section; 10] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -39,6 +40,7 @@ impl Section {
         Section::Datasets,
         Section::Fullscreen,
         Section::Dicom,
+        Section::DicomSend,
         Section::Keys,
     ];
 
@@ -52,6 +54,7 @@ impl Section {
             Section::Datasets => "Datasets",
             Section::Fullscreen => "Fullscreen slideshow",
             Section::Dicom => "Medical images (DICOM)",
+            Section::DicomSend => "DICOM sending",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -67,7 +70,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 37] = [
+const ITEMS: [Item; 39] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -327,7 +330,65 @@ const ITEMS: [Item; 37] = [
         description: "Regular expression for the extensions (without the dot, empty for no extension, case-insensitive) of files whose first bytes are read to see if they are DICOM. .dcm, .dicom and .dic files are always shown as DICOM. The default checks files with no extension, only digits, dcm, dicom or ima.",
         widget: probe_extensions_widget,
     },
+    Item {
+        section: Section::DicomSend,
+        key: "dicom_send.ae_title",
+        title: "My AE title",
+        description: "AE title vw uses when sending (Calling AE). Up to 16 of A-Z, 0-9, space, _ and -.",
+        widget: ae_title_widget,
+    },
+    Item {
+        section: Section::DicomSend,
+        key: "dicom_send.timeout_secs",
+        title: "Timeout",
+        description: "Seconds to wait for a destination to connect and answer.",
+        widget: send_timeout_widget,
+    },
 ];
+
+/// AE タイトルの入力欄。正しくない間は赤枠にして設定に入れない（保存もしない）。
+/// 打っている途中の文字を設定とは別に持つのは、1 文字ごとに検査で弾くと、
+/// 小文字を打ってから直すといった途中の状態を作れなくなるため。
+fn ae_title_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let id = ui.id().with("ae_title_draft");
+    let mut draft = ui
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| s.dicom_send.ae_title.clone());
+    let valid = vw_dicom::net::valid_ae_title(&draft);
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut draft)
+            .desired_width(160.0)
+            .text_color_opt((!valid).then_some(Color32::from_rgb(230, 80, 80))),
+    );
+    if !valid {
+        ui.painter().rect_stroke(
+            r.rect,
+            2.0,
+            egui::Stroke::new(1.0, Color32::from_rgb(230, 80, 80)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let mut changed = false;
+    if vw_dicom::net::valid_ae_title(&draft) && draft != s.dicom_send.ae_title {
+        s.dicom_send.ae_title = draft.clone();
+        changed = true;
+    }
+    if !r.has_focus() && vw_dicom::net::valid_ae_title(&draft) {
+        draft = s.dicom_send.ae_title.clone();
+    }
+    ui.data_mut(|d| d.insert_temp(id, draft));
+    changed
+}
+
+fn send_timeout_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    use crate::settings::DicomSend;
+    let r = ui.add(
+        egui::DragValue::new(&mut s.dicom_send.timeout_secs)
+            .range(DicomSend::TIMEOUT_RANGE)
+            .suffix(" s"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
 
 fn fullscreen_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let before = s.fullscreen.mode;
@@ -874,6 +935,8 @@ pub struct Response {
     pub changed: bool,
     pub open_file: bool,
     pub close: bool,
+    /// ログに出すこと（接続確認の結果）。`true` なら成功。
+    pub logs: Vec<(bool, String)>,
 }
 
 /// 設定画面の状態。
@@ -885,9 +948,16 @@ pub struct SettingsUi {
     notice: Option<(Action, Notice)>,
     jump: Option<Section>,
     focus_search: bool,
+    destinations: Destinations,
 }
 
 impl SettingsUi {
+    /// 送信先の設定へ移る（送信先がないまま送ろうとしたとき）。
+    pub fn show_destinations(&mut self) {
+        self.query.clear();
+        self.jump = Some(Section::DicomSend);
+    }
+
     /// 画面を開いたときに呼ぶ。すぐ検索語を打てるようにする。
     pub fn opened(&mut self) {
         self.focus_search = true;
@@ -1048,7 +1118,16 @@ impl SettingsUi {
             .filter(|a| Some(a.scope()) == scope)
             .filter(|a| self.action_matches(*a, &settings.keys, lang))
             .collect();
-        if items.is_empty() && actions.is_empty() {
+        let destinations = section == Section::DicomSend
+            && matches(
+                &self.query,
+                &[
+                    "dicom_send.destinations",
+                    "Destinations",
+                    tr(lang, "Destinations"),
+                ],
+            );
+        if items.is_empty() && actions.is_empty() && !destinations {
             return false;
         }
 
@@ -1077,6 +1156,16 @@ impl SettingsUi {
             if self.action_ui(ui, action, &mut settings.keys, lang) {
                 out.changed = true;
             }
+        }
+        if destinations {
+            item_frame(ui, |ui| {
+                title_line(ui, tr(lang, "Destinations"), "dicom_send.destinations");
+                ui.weak(tr(
+                    lang,
+                    "Where Send to in the right-click menu sends files. Test sends a C-ECHO to check the settings.",
+                ));
+                self.destinations.ui(ui, settings, out);
+            });
         }
         true
     }
@@ -1475,5 +1564,219 @@ mod tests {
         let mut map = Keymap::default();
         let (c, n) = capture(Action::NewSlot, &[Event::Copy], &mut map, Os::Linux);
         assert_eq!((c, n), (Capture::Rejected, Some(Notice::Clipboard)));
+    }
+}
+
+/// 送信先の表の 1 行。入力の途中（正しくない値）も持てるよう、設定とは別に持つ。
+#[derive(Clone)]
+struct Row {
+    /// 接続確認の結果を、並べ替えや削除で取り違えないための番号。
+    id: u64,
+    dest: crate::settings::Destination,
+    /// ポートの入力欄の文字。数字以外を打った途中も残すため。
+    port: String,
+}
+
+enum Echo {
+    Running(std::sync::mpsc::Receiver<Result<(), String>>),
+    Done(Result<(), String>),
+}
+
+/// 送信先の表（追加・削除・接続確認）。
+#[derive(Default)]
+struct Destinations {
+    rows: Vec<Row>,
+    next_id: u64,
+    echoes: std::collections::HashMap<u64, Echo>,
+}
+
+impl Destinations {
+    /// 正しい行だけを設定に入れたもの。
+    fn valid(&self) -> Vec<crate::settings::Destination> {
+        self.rows
+            .iter()
+            .filter(|r| r.dest.problem().is_none())
+            .map(|r| r.dest.clone())
+            .collect()
+    }
+
+    fn row(&mut self, dest: crate::settings::Destination) -> Row {
+        self.next_id += 1;
+        Row {
+            id: self.next_id,
+            port: if dest.port == 0 {
+                String::new()
+            } else {
+                dest.port.to_string()
+            },
+            dest,
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings, out: &mut Response) {
+        let lang = settings.appearance.language;
+        // 設定ファイルが外で書き換えられたら、表を作り直す。
+        if self.valid() != settings.dicom_send.destinations {
+            let dests = settings.dicom_send.destinations.clone();
+            self.rows = dests.into_iter().map(|d| self.row(d)).collect();
+            self.echoes.clear();
+        }
+        for echo in self.echoes.values_mut() {
+            if let Echo::Running(rx) = echo {
+                if let Ok(result) = rx.try_recv() {
+                    *echo = Echo::Done(result);
+                }
+            }
+        }
+        if self.echoes.values().any(|e| matches!(e, Echo::Running(_))) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        let mut edited = false;
+        let mut remove = None;
+        let red = Color32::from_rgb(230, 80, 80);
+        egui::Grid::new("destinations")
+            .num_columns(6)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                for title in ["Name", "Host", "Port", "AE title"] {
+                    ui.weak(tr(lang, title));
+                }
+                ui.end_row();
+                for (i, row) in self.rows.iter_mut().enumerate() {
+                    let problem = row.dest.problem();
+                    let bad = [
+                        row.dest.name.trim().is_empty(),
+                        row.dest.host.trim().is_empty(),
+                        row.dest.port == 0,
+                        !vw_dicom::net::valid_ae_title(&row.dest.ae_title),
+                    ];
+                    let fields: [(&mut String, f32, bool); 4] = [
+                        (&mut row.dest.name, 110.0, bad[0]),
+                        (&mut row.dest.host, 140.0, bad[1]),
+                        (&mut row.port, 56.0, bad[2]),
+                        (&mut row.dest.ae_title, 130.0, bad[3]),
+                    ];
+                    for (text, width, bad) in fields {
+                        // グリッドのセルでは前の描画の列幅までしか広がらないため、幅は下限で与える。
+                        let r = ui.add(
+                            egui::TextEdit::singleline(text)
+                                .desired_width(width)
+                                .min_size(egui::vec2(width, 0.0)),
+                        );
+                        if bad {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                2.0,
+                                egui::Stroke::new(1.0, red),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        edited |= r.changed();
+                    }
+                    row.dest.port = row.port.trim().parse().unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        let test = ui.add_enabled(
+                            problem.is_none()
+                                && !matches!(self.echoes.get(&row.id), Some(Echo::Running(_))),
+                            egui::Button::new(tr(lang, "Test")),
+                        );
+                        if test.clicked() {
+                            let endpoint = vw_dicom::net::Endpoint {
+                                calling_ae: settings.dicom_send.ae_title.clone(),
+                                host: row.dest.host.trim().to_owned(),
+                                port: row.dest.port,
+                                called_ae: row.dest.ae_title.clone(),
+                                timeout: settings.dicom_send.timeout(),
+                            };
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let ctx = ui.ctx().clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(vw_dicom::net::echo(&endpoint));
+                                ctx.request_repaint();
+                            });
+                            self.echoes.insert(row.id, Echo::Running(rx));
+                        }
+                        if ui
+                            .button(icon::X)
+                            .on_hover_text(tr(lang, "Remove destination"))
+                            .clicked()
+                        {
+                            remove = Some(i);
+                        }
+                        match self.echoes.get(&row.id) {
+                            Some(Echo::Running(_)) => {
+                                ui.spinner();
+                            }
+                            Some(Echo::Done(Ok(()))) => {
+                                ui.colored_label(
+                                    Color32::from_rgb(90, 180, 90),
+                                    tr(lang, "Connected"),
+                                );
+                            }
+                            Some(Echo::Done(Err(e))) => {
+                                ui.colored_label(red, tr(lang, "Failed"))
+                                    .on_hover_text(e.as_str());
+                            }
+                            None => {
+                                if let Some(p) = problem {
+                                    ui.colored_label(red, tr_text(lang, p));
+                                }
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+        // 終わった接続確認は 1 度だけログに出す。
+        for row in &self.rows {
+            if let Some(Echo::Done(result)) = self.echoes.get(&row.id) {
+                let key = ("echo_logged", row.id);
+                let logged = ui
+                    .data(|d| d.get_temp::<bool>(egui::Id::new(key)))
+                    .unwrap_or(false);
+                if !logged {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(key), true));
+                    let target = format!("{} ({})", row.dest.name, row.dest.address());
+                    out.logs.push(match result {
+                        Ok(()) => (true, format!("C-ECHO {target}: OK")),
+                        Err(e) => (false, format!("C-ECHO {target}: {e}")),
+                    });
+                }
+            }
+        }
+        if ui
+            .button(format!("{} {}", icon::PLUS, tr(lang, "Add destination")))
+            .clicked()
+        {
+            let row = self.row(crate::settings::Destination {
+                port: 104,
+                ..Default::default()
+            });
+            self.rows.push(row);
+            edited = true;
+        }
+        if let Some(i) = remove {
+            let row = self.rows.remove(i);
+            self.echoes.remove(&row.id);
+            edited = true;
+        }
+        if edited {
+            // 行を書き換えたら、前の接続確認の結果はもう当てにならない。
+            for row in &self.rows {
+                if matches!(self.echoes.get(&row.id), Some(Echo::Done(_))) {
+                    let same = settings.dicom_send.destinations.contains(&row.dest);
+                    if !same {
+                        self.echoes.remove(&row.id);
+                    }
+                }
+            }
+            let valid = self.valid();
+            if valid != settings.dicom_send.destinations {
+                settings.dicom_send.destinations = valid;
+                out.changed = true;
+            }
+        }
     }
 }

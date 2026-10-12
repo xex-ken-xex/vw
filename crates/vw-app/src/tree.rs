@@ -52,6 +52,8 @@ struct View<'a> {
     dicom_extensions: &'a [&'a str],
     /// まだ読んでいないフォルダの下に項目があるか（[`Peeker`]）。
     peeks: &'a HashMap<PathBuf, Peek>,
+    /// 右クリックの「送信 ▸」に並べる送信先の名前。
+    destinations: &'a [String],
 }
 
 impl View<'_> {
@@ -113,6 +115,11 @@ pub enum TreeAction {
     },
     /// データセットの登録・編集・更新。
     Dataset(crate::dataset_ui::Request),
+    /// ファイルやフォルダを送信先へ送る（右クリックの「送信 ▸」）。
+    Send {
+        choice: crate::dicom_send::Choice,
+        targets: Vec<PathBuf>,
+    },
 }
 
 impl Node {
@@ -150,6 +157,7 @@ impl Node {
                     out.action = Some(TreeAction::OpenInFileManager(folder));
                     ui.close();
                 }
+                send_menu(ui, &self.path, view, &mut out.action);
             });
             return;
         }
@@ -249,9 +257,10 @@ impl Node {
                     out.action = Some(TreeAction::Unmount(self.path.clone()));
                     ui.close();
                 }
+                send_menu(ui, &self.path, view, &mut out.action);
             });
         } else {
-            folder_menu(label, &self.path, lang, &mut out.action);
+            folder_menu(label, &self.path, view, &mut out.action);
         }
     }
 
@@ -407,13 +416,15 @@ fn dicom_studies(dir: &Path, children: &[Node], view: &View, out: &mut Out) -> V
 /// 検査の見出しと、その下のシリーズ。
 fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut Out) {
     let id = ui.make_persistent_id((dir, &study.uid));
-    CollapsingState::load_with_default_open(ui.ctx(), id, true)
+    let (_, header, _) = CollapsingState::load_with_default_open(ui.ctx(), id, true)
         .show_header(ui, |ui| ui.label(study.title()))
         .body(|ui| {
             for series in &study.series {
                 series_ui(ui, dir, series, view, out);
             }
         });
+    let files = study.series.iter().flat_map(|s| s.files.clone()).collect();
+    files_menu(&header.inner, files, view, &mut out.action);
 }
 
 fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &mut Out) {
@@ -427,6 +438,7 @@ fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &
             files: series.files.clone(),
         });
     }
+    files_menu(&r, series.files.clone(), view, &mut out.action);
 }
 
 /// ▶ を出さない項目。▶ の幅だけ空けて、▶ のある兄弟と名前の位置を揃える。
@@ -445,8 +457,9 @@ fn without_toggle(
 }
 
 /// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
-fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option<TreeAction>) {
+fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<TreeAction>) {
     use crate::dataset_ui::Request;
+    let lang = view.lang;
     r.context_menu(|ui| {
         if ui.button(tr(lang, "Copy")).clicked() {
             *out = Some(TreeAction::Copy(path.to_owned()));
@@ -472,6 +485,30 @@ fn folder_menu(r: &egui::Response, path: &Path, lang: Language, out: &mut Option
                 *out = Some(TreeAction::Dataset(request));
                 ui.close();
             }
+        }
+        send_menu(ui, path, view, out);
+    });
+}
+
+/// フォルダや ZIP の右クリックメニューの「送信 ▸」。中の DICOM ファイルを送る。
+fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Option<TreeAction>) {
+    ui.separator();
+    if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
+        *out = Some(TreeAction::Send {
+            choice,
+            targets: vec![path.to_owned()],
+        });
+    }
+}
+
+/// 検査・シリーズの右クリックメニュー。その全ファイルを送る。
+fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Option<TreeAction>) {
+    r.context_menu(|ui| {
+        if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
+            *out = Some(TreeAction::Send {
+                choice,
+                targets: files.clone(),
+            });
         }
     });
 }
@@ -594,6 +631,7 @@ pub struct Context<'a> {
     pub current: Option<&'a Path>,
     pub active_image: Option<&'a Path>,
     pub lang: Language,
+    pub destinations: &'a [String],
 }
 
 /// ツリーを描いた結果。
@@ -732,6 +770,7 @@ impl FolderTree {
             series: cx.series,
             dicom_extensions: dicom_extensions(cx.registry),
             peeks: &peeker.known,
+            destinations: cx.destinations,
         };
         let mut out = Out::default();
         for root in &mut self.roots {

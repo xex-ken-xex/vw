@@ -281,6 +281,65 @@ impl Dicom {
     }
 }
 
+/// 他の機器への送信（[`crate::dicom_send`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DicomSend {
+    /// 自分の AE タイトル（Calling AE）。
+    pub ae_title: String,
+    /// 接続と応答を待つ秒数。
+    pub timeout_secs: u32,
+    pub destinations: Vec<Destination>,
+}
+
+/// 送信先 1 つ。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Destination {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub ae_title: String,
+}
+
+impl Destination {
+    /// 入力に誤りがあれば、その説明。
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.name.trim().is_empty() {
+            Some("name is empty")
+        } else if self.host.trim().is_empty() {
+            Some("host is empty")
+        } else if self.port == 0 {
+            Some("port must be 1 to 65535")
+        } else if !vw_dicom::net::valid_ae_title(&self.ae_title) {
+            Some("AE title must be 1 to 16 of A-Z, 0-9, space, _ and -")
+        } else {
+            None
+        }
+    }
+
+    /// ログや確認に出す `TESTPACS@192.168.1.20:104`。
+    pub fn address(&self) -> String {
+        format!("{}@{}:{}", self.ae_title, self.host, self.port)
+    }
+}
+
+impl DicomSend {
+    pub const TIMEOUT_RANGE: std::ops::RangeInclusive<u32> = 1..=600;
+
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs.into())
+    }
+}
+
+impl Default for DicomSend {
+    fn default() -> Self {
+        Self {
+            ae_title: "VW".into(),
+            timeout_secs: 30,
+            destinations: Vec::new(),
+        }
+    }
+}
+
 /// データセット（[`crate::catalog`]）。
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Dataset {
@@ -371,6 +430,7 @@ pub struct Settings {
     pub behavior: Behavior,
     pub labels: Labels,
     pub dicom: Dicom,
+    pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
     pub keys: Keymap,
@@ -511,6 +571,40 @@ impl Settings {
                 )
                 .unwrap_or_else(|| d.dicom.probe_extensions.clone()),
         };
+        let dicom_send = DicomSend {
+            ae_title: r
+                .get_valid(
+                    "dicom_send",
+                    "ae_title",
+                    |t: &String| vw_dicom::net::valid_ae_title(t),
+                    "must be 1 to 16 of A-Z, 0-9, space, _ and -",
+                )
+                .unwrap_or_else(|| d.dicom_send.ae_title.clone()),
+            timeout_secs: r
+                .get_valid(
+                    "dicom_send",
+                    "timeout_secs",
+                    |v: &u32| DicomSend::TIMEOUT_RANGE.contains(v),
+                    "must be 1 to 600",
+                )
+                .unwrap_or(d.dicom_send.timeout_secs),
+            destinations: r
+                .get::<Vec<Destination>>("dicom_send", "destinations")
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|dest| match dest.problem() {
+                    // 誤った送信先だけを外し、残りは使えるようにする。
+                    Some(p) => {
+                        r.problems.push(format!(
+                            "dicom_send.destinations: {:?}: {p} (ignored)",
+                            dest.name
+                        ));
+                        false
+                    }
+                    None => true,
+                })
+                .collect(),
+        };
         let dataset = Dataset {
             roots: r
                 .get("dataset", "roots")
@@ -590,6 +684,7 @@ impl Settings {
                 behavior,
                 labels,
                 dicom,
+                dicom_send,
                 dataset,
                 fullscreen,
                 keys,
@@ -891,6 +986,24 @@ mod tests {
             path_opacity: 80,
             path_size: 20.0,
         };
+        s.dicom_send = DicomSend {
+            ae_title: "VW_TEST".into(),
+            timeout_secs: 5,
+            destinations: vec![
+                Destination {
+                    name: "検証用PACS".into(),
+                    host: "192.168.1.20".into(),
+                    port: 104,
+                    ae_title: "TESTPACS".into(),
+                },
+                Destination {
+                    name: "Analysis".into(),
+                    host: "analysis.local".into(),
+                    port: 11112,
+                    ae_title: "ANALYSIS".into(),
+                },
+            ],
+        };
         s.keys
             .unassign(Action::NextImage, KeyCombo::plain(eframe::egui::Key::Space));
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
@@ -904,6 +1017,34 @@ mod tests {
         assert!(text.contains("theme = \"system\""), "{text}");
         assert!(text.contains("language = \"en\""), "{text}");
         assert!(text.contains("next_image = ["), "{text}");
+    }
+
+    #[test]
+    fn broken_destinations_are_dropped_one_by_one() {
+        let text = r#"
+[dicom_send]
+ae_title = "lower"
+[[dicom_send.destinations]]
+name = "ok"
+host = "pacs"
+port = 104
+ae_title = "PACS"
+[[dicom_send.destinations]]
+name = "bad title"
+host = "pacs"
+port = 104
+ae_title = "pacs"
+[[dicom_send.destinations]]
+name = "no port"
+host = "pacs"
+port = 0
+ae_title = "PACS"
+"#;
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.dicom_send.ae_title, "VW");
+        let names: Vec<_> = s.dicom_send.destinations.iter().map(|d| &d.name).collect();
+        assert_eq!(names, ["ok"]);
+        assert_eq!(problems.len(), 3);
     }
 
     #[test]

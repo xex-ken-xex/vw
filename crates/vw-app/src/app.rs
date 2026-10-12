@@ -128,6 +128,8 @@ pub struct VwApp {
     tool: Tool,
     settings: SettingsStore,
     settings_ui: SettingsUi,
+    /// 他の機器への送信（数えている・確かめている・送っている）。一度に 1 つだけ。
+    send_job: Option<crate::dicom_send::Job>,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
@@ -467,6 +469,7 @@ impl VwApp {
             tool: Tool::Browse,
             settings,
             settings_ui: SettingsUi::default(),
+            send_job: None,
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -2505,6 +2508,211 @@ impl VwApp {
         }
     }
 
+    /// 送信先の名前（右クリックの「送信 ▸」に並べる）。
+    fn destination_names(&self) -> Vec<String> {
+        self.settings
+            .settings
+            .dicom_send
+            .destinations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect()
+    }
+
+    /// 右クリックの「送信 ▸」で選ばれたものを処理する。送るのは確かめてから。
+    fn send_to(&mut self, choice: crate::dicom_send::Choice, targets: Vec<PathBuf>) {
+        let targets = targets
+            .into_iter()
+            .map(crate::dicom_send::Target::Path)
+            .collect();
+        self.send_targets(choice, targets);
+    }
+
+    fn send_targets(
+        &mut self,
+        choice: crate::dicom_send::Choice,
+        targets: Vec<crate::dicom_send::Target>,
+    ) {
+        use crate::dicom_send::{Choice, Job};
+        let lang = self.lang();
+        let i = match choice {
+            Choice::Configure => {
+                self.show_datasets = false;
+                self.show_fullscreen_setup = false;
+                if !self.show_settings {
+                    self.toggle_settings();
+                }
+                self.settings_ui.show_destinations();
+                return;
+            }
+            Choice::To(i) => i,
+        };
+        if self.send_job.as_ref().is_some_and(|j| j.sending) {
+            self.log.warn(tr(
+                lang,
+                "Already sending. Wait for it to finish or cancel it first.",
+            ));
+            return;
+        }
+        let send = &self.settings.settings.dicom_send;
+        let Some(destination) = send.destinations.get(i).cloned() else {
+            return;
+        };
+        if let Some(mut old) = self.send_job.take() {
+            old.cancel();
+        }
+        self.send_job = Some(Job::new(
+            destination,
+            send.ae_title.clone(),
+            send.timeout(),
+            targets,
+        ));
+    }
+
+    /// スロットから送るファイル。シリーズのスロットはシリーズの全ファイル、
+    /// マルチフレームはフレームではなくファイル 1 つ。
+    fn slot_send_targets(&self, index: usize) -> Vec<PathBuf> {
+        let slot = &self.slots[index];
+        if let Some(seq) = slot
+            .sequence
+            .as_ref()
+            .filter(|q| q.kind == SequenceKind::Series)
+        {
+            return seq.paths.clone();
+        }
+        slot.shown
+            .as_ref()
+            .map(|s| vec![frames::file_of(&s.path)])
+            .unwrap_or_default()
+    }
+
+    /// 送信の知らせをログに出し、送る前の確認を出す。
+    fn send_ui(&mut self, ctx: &egui::Context) {
+        use crate::dicom_send::Event;
+        let lang = self.lang();
+        let Some(job) = &mut self.send_job else {
+            return;
+        };
+        let name = format!("{} ({})", job.destination.name, job.destination.address());
+        let mut finished = false;
+        for event in job.poll() {
+            match event {
+                Event::Counted { total, notes } => {
+                    for note in notes {
+                        self.log.warn(format!("Send: {note}"));
+                    }
+                    if total == 0 {
+                        self.log
+                            .warn(format!("Send to {name}: no DICOM files found"));
+                    }
+                }
+                Event::Failed { file, reason } => {
+                    self.log.error(format!("Send to {name}: {file}: {reason}"));
+                }
+                Event::Warning { file, status } => {
+                    self.log.warn(format!(
+                        "Send to {name}: {file}: stored with warning {status:04X}H"
+                    ));
+                }
+                Event::Finished {
+                    sent,
+                    failed,
+                    cancelled,
+                    stopped,
+                } => {
+                    finished = true;
+                    let line = format!("Send to {name}: sent {sent}, failed {failed}");
+                    match (stopped, cancelled) {
+                        (Some(e), _) => self.log.error(format!("{line} (stopped: {e})")),
+                        (None, true) => self.log.warn(format!("{line} (cancelled)")),
+                        (None, false) if failed > 0 => self.log.error(line),
+                        (None, false) => self.log.info(line),
+                    }
+                }
+            }
+        }
+        if finished {
+            self.send_job = None;
+            return;
+        }
+        let Some(job) = &mut self.send_job else {
+            return;
+        };
+        if job.sending {
+            ctx.request_repaint_after(Duration::from_millis(200));
+            return;
+        }
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("send_question")).show(ctx, |ui| {
+            ui.set_max_width(520.0);
+            ui.heading(tr(lang, "Send"));
+            ui.add_space(4.0);
+            match job.total {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(tr1(
+                            lang,
+                            "Looking for DICOM files... {}",
+                            &thousands(job.counted()),
+                        ));
+                    });
+                }
+                Some(0) => {
+                    ui.label(tr(lang, "There are no DICOM files to send."));
+                }
+                Some(n) => {
+                    ui.label(
+                        tr(lang, "Send {n} files to {destination}?")
+                            .replace("{n}", &thousands(n))
+                            .replace("{destination}", &name),
+                    );
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let ready = job.total.is_some_and(|n| n > 0);
+                if ready && ui.button(tr(lang, "Send")).clicked() {
+                    answer = Some(true);
+                }
+                let close = if job.total == Some(0) {
+                    "Close"
+                } else {
+                    "Cancel"
+                };
+                if ui.button(tr(lang, close)).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if job.total.is_none() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        match answer {
+            Some(true) => {
+                let n = job.total.unwrap_or(0);
+                self.log
+                    .info(format!("Sending {} files to {name}", thousands(n)));
+                job.start();
+            }
+            Some(false) => {
+                job.cancel();
+                self.send_job = None;
+            }
+            None => {}
+        }
+    }
+
+    /// 送信を取り消す。
+    fn cancel_send(&mut self) {
+        if let Some(job) = &mut self.send_job {
+            job.cancel();
+        }
+    }
+
     /// ZIP の展開・データセットの読み込みや取り出し・書き出しの進み具合（0〜1）。何もしていなければ `None`。
     fn activity(&self) -> Option<f32> {
         let jobs = [
@@ -2514,6 +2722,7 @@ impl VwApp {
                 .as_ref()
                 .and_then(|d| d.job.as_ref())
                 .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
+            self.send_job.as_ref().and_then(|j| j.progress()),
         ];
         let mut busy = false;
         let mut fraction: f32 = 1.0;
@@ -3241,6 +3450,7 @@ impl VwApp {
             Action::FilterUnflagged => self.set_filter(ctx, Filter::Flag(None)),
             Action::ExportImages => self.open_export(),
             Action::TrashBadImages => self.ask_trash_bad(),
+            Action::CancelSending => self.cancel_send(),
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -3857,6 +4067,12 @@ impl VwApp {
                 ui.separator();
                 if self.menu_item(ui, Action::ParentFolder, None) {
                     chosen = Some(Action::ParentFolder);
+                }
+                if self.send_job.as_ref().is_some_and(|j| j.sending) {
+                    ui.separator();
+                    if self.menu_item(ui, Action::CancelSending, None) {
+                        chosen = Some(Action::CancelSending);
+                    }
                 }
                 ui.separator();
                 if self.menu_item(ui, Action::Quit, None) {
@@ -4543,6 +4759,8 @@ impl VwApp {
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
         let hint = empty_slot_hint(self.current.is_some());
+        let destinations = self.destination_names();
+        let mut send = None;
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
             if !view.range.contains(&i) {
@@ -4574,6 +4792,7 @@ impl VwApp {
                     empty_hint,
                     label: &label,
                     probe: self.tool == Tool::PixelProbe,
+                    destinations: &destinations,
                 },
             );
             let slot = &mut self.slots[i];
@@ -4592,6 +4811,9 @@ impl VwApp {
             }
             if let Some(text) = resp.copy_text {
                 self.copy_text(ui.ctx(), text, "probe point");
+            }
+            if let Some(choice) = resp.send {
+                send = Some((choice, self.slot_send_targets(i)));
             }
             if resp.develop {
                 self.develop_slot(i);
@@ -4637,6 +4859,7 @@ impl VwApp {
                         empty_hint: hint,
                         label: &Default::default(),
                         probe: false,
+                        destinations: &[],
                     },
                 );
                 if resp.clicked {
@@ -4655,6 +4878,9 @@ impl VwApp {
             if let Some(delta) = self.page_bar(ui.ctx(), area, &view) {
                 self.step_page(delta);
             }
+        }
+        if let Some((choice, targets)) = send {
+            self.send_to(choice, targets);
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
         if let Some((file, dir)) = dropped {
@@ -4738,6 +4964,7 @@ impl eframe::App for VwApp {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.activity_line(ui);
+        self.send_ui(&ctx);
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
@@ -4757,6 +4984,13 @@ impl eframe::App for VwApp {
                 .ui(ui, &mut self.settings.settings, path.as_deref(), exists);
             if r.changed {
                 self.settings_changed(&ctx);
+            }
+            for (ok, line) in r.logs {
+                if ok {
+                    self.log.info(line);
+                } else {
+                    self.log.error(line);
+                }
             }
             if r.open_file {
                 if let Err(e) = self.settings.open_in_editor() {
@@ -4790,7 +5024,10 @@ impl eframe::App for VwApp {
         if self.show_datasets {
             let lang = self.lang();
             let dataset = &self.settings.settings.dataset;
-            let action = self.datasets.ui(ui, lang, &dataset.roots, &dataset.fields);
+            let destinations = self.destination_names();
+            let action = self
+                .datasets
+                .ui(ui, lang, &dataset.roots, &dataset.fields, &destinations);
             match action {
                 Some(crate::datasets_screen::Action::Close) => self.show_datasets = false,
                 Some(crate::datasets_screen::Action::Show(dir)) => {
@@ -4807,6 +5044,10 @@ impl eframe::App for VwApp {
                 }
                 Some(crate::datasets_screen::Action::Update(dirs)) => {
                     self.dataset_queue.extend(dirs);
+                }
+                Some(crate::datasets_screen::Action::Send(dir, hits, choice)) => {
+                    let targets = crate::dicom_send::dataset_targets(&dir, hits.as_deref());
+                    self.send_targets(choice, targets);
                 }
                 Some(crate::datasets_screen::Action::Reload) => {
                     self.datasets.reload(&dataset.roots, &ctx);
@@ -4828,7 +5069,27 @@ impl eframe::App for VwApp {
                 .resizable(true)
                 .default_size(140.0)
                 .show(ui, |ui| {
-                    panel_header(ui, tr(lang, "Log"));
+                    let sending = self.send_job.as_ref().and_then(|j| j.progress());
+                    match sending {
+                        Some((done, total)) => {
+                            let cancel = ui
+                                .horizontal(|ui| {
+                                    panel_header(ui, tr(lang, "Log"));
+                                    ui.weak(format!(
+                                        "{} {} / {}",
+                                        tr(lang, "Sending"),
+                                        thousands(done),
+                                        thousands(total)
+                                    ));
+                                    ui.small_button(tr(lang, "Cancel sending")).clicked()
+                                })
+                                .inner;
+                            if cancel {
+                                self.cancel_send();
+                            }
+                        }
+                        None => panel_header(ui, tr(lang, "Log")),
+                    }
                     self.log_ui(ui);
                 });
         }
@@ -4850,6 +5111,7 @@ impl eframe::App for VwApp {
                     }
                     // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
                     let active_image = self.active_image().map(|p| frames::file_of(&p));
+                    let destinations = self.destination_names();
                     let drawn = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
@@ -4861,6 +5123,7 @@ impl eframe::App for VwApp {
                                     current: self.current.as_deref(),
                                     active_image: active_image.as_deref(),
                                     lang,
+                                    destinations: &destinations,
                                 },
                             )
                         })
@@ -4878,6 +5141,7 @@ impl eframe::App for VwApp {
                     match action {
                         TreeAction::Cd(p) => self.open_folder(&ctx, p),
                         TreeAction::Dataset(request) => self.open_dataset_dialog(&ctx, request),
+                        TreeAction::Send { choice, targets } => self.send_to(choice, targets),
                         TreeAction::Mount(zip) => self.mount(&ctx, &zip),
                         TreeAction::Unmount(dir) => self.unmount(&ctx, &dir),
                         TreeAction::Series { folder, files } => {
@@ -5038,6 +5302,19 @@ fn fixed_width(
     .inner
 }
 
+/// `1234` を `1,234` にする。送る件数の確認で桁を読み違えないように。
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn panel_header(ui: &mut egui::Ui, text: &str) {
     // 絞り込みの条件などで長くなっても、欄を押し広げないよう省略する。
     ui.add(egui::Label::new(egui::RichText::new(text.to_uppercase()).small().weak()).truncate());
@@ -5114,6 +5391,13 @@ fn zip_stem(zip: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_counts_are_grouped_by_thousands() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1234), "1,234");
+        assert_eq!(thousands(1234567), "1,234,567");
+    }
 
     #[test]
     fn metadata_key_column_fits_the_widest_key_when_there_is_room() {

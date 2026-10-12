@@ -65,6 +65,7 @@ pub enum Action {
     ParentFolder,
     DevelopRaw,
     TrashBadImages,
+    CancelSending,
     FullscreenSlideshow,
     FullscreenExit,
     FullscreenNext,
@@ -86,7 +87,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 59] = [
+    pub const ALL: [Action; 60] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -130,6 +131,7 @@ impl Action {
         Action::FilterUnflagged,
         Action::ExportImages,
         Action::TrashBadImages,
+        Action::CancelSending,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -201,6 +203,7 @@ impl Action {
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
             Action::TrashBadImages => "trash_bad_images",
+            Action::CancelSending => "cancel_sending",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
             Action::FullscreenNext => "fullscreen_next",
@@ -269,6 +272,7 @@ impl Action {
             Action::FilterUnflagged => "Show only unflagged images",
             Action::ExportImages => "Export images...",
             Action::TrashBadImages => "Move bad images to trash...",
+            Action::CancelSending => "Cancel sending",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -423,6 +427,7 @@ impl Action {
             Action::ExportImages => vec![KeyCombo::ctrl(E)],
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
+            Action::CancelSending => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],

@@ -15,6 +15,7 @@ mod dataset_extract;
 mod dataset_search;
 mod dataset_ui;
 mod datasets_screen;
+mod dicom_send;
 mod discard;
 mod export;
 mod fonts;

@@ -25,6 +25,8 @@ pub enum Action {
     Update(Vec<PathBuf>),
     /// 検索カタログを探し直す。
     Reload,
+    /// 送る。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
+    Send(PathBuf, Option<Vec<String>>, crate::dicom_send::Choice),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -144,6 +146,7 @@ impl DatasetsScreen {
         lang: Language,
         roots: &[String],
         fields: &[String],
+        destinations: &[String],
     ) -> Option<Action> {
         self.poll();
         self.search();
@@ -209,12 +212,12 @@ impl DatasetsScreen {
             }
             ui.add_space(4.0);
         });
-        if let Some(a) = self.detail_panel(ui, lang, &field_names) {
+        if let Some(a) = self.detail_panel(ui, lang, &field_names, destinations) {
             action = Some(a);
         }
         egui::CentralPanel::default().show(ui, |ui| {
             self.status_line(ui, lang, roots);
-            if let Some(a) = self.table_ui(ui, lang, &field_names) {
+            if let Some(a) = self.table_ui(ui, lang, &field_names, destinations) {
                 action = Some(a);
             }
         });
@@ -373,6 +376,7 @@ impl DatasetsScreen {
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
+        destinations: &[String],
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
         let dir = self.selected.as_ref()?;
@@ -384,9 +388,7 @@ impl DatasetsScreen {
         let entry = &index.entries[hit.entry];
         let c = &entry.catalog;
         // 絞り込んだときだけ。すべてのファイルが当たったときは、データセットを開くのと同じため。
-        let hits: Option<Vec<String>> = hit
-            .narrowed
-            .then(|| hit.files.iter().map(|&f| c.files[f].path.clone()).collect());
+        let hits = narrowed_paths(index, hit);
         let mut action = None;
         egui::Panel::right("dataset_detail")
             .default_size(300.0)
@@ -410,6 +412,9 @@ impl DatasetsScreen {
                         }
                         if ui.button(tr(lang, "Extract...")).clicked() {
                             action = Some(Action::Extract(entry.dir.clone(), hits.clone()));
+                        }
+                        if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
+                            action = Some(Action::Send(entry.dir.clone(), hits.clone(), choice));
                         }
                     });
                     if let Some(hits) = &hits {
@@ -498,8 +503,10 @@ impl DatasetsScreen {
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
+        destinations: &[String],
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
+        let mut send = None;
         let mut order: Vec<&Hit> = self.hits.iter().collect();
         let entry = |h: &Hit| &index.entries[h.entry];
         let key = |h: &Hit| -> String {
@@ -612,6 +619,15 @@ impl DatasetsScreen {
                         if row.double_clicked() {
                             show = Some(e.dir.clone());
                         }
+                        row.context_menu(|ui| {
+                            if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
+                                send = Some(Action::Send(
+                                    e.dir.clone(),
+                                    narrowed_paths(index, h),
+                                    choice,
+                                ));
+                            }
+                        });
                     }
                 });
         });
@@ -630,8 +646,16 @@ impl DatasetsScreen {
         if let Some(dir) = clicked {
             self.selected = Some(dir);
         }
-        show.map(Action::Show)
+        send.or(show.map(Action::Show))
     }
+}
+
+/// 検索で絞り込んだときだけ、当たったファイルのパス。すべてのファイルが当たったときは、
+/// データセットそのものを渡すのと同じため `None`。
+fn narrowed_paths(index: &Index, hit: &Hit) -> Option<Vec<String>> {
+    let files = &index.entries[hit.entry].catalog.files;
+    hit.narrowed
+        .then(|| hit.files.iter().map(|&f| files[f].path.clone()).collect())
 }
 
 fn target_title(target: &Target, lang: Language) -> String {
