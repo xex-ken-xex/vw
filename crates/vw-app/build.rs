@@ -9,7 +9,6 @@ fn main() {
         res.set_icon("../../packaging/icons/vw.ico");
         res.set("ProductName", "vw");
         res.set("FileDescription", "vw - Fast image viewer");
-        res.set("CompanyName", "xex");
         // about.rs の COPYRIGHT と同じ文言。build.rs からはクレートのモジュールを読めないので写す。
         res.set("LegalCopyright", "Copyright (c) 2026 vw contributors");
         res.compile()
