@@ -367,7 +367,107 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
     let ts = obj.meta().transfer_syntax().trim_end_matches('\0');
     let ts_name = dicom_transfer_syntax_name(ts);
     m.push("DICOM", "Transfer syntax", ts_name.unwrap_or(ts));
+    tag_listing(obj, &mut m);
     m
+}
+
+/// メタデータ欄で全タグを並べるグループ。
+pub const TAG_LISTING: &str = "DICOM tags";
+
+/// 長い値はここまでで切る。検索カタログの値の上限と揃える。
+const LISTED_VALUE_MAX: usize = 2048;
+
+/// ファイルの全タグを、ファイルの順に `(0010,0010) PatientName` の形のキーで並べる。
+/// シーケンスの項目の中のタグは、深さの分だけキーの頭に `>` を付ける（dcmdump と同じ書き方）。
+///
+/// 主なタグを名前で出す上のグループとは別に持つのは、そちらを分かりやすい名前のまま残したいのと、
+/// シリーズの並べ替えなどがそちらのキーを読むため。
+fn tag_listing(obj: &DefaultDicomObject, m: &mut Metadata) {
+    let meta = obj.meta();
+    let file_meta = [
+        (
+            tags::MEDIA_STORAGE_SOP_CLASS_UID,
+            meta.media_storage_sop_class_uid.as_str(),
+        ),
+        (
+            tags::MEDIA_STORAGE_SOP_INSTANCE_UID,
+            meta.media_storage_sop_instance_uid.as_str(),
+        ),
+        (tags::TRANSFER_SYNTAX_UID, meta.transfer_syntax.as_str()),
+        (
+            tags::IMPLEMENTATION_CLASS_UID,
+            meta.implementation_class_uid.as_str(),
+        ),
+    ];
+    for (tag, value) in file_meta {
+        m.push(TAG_LISTING, listed_key(tag, 0), listed_value(value));
+    }
+    if let Some(name) = &meta.implementation_version_name {
+        m.push(
+            TAG_LISTING,
+            listed_key(tags::IMPLEMENTATION_VERSION_NAME, 0),
+            listed_value(name),
+        );
+    }
+    list_elements(obj, 0, m);
+}
+
+fn list_elements(obj: &dicom_object::InMemDicomObject, depth: usize, m: &mut Metadata) {
+    use dicom_core::value::Value;
+    use dicom_core::VR;
+    for e in obj.iter() {
+        let tag = e.header().tag;
+        let key = listed_key(tag, depth);
+        match e.value() {
+            Value::Sequence(seq) => {
+                let n = seq.items().len();
+                let unit = if n == 1 { "item" } else { "items" };
+                m.push(TAG_LISTING, key, format!("{n} {unit}"));
+                for item in seq.items() {
+                    list_elements(item, depth + 1, m);
+                }
+            }
+            Value::PixelSequence(seq) => {
+                m.push(
+                    TAG_LISTING,
+                    key,
+                    format!("({} fragments)", seq.fragments().len()),
+                );
+            }
+            Value::Primitive(p) => {
+                let binary = matches!(
+                    e.vr(),
+                    VR::OB | VR::OD | VR::OF | VR::OL | VR::OV | VR::OW | VR::UN
+                );
+                let value = if binary {
+                    format!("({:?}, {} bytes)", e.vr(), p.calculate_byte_len())
+                } else {
+                    listed_value(&p.to_str())
+                };
+                m.push(TAG_LISTING, key, value);
+            }
+        }
+    }
+}
+
+fn listed_key(tag: Tag, depth: usize) -> String {
+    let number = format!("{:04X},{:04X}", tag.group(), tag.element());
+    let name = tag_name(&number).unwrap_or("");
+    format!("{}({number}) {name}", ">".repeat(depth))
+        .trim_end()
+        .to_owned()
+}
+
+fn listed_value(value: &str) -> String {
+    let value = value.trim_matches([' ', '\0']);
+    if value.len() <= LISTED_VALUE_MAX {
+        return value.to_owned();
+    }
+    let mut end = LISTED_VALUE_MAX;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… ({} bytes)", &value[..end], value.len())
 }
 
 /// よく見る転送構文の名前。
@@ -521,6 +621,40 @@ mod tests {
         assert_eq!(m.get("DICOM", "0002,0010"), Some("1.2.840.10008.1.2.1"));
         assert_eq!(m.get("DICOM", "7FE0,0010"), None);
         assert!(m.entries.iter().all(|(g, _, _)| g == "DICOM"));
+    }
+
+    #[test]
+    fn every_tag_is_listed_by_number_and_name_with_sequence_items_nested() {
+        let bytes = Synth::ct(2, 2)
+            .patient("Doe^Jane")
+            .frames_i16(&[&[0; 4], &[0; 4]])
+            .per_frame_values(&[(1.0, -1024.0, 40.0, 400.0), (1.0, -824.0, 40.0, 400.0)])
+            .bytes();
+        let m = DicomPlugin.read_metadata(&bytes).unwrap();
+        let listed = |key: &str| m.get(TAG_LISTING, key);
+        assert_eq!(listed("(0010,0010) PatientName"), Some("Doe^Jane"));
+        assert_eq!(
+            listed("(0002,0010) TransferSyntaxUID"),
+            Some("1.2.840.10008.1.2.1")
+        );
+        assert_eq!(
+            listed("(5200,9230) PerFrameFunctionalGroupsSequence"),
+            Some("2 items")
+        );
+        assert_eq!(
+            listed(">(0028,9145) PixelValueTransformationSequence"),
+            Some("1 item")
+        );
+        assert_eq!(listed(">>(0028,1052) RescaleIntercept"), Some("-1024"));
+        assert_eq!(m.get("Patient", "Name"), Some("Doe^Jane"));
+    }
+
+    #[test]
+    fn listed_values_longer_than_the_cap_are_cut_with_their_length() {
+        let long = "A".repeat(LISTED_VALUE_MAX + 10);
+        let shown = listed_value(&long);
+        assert!(shown.starts_with(&"A".repeat(LISTED_VALUE_MAX)));
+        assert!(shown.ends_with(&format!("… ({} bytes)", LISTED_VALUE_MAX + 10)));
     }
 
     #[test]

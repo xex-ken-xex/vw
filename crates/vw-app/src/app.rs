@@ -3640,6 +3640,18 @@ impl VwApp {
         }
     }
 
+    /// 検索のグループを設定に足して保存する。同じ名前の組は置き換える。
+    fn save_search_group(&mut self, ctx: &egui::Context, group: crate::settings::SearchGroup) {
+        let groups = &mut self.settings.settings.dataset.search_groups;
+        let message = format!("Search group {:?}: {}", group.name, group.keys.join("; "));
+        match groups.iter_mut().find(|g| g.name == group.name) {
+            Some(g) => *g = group,
+            None => groups.push(group),
+        }
+        self.log.info(message);
+        self.settings_changed(ctx);
+    }
+
     /// 設定画面で値が変わったときに、反映して保存する。
     fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings.settings.appearance);
@@ -5117,9 +5129,14 @@ impl eframe::App for VwApp {
             let lang = self.lang();
             let dataset = &self.settings.settings.dataset;
             let destinations = self.destination_names();
-            let action = self
-                .datasets
-                .ui(ui, lang, &dataset.roots, &dataset.fields, &destinations);
+            let action = self.datasets.ui(
+                ui,
+                lang,
+                &dataset.roots,
+                &dataset.fields,
+                &dataset.search_groups,
+                &destinations,
+            );
             match action {
                 Some(crate::datasets_screen::Action::Close) => self.show_datasets = false,
                 Some(crate::datasets_screen::Action::Show(dir)) => {
@@ -5140,6 +5157,9 @@ impl eframe::App for VwApp {
                 Some(crate::datasets_screen::Action::Send(dir, hits, choice)) => {
                     let targets = crate::dicom_send::dataset_targets(&dir, hits.as_deref());
                     self.send_targets(choice, targets);
+                }
+                Some(crate::datasets_screen::Action::SaveGroup(group)) => {
+                    self.save_search_group(&ctx, group);
                 }
                 Some(crate::datasets_screen::Action::Reload) => {
                     self.datasets.reload(&dataset.roots, &ctx);

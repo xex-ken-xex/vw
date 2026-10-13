@@ -341,12 +341,83 @@ impl Default for DicomSend {
 }
 
 /// データセット（[`crate::catalog`]）。
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Dataset {
     /// データセットを探しにいくフォルダ。
     pub roots: Vec<String>,
     /// 名前・メモ・タグのほかに、データセットに書き込む項目（入手元など）。
     pub fields: Vec<String>,
+    /// 詳細検索で選べる、メタデータの条件の組。
+    pub search_groups: Vec<SearchGroup>,
+}
+
+impl Default for Dataset {
+    fn default() -> Self {
+        let group = |name: &str, keys: &[&str]| SearchGroup {
+            name: name.into(),
+            keys: keys.iter().map(|&k| k.into()).collect(),
+        };
+        Self {
+            roots: Vec::new(),
+            fields: Vec::new(),
+            search_groups: vec![
+                group("Patient", &["PatientID", "PatientName", "PatientBirthDate"]),
+                group("Study", &["StudyDate", "Modality", "StudyDescription"]),
+                group("Series", &["Modality", "SeriesNumber", "SeriesDescription"]),
+            ],
+        }
+    }
+}
+
+/// 名前を付けたメタデータのキーの組。選ぶとキーごとに値の一致（equals）の条件が並び、値を入れるだけで探せる。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SearchGroup {
+    pub name: String,
+    /// `PatientID`・`0010,0020` のようなキー。種類を限るときは `exif:Model` のように頭に付ける。
+    pub keys: Vec<String>,
+}
+
+impl SearchGroup {
+    /// 設定画面での 1 行の区切り。キーの区切りにカンマを使わないのは、DICOM のタグ番号（`0010,0020`）にカンマが入るため。
+    const NAME_END: char = '=';
+    const KEY_SEPARATOR: char = ';';
+
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.name.trim().is_empty() {
+            Some("name is empty")
+        } else if self.keys.iter().all(|k| k.trim().is_empty()) {
+            Some("no keys")
+        } else {
+            None
+        }
+    }
+
+    /// `exif:Model` を `("exif", "Model")` に、`PatientID` を `("", "PatientID")` に分ける。
+    pub fn split_key(key: &str) -> (&str, &str) {
+        match key.split_once(':') {
+            Some((kind, key)) => (kind.trim(), key.trim()),
+            None => ("", key.trim()),
+        }
+    }
+
+    /// `Patient = PatientID; PatientName` の形の 1 行を読む。
+    pub fn parse_line(line: &str) -> Option<Self> {
+        let (name, keys) = line.split_once(Self::NAME_END)?;
+        let group = Self {
+            name: name.trim().to_owned(),
+            keys: keys
+                .split(Self::KEY_SEPARATOR)
+                .map(|k| k.trim().to_owned())
+                .filter(|k| !k.is_empty())
+                .collect(),
+        };
+        group.problem().is_none().then_some(group)
+    }
+
+    pub fn to_line(&self) -> String {
+        let sep = format!("{} ", Self::KEY_SEPARATOR);
+        format!("{} {} {}", self.name, Self::NAME_END, self.keys.join(&sep))
+    }
 }
 
 /// 全画面スライドショーの進め方。
@@ -617,6 +688,23 @@ impl Settings {
                     "field names must be non-empty and unique",
                 )
                 .unwrap_or_else(|| d.dataset.fields.clone()),
+            search_groups: match r.get::<Vec<SearchGroup>>("dataset", "search_groups") {
+                Some(groups) => groups
+                    .into_iter()
+                    .filter(|g| match g.problem() {
+                        // 誤った組だけを外し、残りは使えるようにする。
+                        Some(p) => {
+                            r.problems.push(format!(
+                                "dataset.search_groups: {:?}: {p} (ignored)",
+                                g.name
+                            ));
+                            false
+                        }
+                        None => true,
+                    })
+                    .collect(),
+                None => d.dataset.search_groups.clone(),
+            },
         };
         let fullscreen = Fullscreen {
             mode: r.get("fullscreen", "mode").unwrap_or(d.fullscreen.mode),
@@ -1017,6 +1105,53 @@ mod tests {
         assert!(text.contains("theme = \"system\""), "{text}");
         assert!(text.contains("language = \"en\""), "{text}");
         assert!(text.contains("next_image = ["), "{text}");
+    }
+
+    #[test]
+    fn search_groups_are_written_and_read_back_including_an_emptied_list() {
+        let mut s = Settings::default();
+        s.dataset.search_groups[0].keys.push("exif:Model".into());
+        let (back, _) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert_eq!(back.dataset.search_groups, s.dataset.search_groups);
+        s.dataset.search_groups.clear();
+        let (back, _) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(back.dataset.search_groups.is_empty());
+    }
+
+    #[test]
+    fn search_groups_without_a_name_or_keys_are_dropped_one_by_one() {
+        let text = r#"
+[[dataset.search_groups]]
+name = "ok"
+keys = ["PatientID"]
+[[dataset.search_groups]]
+name = ""
+keys = ["PatientID"]
+[[dataset.search_groups]]
+name = "no keys"
+keys = []
+"#;
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        let names: Vec<&str> = s
+            .dataset
+            .search_groups
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        assert_eq!(names, ["ok"]);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+    }
+
+    #[test]
+    fn a_search_group_line_keeps_tag_numbers_with_commas_as_one_key() {
+        let g = SearchGroup::parse_line("Patient = 0010,0020; PatientName ;exif:Model").unwrap();
+        assert_eq!(g.name, "Patient");
+        assert_eq!(g.keys, ["0010,0020", "PatientName", "exif:Model"]);
+        assert_eq!(SearchGroup::parse_line(&g.to_line()), Some(g));
+        assert_eq!(SearchGroup::parse_line("no separator"), None);
+        assert_eq!(SearchGroup::parse_line("empty = ;"), None);
+        assert_eq!(SearchGroup::split_key("exif:Model"), ("exif", "Model"));
+        assert_eq!(SearchGroup::split_key("0010,0020"), ("", "0010,0020"));
     }
 
     #[test]
