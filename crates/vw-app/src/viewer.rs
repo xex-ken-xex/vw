@@ -285,6 +285,8 @@ pub struct SlotResponse {
     pub pipeline: bool,
     /// 右クリックメニューで「評価の基準にする」が選ばれた。
     pub reference: bool,
+    /// 右クリックメニューで「AI タグを付ける」が選ばれた。
+    pub ai_tag: bool,
     /// 色導出から知らせること（ログに出す）。
     pub derive: Option<derive::Event>,
 }
@@ -1293,6 +1295,10 @@ impl Slot {
                     .clicked()
                 {
                     out.reference = true;
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Add AI tags")).clicked() {
+                    out.ai_tag = true;
                     ui.close();
                 }
                 let developable = self

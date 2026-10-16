@@ -36,6 +36,7 @@ use crate::viewer::{Sequence, Slot, KEY_ZOOM_FACTOR};
 use crate::watch::FolderWatcher;
 
 mod activity;
+mod ai_tagging;
 mod clipboard;
 mod dataset_dialogs;
 mod export_dialog;
@@ -168,6 +169,15 @@ pub struct VwApp {
     /// 名前を付けて保存した色導出の値。
     presets: crate::pipelines::PresetStore,
     about: crate::about::About,
+    /// 「AI のモデル」ウインドウとダウンロード。
+    ai_models: crate::ai_models::Dialog,
+    /// モデルの置き場。設定ファイルの場所が決まらない環境では `None`。
+    ai_store: Option<crate::ai_models::Store>,
+    ai_tags: crate::ai_tags::AiTagStore,
+    /// 走っている AI タグ付け。一度に 1 つ。
+    ai_job: Option<ai_tagging::Job>,
+    /// 走っている仕事が終わったら付ける画像。
+    ai_queue: Vec<PathBuf>,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
@@ -512,6 +522,12 @@ impl VwApp {
             .as_deref()
             .and_then(Path::parent)
             .map(|p| p.join("labels"));
+        let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
+        let ai_tag_fallback = settings
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|p| p.join("ai-tags"));
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
@@ -531,6 +547,11 @@ impl VwApp {
             settings_ui: SettingsUi::default(),
             send_job: None,
             about: Default::default(),
+            ai_models: Default::default(),
+            ai_store,
+            ai_tags: crate::ai_tags::AiTagStore::new(ai_tag_fallback),
+            ai_job: None,
+            ai_queue: Vec::new(),
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
                 view.restore_node_positions(&saved.pipeline_nodes);
@@ -699,6 +720,8 @@ impl VwApp {
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ShowAbout => self.about.open = true,
+            Action::ShowAiModels => self.ai_models.open = true,
+            Action::AiTagFolder => self.ai_tag_current_folder(ctx),
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -872,6 +895,7 @@ impl eframe::App for VwApp {
         self.pipeline_ui(&ctx);
         self.histogram_ui(&ctx);
         self.zoom_map_ui(&ctx);
+        self.ai_ui(&ctx);
         if let Some(e) = self.about.ui(&ctx, self.lang()) {
             self.log
                 .error(format!("Third-party licenses: cannot open {e}"));
@@ -1074,6 +1098,10 @@ impl eframe::App for VwApp {
                         }
                         TreeAction::OpenInFileManager(p) => {
                             self.open_in_file_manager(&p);
+                            return;
+                        }
+                        TreeAction::AiTagFolder(p) => {
+                            self.ai_tag_folder(&ctx, &p);
                             return;
                         }
                         TreeAction::Copy(p) => {

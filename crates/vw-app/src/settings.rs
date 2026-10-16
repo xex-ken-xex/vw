@@ -883,6 +883,58 @@ impl Fullscreen {
     }
 }
 
+/// AI タグ（[`crate::tagger`]）。しきい値は確信度 0〜1。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Ai {
+    pub general_threshold: f32,
+    pub character_threshold: f32,
+    /// 推論に使うスレッド数。0 なら ONNX Runtime に任せる。
+    pub threads: usize,
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        let t = crate::tagger::Thresholds::default();
+        Self {
+            general_threshold: t.general,
+            character_threshold: t.character,
+            threads: 0,
+        }
+    }
+}
+
+impl Ai {
+    pub const THREADS_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let mut r = r.at("ai");
+        let d = Self::default();
+        let unit = |v: &f32| (0.0..=1.0).contains(v);
+        Self {
+            general_threshold: r
+                .get_valid("general_threshold", unit, "must be between 0 and 1")
+                .unwrap_or(d.general_threshold),
+            character_threshold: r
+                .get_valid("character_threshold", unit, "must be between 0 and 1")
+                .unwrap_or(d.character_threshold),
+            threads: r
+                .get_valid(
+                    "threads",
+                    |v| Self::THREADS_RANGE.contains(v),
+                    "must be between 0 and 64",
+                )
+                .unwrap_or(d.threads),
+        }
+    }
+
+    pub fn thresholds(&self) -> crate::tagger::Thresholds {
+        crate::tagger::Thresholds {
+            general: self.general_threshold,
+            character: self.character_threshold,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -896,6 +948,7 @@ pub struct Settings {
     pub fullscreen: Fullscreen,
     pub log: LogSettings,
     pub quality: Quality,
+    pub ai: Ai,
     pub keys: Keymap,
 }
 
@@ -918,6 +971,7 @@ impl Settings {
         let fullscreen = Fullscreen::read(&mut r);
         let log = LogSettings::read(&mut r);
         let quality = Quality::read(&mut r);
+        let ai = Ai::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -941,6 +995,7 @@ impl Settings {
                 fullscreen,
                 log,
                 quality,
+                ai,
                 keys,
             },
             problems,
