@@ -21,6 +21,7 @@ use dicom_pixeldata::{
 };
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+pub mod charset;
 pub mod net;
 pub mod pipeline;
 pub mod synth;
@@ -124,7 +125,7 @@ fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
                     VR::OB | VR::OD | VR::OF | VR::OL | VR::OV | VR::OW | VR::UN
                 );
                 if !binary {
-                    push_tag(m, e.header().tag, &p.to_str());
+                    push_tag(m, e.header().tag, &charset::value_text(p));
                 }
             }
         }
@@ -158,7 +159,7 @@ fn frames_in(obj: &DefaultDicomObject) -> usize {
 }
 
 fn text(obj: &DefaultDicomObject, tag: Tag) -> Option<String> {
-    let s = obj.get(tag)?.to_str().ok()?;
+    let s = charset::value_text(obj.get(tag)?.value().primitive()?);
     let s = s.trim_matches([' ', '\0']);
     (!s.is_empty()).then(|| s.to_owned())
 }
@@ -442,7 +443,7 @@ fn list_elements(obj: &dicom_object::InMemDicomObject, depth: usize, m: &mut Met
                 let value = if binary {
                     format!("({:?}, {} bytes)", e.vr(), p.calculate_byte_len())
                 } else {
-                    listed_value(&p.to_str())
+                    listed_value(&charset::value_text(p))
                 };
                 m.push(TAG_LISTING, key, value);
             }
@@ -492,6 +493,7 @@ fn dicom_transfer_syntax_name(uid: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dicom_core::VR;
     use synth::{
         Synth, CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, XA_IMAGE,
     };
@@ -655,6 +657,33 @@ mod tests {
         let shown = listed_value(&long);
         assert!(shown.starts_with(&"A".repeat(LISTED_VALUE_MAX)));
         assert!(shown.ends_with(&format!("… ({} bytes)", LISTED_VALUE_MAX + 10)));
+    }
+
+    #[test]
+    fn japanese_names_written_with_iso_2022_escapes_are_read_everywhere() {
+        let name = "Yamada^Taro=\x1b$B;3ED\x1b(B^\x1b$BB@O:\x1b(B";
+        let study = "\x1b$B6;It\x1b(B CT";
+        let bytes = Synth::ct(1, 1)
+            .text(
+                tags::SPECIFIC_CHARACTER_SET,
+                VR::CS,
+                "ISO 2022 IR 6\\ISO 2022 IR 87",
+            )
+            .patient(name)
+            .text(tags::STUDY_DESCRIPTION, VR::LO, study)
+            .bytes();
+        let shown = DicomPlugin.read_metadata(&bytes).unwrap();
+        assert_eq!(shown.get("Patient", "Name"), Some("Yamada^Taro=山田^太郎"));
+        assert_eq!(shown.get("DICOM", "Study"), Some("胸部 CT"));
+        assert_eq!(
+            shown.get(TAG_LISTING, "(0010,0010) PatientName"),
+            Some("Yamada^Taro=山田^太郎")
+        );
+        let catalog = DicomPlugin.read_all_metadata(&bytes).unwrap();
+        assert_eq!(
+            catalog.get("DICOM", "0010,0010"),
+            Some("Yamada^Taro=山田^太郎")
+        );
     }
 
     #[test]
