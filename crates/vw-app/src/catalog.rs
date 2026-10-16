@@ -68,7 +68,7 @@ impl std::fmt::Display for Skipped {
     }
 }
 
-pub(crate) const PASSWORD_SKIPPED: &str = "password";
+pub const PASSWORD_SKIPPED: &str = "password";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
@@ -251,7 +251,7 @@ pub fn scan(
     })
 }
 
-pub(crate) fn skip(path: &str, reason: impl Into<String>) -> Skipped {
+pub fn skip(path: &str, reason: impl Into<String>) -> Skipped {
     Skipped {
         path: path.to_owned(),
         reason: reason.into(),
@@ -326,7 +326,7 @@ fn scan_archive(
                 }
                 return;
             }
-            Err(ArchiveError::NeedsPassword) | Err(ArchiveError::WrongPassword)
+            Err(ArchiveError::NeedsPassword | ArchiveError::WrongPassword)
                 if !progress.cancelled() =>
             {
                 let wrong = password.is_some();
@@ -467,7 +467,7 @@ fn relative_name(root: &Path, path: &Path) -> String {
 }
 
 /// OS によらず `/` で区切る。Windows で作ったカタログを Linux でも使えるように。
-pub(crate) fn slash_path(path: &Path) -> String {
+pub fn slash_path(path: &Path) -> String {
     path.components()
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

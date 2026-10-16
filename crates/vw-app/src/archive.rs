@@ -406,7 +406,7 @@ fn each_in_7z(
 
 /// 中身を書き写す。`std::io::copy` を使わないのは、読めなかったのか書けなかったのかを
 /// 同じ `io::Error` で返すため。
-pub(crate) fn copy_entry(
+pub fn copy_entry(
     data: &mut dyn std::io::Read,
     target: &mut std::fs::File,
 ) -> Result<(), EntryError> {

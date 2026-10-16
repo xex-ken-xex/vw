@@ -208,6 +208,8 @@ fn gray_image(
             (lo as f32, (lo + w.width) as f32)
         });
     let values = stored_values(raw, px.bits_allocated(), stored, signed, pixels)?;
+    // 近い値を同一視する必要はない。ちょうど恒等のときだけ格納値をそのまま使う近道で、
+    // 外れても遅い道が同じ結果を出す。
     let plain = slope == 1.0 && intercept == 0.0 && !signed && !invert;
     let (data, significant_bits) = match (plain, px.bits_allocated()) {
         (true, 8) => (PixelData::U8(values.iter().map(|&v| v as u8).collect()), 8),

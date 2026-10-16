@@ -192,7 +192,7 @@ pub fn echo(endpoint: &Endpoint) -> Result<(), String> {
     ]);
     let result = send_command(&mut assoc, pc, &command)
         .and_then(|()| receive_status(&mut assoc))
-        .map_err(|e| e.to_string());
+        .map_err(|e| e.clone());
     let _ = assoc.release();
     match result? {
         0 => Ok(()),

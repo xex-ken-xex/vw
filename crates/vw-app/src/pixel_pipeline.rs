@@ -4,7 +4,9 @@
 
 use eframe::egui::{Color32, ColorImage};
 use vw_core::{PixelData, VwImage};
-use vw_dicom::pipeline::Gray;
+use vw_dicom::pipeline::{Gray, Pipeline};
+
+use crate::frames;
 
 /// VOI LUT Function（DICOM PS3.3 C.11.2.1.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +116,7 @@ pub fn file_params(g: &Gray, image: &VwImage, decoded: &Decoded) -> Params {
         (Some(c), Some(w)) => (c.value, w.value),
         _ => {
             let (lo, hi) = full_range(image, decoded, g);
-            ((lo + hi) / 2.0, (hi - lo).max(1.0))
+            (f64::midpoint(lo, hi), (hi - lo).max(1.0))
         }
     };
     Params {
@@ -248,6 +250,27 @@ pub fn histogram(image: &VwImage, decoded: &Decoded, slope: f64, intercept: f64)
         lo: lo.min(hi),
         hi,
         bins,
+    }
+}
+
+/// ファイルの段（DICOM のヘッダ）を裏のスレッドで読む。画像の画素は別に届くので、ここでは読まない。
+pub fn read_in_background(
+    ctx: &eframe::egui::Context,
+    path: &std::path::Path,
+) -> std::sync::mpsc::Receiver<Result<Pipeline, String>> {
+    let (file, frame) = frames::split(path).unwrap_or_else(|| (path.to_path_buf(), 0));
+    crate::background::compute(ctx, move || {
+        std::fs::read(&file)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| vw_dicom::pipeline::read(&bytes, frame).map_err(|e| e.to_string()))
+    })
+}
+
+/// 物理量の単位。CT は HU、PET は Units の値。
+pub fn unit_of(g: &Gray) -> Option<String> {
+    match g.modality.modality.as_deref().map(str::trim) {
+        Some("CT") => Some("HU".into()),
+        _ => g.modality.units.clone(),
     }
 }
 

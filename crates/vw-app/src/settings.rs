@@ -70,6 +70,26 @@ impl Default for Appearance {
 }
 
 impl Appearance {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("appearance");
+        let scale_range = Appearance::MIN_SCALE..=Appearance::MAX_SCALE;
+        Self {
+            theme: r.get("theme").unwrap_or(d.theme),
+            language: r.get("language").unwrap_or(d.language),
+            ui_scale: r
+                .get_valid(
+                    "ui_scale",
+                    |v: &f32| scale_range.contains(v),
+                    "must be 0.75 to 2.0",
+                )
+                .unwrap_or(d.ui_scale),
+            compact: r.get("compact").unwrap_or(d.compact),
+        }
+    }
+}
+
+impl Appearance {
     pub const MIN_SCALE: f32 = 0.75;
     pub const MAX_SCALE: f32 = 2.0;
 
@@ -143,6 +163,63 @@ impl Default for Viewer {
     }
 }
 
+impl Viewer {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("viewer");
+        Self {
+            background: r
+                .get_valid(
+                    "background",
+                    |v: &String| v.trim().is_empty() || parse_hex_color(v).is_some(),
+                    "must be #RRGGBB or empty",
+                )
+                .unwrap_or(d.background),
+            full_image_limit_mb: r
+                .get_valid(
+                    "full_image_limit_mb",
+                    |v: &u32| Viewer::LIMIT_RANGE_MB.contains(v),
+                    "must be 256 to 1048576",
+                )
+                .unwrap_or(d.full_image_limit_mb),
+            layout: r.get("layout").unwrap_or(d.layout),
+            custom_layout: r
+                .get_valid(
+                    "custom_layout",
+                    |v: &SlotLayout| *v != SlotLayout::Auto,
+                    "must be COLSxROWS",
+                )
+                .unwrap_or(d.custom_layout),
+            auto_layout_max: r
+                .get_valid(
+                    "auto_layout_max",
+                    |v: &SlotLayout| *v != SlotLayout::Auto,
+                    "must be COLSxROWS",
+                )
+                .unwrap_or(d.auto_layout_max),
+            slideshow_fps: r
+                .get_valid(
+                    "slideshow_fps",
+                    |v: &f32| FPS_RANGE.contains(v),
+                    "must be 0.1 to 120",
+                )
+                .unwrap_or(d.slideshow_fps),
+            slideshow_end: r.get("slideshow_end").unwrap_or(d.slideshow_end),
+            slideshow_drop_window_secs: r
+                .get_valid(
+                    "slideshow_drop_window_secs",
+                    |v: &u32| DROP_WINDOW_RANGE.contains(v),
+                    "must be 1 to 60",
+                )
+                .unwrap_or(d.slideshow_drop_window_secs),
+            keep_view: r.get("keep_view").unwrap_or(d.keep_view),
+            develop_raw: r.get("develop_raw").unwrap_or(d.develop_raw),
+            magnify_filter: r.get("magnify_filter").unwrap_or(d.magnify_filter),
+            minify_filter: r.get("minify_filter").unwrap_or(d.minify_filter),
+        }
+    }
+}
+
 /// グループの見出し（メタデータ欄の File など）をクリックしたときの動作。
 /// 開閉の ▶ はどちらでも開閉する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -166,6 +243,17 @@ impl Default for Behavior {
         Self {
             header_click: HeaderClick::default(),
             auto_reload: true,
+        }
+    }
+}
+
+impl Behavior {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("behavior");
+        Self {
+            header_click: r.get("header_click").unwrap_or(d.header_click),
+            auto_reload: r.get("auto_reload").unwrap_or(d.auto_reload),
         }
     }
 }
@@ -211,6 +299,24 @@ impl Default for LogSettings {
             style: LogStyle::Normal,
             file: true,
             keep_files: 20,
+        }
+    }
+}
+
+impl LogSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("log");
+        Self {
+            style: r.get("style").unwrap_or(d.style),
+            file: r.get("file").unwrap_or(d.file),
+            keep_files: r
+                .get_valid(
+                    "keep_files",
+                    |v: &u32| LogSettings::KEEP_RANGE.contains(v),
+                    "must be 1 to 1000",
+                )
+                .unwrap_or(d.keep_files),
         }
     }
 }
@@ -281,6 +387,29 @@ impl Default for Tree {
 }
 
 impl Tree {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("tree");
+        Self {
+            sort: r.get("sort").unwrap_or(d.sort),
+            sort_descending: r.get("sort_descending").unwrap_or(d.sort_descending),
+            confirm_every: r.get("confirm_every").unwrap_or(d.confirm_every),
+            confirm_chunk: r
+                .get_valid(
+                    "confirm_chunk",
+                    |v: &u32| Tree::CHUNK_RANGE.contains(v),
+                    "must be 1 to 100000",
+                )
+                .unwrap_or(d.confirm_chunk),
+            load_into: r.get("load_into").unwrap_or(d.load_into),
+            other_load_modifier: r
+                .get("other_load_modifier")
+                .unwrap_or(d.other_load_modifier),
+        }
+    }
+}
+
+impl Tree {
     pub const CHUNK_RANGE: std::ops::RangeInclusive<u32> = 1..=100_000;
 
     pub fn order(&self) -> SortOrder {
@@ -310,6 +439,23 @@ impl Default for Labels {
 }
 
 impl Labels {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("labels");
+        Self {
+            tags: r
+                .get_valid(
+                    "tags",
+                    |t: &Vec<String>| Labels::valid_tags(t),
+                    "tag names must be non-empty and unique",
+                )
+                .unwrap_or_else(|| d.tags.clone()),
+            advance: r.get("advance").unwrap_or(d.advance),
+        }
+    }
+}
+
+impl Labels {
     /// タグの一覧として使えるか。空の名前や重なった名前があると、キーとタグの対応が分からなくなる。
     pub fn valid_tags(tags: &[String]) -> bool {
         let mut seen = std::collections::HashSet::new();
@@ -329,6 +475,22 @@ impl Default for Dicom {
     fn default() -> Self {
         Self {
             probe_extensions: vw_core::ProbeExtensions::DEFAULT.into(),
+        }
+    }
+}
+
+impl Dicom {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("dicom");
+        Self {
+            probe_extensions: r
+                .get_valid(
+                    "probe_extensions",
+                    |e: &String| vw_core::ProbeExtensions::new(e).is_ok(),
+                    "not a valid regular expression",
+                )
+                .unwrap_or_else(|| d.probe_extensions.clone()),
         }
     }
 }
@@ -398,6 +560,42 @@ impl Default for DicomSend {
     }
 }
 
+impl DicomSend {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("dicom_send");
+        Self {
+            ae_title: r
+                .get_valid(
+                    "ae_title",
+                    |t: &String| vw_dicom::net::valid_ae_title(t),
+                    "must be 1 to 16 of A-Z, 0-9, space, _ and -",
+                )
+                .unwrap_or_else(|| d.ae_title.clone()),
+            timeout_secs: r
+                .get_valid(
+                    "timeout_secs",
+                    |v: &u32| DicomSend::TIMEOUT_RANGE.contains(v),
+                    "must be 1 to 600",
+                )
+                .unwrap_or(d.timeout_secs),
+            destinations: r
+                .get::<Vec<Destination>>("destinations")
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|dest| match dest.problem() {
+                    // 誤った送信先だけを外し、残りは使えるようにする。
+                    Some(p) => {
+                        r.problem("destinations", format!("{:?}: {p} (ignored)", dest.name));
+                        false
+                    }
+                    None => true,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// データセット（[`crate::catalog`]）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Dataset {
@@ -423,6 +621,37 @@ impl Default for Dataset {
                 group("Study", &["StudyDate", "Modality", "StudyDescription"]),
                 group("Series", &["Modality", "SeriesNumber", "SeriesDescription"]),
             ],
+        }
+    }
+}
+
+impl Dataset {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("dataset");
+        Self {
+            roots: r.get("roots").unwrap_or_else(|| d.roots.clone()),
+            fields: r
+                .get_valid(
+                    "fields",
+                    |t: &Vec<String>| Labels::valid_tags(t),
+                    "field names must be non-empty and unique",
+                )
+                .unwrap_or_else(|| d.fields.clone()),
+            search_groups: match r.get::<Vec<SearchGroup>>("search_groups") {
+                Some(groups) => groups
+                    .into_iter()
+                    .filter(|g| match g.problem() {
+                        // 誤った組だけを外し、残りは使えるようにする。
+                        Some(p) => {
+                            r.problem("search_groups", format!("{:?}: {p} (ignored)", g.name));
+                            false
+                        }
+                        None => true,
+                    })
+                    .collect(),
+                None => d.search_groups.clone(),
+            },
         }
     }
 }
@@ -551,6 +780,49 @@ impl Default for Fullscreen {
     }
 }
 
+impl Fullscreen {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("fullscreen");
+        Self {
+            mode: r.get("mode").unwrap_or(d.mode),
+            sort: r.get("sort").unwrap_or(d.sort),
+            folders_descending: r.get("folders_descending").unwrap_or(d.folders_descending),
+            files_descending: r.get("files_descending").unwrap_or(d.files_descending),
+            interval_secs: r
+                .get_valid(
+                    "interval_secs",
+                    |v: &f32| Fullscreen::INTERVAL_RANGE.contains(v),
+                    "must be 0 to 3600",
+                )
+                .unwrap_or(d.interval_secs),
+            loop_at_end: r.get("loop_at_end").unwrap_or(d.loop_at_end),
+            show_path: r.get("show_path").unwrap_or(d.show_path),
+            path_color: r
+                .get_valid(
+                    "path_color",
+                    |v: &String| parse_hex_color(v).is_some(),
+                    "must be #RRGGBB",
+                )
+                .unwrap_or_else(|| d.path_color.clone()),
+            path_opacity: r
+                .get_valid(
+                    "path_opacity",
+                    |v: &u32| Fullscreen::OPACITY_RANGE.contains(v),
+                    "must be 0 to 100",
+                )
+                .unwrap_or(d.path_opacity),
+            path_size: r
+                .get_valid(
+                    "path_size",
+                    |v: &f32| Fullscreen::PATH_SIZE_RANGE.contains(v),
+                    "must be 6 to 72",
+                )
+                .unwrap_or(d.path_size),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -573,264 +845,17 @@ impl Settings {
     /// TOML として読めない（構文の誤り）ときだけ `Err` を返す。
     pub fn from_toml(text: &str) -> Result<(Self, Vec<String>), String> {
         let table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
-        let d = Settings::default();
         let mut r = Reader::new(&table);
-        let scale_range = Appearance::MIN_SCALE..=Appearance::MAX_SCALE;
-        let appearance = Appearance {
-            theme: r.get("appearance", "theme").unwrap_or(d.appearance.theme),
-            language: r
-                .get("appearance", "language")
-                .unwrap_or(d.appearance.language),
-            ui_scale: r
-                .get_valid(
-                    "appearance",
-                    "ui_scale",
-                    |v: &f32| scale_range.contains(v),
-                    "must be 0.75 to 2.0",
-                )
-                .unwrap_or(d.appearance.ui_scale),
-            compact: r
-                .get("appearance", "compact")
-                .unwrap_or(d.appearance.compact),
-        };
-        let viewer = Viewer {
-            background: r
-                .get_valid(
-                    "viewer",
-                    "background",
-                    |v: &String| v.trim().is_empty() || parse_hex_color(v).is_some(),
-                    "must be #RRGGBB or empty",
-                )
-                .unwrap_or(d.viewer.background),
-            full_image_limit_mb: r
-                .get_valid(
-                    "viewer",
-                    "full_image_limit_mb",
-                    |v: &u32| Viewer::LIMIT_RANGE_MB.contains(v),
-                    "must be 256 to 1048576",
-                )
-                .unwrap_or(d.viewer.full_image_limit_mb),
-            layout: r.get("viewer", "layout").unwrap_or(d.viewer.layout),
-            custom_layout: r
-                .get_valid(
-                    "viewer",
-                    "custom_layout",
-                    |v: &SlotLayout| *v != SlotLayout::Auto,
-                    "must be COLSxROWS",
-                )
-                .unwrap_or(d.viewer.custom_layout),
-            auto_layout_max: r
-                .get_valid(
-                    "viewer",
-                    "auto_layout_max",
-                    |v: &SlotLayout| *v != SlotLayout::Auto,
-                    "must be COLSxROWS",
-                )
-                .unwrap_or(d.viewer.auto_layout_max),
-            slideshow_fps: r
-                .get_valid(
-                    "viewer",
-                    "slideshow_fps",
-                    |v: &f32| FPS_RANGE.contains(v),
-                    "must be 0.1 to 120",
-                )
-                .unwrap_or(d.viewer.slideshow_fps),
-            slideshow_end: r
-                .get("viewer", "slideshow_end")
-                .unwrap_or(d.viewer.slideshow_end),
-            slideshow_drop_window_secs: r
-                .get_valid(
-                    "viewer",
-                    "slideshow_drop_window_secs",
-                    |v: &u32| DROP_WINDOW_RANGE.contains(v),
-                    "must be 1 to 60",
-                )
-                .unwrap_or(d.viewer.slideshow_drop_window_secs),
-            keep_view: r.get("viewer", "keep_view").unwrap_or(d.viewer.keep_view),
-            develop_raw: r
-                .get("viewer", "develop_raw")
-                .unwrap_or(d.viewer.develop_raw),
-            magnify_filter: r
-                .get("viewer", "magnify_filter")
-                .unwrap_or(d.viewer.magnify_filter),
-            minify_filter: r
-                .get("viewer", "minify_filter")
-                .unwrap_or(d.viewer.minify_filter),
-        };
-        let tree = Tree {
-            sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
-            sort_descending: r
-                .get("tree", "sort_descending")
-                .unwrap_or(d.tree.sort_descending),
-            confirm_every: r
-                .get("tree", "confirm_every")
-                .unwrap_or(d.tree.confirm_every),
-            confirm_chunk: r
-                .get_valid(
-                    "tree",
-                    "confirm_chunk",
-                    |v: &u32| Tree::CHUNK_RANGE.contains(v),
-                    "must be 1 to 100000",
-                )
-                .unwrap_or(d.tree.confirm_chunk),
-            load_into: r.get("tree", "load_into").unwrap_or(d.tree.load_into),
-            other_load_modifier: r
-                .get("tree", "other_load_modifier")
-                .unwrap_or(d.tree.other_load_modifier),
-        };
-        let behavior = Behavior {
-            header_click: r
-                .get("behavior", "header_click")
-                .unwrap_or(d.behavior.header_click),
-            auto_reload: r
-                .get("behavior", "auto_reload")
-                .unwrap_or(d.behavior.auto_reload),
-        };
-        let labels = Labels {
-            tags: r
-                .get_valid(
-                    "labels",
-                    "tags",
-                    |t: &Vec<String>| Labels::valid_tags(t),
-                    "tag names must be non-empty and unique",
-                )
-                .unwrap_or_else(|| d.labels.tags.clone()),
-            advance: r.get("labels", "advance").unwrap_or(d.labels.advance),
-        };
-        let dicom = Dicom {
-            probe_extensions: r
-                .get_valid(
-                    "dicom",
-                    "probe_extensions",
-                    |e: &String| vw_core::ProbeExtensions::new(e).is_ok(),
-                    "not a valid regular expression",
-                )
-                .unwrap_or_else(|| d.dicom.probe_extensions.clone()),
-        };
-        let dicom_send = DicomSend {
-            ae_title: r
-                .get_valid(
-                    "dicom_send",
-                    "ae_title",
-                    |t: &String| vw_dicom::net::valid_ae_title(t),
-                    "must be 1 to 16 of A-Z, 0-9, space, _ and -",
-                )
-                .unwrap_or_else(|| d.dicom_send.ae_title.clone()),
-            timeout_secs: r
-                .get_valid(
-                    "dicom_send",
-                    "timeout_secs",
-                    |v: &u32| DicomSend::TIMEOUT_RANGE.contains(v),
-                    "must be 1 to 600",
-                )
-                .unwrap_or(d.dicom_send.timeout_secs),
-            destinations: r
-                .get::<Vec<Destination>>("dicom_send", "destinations")
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|dest| match dest.problem() {
-                    // 誤った送信先だけを外し、残りは使えるようにする。
-                    Some(p) => {
-                        r.problems.push(format!(
-                            "dicom_send.destinations: {:?}: {p} (ignored)",
-                            dest.name
-                        ));
-                        false
-                    }
-                    None => true,
-                })
-                .collect(),
-        };
-        let dataset = Dataset {
-            roots: r
-                .get("dataset", "roots")
-                .unwrap_or_else(|| d.dataset.roots.clone()),
-            fields: r
-                .get_valid(
-                    "dataset",
-                    "fields",
-                    |t: &Vec<String>| Labels::valid_tags(t),
-                    "field names must be non-empty and unique",
-                )
-                .unwrap_or_else(|| d.dataset.fields.clone()),
-            search_groups: match r.get::<Vec<SearchGroup>>("dataset", "search_groups") {
-                Some(groups) => groups
-                    .into_iter()
-                    .filter(|g| match g.problem() {
-                        // 誤った組だけを外し、残りは使えるようにする。
-                        Some(p) => {
-                            r.problems.push(format!(
-                                "dataset.search_groups: {:?}: {p} (ignored)",
-                                g.name
-                            ));
-                            false
-                        }
-                        None => true,
-                    })
-                    .collect(),
-                None => d.dataset.search_groups.clone(),
-            },
-        };
-        let fullscreen = Fullscreen {
-            mode: r.get("fullscreen", "mode").unwrap_or(d.fullscreen.mode),
-            sort: r.get("fullscreen", "sort").unwrap_or(d.fullscreen.sort),
-            folders_descending: r
-                .get("fullscreen", "folders_descending")
-                .unwrap_or(d.fullscreen.folders_descending),
-            files_descending: r
-                .get("fullscreen", "files_descending")
-                .unwrap_or(d.fullscreen.files_descending),
-            interval_secs: r
-                .get_valid(
-                    "fullscreen",
-                    "interval_secs",
-                    |v: &f32| Fullscreen::INTERVAL_RANGE.contains(v),
-                    "must be 0 to 3600",
-                )
-                .unwrap_or(d.fullscreen.interval_secs),
-            loop_at_end: r
-                .get("fullscreen", "loop_at_end")
-                .unwrap_or(d.fullscreen.loop_at_end),
-            show_path: r
-                .get("fullscreen", "show_path")
-                .unwrap_or(d.fullscreen.show_path),
-            path_color: r
-                .get_valid(
-                    "fullscreen",
-                    "path_color",
-                    |v: &String| parse_hex_color(v).is_some(),
-                    "must be #RRGGBB",
-                )
-                .unwrap_or_else(|| d.fullscreen.path_color.clone()),
-            path_opacity: r
-                .get_valid(
-                    "fullscreen",
-                    "path_opacity",
-                    |v: &u32| Fullscreen::OPACITY_RANGE.contains(v),
-                    "must be 0 to 100",
-                )
-                .unwrap_or(d.fullscreen.path_opacity),
-            path_size: r
-                .get_valid(
-                    "fullscreen",
-                    "path_size",
-                    |v: &f32| Fullscreen::PATH_SIZE_RANGE.contains(v),
-                    "must be 6 to 72",
-                )
-                .unwrap_or(d.fullscreen.path_size),
-        };
-        let log = LogSettings {
-            style: r.get("log", "style").unwrap_or(d.log.style),
-            file: r.get("log", "file").unwrap_or(d.log.file),
-            keep_files: r
-                .get_valid(
-                    "log",
-                    "keep_files",
-                    |v: &u32| LogSettings::KEEP_RANGE.contains(v),
-                    "must be 1 to 1000",
-                )
-                .unwrap_or(d.log.keep_files),
-        };
+        let appearance = Appearance::read(&mut r);
+        let viewer = Viewer::read(&mut r);
+        let tree = Tree::read(&mut r);
+        let behavior = Behavior::read(&mut r);
+        let labels = Labels::read(&mut r);
+        let dicom = Dicom::read(&mut r);
+        let dicom_send = DicomSend::read(&mut r);
+        let dataset = Dataset::read(&mut r);
+        let fullscreen = Fullscreen::read(&mut r);
+        let log = LogSettings::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -838,7 +863,7 @@ impl Settings {
                 problems.extend(p);
                 keys
             }
-            None => d.keys,
+            None => Keymap::default(),
         };
         problems.append(&mut r.problems);
         Ok((

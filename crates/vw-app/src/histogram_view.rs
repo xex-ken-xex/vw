@@ -2,17 +2,15 @@
 //! ピクセルパイプラインで値を変えているときは、変更前（グレーの塗り）と変更後（線）を重ねる。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use eframe::egui::{self, pos2, Color32, Pos2, Rect, Sense, Stroke};
 use vw_core::{display, DisplayParams, VwImage};
 use vw_dicom::pipeline::Pipeline;
 
-use crate::frames;
 use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
 use crate::i18n::tr;
-use crate::pipeline_view;
 use crate::pixel_pipeline::{self, Decoded, Params};
 use crate::settings::Language;
 use crate::sub_window::SubWindow;
@@ -114,7 +112,7 @@ impl HistogramView {
         if let Some(t) = &target {
             self.count(ctx, t);
         }
-        let title = self.title(lang);
+        let title = crate::sub_window::title(lang, "Histogram", self.path.as_deref());
         let mut close = false;
         let has_image = target.as_ref().is_some_and(|t| t.image.is_some());
         let has_target = target.is_some();
@@ -151,7 +149,7 @@ impl HistogramView {
             self.path = path;
             self.gray = target.map(|t| {
                 if t.dicom {
-                    Gray::Reading(pipeline_view::read_in_background(ctx, t.path))
+                    Gray::Reading(pixel_pipeline::read_in_background(ctx, t.path))
                 } else {
                     Gray::None
                 }
@@ -162,7 +160,7 @@ impl HistogramView {
                 self.gray = Some(match result {
                     Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
                         decoded: Decoded::of(&info),
-                        unit: pipeline_view::unit_of(&info),
+                        unit: pixel_pipeline::unit_of(&info),
                         info,
                     }),
                     _ => Gray::None,
@@ -202,49 +200,30 @@ impl HistogramView {
             let file = pixel_pipeline::file_params(&g.info, &image, &g.decoded);
             (g.decoded, file, g.unit.clone())
         });
-        let (tx, rx) = channel();
-        let ctx = ctx.clone();
         let (axis, edited) = (key.axis, key.edited);
-        std::thread::spawn(move || {
-            let counted = match (axis, gray) {
-                (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
-                    histogram: histogram::physical(
-                        &image,
-                        &decoded,
-                        (file.slope, file.intercept),
-                        edited.map(|p| (p.slope, p.intercept)),
-                    ),
-                    file,
-                    edited,
-                    unit,
-                },
-                (_, gray) => {
-                    let shown = display::to_display(&image, &DisplayParams::default());
-                    Counted::Levels {
-                        before: histogram::levels_of_rgba(&shown.rgba),
-                        after: gray.zip(edited).map(|((decoded, _, _), p)| {
-                            histogram::levels_of_params(&image, &decoded, &p)
-                        }),
-                    }
+        let rx = crate::background::compute(ctx, move || match (axis, gray) {
+            (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
+                histogram: histogram::physical(
+                    &image,
+                    &decoded,
+                    (file.slope, file.intercept),
+                    edited.map(|p| (p.slope, p.intercept)),
+                ),
+                file,
+                edited,
+                unit,
+            },
+            (_, gray) => {
+                let shown = display::to_display(&image, &DisplayParams::default());
+                Counted::Levels {
+                    before: histogram::levels_of_rgba(&shown.rgba),
+                    after: gray.zip(edited).map(|((decoded, _, _), p)| {
+                        histogram::levels_of_params(&image, &decoded, &p)
+                    }),
                 }
-            };
-            let _ = tx.send(counted);
-            ctx.request_repaint();
+            }
         });
         self.counting = Some((key, rx));
-    }
-
-    fn title(&self, lang: Language) -> String {
-        let name = tr(lang, "Histogram");
-        let Some(path) = &self.path else {
-            return name.to_owned();
-        };
-        let file = frames::file_of(path);
-        let file = file.file_name().unwrap_or_default().to_string_lossy();
-        match frames::split(path) {
-            Some((_, frame)) => format!("{name} - {file}  {} {}", tr(lang, "Frame"), frame + 1),
-            None => format!("{name} - {file}"),
-        }
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, lang: Language) {
