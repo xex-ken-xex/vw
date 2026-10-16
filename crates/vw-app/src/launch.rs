@@ -5,16 +5,37 @@ use std::path::Path;
 /// ファイルを、拡張子に関連付けられたアプリで開く。
 #[cfg(windows)]
 pub fn open_file(path: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    // cmd の start は拡張子に関連付けられたアプリで開く。CREATE_NO_WINDOW で
-    // cmd 自身の黒い窓を出さない。関連付けがなければ Windows が「アプリを選択」を出す。
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(drop)
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{ShellExecuteW, SE_ERR_NOASSOC};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    // cmd の start を使わないのは、cmd が引数を独自に読み直すため、起動はしても
+    // 何も開かないことがあり、失敗も返ってこないから。ShellExecuteW なら結果の値で失敗が分かる。
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result > 32 {
+        return Ok(());
+    }
+    if result == SE_ERR_NOASSOC as isize {
+        // 関連付けが無いときは「アプリを選択」を出す。ShellExecuteW の "openas" は
+        // Windows 10 以降で黙って失敗することがあるため、rundll32 から出す。
+        return std::process::Command::new("rundll32")
+            .arg("shell32.dll,OpenAs_RunDLL")
+            .arg(path)
+            .spawn()
+            .map(drop);
+    }
+    Err(std::io::Error::other(format!(
+        "ShellExecuteW failed ({result})"
+    )))
 }
 
 #[cfg(not(windows))]
