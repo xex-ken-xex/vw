@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use eframe::egui::Color32;
+use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
@@ -15,6 +15,7 @@ use crate::layout::SlotLayout;
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
+use crate::viewer::ScaleFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -103,6 +104,16 @@ pub struct Viewer {
     pub keep_view: bool,
     /// カメラ RAW を開いたら、まず埋め込みプレビューを出し、裏で現像して差し替える。
     pub develop_raw: bool,
+    /// 画像を拡大して表示するときの補間。最近傍なら画素単位で確かめられる。
+    pub magnify_filter: ScaleFilter,
+    /// 画像を縮小して表示するときの補間。
+    pub minify_filter: ScaleFilter,
+}
+
+impl Viewer {
+    pub fn texture_options(&self) -> egui::TextureOptions {
+        crate::viewer::texture_options(self.magnify_filter, self.minify_filter)
+    }
 }
 
 impl Viewer {
@@ -126,6 +137,8 @@ impl Default for Viewer {
             slideshow_drop_window_secs: 5,
             keep_view: true,
             develop_raw: true,
+            magnify_filter: ScaleFilter::Nearest,
+            minify_filter: ScaleFilter::Linear,
         }
     }
 }
@@ -637,6 +650,12 @@ impl Settings {
             develop_raw: r
                 .get("viewer", "develop_raw")
                 .unwrap_or(d.viewer.develop_raw),
+            magnify_filter: r
+                .get("viewer", "magnify_filter")
+                .unwrap_or(d.viewer.magnify_filter),
+            minify_filter: r
+                .get("viewer", "minify_filter")
+                .unwrap_or(d.viewer.minify_filter),
         };
         let tree = Tree {
             sort: r.get("tree", "sort").unwrap_or(d.tree.sort),
@@ -1113,6 +1132,8 @@ mod tests {
         s.viewer.slideshow_end = EndMode::PingPong;
         s.viewer.slideshow_drop_window_secs = 10;
         s.viewer.keep_view = false;
+        s.viewer.magnify_filter = ScaleFilter::Linear;
+        s.viewer.minify_filter = ScaleFilter::Nearest;
         s.tree.load_into = LoadInto::Folders;
         s.tree.other_load_modifier = LoadModifier::Ctrl;
         s.tree.sort = SortKey::NameString;
@@ -1370,6 +1391,24 @@ ae_title = "PACS"
         assert_eq!(s.viewer.layout, SlotLayout::Auto);
         assert_eq!(s.viewer.custom_layout, SlotLayout::grid(6, 6));
         assert_eq!(problems.len(), 2, "{problems:?}");
+    }
+
+    #[test]
+    fn magnifies_with_nearest_and_minifies_linearly_by_default() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.magnify_filter, ScaleFilter::Nearest);
+        assert_eq!(s.viewer.minify_filter, ScaleFilter::Linear);
+    }
+
+    #[test]
+    fn unknown_scale_filter_falls_back_to_default_with_a_problem() {
+        let (s, problems) = Settings::from_toml(
+            "[viewer]\nmagnify_filter = \"lanczos\"\nminify_filter = \"nearest\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.viewer.magnify_filter, ScaleFilter::Nearest);
+        assert_eq!(s.viewer.minify_filter, ScaleFilter::Nearest);
+        assert_eq!(problems.len(), 1, "{problems:?}");
     }
 
     #[test]

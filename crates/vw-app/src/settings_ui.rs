@@ -15,6 +15,7 @@ use crate::settings::{
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
+use crate::viewer::ScaleFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -73,7 +74,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 43] = [
+const ITEMS: [Item; 45] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -171,6 +172,20 @@ const ITEMS: [Item; 43] = [
         title: "Develop RAW in the background",
         description: "Camera RAW files first show the preview JPEG embedded by the camera, then are developed from the sensor data in the background and replaced (a film icon is shown on the slot meanwhile). When off, develop from the right-click menu.",
         widget: develop_raw_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.magnify_filter",
+        title: "Zoom-in interpolation",
+        description: "How an image enlarged on screen is drawn. Nearest neighbor shows each pixel as a sharp square with its original value; linear blends neighboring pixels smoothly.",
+        widget: magnify_filter_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.minify_filter",
+        title: "Zoom-out interpolation",
+        description: "How an image shrunk on screen is drawn. Linear averages pixels smoothly; nearest neighbor picks single pixels, keeping original values but showing jagged edges and moire.",
+        widget: minify_filter_widget,
     },
     Item {
         section: Section::Tree,
@@ -736,6 +751,24 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.keep_view, tr(lang, "Enabled"))
         .changed()
+}
+
+fn magnify_filter_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    scale_filter_radios(&mut s.viewer.magnify_filter, ui, lang)
+}
+
+fn minify_filter_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    scale_filter_radios(&mut s.viewer.minify_filter, ui, lang)
+}
+
+fn scale_filter_radios(value: &mut ScaleFilter, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = *value;
+    ui.horizontal(|ui| {
+        for filter in ScaleFilter::ALL {
+            ui.radio_value(value, filter, tr(lang, filter.title()));
+        }
+    });
+    *value != before
 }
 
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

@@ -7,9 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, pos2, vec2, Color32, MouseWheelUnit, PointerButton, Pos2, Rect, Sense, TextureHandle,
-    Vec2,
+    self, pos2, vec2, Color32, ColorImage, MouseWheelUnit, PointerButton, Pos2, Rect, Sense,
+    TextureFilter, TextureHandle, TextureOptions, Vec2,
 };
+use serde::{Deserialize, Serialize};
 use vw_core::VwImage;
 
 use crate::i18n::tr;
@@ -50,6 +51,57 @@ impl Shown {
     pub fn texture(&self) -> &TextureHandle {
         self.full.as_ref().map_or(&self.thumb, |f| &f.texture)
     }
+}
+
+/// 画面の 1 画素に画像の画素をどう割り当てるか（拡大・縮小それぞれ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScaleFilter {
+    /// いちばん近い画素の値をそのまま使う。画素の境界と元の値がそのまま見える。
+    Nearest,
+    /// まわりの画素の値を混ぜてなめらかにする。
+    Linear,
+}
+
+impl ScaleFilter {
+    pub const ALL: [ScaleFilter; 2] = [ScaleFilter::Nearest, ScaleFilter::Linear];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ScaleFilter::Nearest => "Nearest neighbor",
+            ScaleFilter::Linear => "Linear (smooth)",
+        }
+    }
+}
+
+/// スロットの画像のテクスチャの設定。
+///
+/// 縮小を線形にするときはミップマップも使う。使わないと、大きく縮めたときに間の画素が
+/// 飛ばされてちらつく。最近傍の縮小ではミップマップを使わない。ミップマップの段は画素を
+/// 平均した値なので、元の値だけを見せるという最近傍を選ぶ理由に反するため。
+///
+/// バイキュービックや Lanczos は選べない。GPU のテクスチャの補間には最近傍と線形しかなく、
+/// egui の描画に自前のシェーダーを差し込む必要があって手間が大きいため。
+pub fn texture_options(magnify: ScaleFilter, minify: ScaleFilter) -> TextureOptions {
+    let filter = |f| match f {
+        ScaleFilter::Nearest => TextureFilter::Nearest,
+        ScaleFilter::Linear => TextureFilter::Linear,
+    };
+    TextureOptions {
+        magnification: filter(magnify),
+        minification: filter(minify),
+        mipmap_mode: (minify == ScaleFilter::Linear).then_some(TextureFilter::Linear),
+        ..TextureOptions::LINEAR
+    }
+}
+
+/// 読み込み済みのテクスチャの拡大・縮小の設定だけを変える。
+///
+/// 0x0 の部分更新を送る。画素を送り直さずに済むよう、egui の glow の描画が部分更新のたびに
+/// 補間の設定とミップマップを作り直すのを利用している。画像を読み直す方法は採らない。
+/// 縮小画像の画素はテクスチャにしか残しておらず、全スロットをデコードし直すことになるため。
+pub fn set_texture_options(texture: &mut TextureHandle, options: TextureOptions) {
+    texture.set_partial([0, 0], ColorImage::new([0, 0], Vec::new()), options);
 }
 
 /// 塊のスロット（フォルダスロットなど）が送る画像の並び。
@@ -950,6 +1002,22 @@ impl Slot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_minify_uses_no_mipmaps_so_only_original_values_are_shown() {
+        let o = texture_options(ScaleFilter::Nearest, ScaleFilter::Nearest);
+        assert_eq!(o.magnification, TextureFilter::Nearest);
+        assert_eq!(o.minification, TextureFilter::Nearest);
+        assert_eq!(o.mipmap_mode, None);
+    }
+
+    #[test]
+    fn linear_minify_uses_linear_mipmaps() {
+        let o = texture_options(ScaleFilter::Linear, ScaleFilter::Linear);
+        assert_eq!(o.magnification, TextureFilter::Linear);
+        assert_eq!(o.minification, TextureFilter::Linear);
+        assert_eq!(o.mipmap_mode, Some(TextureFilter::Linear));
+    }
 
     #[test]
     fn large_image_fits_the_limiting_side() {

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{
     self, collapsing_header::CollapsingState, pos2, text_selection::LabelSelectionState, vec2,
-    Color32, Rect, TextureFilter, TextureOptions,
+    Color32, Rect, TextureOptions,
 };
 use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
@@ -118,6 +118,8 @@ pub struct VwApp {
     tree: FolderTree,
     /// レジストリに渡した、DICOM か調べる拡張子の式。変わったときだけフォルダを読み直すため。
     probe_extensions: String,
+    /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
+    texture_options: TextureOptions,
     /// 画像フィールドの枠。常に 1 つ以上ある。
     slots: Vec<Slot>,
     /// 操作対象のスロットの添字。メタデータ表示とツリーのクリックはこのスロットに対して働く。
@@ -472,6 +474,7 @@ impl VwApp {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
+            texture_options: settings.settings.viewer.texture_options(),
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
@@ -2575,6 +2578,7 @@ impl VwApp {
 
     fn apply_pipeline(&mut self, changes: Vec<crate::pipeline_view::Change>) {
         use crate::pipeline_view::Change;
+        let options = self.texture_options;
         for change in changes {
             let path = match &change {
                 Change::Show(path, _) | Change::Restore(path) => path,
@@ -2595,7 +2599,7 @@ impl VwApp {
                 Change::Show(_, image) => crate::loader::fit_color_image(image, size),
                 Change::Restore(_) => crate::loader::default_color_image(&full.image, size),
             };
-            full.texture.set(image, texture_options());
+            full.texture.set(image, options);
         }
     }
 
@@ -3679,6 +3683,7 @@ impl VwApp {
         theme::apply(ctx, &self.settings.settings.appearance);
         self.tree.set_order(self.settings.settings.tree.order());
         self.apply_probe_extensions();
+        self.apply_texture_options();
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -3704,6 +3709,26 @@ impl VwApp {
         }
     }
 
+    /// 拡大・縮小の補間が変わったら、表示中の画像にもすぐ当てる。
+    fn apply_texture_options(&mut self) {
+        let options = self.settings.settings.viewer.texture_options();
+        if options == self.texture_options {
+            return;
+        }
+        self.texture_options = options;
+        for shown in self.slots.iter_mut().filter_map(|s| s.shown.as_mut()) {
+            crate::viewer::set_texture_options(&mut shown.thumb, options);
+            if let Some(full) = &mut shown.full {
+                crate::viewer::set_texture_options(&mut full.texture, options);
+            }
+        }
+        if let Some(pb) = &mut self.playback {
+            for frame in pb.cache.values_mut() {
+                crate::viewer::set_texture_options(&mut frame.texture, options);
+            }
+        }
+    }
+
     /// 設定ファイルが外部のエディタで書き換えられていたら読み直して反映する。
     fn reload_settings(&mut self, ctx: &egui::Context) {
         match self.settings.reload_if_changed() {
@@ -3716,6 +3741,7 @@ impl VwApp {
                 theme::apply(ctx, &self.settings.settings.appearance);
                 self.tree.set_order(self.settings.settings.tree.order());
                 self.apply_probe_extensions();
+                self.apply_texture_options();
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }
@@ -3894,6 +3920,7 @@ impl VwApp {
 
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
+        let options = self.texture_options;
         while let Ok(r) = self.loader.rx.try_recv() {
             self.throughput.record(Instant::now());
             if let Some(show) = self
@@ -3918,7 +3945,7 @@ impl VwApp {
                             let texture = ctx.load_texture(
                                 format!("{}#play", r.path.display()),
                                 image,
-                                texture_options(),
+                                options,
                             );
                             pb.cache.insert(
                                 index,
@@ -3972,6 +3999,7 @@ impl VwApp {
         path: &Path,
         loaded: &mut Loaded,
     ) {
+        let options = self.texture_options;
         let Some(shown) = &mut self.slots[index].shown else {
             return;
         };
@@ -3981,11 +4009,7 @@ impl VwApp {
         let info = &loaded.info;
         shown.info = info.clone();
         if let Some(thumb) = loaded.thumb.take() {
-            shown.thumb = ctx.load_texture(
-                format!("{}#thumb", path.display()),
-                thumb,
-                texture_options(),
-            );
+            shown.thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
         }
         self.log.info(format!(
             "{}: developed {}x{} | read {} / develop {} / convert {}",
@@ -4007,6 +4031,7 @@ impl VwApp {
         result: Result<Loaded, String>,
     ) {
         let keep_view_setting = self.settings.settings.viewer.keep_view;
+        let options = self.texture_options;
         let s = &mut self.slots[index];
         s.loading = false;
         let reloaded = s.shown.as_ref().is_some_and(|shown| shown.path == path);
@@ -4023,11 +4048,7 @@ impl VwApp {
         let thumb = loaded
             .thumb
             .expect("the first load always asks for a thumbnail");
-        let thumb = ctx.load_texture(
-            format!("{}#thumb", path.display()),
-            thumb,
-            texture_options(),
-        );
+        let thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
         let i = &loaded.info;
         self.log.info(format!(
             "{}: {}x{} {} | read {} / decode {} / convert {} / texture {}",
@@ -4106,7 +4127,7 @@ impl VwApp {
             return;
         };
         let path = &shown.path;
-        let texture = ctx.load_texture(path.to_string_lossy(), full.display, texture_options());
+        let texture = ctx.load_texture(path.to_string_lossy(), full.display, self.texture_options);
         if texture.size()[0] < shown.info.width as usize {
             self.log.warn(format!(
                 "{}: shown downsampled to {}x{} (texture size limit)",
@@ -5646,17 +5667,6 @@ fn selection_name(sel: &MetaSelection) -> String {
     match sel {
         MetaSelection::Group(g) => g.clone(),
         MetaSelection::Row(g, i) => format!("{g} row {}", i + 1),
-    }
-}
-
-/// 拡大時は最近傍（画素の境界をそのまま見せる）、縮小時は線形＋ミップマップ。
-/// 拡大まで線形にすると、画素単位で確認したい医用画像などがぼやけるため。
-fn texture_options() -> TextureOptions {
-    TextureOptions {
-        magnification: TextureFilter::Nearest,
-        minification: TextureFilter::Linear,
-        mipmap_mode: Some(TextureFilter::Linear),
-        ..TextureOptions::LINEAR
     }
 }
 
