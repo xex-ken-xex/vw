@@ -1094,7 +1094,7 @@ fn keeps_view(
 /// シネやアニメーションのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を
 /// 優先し、なければ推奨の表示速度か Cine Rate を使う。DICOM でなければアニメーションの
 /// 1 フレームの平均の表示時間を使う。
-pub(crate) fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
+pub fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
     let number = |group, key| {
         let v = metadata.get(group, key)?;
         // 複数値（`33.3\33.3`）なら最初の値。

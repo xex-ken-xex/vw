@@ -166,7 +166,7 @@ impl VwApp {
     }
 
     /// 終了時の状態を保存する。モニタ構成は起動中に変わることがあるので、ここで取り直す。
-    pub(super) fn save_state(&mut self) {
+    pub(super) fn save_state(&self) {
         let Some(path) = &self.state_path else {
             return;
         };

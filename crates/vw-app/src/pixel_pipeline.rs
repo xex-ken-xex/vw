@@ -116,7 +116,7 @@ pub fn file_params(g: &Gray, image: &VwImage, decoded: &Decoded) -> Params {
         (Some(c), Some(w)) => (c.value, w.value),
         _ => {
             let (lo, hi) = full_range(image, decoded, g);
-            ((lo + hi) / 2.0, (hi - lo).max(1.0))
+            (f64::midpoint(lo, hi), (hi - lo).max(1.0))
         }
     };
     Params {

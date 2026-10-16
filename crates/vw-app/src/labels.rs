@@ -118,7 +118,7 @@ impl LabelStore {
     }
 
     /// フォルダのラベルファイルが外で書き換えられたときに、次に使うときに読み直させる。
-    pub fn forget(&mut self, dir: &Path) {
+    pub fn forget(&self, dir: &Path) {
         self.dirs.borrow_mut().remove(dir);
     }
 
@@ -126,11 +126,7 @@ impl LabelStore {
         std::mem::take(&mut self.problems.borrow_mut())
     }
 
-    fn edit_file<T>(
-        &mut self,
-        path: &Path,
-        edit: impl FnOnce(&mut Label) -> T,
-    ) -> Result<T, String> {
+    fn edit_file<T>(&self, path: &Path, edit: impl FnOnce(&mut Label) -> T) -> Result<T, String> {
         let (Some(dir), Some(name)) = (path.parent(), file_key(path)) else {
             return Err(format!("{}: not a file in a folder", path.display()));
         };

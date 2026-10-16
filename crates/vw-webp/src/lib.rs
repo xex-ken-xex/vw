@@ -97,7 +97,7 @@ impl WebpPlugin {
 
     fn animation_frame(&self, data: &[u8], frame: usize) -> Result<Vec<u8>, DecodeError> {
         let mut cache = self.animation.lock().unwrap_or_else(|e| e.into_inner());
-        if !cache.as_ref().is_some_and(|a| *a.data == *data) {
+        if cache.as_ref().is_none_or(|a| *a.data != *data) {
             *cache = Some(Animation::new(data)?);
         }
         let animation = cache.as_mut().expect("set just above");

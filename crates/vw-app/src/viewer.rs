@@ -668,6 +668,7 @@ impl Slot {
             if response.hovered() {
                 // タッチパッドのピンチと Ctrl+ホイール（egui がズームとして届ける）。
                 let (pinch, pointer) = ui.input(|i| (i.zoom_delta(), i.pointer.hover_pos()));
+                // ピンチがなければ egui はちょうど 1.0 を返す。
                 if pinch != 1.0 {
                     let cursor = pointer.map(|p| p - body.center());
                     (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, pinch, base, cursor);

@@ -451,7 +451,7 @@ impl DatasetsScreen {
     }
 
     fn detail_panel(
-        &mut self,
+        &self,
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
@@ -854,7 +854,7 @@ fn tail_that_fits(text: &str, fits: impl Fn(&str) -> bool) -> String {
     let tail = |k: usize| format!("…{}", &text[starts[k]..]);
     let (mut lo, mut hi) = (0, starts.len().saturating_sub(1));
     while lo < hi {
-        let mid = (lo + hi) / 2;
+        let mid = usize::midpoint(lo, hi);
         if fits(&tail(mid)) {
             hi = mid;
         } else {

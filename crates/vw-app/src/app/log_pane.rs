@@ -14,7 +14,7 @@ use super::*;
 
 impl VwApp {
     /// ログ欄の見出しの右に、見た目の切り替えとログファイルを開くボタンを出す。
-    pub(super) fn log_header(&mut self, ui: &mut egui::Ui) -> Option<LogAction> {
+    pub(super) fn log_header(&self, ui: &mut egui::Ui) -> Option<LogAction> {
         let lang = self.lang();
         let mut action = None;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

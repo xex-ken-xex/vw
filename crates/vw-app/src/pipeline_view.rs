@@ -729,6 +729,7 @@ fn number_field(
         changed = ui
             .add(egui::DragValue::new(value).speed(speed).max_decimals(4))
             .changed();
+        // 「変更あり」は値がファイルの値と完全に一致しないこと。入力欄に戻せば同じ値になる。
         if *value != file {
             ui.colored_label(ui.visuals().selection.stroke.color, tr(lang, "changed"));
             if ui
