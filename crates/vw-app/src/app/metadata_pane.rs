@@ -94,7 +94,7 @@ impl VwApp {
             ui.weak(tr(lang, "No image"));
             return;
         };
-        let header_click = self.settings.settings.behavior.header_click;
+        let header_click = self.settings().behavior.header_click;
         let mut picked: Option<MetaSelection> = None;
         let mut copy: Option<MetaSelection> = None;
         let mut text_drag = false;

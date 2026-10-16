@@ -27,7 +27,7 @@ impl VwApp {
                 let Some(path) = slot.path.clone() else {
                     return;
                 };
-                let order = self.settings.settings.tree.order();
+                let order = self.settings().tree.order();
                 let files = tree::sibling_images(&path, self.loader.registry(), order);
                 let start = files.iter().position(|p| *p == path).unwrap_or(0);
                 (files, start)
@@ -50,7 +50,7 @@ impl VwApp {
         if self.maximized != Some(slot.id) {
             self.toggle_maximize(self.active);
         }
-        let v = &self.settings.settings.viewer;
+        let v = &self.settings().viewer;
         let fps = self.playback_fps();
         let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now());
         let loader_slot = self.next_id;
@@ -96,7 +96,7 @@ impl VwApp {
         let now = Instant::now();
         let full = self.cell_needs_full();
         // 先読みには、表示中の画像のフル解像度と同じ上限の半分まで使う。
-        let budget = self.settings.settings.viewer.full_image_limit_bytes() / 2;
+        let budget = self.settings().viewer.full_image_limit_bytes() / 2;
         let pb = self.playback.as_mut().expect("checked above");
         let step = pb.clock.advance(now);
         let mut show = None;
@@ -193,13 +193,13 @@ impl VwApp {
     pub(super) fn playback_fps(&self) -> f32 {
         self.file_fps()
             .filter(|_| self.use_file_speed)
-            .unwrap_or(self.settings.settings.viewer.slideshow_fps)
+            .unwrap_or(self.settings().viewer.slideshow_fps)
     }
 
     /// 最大化したスロットの下の再生バー。
     pub(super) fn play_bar(&self, ui: &mut egui::Ui) -> Option<BarAction> {
         let lang = self.lang();
-        let viewer = &self.settings.settings.viewer;
+        let viewer = &self.settings().viewer;
         let mut action = None;
         ui.horizontal_centered(|ui| {
             ui.add_space(6.0);

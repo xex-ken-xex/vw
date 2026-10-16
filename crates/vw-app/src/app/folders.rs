@@ -47,7 +47,7 @@ impl VwApp {
     /// フォルダ `path` へ移る。スロットを閉じて、中のサブフォルダと ZIP をフォルダのスロットとして並べ、
     /// DICOM のシリーズと画像をその後ろに読み込んでいく。前の読み込みが続いていれば、そこで打ち切る。
     pub(super) fn cd(&mut self, ctx: &egui::Context, path: PathBuf, into: LoadInto) {
-        let tree = self.settings.settings.tree.clone();
+        let tree = self.settings().tree.clone();
         let registry = self.loader.registry().clone();
         self.finish_folder_load();
         self.close_all_slots();
@@ -192,7 +192,7 @@ impl VwApp {
             self.open_folder(ctx, folder);
             return;
         }
-        let tree = self.settings.settings.tree.clone();
+        let tree = self.settings().tree.clone();
         let slot = &mut self.slots[index];
         slot.sequence = Some(Sequence::subtree(folder.clone()));
         slot.loading = true;
@@ -216,7 +216,7 @@ impl VwApp {
             self.mount(ctx, &folder);
             return;
         }
-        let tree = &self.settings.settings.tree;
+        let tree = &self.settings().tree;
         let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
         let into = if other {
             tree.load_into.other()
@@ -236,7 +236,7 @@ impl VwApp {
             _ => current.parent().map(Path::to_path_buf),
         };
         if let Some(parent) = parent {
-            let into = self.settings.settings.tree.load_into;
+            let into = self.settings().tree.load_into;
             self.cd(ctx, parent, into);
         }
     }
@@ -399,7 +399,7 @@ impl VwApp {
             || load.root.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        let chunk = self.settings.settings.tree.confirm_chunk;
+        let chunk = self.settings().tree.confirm_chunk;
         let (message, yes, no) = match question {
             Question::Subfolders => (
                 tr1(
@@ -487,7 +487,7 @@ impl VwApp {
 
     /// フォルダの変化を受け取り、ツリーとスロットに反映する。
     pub(super) fn watch_folders(&mut self, ctx: &egui::Context) {
-        if !self.settings.settings.behavior.auto_reload {
+        if !self.settings().behavior.auto_reload {
             self.watcher = None;
             self.watcher_failed = false;
             return;
@@ -575,7 +575,7 @@ impl VwApp {
         if let Some(current) = self.current.clone().filter(|c| dirs.contains(c)) {
             self.sync_folder_slots(&current, &registry);
             let images =
-                tree::list_folder(&current, &registry, self.settings.settings.tree.order()).images;
+                tree::list_folder(&current, &registry, self.settings().tree.order()).images;
             self.scan_series(ctx, &current, &images);
         }
         // フォルダを読み込み中は、スロットの並びを読み込みのほうに任せる。並びを読み直すと、
@@ -585,7 +585,7 @@ impl VwApp {
         }
         let matcher = self.matcher();
         created.retain(|p| matcher.matches(p));
-        let order = self.settings.settings.tree.order();
+        let order = self.settings().tree.order();
         for dir in &dirs {
             self.sync_loaded_folder(dir, &created, &removed, &registry);
         }
@@ -687,7 +687,7 @@ impl VwApp {
     /// cd したフォルダのサブフォルダと ZIP のスロットを、フォルダの今の中身に合わせる。
     /// 消えたもののスロットは閉じ、新しいものはフォルダのスロットの最後に足す。
     pub(super) fn sync_folder_slots(&mut self, current: &Path, registry: &Registry) {
-        let listing = tree::list_folder(current, registry, self.settings.settings.tree.order());
+        let listing = tree::list_folder(current, registry, self.settings().tree.order());
         let wanted: Vec<PathBuf> = listing
             .folders
             .into_iter()
@@ -754,7 +754,7 @@ impl VwApp {
         if last.is_none() && root.is_none() {
             return;
         }
-        let order = self.settings.settings.tree.order();
+        let order = self.settings().tree.order();
         let new: Vec<PathBuf> = tree::list_folder(dir, registry, order)
             .images
             .into_iter()
@@ -816,7 +816,7 @@ impl VwApp {
 
     /// 読み込んだ時点で空だったフォルダに画像が来たら、フォルダスロットを作って最新の画像を出す。
     pub(super) fn add_folder_slot(&mut self, dir: &Path, registry: &Registry) {
-        let order = self.settings.settings.tree.order();
+        let order = self.settings().tree.order();
         let paths = tree::list_folder(dir, registry, order).images;
         let Some(newest) = paths.last().cloned() else {
             return;
@@ -838,7 +838,7 @@ impl VwApp {
     /// ルートに足す。
     pub(super) fn mount(&mut self, ctx: &egui::Context, zip: &Path) {
         if let Some(mount) = self.archives.mounted_zip(zip) {
-            let (dir, into) = (mount.dir.clone(), self.settings.settings.tree.load_into);
+            let (dir, into) = (mount.dir.clone(), self.settings().tree.load_into);
             self.cd(ctx, dir, into);
             return;
         }
@@ -859,7 +859,7 @@ impl VwApp {
                     self.log
                         .info(format!("Opened {} ({files} files)", mount.zip.display()));
                     self.tree.add_mounted_root(mount.dir.clone(), mount.name());
-                    let into = self.settings.settings.tree.load_into;
+                    let into = self.settings().tree.load_into;
                     self.cd(ctx, mount.dir, into);
                 }
                 archive::Event::Failed { zip, error } => {
@@ -895,7 +895,7 @@ impl VwApp {
             self.close_all_slots();
             self.current = None;
             if let Some(back) = back {
-                let into = self.settings.settings.tree.load_into;
+                let into = self.settings().tree.load_into;
                 self.cd(ctx, back, into);
             }
         }
@@ -920,7 +920,7 @@ impl VwApp {
     /// ツリーで DICOM のシリーズを選んだ。そのフォルダへ移り、シリーズのスロットを選ぶ。
     pub(super) fn show_series(&mut self, ctx: &egui::Context, folder: PathBuf, files: &[PathBuf]) {
         if self.current.as_ref() != Some(&folder) {
-            let into = self.settings.settings.tree.load_into;
+            let into = self.settings().tree.load_into;
             self.cd(ctx, folder, into);
         }
         let found = self.slots.iter().position(|s| match &s.sequence {

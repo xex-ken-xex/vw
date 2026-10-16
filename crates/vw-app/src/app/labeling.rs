@@ -39,7 +39,7 @@ impl VwApp {
     /// 自分で開いた画像のスロットはそのままにする。
     pub(super) fn apply_filter_to_slots(&mut self) {
         let registry = self.loader.registry().clone();
-        let order = self.settings.settings.tree.order();
+        let order = self.settings().tree.order();
         let roots: Vec<PathBuf> = self
             .loaded_folders
             .iter()
@@ -158,7 +158,7 @@ impl VwApp {
             Filter::Flag(Some(flag)) => Some(theme::flag_color(*flag)),
             Filter::Flag(None) => Some(theme::UNFLAGGED),
             Filter::Tag(tag) => {
-                let tags = &self.settings.settings.labels.tags;
+                let tags = &self.settings().labels.tags;
                 tags.iter().position(|t| t == tag).map(theme::tag_color)
             }
         }
@@ -202,7 +202,7 @@ impl VwApp {
 
     /// 設定の `index` 番目のタグを付ける・外す。
     pub(super) fn tag(&mut self, index: usize) {
-        let Some(tag) = self.settings.settings.labels.tags.get(index).cloned() else {
+        let Some(tag) = self.settings().labels.tags.get(index).cloned() else {
             self.log.warn(format!(
                 "No tag for key {} (add tags in Settings > Flags and tags)",
                 index + 1
@@ -231,7 +231,7 @@ impl VwApp {
     /// 次のスロットへ、そうでなければスロットの中で次の画像へ。最後まで来たら先頭に戻らずに止まる。
     /// 戻ると、付け終わったことに気づかずに最初の画像のラベルを付け替えてしまうため。
     pub(super) fn advance_after_label(&mut self) {
-        if !self.settings.settings.labels.advance {
+        if !self.settings().labels.advance {
             return;
         }
         let slot = &self.slots[self.active];
@@ -242,7 +242,7 @@ impl VwApp {
         let at_end = match &slot.sequence {
             Some(seq) => seq.index + 1 >= seq.paths.len(),
             None => slot.path.as_ref().is_none_or(|p| {
-                let order = self.settings.settings.tree.order();
+                let order = self.settings().tree.order();
                 let files = tree::sibling_images(p, self.loader.registry(), order);
                 files.last() == Some(p)
             }),
@@ -295,7 +295,7 @@ impl VwApp {
                     }
                 }
                 ui.separator();
-                let tags = &self.settings.settings.labels.tags;
+                let tags = &self.settings().labels.tags;
                 if tags.is_empty() {
                     ui.weak(tr(lang, "Add tags in Settings > Flags and tags"));
                 }

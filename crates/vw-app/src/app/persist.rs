@@ -26,8 +26,8 @@ impl VwApp {
 
     /// 設定画面で値が変わったときに、反映して保存する。
     pub(super) fn settings_changed(&mut self, ctx: &egui::Context) {
-        theme::apply(ctx, &self.settings.settings.appearance);
-        self.tree.set_order(self.settings.settings.tree.order());
+        theme::apply(ctx, &self.settings().appearance);
+        self.tree.set_order(self.settings().tree.order());
         self.apply_probe_extensions();
         self.apply_texture_options();
         match self.settings.save() {
@@ -57,7 +57,7 @@ impl VwApp {
 
     /// 拡大・縮小の補間が変わったら、表示中の画像にもすぐ当てる。
     pub(super) fn apply_texture_options(&mut self) {
-        let options = self.settings.settings.viewer.texture_options();
+        let options = self.settings().viewer.texture_options();
         if options == self.texture_options {
             return;
         }
@@ -84,8 +84,8 @@ impl VwApp {
                 for p in problems {
                     self.log.error(format!("Settings: {p}"));
                 }
-                theme::apply(ctx, &self.settings.settings.appearance);
-                self.tree.set_order(self.settings.settings.tree.order());
+                theme::apply(ctx, &self.settings().appearance);
+                self.tree.set_order(self.settings().tree.order());
                 self.apply_probe_extensions();
                 self.apply_texture_options();
             }

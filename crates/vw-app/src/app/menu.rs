@@ -148,7 +148,7 @@ impl VwApp {
                 chosen = Some(action);
             }
         }
-        let tags = self.settings.settings.labels.tags.clone();
+        let tags = self.settings().labels.tags.clone();
         if !tags.is_empty() {
             ui.menu_button(tr(lang, "Show only tag"), |ui| {
                 for tag in tags {
@@ -176,7 +176,7 @@ impl VwApp {
     /// View > Layout の項目。今のレイアウトに印を付ける。
     pub(super) fn layout_menu(&self, ui: &mut egui::Ui) -> Option<Action> {
         let lang = self.lang();
-        let viewer = &self.settings.settings.viewer;
+        let viewer = &self.settings().viewer;
         let mut chosen = None;
         let presets = [
             Action::LayoutAuto,
@@ -278,7 +278,7 @@ impl VwApp {
             );
             let button = egui::Button::selectable(!self.filter.is_all(), text).min_size(size);
             if ui.add(button).on_hover_text(tip).clicked() {
-                let next = self.filter.next(&self.settings.settings.labels.tags);
+                let next = self.filter.next(&self.settings().labels.tags);
                 self.set_filter(ui.ctx(), next);
             }
             ui.separator();

@@ -596,13 +596,18 @@ impl VwApp {
         app
     }
 
+    /// 今の設定。`SettingsStore` はファイルとの同期も持つので、値を読むだけのときはこちら。
+    fn settings(&self) -> &crate::settings::Settings {
+        &self.settings.settings
+    }
+
     fn lang(&self) -> Language {
-        self.settings.settings.appearance.language
+        self.settings().appearance.language
     }
 
     /// 画像の背景色。設定が空か読めない形式ならテーマの既定色。
     fn canvas_color(&self, ctx: &egui::Context) -> Color32 {
-        parse_hex_color(&self.settings.settings.viewer.background)
+        parse_hex_color(&self.settings().viewer.background)
             .unwrap_or_else(|| theme::canvas_color(ctx.theme()))
     }
 
@@ -719,9 +724,7 @@ impl VwApp {
             Action::DevelopRaw => self.develop_slot(self.active),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
-            Action::LayoutCustom => {
-                self.set_layout(ctx, self.settings.settings.viewer.custom_layout)
-            }
+            Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),
             Action::LayoutAuto
             | Action::Layout1x1
             | Action::Layout1x2
@@ -739,7 +742,7 @@ impl VwApp {
     /// このフレームのキー入力に割り当てられた操作を実行する。
     fn run_hotkeys(&mut self, ctx: &egui::Context) {
         let events = ctx.input(|i| i.events.clone());
-        let keys = &self.settings.settings.keys;
+        let keys = &self.settings().keys;
         // テキスト入力中は、文字入力と区別できる Ctrl / Alt 付きのキーだけを実行する。
         // 全部止めると、設定画面の検索欄にいるときに Ctrl+, で設定を閉じられない。
         let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() {

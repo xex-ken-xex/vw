@@ -176,7 +176,7 @@ impl VwApp {
         self.next_id += 1;
         let (show, problems) = crate::fullscreen::Show::start(
             root.clone(),
-            &self.settings.settings.fullscreen,
+            &self.settings().fullscreen,
             self.loader.registry(),
             self.next_id,
             ctx,

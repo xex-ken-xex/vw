@@ -30,7 +30,7 @@ impl VwApp {
             {
                 action = Some(LogAction::OpenFile);
             }
-            let style = self.settings.settings.log.style;
+            let style = self.settings().log.style;
             for choice in LogStyle::ALL.into_iter().rev() {
                 if ui
                     .selectable_label(style == choice, tr(lang, choice.title()))
@@ -69,7 +69,7 @@ impl VwApp {
             sparkline: self.throughput.sparkline(now),
             rate: self.throughput.rate(now),
             resident: self.full_states().iter().filter_map(|f| f.resident).sum(),
-            limit: self.settings.settings.viewer.full_image_limit_bytes(),
+            limit: self.settings().viewer.full_image_limit_bytes(),
             jobs,
             spinner: status::spinner(now.duration_since(self.started).as_secs_f64()),
         };
@@ -122,7 +122,7 @@ impl VwApp {
     /// 新しい行が増えても選んだ範囲が行のラベルに付いたまま動かないようにするため。
     pub(super) fn log_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let terminal = self.settings.settings.log.style == LogStyle::Terminal;
+        let terminal = self.settings().log.style == LogStyle::Terminal;
         let mut action = None;
         let mut selecting = false;
         let frame = if terminal {

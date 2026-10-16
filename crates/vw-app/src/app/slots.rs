@@ -109,7 +109,7 @@ impl VwApp {
 
     /// 今のスロットの数で使うマス目。自動レイアウトは上限の設定の中で決まる。
     pub(super) fn layout(&self) -> SlotLayout {
-        let viewer = &self.settings.settings.viewer;
+        let viewer = &self.settings().viewer;
         viewer
             .layout
             .resolve(self.slots.len(), viewer.auto_layout_max)
@@ -162,7 +162,7 @@ impl VwApp {
     /// レイアウトを変えて設定に保存する。最大化は解く（変えた結果が見えるように）。
     pub(super) fn set_layout(&mut self, ctx: &egui::Context, layout: SlotLayout) {
         self.maximized = None;
-        if self.settings.settings.viewer.layout != layout {
+        if self.settings().viewer.layout != layout {
             self.settings.settings.viewer.layout = layout;
             self.settings_changed(ctx);
         }
@@ -182,7 +182,7 @@ impl VwApp {
         let files = match &slot.sequence {
             Some(seq) => seq.paths.clone(),
             None => {
-                let order = self.settings.settings.tree.order();
+                let order = self.settings().tree.order();
                 tree::sibling_images(&path, self.loader.registry(), order)
             }
         };
@@ -318,7 +318,7 @@ impl VwApp {
         path: PathBuf,
         result: Result<Loaded, String>,
     ) {
-        let keep_view_setting = self.settings.settings.viewer.keep_view;
+        let keep_view_setting = self.settings().viewer.keep_view;
         let options = self.texture_options;
         let s = &mut self.slots[index];
         s.loading = false;
@@ -382,7 +382,7 @@ impl VwApp {
         if let Some(full) = loaded.full {
             self.attach_full(ctx, index, full);
         }
-        if self.settings.settings.viewer.develop_raw {
+        if self.settings().viewer.develop_raw {
             self.develop_slot(index);
         }
     }
@@ -406,7 +406,7 @@ impl VwApp {
             self.copied(ctx, &what);
         }
         let bytes = full.bytes();
-        let limit = self.settings.settings.viewer.full_image_limit_bytes();
+        let limit = self.settings().viewer.full_image_limit_bytes();
         if !memory::fits(&self.full_states(), bytes, limit) {
             return;
         }
@@ -452,7 +452,7 @@ impl VwApp {
 
     /// このフレームで必要になったフル解像度の画像を読み込み、上限を超える分を捨てる。
     pub(super) fn manage_full_images(&mut self) {
-        let limit = self.settings.settings.viewer.full_image_limit_bytes();
+        let limit = self.settings().viewer.full_image_limit_bytes();
         let plan = memory::plan(&self.full_states(), limit);
         for s in &mut self.slots {
             let Some(shown) = &mut s.shown else {
@@ -624,7 +624,7 @@ impl VwApp {
             }
         }
         let mut filler_clicked = None;
-        if !maximized && self.settings.settings.viewer.layout != SlotLayout::Auto {
+        if !maximized && self.settings().viewer.layout != SlotLayout::Auto {
             for cell_index in view.range.len()..cols * rows {
                 let (c, r) = (cell_index % cols, cell_index / cols);
                 let (x0, x1) = layout::cell_span(area.min.x, area.width(), cols, c, pixel);

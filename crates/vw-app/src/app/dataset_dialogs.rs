@@ -22,7 +22,7 @@ impl VwApp {
         }
         self.dataset_dialog = Some(crate::dataset_ui::DatasetDialog::open(
             request,
-            &self.settings.settings.dataset.fields,
+            &self.settings().dataset.fields,
             self.datasets.index(),
             &self.extract_base(),
             self.loader.registry(),
@@ -71,7 +71,7 @@ impl VwApp {
         if self.dataset_dialog.is_some() {
             return;
         }
-        let lang = self.settings.settings.appearance.language;
+        let lang = self.settings().appearance.language;
         let name = crate::catalog::load(outer)
             .map(|c| c.name)
             .unwrap_or_else(|_| outer.display().to_string());
@@ -156,7 +156,7 @@ impl VwApp {
     /// 見つからないファイルはログに出し、更新を促す。
     pub(super) fn show_dataset(&mut self, ctx: &egui::Context, dir: PathBuf) {
         self.show_datasets = false;
-        let into = self.settings.settings.tree.load_into;
+        let into = self.settings().tree.load_into;
         self.cd(ctx, dir.clone(), into);
         let Some(entry) = self
             .datasets
