@@ -23,6 +23,7 @@ mod discard;
 mod export;
 mod expr;
 mod fonts;
+mod format_stages;
 mod frames;
 mod fullscreen;
 mod histogram;
