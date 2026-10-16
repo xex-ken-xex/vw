@@ -1,7 +1,7 @@
 //! Datasets 画面。設定画面と同じくメインの領域を置き換え、データセットを探して一覧する。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::Receiver;
 
 use eframe::egui;
 use egui_phosphor::regular as icon;
@@ -94,13 +94,9 @@ impl DatasetsScreen {
     /// データセットのフォルダ以下を別スレッドで探し直す。ネットワークドライブでは数秒かかるため。
     pub fn reload(&mut self, roots: &[String], ctx: &egui::Context) {
         let roots: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
-        let (tx, rx) = channel();
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(Index::discover(&roots));
-            ctx.request_repaint();
-        });
-        self.loading = Some(rx);
+        self.loading = Some(crate::background::compute(ctx, move || {
+            Index::discover(&roots)
+        }));
     }
 
     /// 編集や更新が終わったデータセットを読み直す。

@@ -1823,11 +1823,8 @@ impl Destinations {
                                 called_ae: row.dest.ae_title.clone(),
                                 timeout: settings.dicom_send.timeout(),
                             };
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            let ctx = ui.ctx().clone();
-                            std::thread::spawn(move || {
-                                let _ = tx.send(vw_dicom::net::echo(&endpoint));
-                                ctx.request_repaint();
+                            let rx = crate::background::compute(ui.ctx(), move || {
+                                vw_dicom::net::echo(&endpoint)
                             });
                             self.echoes.insert(row.id, Echo::Running(rx));
                         }

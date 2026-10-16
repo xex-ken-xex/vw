@@ -3,8 +3,23 @@
 use eframe::egui;
 use egui_phosphor::regular as icon;
 
+use crate::frames;
 use crate::i18n::tr;
 use crate::settings::Language;
+
+/// 画像に追従するウインドウのタイトル。「名前 - ファイル名  Frame n」。
+pub fn title(lang: Language, name: &'static str, path: Option<&std::path::Path>) -> String {
+    let name = tr(lang, name);
+    let Some(path) = path else {
+        return name.to_owned();
+    };
+    let file = frames::file_of(path);
+    let file = file.file_name().unwrap_or_default().to_string_lossy();
+    match frames::split(path) {
+        Some((_, frame)) => format!("{name} - {file}  {} {}", tr(lang, "Frame"), frame + 1),
+        None => format!("{name} - {file}"),
+    }
+}
 
 /// 起動をまたいで残す値。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

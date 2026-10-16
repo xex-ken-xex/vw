@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use eframe::egui::{
@@ -19,7 +19,6 @@ use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
 
 use egui_phosphor::regular as icon;
 
-use crate::frames;
 use crate::i18n::{tr, tr_text};
 use crate::pixel_pipeline::{self, Decoded, Histogram, Params, Trace, VoiFunction};
 use crate::settings::Language;
@@ -222,7 +221,7 @@ impl PipelineView {
             return Vec::new();
         }
         let mut out = self.follow(ctx, target.as_ref());
-        let title = self.title(lang);
+        let title = crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref());
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let mut close = false;
         let mut edited = false;
@@ -258,7 +257,8 @@ impl PipelineView {
             out.extend(self.applied.take().map(Change::Restore));
             self.rendering = None;
             self.path = path.clone();
-            self.loaded = path.map(|p| Loaded::Reading(read_in_background(ctx, &p)));
+            self.loaded =
+                path.map(|p| Loaded::Reading(pixel_pipeline::read_in_background(ctx, &p)));
         }
         if let Some(Loaded::Reading(rx)) = &self.loaded {
             if let Ok(result) = rx.try_recv() {
@@ -303,19 +303,6 @@ impl PipelineView {
         out
     }
 
-    fn title(&self, lang: Language) -> String {
-        let name = tr(lang, "Pixel pipeline");
-        let Some(path) = &self.path else {
-            return name.to_owned();
-        };
-        let file = frames::file_of(path);
-        let file = file.file_name().unwrap_or_default().to_string_lossy();
-        match frames::split(path) {
-            Some((_, frame)) => format!("{name} - {file}  {} {}", tr(lang, "Frame"), frame + 1),
-            None => format!("{name} - {file}"),
-        }
-    }
-
     fn request_render(&mut self, ctx: &egui::Context) {
         let (Some(path), Some(Loaded::Gray(g))) = (&self.path, &self.loaded) else {
             return;
@@ -328,12 +315,9 @@ impl PipelineView {
             return;
         }
         self.stale = false;
-        let (tx, rx) = channel();
         let (decoded, params) = (g.decoded, g.params);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(pixel_pipeline::render(&image, &decoded, &params));
-            ctx.request_repaint();
+        let rx = crate::background::compute(ctx, move || {
+            pixel_pipeline::render(&image, &decoded, &params)
         });
         self.rendering = Some((path.clone(), rx));
     }
@@ -680,23 +664,6 @@ fn placeholder() -> Params {
     }
 }
 
-pub(crate) fn read_in_background(
-    ctx: &egui::Context,
-    path: &Path,
-) -> Receiver<Result<Pipeline, String>> {
-    let (tx, rx) = channel();
-    let (file, frame) = frames::split(path).unwrap_or_else(|| (path.to_path_buf(), 0));
-    let ctx = ctx.clone();
-    std::thread::spawn(move || {
-        let result = std::fs::read(&file)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| vw_dicom::pipeline::read(&bytes, frame).map_err(|e| e.to_string()));
-        let _ = tx.send(result);
-        ctx.request_repaint();
-    });
-    rx
-}
-
 fn node_title(node: Node) -> &'static str {
     match node {
         Node::Stored => "Stored values",
@@ -845,7 +812,7 @@ fn gray_body(
             ui.weak(tr(lang, "stored × slope + intercept"));
         }
         Node::Unit => {
-            let unit = unit_of(info);
+            let unit = pixel_pipeline::unit_of(info);
             ui.label(unit.unwrap_or_else(|| tr(lang, "No unit").to_owned()));
             if let Some(m) = &info.modality.modality {
                 ui.weak(format!("Modality {m}"));
@@ -972,14 +939,6 @@ fn color_body(ui: &mut egui::Ui, lang: Language, node: Node, c: &Color) {
             ui.label(tr(lang, "8-bit RGB"));
         }
         _ => {}
-    }
-}
-
-/// 物理量の単位。CT は HU、PET は Units の値。
-pub(crate) fn unit_of(g: &Gray) -> Option<String> {
-    match g.modality.modality.as_deref().map(str::trim) {
-        Some("CT") => Some("HU".into()),
-        _ => g.modality.units.clone(),
     }
 }
 

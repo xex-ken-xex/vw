@@ -10,6 +10,7 @@ mod about;
 mod app;
 mod archive;
 mod autoload;
+mod background;
 mod catalog;
 mod copy;
 mod dataset_extract;
