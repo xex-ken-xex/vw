@@ -26,10 +26,10 @@ use crate::keymap::{Action, KeyCombo, Scope};
 use crate::labels::{Flag, Label, LabelStore};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Job, Loaded, Loader};
-use crate::log::{Level, Log};
+use crate::log::{self, Level, Log, LogFile};
 use crate::memory;
 use crate::series::{Scan, SeriesIndex};
-use crate::settings::{parse_hex_color, HeaderClick, Language, LoadInto, SettingsStore};
+use crate::settings::{parse_hex_color, HeaderClick, Language, LoadInto, LogStyle, SettingsStore};
 use crate::settings_ui::{fps_input, layout_title, SettingsUi};
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
@@ -167,7 +167,6 @@ pub struct VwApp {
     focus: Focus,
     meta_selected: Option<MetaSelection>,
     /// ログ欄で選んでいる行。
-    log_selected: Option<usize>,
     /// コピーしたことを知らせる表示。
     toast: Option<Toast>,
     /// 描いたフレームの番号。フル解像度の画像を最後に使った時期の比較に使う。
@@ -407,6 +406,17 @@ impl VwApp {
         for n in notes {
             log.error(format!("Settings: {n}"));
         }
+        let log_settings = &settings.settings.log;
+        if let (true, Some(path)) = (log_settings.file, settings.path.as_deref()) {
+            let dir = log::log_dir(path);
+            match LogFile::create(&dir, log_settings.keep_files as usize, chrono::Local::now()) {
+                Ok(file) => {
+                    file.install_panic_hook();
+                    log.write_to(file);
+                }
+                Err(e) => log.error(format!("Log file: {}: {e}", dir.display())),
+            }
+        }
         let state_path = settings.path.as_deref().map(state::state_path);
         let (saved, notes) = match &state_path {
             Some(p) => AppState::load(p),
@@ -498,7 +508,6 @@ impl VwApp {
             metadata_from: None,
             focus: Focus::Images,
             meta_selected: None,
-            log_selected: None,
             toast: None,
             frame: 0,
             images_area: None,
@@ -4552,77 +4561,149 @@ impl VwApp {
         }
     }
 
+    /// ログ欄の見出しの右に、見た目の切り替えとログファイルを開くボタンを出す。
+    fn log_header(&mut self, ui: &mut egui::Ui) -> Option<LogAction> {
+        let lang = self.lang();
+        let mut action = None;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let has_file = self.log.file_path().is_some();
+            if ui
+                .add_enabled(has_file, egui::Button::new(icon::FILE_TEXT).small())
+                .on_hover_text(tr(lang, "Open the log file"))
+                .on_disabled_hover_text(tr(
+                    lang,
+                    "The log is not written to a file (Settings > Log).",
+                ))
+                .clicked()
+            {
+                action = Some(LogAction::OpenFile);
+            }
+            let style = self.settings.settings.log.style;
+            for choice in LogStyle::ALL.into_iter().rev() {
+                if ui
+                    .selectable_label(style == choice, tr(lang, choice.title()))
+                    .clicked()
+                    && style != choice
+                {
+                    action = Some(LogAction::Style(choice));
+                }
+            }
+        });
+        action
+    }
+
+    fn log_action(&mut self, ctx: &egui::Context, action: LogAction) {
+        match action {
+            LogAction::Style(style) => {
+                self.settings.settings.log.style = style;
+                self.settings_changed(ctx);
+            }
+            LogAction::OpenFile => {
+                if let Some(path) = self.log.file_path().map(Path::to_path_buf) {
+                    if let Err(e) = crate::launch::open_file(&path) {
+                        self.log.error(format!("{}: {e}", path.display()));
+                    }
+                }
+            }
+            LogAction::OpenFolder => {
+                if let Some(dir) = self
+                    .log
+                    .file_path()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+                {
+                    if let Err(e) = crate::launch::open_folder(&dir) {
+                        self.log.error(format!("{}: {e}", dir.display()));
+                    }
+                }
+            }
+            LogAction::CopyAll => {
+                let text = self.log.all_text();
+                self.copy_text(ctx, text, "log");
+            }
+        }
+    }
+
     /// ログを新しいものが下に来る順で出し、末尾に自動で追従する。
-    /// ログ欄。行をクリックで選び（Ctrl+C でコピー）、右クリックで 1 行かすべてをコピーする。
+    /// 文字はドラッグで行をまたいで範囲選択でき、Ctrl+C でコピーする（コピーは egui のラベル選択に任せる）。
     ///
-    /// 文字のドラッグでの範囲選択にしないのは、行が増えるたびに下へ流れて選択がずれるのと、
-    /// 他の欄と同じ「選んでコピー」の操作に揃えるため。
+    /// 行ごとに別のラベルにして 1 つの文字列にまとめないのは、行ごとに色を変えるのと、
+    /// 新しい行が増えても選んだ範囲が行のラベルに付いたまま動かないようにするため。
     fn log_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let mut picked = None;
-        let mut copy = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                for (i, (_, level, _)) in self.log.lines.iter().enumerate() {
-                    let color = match level {
-                        Level::Info => ui.visuals().text_color(),
-                        Level::Warn => ui.visuals().warn_fg_color,
-                        Level::Error => ui.visuals().error_fg_color,
-                    };
-                    let text = self.log.line_text(i).unwrap_or_default();
-                    let fill = if self.log_selected == Some(i) {
-                        ui.visuals().selection.bg_fill
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    let r = egui::Frame::new()
-                        .fill(fill)
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(text).monospace().color(color),
-                                )
-                                .wrap()
-                                .selectable(false)
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner;
-                    if r.clicked() || r.secondary_clicked() {
-                        picked = Some(i);
+        let terminal = self.settings.settings.log.style == LogStyle::Terminal;
+        let mut action = None;
+        let mut selecting = false;
+        let frame = if terminal {
+            egui::Frame::new()
+                .fill(TERMINAL_BACKGROUND)
+                .inner_margin(egui::Margin::symmetric(4, 2))
+        } else {
+            egui::Frame::new()
+        };
+        let mut menu_target: Option<egui::Response> = None;
+        frame.show(ui, |ui| {
+            let scroll = if terminal {
+                egui::ScrollArea::both()
+            } else {
+                egui::ScrollArea::vertical()
+            };
+            scroll
+                .auto_shrink(false)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.set_min_width(ui.available_width());
+                    for (i, line) in self.log.lines.iter().enumerate() {
+                        let label = if terminal {
+                            terminal_line(line)
+                        } else {
+                            normal_line(ui, line)
+                        };
+                        let r = ui.push_id(i, |ui| ui.add(label)).inner;
+                        selecting |= r.drag_started();
+                        menu_target = Some(match menu_target.take() {
+                            Some(m) => m.union(r),
+                            None => r,
+                        });
                     }
-                    r.context_menu(|ui| {
-                        if ui.button(tr(lang, "Copy")).clicked() {
-                            copy = Some(Some(i));
-                            ui.close();
-                        }
-                        if ui.button(tr(lang, "Copy all")).clicked() {
-                            copy = Some(None);
-                            ui.close();
-                        }
+                    let rest = ui.allocate_response(ui.available_size(), egui::Sense::click());
+                    menu_target = Some(match menu_target.take() {
+                        Some(m) => m.union(rest),
+                        None => rest,
                     });
-                }
-            });
+                })
+        });
+        let Some(menu_target) = menu_target else {
+            return;
+        };
+        menu_target.context_menu(|ui| {
+            if ui.button(tr(lang, "Copy all")).clicked() {
+                action = Some(LogAction::CopyAll);
+                ui.close();
+            }
+            let has_file = self.log.file_path().is_some();
+            if ui
+                .add_enabled(has_file, egui::Button::new(tr(lang, "Open the log file")))
+                .clicked()
+            {
+                action = Some(LogAction::OpenFile);
+                ui.close();
+            }
+            if ui
+                .add_enabled(has_file, egui::Button::new(tr(lang, "Open the log folder")))
+                .clicked()
+            {
+                action = Some(LogAction::OpenFolder);
+                ui.close();
+            }
+        });
         let ctx = ui.ctx().clone();
-        if let Some(i) = picked {
-            self.log_selected = Some(i);
+        if selecting {
             self.set_focus(&ctx, Focus::Log);
         }
-        match copy {
-            Some(Some(i)) => {
-                if let Some(text) = self.log.line_text(i) {
-                    self.copy_text(&ctx, text, "log line");
-                }
-            }
-            Some(None) => {
-                let text = self.log.all_text();
-                self.copy_text(&ctx, text, "log");
-            }
-            None => {}
+        if let Some(a) = action {
+            self.log_action(&ctx, a);
         }
     }
 
@@ -4631,7 +4712,7 @@ impl VwApp {
     /// こちらでコピーした内容を上書きしてしまうため。
     fn set_focus(&mut self, ctx: &egui::Context, focus: Focus) {
         self.focus = focus;
-        if focus != Focus::MetadataText {
+        if !matches!(focus, Focus::MetadataText | Focus::Log) {
             ctx.with_plugin(|s: &mut LabelSelectionState| s.clear_selection());
         }
     }
@@ -4729,11 +4810,8 @@ impl VwApp {
                 Some(text) => self.copy_text(ctx, text, "probe point"),
                 None => self.copy_image(ctx, self.active),
             },
-            Focus::Log => {
-                if let Some(text) = self.log_selected.and_then(|i| self.log.line_text(i)) {
-                    self.copy_text(ctx, text, "log line");
-                }
-            }
+            // egui がラベルで選んだ範囲をコピーする。知らせだけを出す。
+            Focus::Log => self.copied(ctx, "log text"),
         }
     }
 
@@ -5182,25 +5260,27 @@ impl eframe::App for VwApp {
                 .default_size(140.0)
                 .show(ui, |ui| {
                     let sending = self.send_job.as_ref().and_then(|j| j.progress());
-                    match sending {
-                        Some((done, total)) => {
-                            let cancel = ui
-                                .horizontal(|ui| {
-                                    panel_header(ui, tr(lang, "Log"));
-                                    ui.weak(format!(
-                                        "{} {} / {}",
-                                        tr(lang, "Sending"),
-                                        thousands(done),
-                                        thousands(total)
-                                    ));
-                                    ui.small_button(tr(lang, "Cancel sending")).clicked()
-                                })
-                                .inner;
-                            if cancel {
-                                self.cancel_send();
+                    let (cancel, header) = ui
+                        .horizontal(|ui| {
+                            panel_header(ui, tr(lang, "Log"));
+                            let mut cancel = false;
+                            if let Some((done, total)) = sending {
+                                ui.weak(format!(
+                                    "{} {} / {}",
+                                    tr(lang, "Sending"),
+                                    thousands(done),
+                                    thousands(total)
+                                ));
+                                cancel = ui.small_button(tr(lang, "Cancel sending")).clicked();
                             }
-                        }
-                        None => panel_header(ui, tr(lang, "Log")),
+                            (cancel, self.log_header(ui))
+                        })
+                        .inner;
+                    if cancel {
+                        self.cancel_send();
+                    }
+                    if let Some(action) = header {
+                        self.log_action(&ctx, action);
                     }
                     self.log_ui(ui);
                 });
@@ -5426,6 +5506,51 @@ fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// ログ欄の見出しのボタンと右クリックのメニューで頼むこと。
+#[derive(Clone, Copy)]
+enum LogAction {
+    Style(LogStyle),
+    OpenFile,
+    OpenFolder,
+    CopyAll,
+}
+
+/// ターミナル風のログ欄の地の色。テーマによらず黒地にする。
+const TERMINAL_BACKGROUND: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
+
+fn terminal_line(line: &log::Line) -> egui::Label {
+    let color = match line.level {
+        Level::Info => Color32::from_rgb(0xcc, 0xcc, 0xcc),
+        Level::Warn => Color32::from_rgb(0xe5, 0xc0, 0x7b),
+        Level::Error => Color32::from_rgb(0xf0, 0x71, 0x78),
+    };
+    egui::Label::new(
+        egui::RichText::new(line.terminal())
+            .monospace()
+            .color(color),
+    )
+    .extend()
+}
+
+/// 時刻を薄く、本文を重さの色で。1 つのラベルにするのは、範囲選択でコピーしたときに時刻と本文が 1 行に並ぶようにするため。
+fn normal_line(ui: &egui::Ui, line: &log::Line) -> egui::Label {
+    let visuals = ui.visuals();
+    let color = match line.level {
+        Level::Info => visuals.text_color(),
+        Level::Warn => visuals.warn_fg_color,
+        Level::Error => visuals.error_fg_color,
+    };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &format!("{}  ", line.clock()),
+        0.0,
+        egui::TextFormat::simple(font.clone(), visuals.weak_text_color()),
+    );
+    job.append(&line.text, 0.0, egui::TextFormat::simple(font, color));
+    egui::Label::new(job).wrap()
 }
 
 fn panel_header(ui: &mut egui::Ui, text: &str) {

@@ -11,7 +11,7 @@ use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refu
 use crate::layout::SlotLayout;
 use crate::settings::{
     parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
-    LoadModifier, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
+    LoadModifier, LogSettings, LogStyle, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -27,11 +27,12 @@ enum Section {
     Fullscreen,
     Dicom,
     DicomSend,
+    Log,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 10] = [
+    const ALL: [Section; 11] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -41,6 +42,7 @@ impl Section {
         Section::Fullscreen,
         Section::Dicom,
         Section::DicomSend,
+        Section::Log,
         Section::Keys,
     ];
 
@@ -55,6 +57,7 @@ impl Section {
             Section::Fullscreen => "Fullscreen slideshow",
             Section::Dicom => "Medical images (DICOM)",
             Section::DicomSend => "DICOM sending",
+            Section::Log => "Log",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -70,7 +73,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 40] = [
+const ITEMS: [Item; 43] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -259,6 +262,27 @@ const ITEMS: [Item; 40] = [
         title: "Search groups",
         description: "Sets of metadata keys offered in the advanced search, one per line as name = key; key; key. Picking one adds an \"equals\" condition for each key, so you only type the values. Keys are tag numbers (0010,0020) or names (PatientID); put kind: in front to limit the kind (exif:Model).",
         widget: search_groups_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: "log.style",
+        title: "Look",
+        description: "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black, without wrapping. Also switchable at the top right of the log.",
+        widget: log_style_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: "log.file",
+        title: "Write to a file",
+        description: "Also write every log line with its date, time and level to a file in the logs folder next to the settings file, one file per start. Takes effect at the next start.",
+        widget: log_file_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: "log.keep_files",
+        title: "Log files kept",
+        description: "How many log files to keep. Older ones are deleted at start.",
+        widget: log_keep_widget,
     },
     Item {
         section: Section::Fullscreen,
@@ -717,6 +741,25 @@ fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.develop_raw, tr(lang, "Enabled"))
         .changed()
+}
+
+fn log_style_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.log.style;
+    ui.horizontal(|ui| {
+        for style in LogStyle::ALL {
+            ui.radio_value(&mut s.log.style, style, tr(lang, style.title()));
+        }
+    });
+    s.log.style != before
+}
+
+fn log_file_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.log.file, tr(lang, "Enabled")).changed()
+}
+
+fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(egui::DragValue::new(&mut s.log.keep_files).range(LogSettings::KEEP_RANGE));
+    (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
 fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
