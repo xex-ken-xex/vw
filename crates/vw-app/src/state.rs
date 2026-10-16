@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::sub_window;
 use crate::toml_reader::Reader;
 
 /// モニタ 1 台の範囲（物理ピクセル）と拡大率（%）。
@@ -49,20 +50,35 @@ pub struct AppState {
     pub fullscreen_root: Option<PathBuf>,
     /// 画素の変換の図で動かしたノードの位置。鍵は `形式.ノード`（例 `gray.voi`）。
     pub pipeline_nodes: BTreeMap<String, [f32; 2]>,
-    /// ヒストグラム・ズームマップなどの別ウインドウの `[左, 上, 幅, 高さ]`（論理ピクセル）。
+    /// ヒストグラム・ズームマップなどの別ウインドウの位置と「常に最前面」。
     /// 鍵はウインドウの名前（`histogram`、`zoom_map`）。
-    pub sub_windows: BTreeMap<String, [f32; 4]>,
+    pub sub_windows: BTreeMap<String, sub_window::Saved>,
 }
 
-/// `[sub_windows]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
-fn read_sub_windows(r: &mut Reader<'_>) -> BTreeMap<String, [f32; 4]> {
+/// `[sub_windows.名前]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
+fn read_sub_windows(r: &mut Reader<'_>) -> BTreeMap<String, sub_window::Saved> {
     let Some(section) = r.section("sub_windows") else {
         return BTreeMap::new();
     };
-    section
+    let mut inner = Reader::new(section);
+    let windows = section
         .keys()
-        .filter_map(|key| Some((key.clone(), r.get::<[f32; 4]>("sub_windows", key)?)))
-        .collect()
+        .filter_map(|name| {
+            inner.section(name)?;
+            let saved = sub_window::Saved {
+                rect: inner.get::<[f32; 4]>(name, "rect"),
+                on_top: inner.get::<bool>(name, "on_top").unwrap_or(false),
+            };
+            Some((name.clone(), saved))
+        })
+        .collect();
+    r.problems.extend(
+        inner
+            .problems
+            .into_iter()
+            .map(|p| format!("sub_windows.{p}")),
+    );
+    windows
 }
 
 /// `[pipeline_nodes]` を読む。読めない項目だけを捨てる（位置はなくても既定の並びに戻るだけ）。
@@ -185,7 +201,14 @@ impl AppState {
             let windows: toml::Table = self
                 .sub_windows
                 .iter()
-                .map(|(k, v)| (k.clone(), toml::Value::try_from(v).unwrap()))
+                .map(|(k, v)| {
+                    let mut t = toml::Table::new();
+                    if let Some(rect) = v.rect {
+                        t.insert("rect".into(), toml::Value::try_from(rect).unwrap());
+                    }
+                    t.insert("on_top".into(), v.on_top.into());
+                    (k.clone(), t.into())
+                })
                 .collect();
             root.insert("sub_windows".into(), windows.into());
         }
@@ -427,7 +450,23 @@ mod tests {
             extract_dir: Some(PathBuf::from("/home/ken/評価")),
             fullscreen_root: Some(PathBuf::from("/home/ken/撮影")),
             pipeline_nodes: [("gray.voi".to_owned(), [560.0, -20.5])].into(),
-            sub_windows: [("histogram".to_owned(), [10.0, 20.5, 700.0, 400.0])].into(),
+            sub_windows: [
+                (
+                    "histogram".to_owned(),
+                    sub_window::Saved {
+                        rect: Some([10.0, 20.5, 700.0, 400.0]),
+                        on_top: true,
+                    },
+                ),
+                (
+                    "zoom_map".to_owned(),
+                    sub_window::Saved {
+                        rect: None,
+                        on_top: false,
+                    },
+                ),
+            ]
+            .into(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -435,13 +474,24 @@ mod tests {
     #[test]
     fn broken_sub_window_is_dropped_alone() {
         let (state, problems) = AppState::from_toml(
-            "[sub_windows]\nhistogram = [1.0, 2.0, 300.0, 200.0]\nzoom_map = \"wide\"\n",
+            "[sub_windows]\nhistogram = { rect = [1.0, 2.0, 300.0, 200.0], on_top = \"yes\" }\nzoom_map = \"wide\"\n",
         );
         assert_eq!(
             state.sub_windows,
-            [("histogram".to_owned(), [1.0, 2.0, 300.0, 200.0])].into()
+            [(
+                "histogram".to_owned(),
+                sub_window::Saved {
+                    rect: Some([1.0, 2.0, 300.0, 200.0]),
+                    on_top: false,
+                }
+            )]
+            .into()
         );
-        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems.iter().all(|p| p.starts_with("sub_windows.")),
+            "{problems:?}"
+        );
     }
 
     #[test]

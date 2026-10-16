@@ -151,6 +151,8 @@ const JA: &[(&str, &str)] = &[
     ("Developing RAW...", "RAW を現像中..."),
     ("Histogram", "ヒストグラム"),
     ("Zoom map", "ズームマップ"),
+    ("Keep this window on top", "このウインドウを常に最前面にする"),
+    ("Always on top (click to release)", "常に最前面（押すと戻る）"),
     ("Show/hide histogram", "ヒストグラムの表示/非表示"),
     ("Show/hide zoom map", "ズームマップの表示/非表示"),
     ("Select an image in a slot.", "スロットで画像を選んでください。"),

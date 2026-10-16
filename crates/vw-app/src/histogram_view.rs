@@ -126,6 +126,7 @@ impl HistogramView {
                     close = true;
                 }
                 self.window.track(ctx);
+                self.window.pin_overlay(ctx, lang);
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if !has_target {
                         ui.centered_and_justified(|ui| {

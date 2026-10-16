@@ -65,6 +65,7 @@ impl ZoomMap {
                     close = true;
                 }
                 self.window.track(ctx);
+                self.window.pin_overlay(ctx, lang);
                 egui::CentralPanel::default().show(ctx, |ui| match &target {
                     None => {
                         ui.centered_and_justified(|ui| {

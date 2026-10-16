@@ -499,12 +499,24 @@ impl VwApp {
             },
             histogram: {
                 let mut view = crate::histogram_view::HistogramView::default();
-                view.window = SubWindow::restored(saved.sub_windows.get("histogram").copied());
+                view.window = SubWindow::restored(
+                    saved
+                        .sub_windows
+                        .get("histogram")
+                        .copied()
+                        .unwrap_or_default(),
+                );
                 view
             },
             zoom_map: {
                 let mut view = crate::zoom_map::ZoomMap::default();
-                view.window = SubWindow::restored(saved.sub_windows.get("zoom_map").copied());
+                view.window = SubWindow::restored(
+                    saved
+                        .sub_windows
+                        .get("zoom_map")
+                        .copied()
+                        .unwrap_or_default(),
+                );
                 view
             },
             show_settings: false,
@@ -3927,11 +3939,12 @@ impl VwApp {
             fullscreen_root: self.last_fullscreen_root.clone(),
             pipeline_nodes: self.pipeline.node_positions(),
             sub_windows: [
-                ("histogram", self.histogram.window.rect()),
-                ("zoom_map", self.zoom_map.window.rect()),
+                ("histogram", self.histogram.window.saved()),
+                ("zoom_map", self.zoom_map.window.saved()),
             ]
             .into_iter()
-            .filter_map(|(name, rect)| Some((name.to_owned(), rect?)))
+            .filter(|(_, saved)| saved.rect.is_some() || saved.on_top)
+            .map(|(name, saved)| (name.to_owned(), saved))
             .collect(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
