@@ -779,7 +779,20 @@ impl PipelineView {
                 .inner_margin(margin)
                 .show(ui, |ui| {
                     ui.set_width(width - margin.sum().x);
-                    let header = ui.horizontal(|ui| {
+                    // 見出しのドラッグ判定は、見出しの部品より先に登録する。egui は後から登録した
+                    // 判定を上に置くので、逆にすると折りたたみや × のボタンが押せなくなる。
+                    let row = ui.spacing().interact_size.y;
+                    let (header_rect, drag) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), row), Sense::drag());
+                    moved = drag.drag_delta();
+                    let mut header_ui = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt(("node_header", node))
+                            .max_rect(header_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    {
+                        let ui = &mut header_ui;
                         let arrow = if collapsed {
                             icon::CARET_RIGHT
                         } else {
@@ -823,13 +836,7 @@ impl PipelineView {
                                 },
                             );
                         }
-                    });
-                    let drag = ui.interact(
-                        header.response.rect,
-                        ui.id().with(("node_drag", node)),
-                        Sense::drag(),
-                    );
-                    moved = drag.drag_delta();
+                    }
                     if !collapsed {
                         ui.separator();
                         edited = self.body(ui, lang, node, marks, info);
@@ -1311,6 +1318,50 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
         }
         nodes::Node::Invert => {
             ui.weak("1 − v");
+        }
+        nodes::Node::Blur { radius } => {
+            egui::Grid::new("blur").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Radius (px)"));
+                edited |= unit(ui, radius, 0.0, 50.0, 0.05);
+                ui.end_row();
+            });
+            ui.weak(tr(lang, "Gaussian; the radius is σ."));
+        }
+        nodes::Node::Noise { sigma, seed } => {
+            egui::Grid::new("noise").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Sigma"));
+                edited |= unit(ui, sigma, 0.0, 1.0, 0.001);
+                ui.end_row();
+                ui.label(tr(lang, "Seed"));
+                edited |= ui.add(egui::DragValue::new(seed).speed(1.0)).changed();
+                ui.end_row();
+            });
+            ui.weak(tr(lang, "Gaussian noise on the 0..1 values."));
+        }
+        nodes::Node::Median { size } => {
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Window"));
+                for n in [3u32, 5] {
+                    edited |= ui.selectable_value(size, n, format!("{n} × {n}")).changed();
+                }
+            });
+        }
+        nodes::Node::Tone {
+            brightness,
+            contrast,
+            curve,
+        } => {
+            egui::Grid::new("tone").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Brightness"));
+                edited |= unit(ui, brightness, -1.0, 1.0, 0.002);
+                ui.end_row();
+                ui.label(tr(lang, "Contrast"));
+                edited |= unit(ui, contrast, 0.0, 4.0, 0.005);
+                ui.end_row();
+                ui.label(tr(lang, "S-curve"));
+                edited |= unit(ui, curve, -1.0, 1.0, 0.005);
+                ui.end_row();
+            });
         }
         nodes::Node::Mix { matrix } => {
             ui.weak(tr(lang, "Output = matrix × (r, g, b)"));
