@@ -165,6 +165,8 @@ pub struct VwApp {
     evaluation: crate::quality::Evaluation,
     /// 「評価の基準にする」で選んだスロットの画像。PSNR・SSIM をこれと比べる。
     quality_reference: Option<PathBuf>,
+    /// 名前を付けて保存した色導出の値。
+    presets: crate::pipelines::PresetStore,
     about: crate::about::About,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
@@ -441,6 +443,15 @@ impl VwApp {
         for n in notes {
             log.error(format!("Settings: {n}"));
         }
+        let presets_path = settings
+            .path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(|dir| dir.join(crate::pipelines::FILE_NAME));
+        let (presets, notes) = crate::pipelines::PresetStore::open(presets_path);
+        for n in notes {
+            log.error(format!("Pipelines: {n}"));
+        }
         let log_settings = &settings.settings.log;
         if let (true, Some(path)) = (log_settings.file, settings.path.as_deref()) {
             let dir = log::log_dir(path);
@@ -538,6 +549,7 @@ impl VwApp {
             },
             evaluation: Default::default(),
             quality_reference: None,
+            presets,
             zoom_map: {
                 let mut view = crate::zoom_map::ZoomMap::default();
                 view.window = SubWindow::restored(
@@ -838,6 +850,7 @@ impl eframe::App for VwApp {
         }
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
+        self.reload_presets();
         if self.fullscreen.is_some() {
             self.fullscreen_ui(ui);
             return;

@@ -112,11 +112,19 @@ impl Decoded {
 /// ファイルの値の組。ウィンドウがファイルにないときは、vw が普段使う値の全範囲を当てる
 /// （表示を変えずに図を開けるように）。
 pub fn file_params(g: &Gray, image: &VwImage, decoded: &Decoded) -> Params {
-    let (center, width) = match (&g.voi.center, &g.voi.width) {
-        (Some(c), Some(w)) => (c.value, w.value),
+    let file_function =
+        VoiFunction::from_dicom(&g.voi.function.value).unwrap_or(VoiFunction::Linear);
+    // ウィンドウがないときの全範囲は端から端まで直線なので、LINEAR（中心を 0.5 ずらす）ではなく
+    // LINEAR_EXACT の式に当たる。LINEAR のままにすると標準の表示と 1 段ずれる。
+    let (center, width, function) = match (&g.voi.center, &g.voi.width) {
+        (Some(c), Some(w)) => (c.value, w.value, file_function),
         _ => {
             let (lo, hi) = full_range(image, decoded, g);
-            (f64::midpoint(lo, hi), (hi - lo).max(1.0))
+            (
+                f64::midpoint(lo, hi),
+                (hi - lo).max(1.0),
+                VoiFunction::LinearExact,
+            )
         }
     };
     Params {
@@ -124,7 +132,7 @@ pub fn file_params(g: &Gray, image: &VwImage, decoded: &Decoded) -> Params {
         intercept: g.modality.intercept.value,
         center,
         width,
-        function: VoiFunction::from_dicom(&g.voi.function.value).unwrap_or(VoiFunction::Linear),
+        function,
         invert: g.presentation.invert,
     }
 }
@@ -251,6 +259,76 @@ pub fn histogram(image: &VwImage, decoded: &Decoded, slope: f64, intercept: f64)
         hi,
         bins,
     }
+}
+
+/// ファイルの値で描いた画像が、標準の表示（[`vw_core::display::to_display`]）と画素単位で
+/// 食い違ったときの、食い違った画素の数と最大の差。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mismatch {
+    pub pixels: usize,
+    pub max: u8,
+}
+
+/// 標準の表示の明るさ（グレースケールなので R だけ）。
+pub fn standard_gray(image: &VwImage) -> Vec<u8> {
+    let shown = vw_core::display::to_display(image, &vw_core::DisplayParams::default());
+    shown.rgba.iter().step_by(4).copied().collect()
+}
+
+/// ファイルの値 `file` で描いた画像が標準の表示 `standard` と同じか確かめる。
+///
+/// 色導出は「標準と同じ画像から、値を変えたところだけが変わる」ことが前提なので、
+/// 食い違うファイル（VOI LUT Function が SIGMOID など、標準が表せない変換）では使わない。
+pub fn check_standard(
+    image: &VwImage,
+    decoded: &Decoded,
+    file: &Params,
+    standard: &[u8],
+) -> Result<(), Mismatch> {
+    let n = image.width as usize * image.height as usize;
+    let (mut pixels, mut max) = (0usize, 0u8);
+    for (i, &s) in standard.iter().enumerate().take(n) {
+        let d = display_value(image, decoded, file, i).abs_diff(s);
+        if d > 0 {
+            pixels += 1;
+            max = max.max(d);
+        }
+    }
+    if pixels == 0 {
+        Ok(())
+    } else {
+        Err(Mismatch { pixels, max })
+    }
+}
+
+/// 変更後と標準の明るさの差 |変更後 − 標準| のヒートマップと、差の最大。
+/// 色の目盛りは差の最大に合わせる（差が小さくても見えるように）。
+pub fn difference(derived: &ColorImage, standard: &[u8]) -> (ColorImage, u8) {
+    let diffs: Vec<u8> = derived
+        .pixels
+        .iter()
+        .zip(standard)
+        .map(|(c, &s)| c.r().abs_diff(s))
+        .collect();
+    let max = diffs.iter().copied().max().unwrap_or(0);
+    let pixels = diffs
+        .iter()
+        .map(|&d| {
+            heat(if max == 0 {
+                0.0
+            } else {
+                f32::from(d) / f32::from(max)
+            })
+        })
+        .collect();
+    (ColorImage::new(derived.size, pixels), max)
+}
+
+/// 0..=1 を 黒 → 赤 → 黄 → 白 の色にする。
+pub fn heat(t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0) * 3.0;
+    let ramp = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(ramp(t), ramp(t - 1.0), ramp(t - 2.0))
 }
 
 /// ファイルの段（DICOM のヘッダ）を裏のスレッドで読む。画像の画素は別に届くので、ここでは読まない。
@@ -390,6 +468,100 @@ mod tests {
         let p = file_params(&g, &image, &decoded);
         let t = trace(&image, &decoded, &p, 0, 0).unwrap();
         assert_eq!((t.stored, t.modality), (100.0, -1848.0));
+    }
+
+    fn synth_image(bytes: &[u8]) -> (VwImage, Gray) {
+        use vw_core::DecoderPlugin;
+        let image = vw_dicom::DicomPlugin.decode_frame(bytes, 0).unwrap();
+        let vw_dicom::pipeline::Pipeline::Gray(g) = vw_dicom::pipeline::read(bytes, 0).unwrap()
+        else {
+            panic!()
+        };
+        (image, *g)
+    }
+
+    fn file_values_match(bytes: &[u8]) -> Result<(), Mismatch> {
+        let (image, g) = synth_image(bytes);
+        let decoded = Decoded::of(&g);
+        let file = file_params(&g, &image, &decoded);
+        check_standard(&image, &decoded, &file, &standard_gray(&image))
+    }
+
+    fn ramp_i16(n: usize, from: i16, step: i16) -> Vec<i16> {
+        (0..n).map(|i| from + step * i as i16).collect()
+    }
+
+    #[test]
+    fn file_values_reproduce_the_standard_display_pixel_by_pixel() {
+        use vw_dicom::synth::{Synth, CT_IMAGE};
+        let ct = || {
+            Synth::ct(16, 16)
+                .pixels_i16(&ramp_i16(256, -100, 9))
+                .rescale(1.0, -1024.0)
+        };
+        assert_eq!(file_values_match(&ct().window(40.0, 400.0).bytes()), Ok(()));
+        assert_eq!(
+            file_values_match(&ct().window(-600.0, 1501.0).bytes()),
+            Ok(())
+        );
+        assert_eq!(
+            file_values_match(
+                &ct()
+                    .window(40.0, 400.0)
+                    .voi_function("LINEAR_EXACT")
+                    .bytes()
+            ),
+            Ok(())
+        );
+        assert_eq!(file_values_match(&ct().bytes()), Ok(()));
+        let unsigned: Vec<u16> = (0..256).map(|i| i * 16).collect();
+        let plain = || Synth::new(CT_IMAGE, 16, 16).pixels_u16(&unsigned, 12);
+        assert_eq!(file_values_match(&plain().bytes()), Ok(()));
+        assert_eq!(
+            file_values_match(&plain().window(2048.0, 1000.0).bytes()),
+            Ok(())
+        );
+        let mono1 = plain().monochrome1().window(1000.0, 3000.0);
+        assert_eq!(file_values_match(&mono1.bytes()), Ok(()));
+    }
+
+    #[test]
+    fn sigmoid_files_do_not_match_the_linear_standard_display() {
+        let bytes = vw_dicom::synth::Synth::ct(16, 16)
+            .pixels_i16(&ramp_i16(256, -100, 9))
+            .rescale(1.0, -1024.0)
+            .window(40.0, 400.0)
+            .voi_function("SIGMOID")
+            .bytes();
+        let m = file_values_match(&bytes).unwrap_err();
+        assert!(m.pixels > 0 && m.max > 1, "{m:?}");
+    }
+
+    #[test]
+    fn difference_scales_the_heat_to_the_largest_change() {
+        let derived = ColorImage::new(
+            [3, 1],
+            vec![
+                Color32::from_gray(10),
+                Color32::from_gray(60),
+                Color32::from_gray(100),
+            ],
+        );
+        let (heatmap, max) = difference(&derived, &[10, 40, 140]);
+        assert_eq!(max, 40);
+        assert_eq!(heatmap.pixels[0], Color32::BLACK);
+        assert_eq!(heatmap.pixels[2], Color32::WHITE);
+        let (none, zero) = difference(&derived, &[10, 60, 100]);
+        assert_eq!(zero, 0);
+        assert!(none.pixels.iter().all(|&c| c == Color32::BLACK));
+    }
+
+    #[test]
+    fn heat_goes_from_black_through_red_and_yellow_to_white() {
+        assert_eq!(heat(0.0), Color32::BLACK);
+        assert_eq!(heat(1.0 / 3.0), Color32::from_rgb(255, 0, 0));
+        assert_eq!(heat(2.0 / 3.0), Color32::from_rgb(255, 255, 0));
+        assert_eq!(heat(1.0), Color32::WHITE);
     }
 
     #[test]

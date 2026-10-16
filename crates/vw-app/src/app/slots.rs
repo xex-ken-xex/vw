@@ -570,8 +570,13 @@ impl VwApp {
                     probe: self.tool == Tool::PixelProbe,
                     roi: self.tool == Tool::Roi,
                     destinations: &destinations,
+                    presets: self.presets.presets(),
+                    texture_options: self.texture_options,
                 },
             );
+            if let Some(event) = resp.derive {
+                self.log_derive(event);
+            }
             if resp.pipeline {
                 self.active = i;
                 if !self.pipeline.open {
@@ -653,6 +658,8 @@ impl VwApp {
                         probe: false,
                         roi: false,
                         destinations: &[],
+                        presets: &[],
+                        texture_options: self.texture_options,
                     },
                 );
                 if resp.clicked {

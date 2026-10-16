@@ -17,7 +17,7 @@ use dicom_object::file::ReadPreamble;
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
 use dicom_pixeldata::{
     DecodedPixelData, PhotometricInterpretation, PixelDecoder, PixelRepresentation,
-    PlanarConfiguration,
+    PlanarConfiguration, VoiLutFunction,
 };
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
@@ -197,16 +197,19 @@ fn gray_image(
         .ok()
         .and_then(|r| r.get(frame).or(r.first()))
         .map_or((1.0, 0.0), |r| (r.slope, r.intercept));
+    let function = px
+        .voi_lut_function()
+        .ok()
+        .flatten()
+        .and_then(|f| f.get(frame).or(f.first()).copied())
+        .unwrap_or_default();
     let window = px
         .window()
         .ok()
         .flatten()
         .and_then(|w| w.get(frame).or(w.first()))
         .filter(|w| w.width > 0.0)
-        .map(|w| {
-            let lo = w.center - w.width / 2.0;
-            (lo as f32, (lo + w.width) as f32)
-        });
+        .map(|w| linear_window(w.center, w.width, function));
     let values = stored_values(raw, px.bits_allocated(), stored, signed, pixels)?;
     // 近い値を同一視する必要はない。ちょうど恒等のときだけ格納値をそのまま使う近道で、
     // 外れても遅い道が同じ結果を出す。
@@ -232,6 +235,25 @@ fn gray_image(
     // MONOCHROME1 は値を反転して持つので、ウィンドウも反転する。
     img.window = window.map(|(lo, hi)| if invert { (-hi, -lo) } else { (lo, hi) });
     Ok(img)
+}
+
+/// ウィンドウを、vw-core が使う「下端から上端へ直線で 0..=255」の範囲にする。
+///
+/// LINEAR は規格（PS3.3 C.11.2.1.2.1）の式どおり中心を 0.5 ずらし、幅から 1 を引く。
+/// 単純に中心 ± 幅 / 2 にすると、ピクセルパイプラインの図（規格の式で描く）と最大 2 段ずれ、
+/// 図をファイルの値のまま開いても表示が変わってしまうため。
+/// SIGMOID は直線では表せないので、中心 ± 幅 / 2 の直線で近似する。
+fn linear_window(center: f64, width: f64, function: VoiLutFunction) -> (f32, f32) {
+    let (lo, hi) = match function {
+        VoiLutFunction::Linear => {
+            let half = (width - 1.0).max(0.0) / 2.0;
+            (center - 0.5 - half, center - 0.5 + half)
+        }
+        VoiLutFunction::LinearExact | VoiLutFunction::Sigmoid => {
+            (center - width / 2.0, center + width / 2.0)
+        }
+    };
+    (lo as f32, hi as f32)
 }
 
 /// 格納されている値。Bits Stored より上のビット（オーバーレイなどに使われる）は捨て、
@@ -550,6 +572,18 @@ mod tests {
             .decode(&synth.window(40.0, 400.0).bytes())
             .unwrap();
         assert_eq!(gray_f32(&img), [-1024.0, -24.0]);
+        // LINEAR の規格の式: 中心 - 0.5 ± (幅 - 1) / 2。
+        assert_eq!(img.window, Some((-160.0, 239.0)));
+    }
+
+    #[test]
+    fn linear_exact_window_spans_center_plus_minus_half_width() {
+        let synth = Synth::ct(2, 1)
+            .pixels_i16(&[0, 1000])
+            .rescale(1.0, -1024.0)
+            .window(40.0, 400.0)
+            .text(tags::VOILUT_FUNCTION, dicom_core::VR::CS, "LINEAR_EXACT");
+        let img = DicomPlugin.decode(&synth.bytes()).unwrap();
         assert_eq!(img.window, Some((-160.0, 240.0)));
     }
 
@@ -581,7 +615,7 @@ mod tests {
             .window(50.0, 100.0);
         let img = DicomPlugin.decode(&synth.bytes()).unwrap();
         assert_eq!(gray_f32(&img), [0.0, -100.0]);
-        assert_eq!(img.window, Some((-100.0, 0.0)));
+        assert_eq!(img.window, Some((-99.0, 0.0)));
     }
 
     #[test]
