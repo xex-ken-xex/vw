@@ -49,6 +49,20 @@ pub struct AppState {
     pub fullscreen_root: Option<PathBuf>,
     /// 画素の変換の図で動かしたノードの位置。鍵は `形式.ノード`（例 `gray.voi`）。
     pub pipeline_nodes: BTreeMap<String, [f32; 2]>,
+    /// ヒストグラム・ズームマップなどの別ウインドウの `[左, 上, 幅, 高さ]`（論理ピクセル）。
+    /// 鍵はウインドウの名前（`histogram`、`zoom_map`）。
+    pub sub_windows: BTreeMap<String, [f32; 4]>,
+}
+
+/// `[sub_windows]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
+fn read_sub_windows(r: &mut Reader<'_>) -> BTreeMap<String, [f32; 4]> {
+    let Some(section) = r.section("sub_windows") else {
+        return BTreeMap::new();
+    };
+    section
+        .keys()
+        .filter_map(|key| Some((key.clone(), r.get::<[f32; 4]>("sub_windows", key)?)))
+        .collect()
 }
 
 /// `[pipeline_nodes]` を読む。読めない項目だけを捨てる（位置はなくても既定の並びに戻るだけ）。
@@ -105,6 +119,7 @@ impl AppState {
         let extract_dir = r.get::<PathBuf>("dataset", "extract_dir");
         let fullscreen_root = r.get::<PathBuf>("fullscreen", "root");
         let pipeline_nodes = read_pipeline_nodes(&mut r);
+        let sub_windows = read_sub_windows(&mut r);
         (
             Self {
                 window,
@@ -113,6 +128,7 @@ impl AppState {
                 extract_dir,
                 fullscreen_root,
                 pipeline_nodes,
+                sub_windows,
             },
             r.problems,
         )
@@ -164,6 +180,14 @@ impl AppState {
                 .map(|(k, v)| (k.clone(), toml::Value::try_from(v).unwrap()))
                 .collect();
             root.insert("pipeline_nodes".into(), nodes.into());
+        }
+        if !self.sub_windows.is_empty() {
+            let windows: toml::Table = self
+                .sub_windows
+                .iter()
+                .map(|(k, v)| (k.clone(), toml::Value::try_from(v).unwrap()))
+                .collect();
+            root.insert("sub_windows".into(), windows.into());
         }
         toml::to_string(&root).expect("state is always representable in TOML")
     }
@@ -403,8 +427,21 @@ mod tests {
             extract_dir: Some(PathBuf::from("/home/ken/評価")),
             fullscreen_root: Some(PathBuf::from("/home/ken/撮影")),
             pipeline_nodes: [("gray.voi".to_owned(), [560.0, -20.5])].into(),
+            sub_windows: [("histogram".to_owned(), [10.0, 20.5, 700.0, 400.0])].into(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
+    }
+
+    #[test]
+    fn broken_sub_window_is_dropped_alone() {
+        let (state, problems) = AppState::from_toml(
+            "[sub_windows]\nhistogram = [1.0, 2.0, 300.0, 200.0]\nzoom_map = \"wide\"\n",
+        );
+        assert_eq!(
+            state.sub_windows,
+            [("histogram".to_owned(), [1.0, 2.0, 300.0, 200.0])].into()
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
     }
 
     #[test]
@@ -418,6 +455,7 @@ mod tests {
             extract_dir: None,
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
+            sub_windows: BTreeMap::new(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -475,6 +513,7 @@ mod tests {
             extract_dir: None,
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
+            sub_windows: BTreeMap::new(),
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));

@@ -22,6 +22,8 @@ mod export;
 mod fonts;
 mod frames;
 mod fullscreen;
+mod histogram;
+mod histogram_view;
 mod i18n;
 mod keymap;
 mod labels;
@@ -40,12 +42,14 @@ mod slideshow;
 mod sort;
 mod state;
 mod status;
+mod sub_window;
 mod theme;
 mod toml_reader;
 mod transfer;
 mod tree;
 mod viewer;
 mod watch;
+mod zoom_map;
 
 #[cfg(test)]
 mod test_util;

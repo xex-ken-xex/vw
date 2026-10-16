@@ -145,6 +145,9 @@ enum Loaded {
 #[derive(Default)]
 pub struct PipelineView {
     pub open: bool,
+    /// 見出しのボタンでヒストグラム・ズームマップを開くよう頼まれた。
+    pub open_histogram: bool,
+    pub open_zoom_map: bool,
     path: Option<PathBuf>,
     loaded: Option<Loaded>,
     /// 手で変えた値で描いた画像を当てているスロットの画像。
@@ -178,6 +181,21 @@ impl PipelineView {
                 }
             }
         }
+    }
+
+    /// `path` の画像に手で変えた値を当てていれば、その値。
+    pub fn edited_for(&self, path: &Path) -> Option<Params> {
+        match &self.loaded {
+            Some(Loaded::Gray(g)) if self.path.as_deref() == Some(path) && g.params != g.file => {
+                Some(g.params)
+            }
+            _ => None,
+        }
+    }
+
+    /// 手で変えた値で描いた画像を当てているスロットの画像。
+    pub fn applied(&self) -> Option<&Path> {
+        self.applied.as_deref()
     }
 
     /// 閉じる。手で変えた値は捨て、表示をファイルの値に戻す。
@@ -361,6 +379,12 @@ impl PipelineView {
                 }
                 if ui.button(tr(lang, "Fit to window")).clicked() {
                     self.transform = None;
+                }
+                if ui.button(tr(lang, "Histogram")).clicked() {
+                    self.open_histogram = true;
+                }
+                if ui.button(tr(lang, "Zoom map")).clicked() {
+                    self.open_zoom_map = true;
                 }
                 ui.weak(tr(
                     lang,
@@ -656,7 +680,10 @@ fn placeholder() -> Params {
     }
 }
 
-fn read_in_background(ctx: &egui::Context, path: &Path) -> Receiver<Result<Pipeline, String>> {
+pub(crate) fn read_in_background(
+    ctx: &egui::Context,
+    path: &Path,
+) -> Receiver<Result<Pipeline, String>> {
     let (tx, rx) = channel();
     let (file, frame) = frames::split(path).unwrap_or_else(|| (path.to_path_buf(), 0));
     let ctx = ctx.clone();
@@ -949,7 +976,7 @@ fn color_body(ui: &mut egui::Ui, lang: Language, node: Node, c: &Color) {
 }
 
 /// 物理量の単位。CT は HU、PET は Units の値。
-fn unit_of(g: &Gray) -> Option<String> {
+pub(crate) fn unit_of(g: &Gray) -> Option<String> {
     match g.modality.modality.as_deref().map(str::trim) {
         Some("CT") => Some("HU".into()),
         _ => g.modality.units.clone(),

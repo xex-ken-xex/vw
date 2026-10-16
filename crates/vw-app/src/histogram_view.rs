@@ -1,0 +1,653 @@
+//! 画像全体のヒストグラムの別ウインドウ。アクティブなスロットの画像に追従し、
+//! ピクセルパイプラインで値を変えているときは、変更前（グレーの塗り）と変更後（線）を重ねる。
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+
+use eframe::egui::{self, pos2, Color32, Pos2, Rect, Sense, Stroke};
+use vw_core::{display, DisplayParams, VwImage};
+use vw_dicom::pipeline::Pipeline;
+
+use crate::frames;
+use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
+use crate::i18n::tr;
+use crate::pipeline_view;
+use crate::pixel_pipeline::{self, Decoded, Params};
+use crate::settings::Language;
+use crate::sub_window::SubWindow;
+
+/// ウインドウに渡す、アクティブなスロットの画像。
+pub struct Target<'a> {
+    /// 表示中の画像のパス（フレームならフレームのパス）。
+    pub path: &'a Path,
+    /// フル解像度の画像。まだ読み込んでいなければ `None`。
+    pub image: Option<&'a Arc<VwImage>>,
+    pub dicom: bool,
+    /// ピクセルパイプラインで手で変えている値（この画像に当てているときだけ）。
+    pub edited: Option<Params>,
+}
+
+/// 横軸。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Axis {
+    /// 表示の明るさ（0..=255）。色の変え方の違いがそのまま出るので既定にする。
+    #[default]
+    Brightness,
+    /// 物理量（HU など）。DICOM のグレースケールのみ。
+    Physical,
+}
+
+/// チャンネルの選び方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Shown {
+    #[default]
+    Luma,
+    One(Channel),
+    /// R・G・B を重ねる。
+    Rgb,
+}
+
+/// DICOM のグレースケール画像の段の値。物理量の軸と窓の位置に使う。
+struct GrayInfo {
+    decoded: Decoded,
+    info: Box<vw_dicom::pipeline::Gray>,
+    unit: Option<String>,
+}
+
+enum Gray {
+    Reading(Receiver<Result<Pipeline, String>>),
+    Loaded(GrayInfo),
+    /// カラーの DICOM、または読めなかった。物理量の軸は出さない。
+    None,
+}
+
+/// 数え直すかどうかを決める、数えた条件。
+#[derive(Debug, Clone, PartialEq)]
+struct Key {
+    path: PathBuf,
+    image: usize,
+    axis: Axis,
+    edited: Option<Params>,
+}
+
+enum Counted {
+    Levels {
+        before: Levels,
+        after: Option<Levels>,
+    },
+    Physical {
+        histogram: Physical,
+        file: Params,
+        edited: Option<Params>,
+        unit: Option<String>,
+    },
+}
+
+#[derive(Default)]
+pub struct HistogramView {
+    pub open: bool,
+    pub window: SubWindow,
+    axis: Axis,
+    channel: Shown,
+    log: bool,
+    path: Option<PathBuf>,
+    gray: Option<Gray>,
+    counted: Option<(Key, Counted)>,
+    counting: Option<(Key, Receiver<Counted>)>,
+}
+
+impl HistogramView {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.path = None;
+        self.gray = None;
+        self.counted = None;
+        self.counting = None;
+    }
+
+    pub fn ui(&mut self, ctx: &egui::Context, lang: Language, target: Option<Target<'_>>) {
+        if !self.open {
+            return;
+        }
+        self.follow(ctx, target.as_ref());
+        if let Some(t) = &target {
+            self.count(ctx, t);
+        }
+        let title = self.title(lang);
+        let mut close = false;
+        let has_image = target.as_ref().is_some_and(|t| t.image.is_some());
+        let has_target = target.is_some();
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("histogram"),
+            self.window.builder(title, [760.0, 440.0]),
+            |ctx, _class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    close = true;
+                }
+                self.window.track(ctx);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if !has_target {
+                        ui.centered_and_justified(|ui| {
+                            ui.weak(tr(lang, "Select an image in a slot."))
+                        });
+                    } else if !has_image {
+                        ui.centered_and_justified(|ui| ui.spinner());
+                    } else {
+                        self.contents(ui, lang);
+                    }
+                });
+            },
+        );
+        if close {
+            self.close();
+        }
+    }
+
+    fn follow(&mut self, ctx: &egui::Context, target: Option<&Target<'_>>) {
+        let path = target.map(|t| t.path.to_path_buf());
+        if path != self.path {
+            self.path = path;
+            self.gray = target.map(|t| {
+                if t.dicom {
+                    Gray::Reading(pipeline_view::read_in_background(ctx, t.path))
+                } else {
+                    Gray::None
+                }
+            });
+        }
+        if let Some(Gray::Reading(rx)) = &self.gray {
+            if let Ok(result) = rx.try_recv() {
+                self.gray = Some(match result {
+                    Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
+                        decoded: Decoded::of(&info),
+                        unit: pipeline_view::unit_of(&info),
+                        info,
+                    }),
+                    _ => Gray::None,
+                });
+            }
+        }
+        if !matches!(self.gray, Some(Gray::Loaded(_))) {
+            self.axis = Axis::Brightness;
+        }
+    }
+
+    /// 条件が変わっていたら裏で数え直す。数えている間は前の結果を出しておく。
+    fn count(&mut self, ctx: &egui::Context, t: &Target<'_>) {
+        if let Some((key, rx)) = &self.counting {
+            if let Ok(counted) = rx.try_recv() {
+                self.counted = Some((key.clone(), counted));
+                self.counting = None;
+            }
+        }
+        let Some(image) = t.image else { return };
+        let gray = match &self.gray {
+            Some(Gray::Loaded(g)) => Some(g),
+            _ => None,
+        };
+        let key = Key {
+            path: t.path.to_path_buf(),
+            image: Arc::as_ptr(image) as usize,
+            axis: self.axis,
+            edited: t.edited.filter(|_| gray.is_some()),
+        };
+        let done = self.counted.as_ref().is_some_and(|(k, _)| *k == key);
+        if done || self.counting.is_some() {
+            return;
+        }
+        let image = image.clone();
+        let gray = gray.map(|g| {
+            let file = pixel_pipeline::file_params(&g.info, &image, &g.decoded);
+            (g.decoded, file, g.unit.clone())
+        });
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let (axis, edited) = (key.axis, key.edited);
+        std::thread::spawn(move || {
+            let counted = match (axis, gray) {
+                (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
+                    histogram: histogram::physical(
+                        &image,
+                        &decoded,
+                        (file.slope, file.intercept),
+                        edited.map(|p| (p.slope, p.intercept)),
+                    ),
+                    file,
+                    edited,
+                    unit,
+                },
+                (_, gray) => {
+                    let shown = display::to_display(&image, &DisplayParams::default());
+                    Counted::Levels {
+                        before: histogram::levels_of_rgba(&shown.rgba),
+                        after: gray.zip(edited).map(|((decoded, _, _), p)| {
+                            histogram::levels_of_params(&image, &decoded, &p)
+                        }),
+                    }
+                }
+            };
+            let _ = tx.send(counted);
+            ctx.request_repaint();
+        });
+        self.counting = Some((key, rx));
+    }
+
+    fn title(&self, lang: Language) -> String {
+        let name = tr(lang, "Histogram");
+        let Some(path) = &self.path else {
+            return name.to_owned();
+        };
+        let file = frames::file_of(path);
+        let file = file.file_name().unwrap_or_default().to_string_lossy();
+        match frames::split(path) {
+            Some((_, frame)) => format!("{name} - {file}  {} {}", tr(lang, "Frame"), frame + 1),
+            None => format!("{name} - {file}"),
+        }
+    }
+
+    fn contents(&mut self, ui: &mut egui::Ui, lang: Language) {
+        let physical_available = matches!(self.gray, Some(Gray::Loaded(_)));
+        let color =
+            matches!(&self.counted, Some((_, Counted::Levels { before, .. })) if before.color);
+        ui.horizontal(|ui| {
+            ui.label(tr(lang, "Horizontal axis"));
+            egui::ComboBox::from_id_salt("histogram_axis")
+                .selected_text(axis_title(lang, self.axis))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.axis,
+                        Axis::Brightness,
+                        axis_title(lang, Axis::Brightness),
+                    );
+                    if physical_available {
+                        ui.selectable_value(
+                            &mut self.axis,
+                            Axis::Physical,
+                            axis_title(lang, Axis::Physical),
+                        );
+                    }
+                });
+            if self.axis == Axis::Brightness && color {
+                ui.label(tr(lang, "Channel"));
+                egui::ComboBox::from_id_salt("histogram_channel")
+                    .selected_text(shown_title(lang, self.channel))
+                    .show_ui(ui, |ui| {
+                        for choice in [
+                            Shown::Luma,
+                            Shown::One(Channel::Red),
+                            Shown::One(Channel::Green),
+                            Shown::One(Channel::Blue),
+                            Shown::Rgb,
+                        ] {
+                            ui.selectable_value(
+                                &mut self.channel,
+                                choice,
+                                shown_title(lang, choice),
+                            );
+                        }
+                    });
+            }
+            ui.checkbox(&mut self.log, tr(lang, "Logarithmic vertical axis"));
+            if self.counting.is_some() {
+                ui.spinner();
+            }
+        });
+        let Some((_, counted)) = &self.counted else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        };
+        let channel = if color { self.channel } else { Shown::Luma };
+        let graph = Graph::of(counted, channel, ui.visuals());
+        let changed = graph.series.iter().any(|s| s.after.is_some())
+            || matches!(counted, Counted::Physical { edited: Some(e), file, .. } if e != file);
+        legend(ui, lang, changed);
+        let height = (ui.available_height() - 100.0).max(80.0);
+        let hover = draw(ui, &graph, self.log, height);
+        stats_table(ui, lang, &graph, changed);
+        let text = match hover {
+            Some(i) => graph.hover_text(lang, i),
+            None => tr(lang, "Point at the graph to see the counts.").to_owned(),
+        };
+        ui.weak(text);
+    }
+}
+
+fn axis_title(lang: Language, axis: Axis) -> &'static str {
+    match axis {
+        Axis::Brightness => tr(lang, "Display brightness"),
+        Axis::Physical => tr(lang, "Physical value"),
+    }
+}
+
+fn shown_title(lang: Language, s: Shown) -> &'static str {
+    match s {
+        Shown::Luma => tr(lang, Channel::Luma.title()),
+        Shown::One(c) => tr(lang, c.title()),
+        Shown::Rgb => tr(lang, "RGB overlaid"),
+    }
+}
+
+/// グラフに描く 1 本分（1 チャンネル）。
+struct Series {
+    before: Vec<u32>,
+    after: Option<Vec<u32>>,
+    color: Color32,
+    before_stats: Stats,
+    after_stats: Option<Stats>,
+    name: &'static str,
+}
+
+/// 物理量の軸の窓（中心, 幅）。
+#[derive(Clone, Copy)]
+struct Windows {
+    before: (f64, f64),
+    after: Option<(f64, f64)>,
+}
+
+/// 描くものをまとめたもの。横軸は区間の番号で、値への換算は `value_at`。
+struct Graph {
+    series: Vec<Series>,
+    lo: f64,
+    hi: f64,
+    /// 物理量の軸の、変更前と変更後の窓（中心, 幅）。
+    windows: Option<Windows>,
+    unit: Option<String>,
+    physical: bool,
+    /// 塗りの色（変更前）。チャンネルを重ねるときは各チャンネルの色を薄くして使う。
+    single: bool,
+}
+
+impl Graph {
+    fn of(counted: &Counted, shown: Shown, visuals: &egui::Visuals) -> Self {
+        let accent = visuals.selection.stroke.color;
+        match counted {
+            Counted::Levels { before, after } => {
+                let channels: Vec<Channel> = match shown {
+                    Shown::Luma => vec![Channel::Luma],
+                    Shown::One(c) => vec![c],
+                    Shown::Rgb => vec![Channel::Red, Channel::Green, Channel::Blue],
+                };
+                let single = channels.len() == 1;
+                let series = channels
+                    .into_iter()
+                    .map(|c| {
+                        let b = before.channel(c).to_vec();
+                        let a = after.as_ref().map(|a| a.channel(c).to_vec());
+                        Series {
+                            before_stats: histogram::level_stats(&b),
+                            after_stats: a.as_deref().map(histogram::level_stats),
+                            before: b,
+                            after: a,
+                            color: if single { accent } else { channel_color(c) },
+                            name: c.title(),
+                        }
+                    })
+                    .collect();
+                Self {
+                    series,
+                    lo: 0.0,
+                    hi: (LEVELS - 1) as f64,
+                    windows: None,
+                    unit: None,
+                    physical: false,
+                    single,
+                }
+            }
+            Counted::Physical {
+                histogram: h,
+                file,
+                edited,
+                unit,
+            } => Self {
+                series: vec![Series {
+                    before: h.before.clone(),
+                    after: h.after.clone(),
+                    color: accent,
+                    before_stats: h.before_stats,
+                    after_stats: h.after_stats,
+                    name: Channel::Luma.title(),
+                }],
+                lo: h.lo,
+                hi: h.hi,
+                windows: Some(Windows {
+                    before: (file.center, file.width),
+                    after: edited.filter(|e| e != file).map(|e| (e.center, e.width)),
+                }),
+                unit: unit.clone(),
+                physical: true,
+                single: true,
+            },
+        }
+    }
+
+    fn bins(&self) -> usize {
+        self.series.first().map_or(1, |s| s.before.len()).max(1)
+    }
+
+    fn value_at(&self, i: usize) -> f64 {
+        if self.physical {
+            self.lo + (self.hi - self.lo) * (i as f64 + 0.5) / self.bins() as f64
+        } else {
+            i as f64
+        }
+    }
+
+    fn format(&self, v: f64) -> String {
+        let n = if self.physical {
+            format!("{v:.1}")
+        } else {
+            format!("{v:.0}")
+        };
+        match &self.unit {
+            Some(u) => format!("{n} {u}"),
+            None => n,
+        }
+    }
+
+    fn hover_text(&self, lang: Language, i: usize) -> String {
+        let mut parts = vec![format!(
+            "{}: {}",
+            tr(lang, "Value"),
+            self.format(self.value_at(i))
+        )];
+        for s in &self.series {
+            let prefix = if self.single {
+                String::new()
+            } else {
+                format!("{} ", tr(lang, s.name))
+            };
+            parts.push(match &s.after {
+                Some(a) => format!(
+                    "{prefix}{} {} / {} {}",
+                    tr(lang, "before"),
+                    s.before[i],
+                    tr(lang, "after"),
+                    a[i]
+                ),
+                None => format!("{prefix}{}", s.before[i]),
+            });
+        }
+        parts.push(tr(lang, "pixels").to_owned());
+        parts.join("   ")
+    }
+}
+
+fn channel_color(c: Channel) -> Color32 {
+    match c {
+        Channel::Red => Color32::from_rgb(230, 90, 90),
+        Channel::Green => Color32::from_rgb(90, 200, 110),
+        Channel::Blue => Color32::from_rgb(100, 140, 240),
+        Channel::Luma => Color32::GRAY,
+    }
+}
+
+fn legend(ui: &mut egui::Ui, lang: Language, changed: bool) {
+    ui.horizontal(|ui| {
+        let before = ui.visuals().weak_text_color();
+        let accent = ui.visuals().selection.stroke.color;
+        swatch(ui, before, true);
+        ui.label(tr(lang, "Before (file values)"));
+        if changed {
+            swatch(ui, accent, false);
+            ui.label(tr(lang, "After (pixel pipeline)"));
+        } else {
+            ui.weak(tr(lang, "No change in the pixel pipeline"));
+        }
+    });
+}
+
+fn swatch(ui: &mut egui::Ui, color: Color32, fill: bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 10.0), Sense::hover());
+    if fill {
+        ui.painter()
+            .rect_filled(rect, 1.0, color.gamma_multiply(0.6));
+    } else {
+        ui.painter().line_segment(
+            [rect.left_center(), rect.right_center()],
+            Stroke::new(1.5, color),
+        );
+    }
+}
+
+/// グラフを描き、カーソルが乗っている区間の番号を返す。
+fn draw(ui: &mut egui::Ui, g: &Graph, log: bool, height: f32) -> Option<usize> {
+    let label_h = 16.0;
+    let (outer, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+    let rect = outer.with_max_y(outer.max.y - label_h);
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(outer);
+    painter.rect_filled(rect, 2.0, visuals.extreme_bg_color);
+    let bins = g.bins();
+    let peak = g
+        .series
+        .iter()
+        .flat_map(|s| s.before.iter().chain(s.after.iter().flatten()))
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
+    let height_of = |n: u32| {
+        let r = if log {
+            (n as f32).ln_1p() / peak.ln_1p()
+        } else {
+            n as f32 / peak
+        };
+        r * rect.height()
+    };
+    let bin_w = rect.width() / bins as f32;
+    let x_of_bin = |i: usize| rect.min.x + (i as f32 + 0.5) * bin_w;
+    let weak = visuals.weak_text_color();
+    for s in &g.series {
+        let fill = if g.single {
+            weak.gamma_multiply(0.6)
+        } else {
+            s.color.gamma_multiply(0.3)
+        };
+        for (i, &n) in s.before.iter().enumerate() {
+            if n == 0 {
+                continue;
+            }
+            let x = rect.min.x + i as f32 * bin_w;
+            let r = Rect::from_min_max(
+                pos2(x, rect.max.y - height_of(n)),
+                pos2((x + bin_w).max(x + 1.0), rect.max.y),
+            );
+            painter.rect_filled(r, 0.0, fill);
+        }
+    }
+    for s in &g.series {
+        if let Some(after) = &s.after {
+            let points: Vec<Pos2> = after
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| pos2(x_of_bin(i), rect.max.y - height_of(n)))
+                .collect();
+            painter.add(egui::Shape::line(points, Stroke::new(1.5, s.color)));
+        }
+    }
+    if let Some(Windows { before, after }) = g.windows {
+        let x_of_value =
+            |v: f64| rect.min.x + ((v - g.lo) / (g.hi - g.lo).max(1e-9)) as f32 * rect.width();
+        let accent = visuals.selection.stroke.color;
+        let edges = |(c, w): (f64, f64)| [c - w / 2.0, c + w / 2.0];
+        for v in edges(before) {
+            let x = x_of_value(v);
+            painter.extend(egui::Shape::dashed_line(
+                &[pos2(x, rect.min.y), pos2(x, rect.max.y)],
+                Stroke::new(1.0, weak),
+                4.0,
+                3.0,
+            ));
+        }
+        if let Some(after) = after {
+            for v in edges(after) {
+                let x = x_of_value(v);
+                painter.line_segment(
+                    [pos2(x, rect.min.y), pos2(x, rect.max.y)],
+                    Stroke::new(1.5, accent),
+                );
+            }
+        }
+    }
+    let font = egui::FontId::proportional(11.0);
+    let y = rect.max.y + 2.0;
+    painter.text(
+        pos2(rect.min.x, y),
+        egui::Align2::LEFT_TOP,
+        g.format(g.lo),
+        font.clone(),
+        weak,
+    );
+    painter.text(
+        pos2(rect.max.x, y),
+        egui::Align2::RIGHT_TOP,
+        g.format(g.hi),
+        font,
+        weak,
+    );
+    let pointer = response.hover_pos().filter(|p| rect.contains(*p))?;
+    let i = (((pointer.x - rect.min.x) / bin_w) as usize).min(bins - 1);
+    let x = x_of_bin(i);
+    painter.line_segment(
+        [pos2(x, rect.min.y), pos2(x, rect.max.y)],
+        Stroke::new(1.0, visuals.strong_text_color().gamma_multiply(0.5)),
+    );
+    Some(i)
+}
+
+fn stats_table(ui: &mut egui::Ui, lang: Language, g: &Graph, changed: bool) {
+    egui::Grid::new("histogram_stats")
+        .num_columns(5)
+        .spacing([18.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("");
+            for h in ["Minimum", "Maximum", "Mean", "Standard deviation"] {
+                ui.weak(tr(lang, h));
+            }
+            ui.end_row();
+            for s in &g.series {
+                let name = |when: &'static str| {
+                    if g.single {
+                        tr(lang, when).to_owned()
+                    } else {
+                        format!("{} {}", tr(lang, s.name), tr(lang, when))
+                    }
+                };
+                let row = |ui: &mut egui::Ui, label: String, st: &Stats| {
+                    ui.label(label);
+                    for v in [st.min, st.max] {
+                        ui.label(g.format(v));
+                    }
+                    ui.label(format!("{:.2}", st.mean));
+                    ui.label(format!("{:.2}", st.std_dev));
+                    ui.end_row();
+                };
+                row(ui, name("Before"), &s.before_stats);
+                if let (true, Some(a)) = (changed, &s.after_stats) {
+                    row(ui, name("After"), a);
+                }
+            }
+        });
+}
