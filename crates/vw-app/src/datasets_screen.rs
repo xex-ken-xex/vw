@@ -8,7 +8,7 @@ use egui_phosphor::regular as icon;
 
 use crate::dataset_search::{self, Condition, Hit, Index, Op, Query, Target};
 use crate::i18n::{tr, tr1};
-use crate::settings::Language;
+use crate::settings::{Language, SearchGroup};
 
 /// 画面から頼まれること。
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +27,8 @@ pub enum Action {
     Reload,
     /// 送る。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
     Send(PathBuf, Option<Vec<String>>, crate::dicom_send::Choice),
+    /// 今のメタデータの条件のキーを、検索のグループとして設定に足す（同じ名前なら置き換える）。
+    SaveGroup(SearchGroup),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,6 +54,11 @@ pub struct DatasetsScreen {
     hovered: Option<PathBuf>,
     sort: Column,
     descending: bool,
+    /// 条件をグループとして保存するときに入力中の名前。
+    group_name: Option<String>,
+    /// 名前の欄を出したフレーム。そのときだけ入力を欄へ向ける（毎フレーム向けると
+    /// 「保存」ボタンの押下を奪うため）。
+    focus_group_name: bool,
 }
 
 impl Default for DatasetsScreen {
@@ -68,6 +75,8 @@ impl Default for DatasetsScreen {
             hovered: None,
             sort: Column::Location,
             descending: false,
+            group_name: None,
+            focus_group_name: false,
         }
     }
 }
@@ -146,6 +155,7 @@ impl DatasetsScreen {
         lang: Language,
         roots: &[String],
         fields: &[String],
+        groups: &[SearchGroup],
         destinations: &[String],
     ) -> Option<Action> {
         self.poll();
@@ -208,7 +218,9 @@ impl DatasetsScreen {
                 }
             });
             if self.advanced {
-                self.conditions_ui(ui, lang, &field_names);
+                if let Some(a) = self.conditions_ui(ui, lang, &field_names, groups) {
+                    action = Some(a);
+                }
             }
             ui.add_space(4.0);
         });
@@ -271,7 +283,13 @@ impl DatasetsScreen {
         });
     }
 
-    fn conditions_ui(&mut self, ui: &mut egui::Ui, lang: Language, field_names: &[String]) {
+    fn conditions_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        field_names: &[String],
+        groups: &[SearchGroup],
+    ) -> Option<Action> {
         let tags = self.index.as_ref().map(Index::tags).unwrap_or_default();
         let values = self
             .index
@@ -355,20 +373,85 @@ impl DatasetsScreen {
         if let Some(i) = remove {
             self.query.conditions.remove(i);
         }
-        if ui
-            .button(format!("{} {}", icon::PLUS, tr(lang, "Condition")))
-            .clicked()
-        {
-            self.query.conditions.push(Condition {
-                target: Target::Meta {
-                    kind: String::new(),
-                    key: String::new(),
+        let mut action = None;
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!("{} {}", icon::PLUS, tr(lang, "Condition")))
+                .clicked()
+            {
+                self.query.conditions.push(Condition {
+                    target: Target::Meta {
+                        kind: String::new(),
+                        key: String::new(),
+                    },
+                    op: Op::Contains,
+                    value: String::new(),
+                    max: String::new(),
+                });
+            }
+            ui.menu_button(
+                format!("{} {} {}", icon::STACK, tr(lang, "Group"), icon::CARET_DOWN),
+                |ui| {
+                    if groups.is_empty() {
+                        ui.weak(tr(lang, "Add search groups in Settings > Datasets."));
+                    }
+                    for g in groups {
+                        if ui
+                            .button(&g.name)
+                            .on_hover_text(g.keys.join("\n"))
+                            .clicked()
+                        {
+                            add_group(&mut self.query.conditions, g);
+                            ui.close();
+                        }
+                    }
                 },
-                op: Op::Contains,
-                value: String::new(),
-                max: String::new(),
-            });
-        }
+            );
+            let savable = group_from(&self.query.conditions, "x").is_some();
+            let focus = std::mem::take(&mut self.focus_group_name);
+            match &mut self.group_name {
+                None => {
+                    if ui
+                        .add_enabled(
+                            savable,
+                            egui::Button::new(tr(lang, "Save as group...")),
+                        )
+                        .on_hover_text(tr(
+                            lang,
+                            "Save the keys of the metadata conditions as a search group in the settings.",
+                        ))
+                        .clicked()
+                    {
+                        self.group_name = Some(String::new());
+                        self.focus_group_name = true;
+                    }
+                }
+                Some(name) => {
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(name)
+                            .hint_text(tr(lang, "Group name"))
+                            .desired_width(140.0),
+                    );
+                    if focus {
+                        edit.request_focus();
+                    }
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.group_name = None;
+                        return;
+                    }
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let group = group_from(&self.query.conditions, name);
+                    let save = ui.add_enabled(group.is_some(), egui::Button::new(tr(lang, "Save")));
+                    if save.clicked() || (enter && group.is_some()) {
+                        action = group.map(Action::SaveGroup);
+                        self.group_name = None;
+                    } else if ui.button(tr(lang, "Cancel")).clicked() {
+                        self.group_name = None;
+                    }
+                }
+            }
+        });
+        action
     }
 
     fn detail_panel(
@@ -652,6 +735,47 @@ impl DatasetsScreen {
 
 /// 検索で絞り込んだときだけ、当たったファイルのパス。すべてのファイルが当たったときは、
 /// データセットそのものを渡すのと同じため `None`。
+/// グループのキーごとに、値の一致の条件を足す。同じキーの条件がもうあれば足さない。
+fn add_group(conditions: &mut Vec<Condition>, group: &SearchGroup) {
+    for k in &group.keys {
+        let (kind, key) = SearchGroup::split_key(k);
+        let present = conditions.iter().any(|c| {
+            matches!(&c.target, Target::Meta { kind: ck, key: kk }
+                if ck.trim().eq_ignore_ascii_case(kind) && kk.trim().eq_ignore_ascii_case(key))
+        });
+        if !present {
+            conditions.push(Condition {
+                target: Target::Meta {
+                    kind: kind.to_owned(),
+                    key: key.to_owned(),
+                },
+                op: Op::Equals,
+                value: String::new(),
+                max: String::new(),
+            });
+        }
+    }
+}
+
+/// 今の条件のうち、キーのあるメタデータの条件を `name` のグループにする。なければ `None`。
+fn group_from(conditions: &[Condition], name: &str) -> Option<SearchGroup> {
+    let keys: Vec<String> = conditions
+        .iter()
+        .filter_map(|c| match &c.target {
+            Target::Meta { kind, key } if !key.trim().is_empty() => Some(match kind.trim() {
+                "" => key.trim().to_owned(),
+                kind => format!("{kind}:{}", key.trim()),
+            }),
+            _ => None,
+        })
+        .collect();
+    let group = SearchGroup {
+        name: name.trim().to_owned(),
+        keys,
+    };
+    group.problem().is_none().then_some(group)
+}
+
 fn narrowed_paths(index: &Index, hit: &Hit) -> Option<Vec<String>> {
     let files = &index.entries[hit.entry].catalog.files;
     hit.narrowed
@@ -819,6 +943,100 @@ mod tests {
             screen.poll();
         }
         screen.index().expect("discovery finished")
+    }
+
+    fn meta(kind: &str, key: &str, op: Op, value: &str) -> Condition {
+        Condition {
+            target: Target::Meta {
+                kind: kind.into(),
+                key: key.into(),
+            },
+            op,
+            value: value.into(),
+            max: String::new(),
+        }
+    }
+
+    #[test]
+    fn picking_a_group_adds_an_equals_condition_per_key_it_does_not_have_yet() {
+        let group = SearchGroup {
+            name: "Patient".into(),
+            keys: vec!["PatientID".into(), "exif:Model".into(), "0010,0010".into()],
+        };
+        let mut conditions = vec![meta("", "patientid", Op::Contains, "12")];
+        add_group(&mut conditions, &group);
+        assert_eq!(
+            conditions,
+            [
+                meta("", "patientid", Op::Contains, "12"),
+                meta("exif", "Model", Op::Equals, ""),
+                meta("", "0010,0010", Op::Equals, ""),
+            ]
+        );
+    }
+
+    #[test]
+    fn saving_conditions_as_a_group_keeps_only_metadata_keys() {
+        let conditions = vec![
+            meta("", "PatientID", Op::Equals, "12"),
+            Condition {
+                target: Target::Name,
+                op: Op::Contains,
+                value: "ct".into(),
+                max: String::new(),
+            },
+            meta("exif", "Model", Op::Equals, ""),
+            meta("", " ", Op::Equals, ""),
+        ];
+        let group = group_from(&conditions, " Mine ").unwrap();
+        assert_eq!(group.name, "Mine");
+        assert_eq!(group.keys, ["PatientID", "exif:Model"]);
+        assert_eq!(group_from(&conditions, ""), None);
+        assert_eq!(group_from(&conditions[1..2], "Mine"), None);
+    }
+
+    #[test]
+    fn a_group_filled_with_exact_values_finds_only_the_matching_files() {
+        let dir = crate::test_util::TempDir::new();
+        let files: &[&[(&str, &str, &str)]] = &[
+            &[("dicom", "0010,0020", "P1"), ("dicom", "0008,0060", "CT")],
+            &[("dicom", "0010,0020", "P12"), ("dicom", "0008,0060", "CT")],
+            &[("dicom", "0010,0020", "P1"), ("dicom", "0008,0060", "MR")],
+        ];
+        let mut c = Catalog {
+            name: "set".into(),
+            ..Catalog::default()
+        };
+        for (n, triples) in files.iter().enumerate() {
+            let mut ids = Vec::new();
+            for &(k, key, v) in *triples {
+                let t = (k.to_owned(), key.to_owned(), v.to_owned());
+                let i = c.meta.iter().position(|x| *x == t).unwrap_or_else(|| {
+                    c.meta.push(t);
+                    c.meta.len() - 1
+                });
+                ids.push(i as u32);
+            }
+            c.files.push(catalog::FileEntry {
+                path: format!("{n}.dcm"),
+                size: 0,
+                modified: String::new(),
+                meta: ids,
+            });
+        }
+        catalog::save(dir.path(), &c).unwrap();
+        let index = Index::discover(&[dir.path().to_path_buf()]);
+        let group = SearchGroup {
+            name: "Patient".into(),
+            keys: vec!["PatientID".into(), "Modality".into()],
+        };
+        let mut query = Query::default();
+        add_group(&mut query.conditions, &group);
+        query.conditions[0].value = "P1".into();
+        query.conditions[1].value = "ct".into();
+        let hits = dataset_search::search(&index, &query).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].files, [0]);
     }
 
     #[test]

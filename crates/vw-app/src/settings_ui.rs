@@ -11,7 +11,7 @@ use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refu
 use crate::layout::SlotLayout;
 use crate::settings::{
     parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
-    LoadModifier, Settings, ThemeChoice, Tree, Viewer,
+    LoadModifier, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -70,7 +70,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 39] = [
+const ITEMS: [Item; 40] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -252,6 +252,13 @@ const ITEMS: [Item; 39] = [
         title: "Dataset fields",
         description: "Fields you fill in for each dataset besides the name, memo and tags (such as where the data came from), separated by commas. They can be used as search conditions.",
         widget: dataset_fields_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.search_groups",
+        title: "Search groups",
+        description: "Sets of metadata keys offered in the advanced search, one per line as name = key; key; key. Picking one adds an \"equals\" condition for each key, so you only type the values. Keys are tag numbers (0010,0020) or names (PatientID); put kind: in front to limit the kind (exif:Model).",
+        widget: search_groups_widget,
     },
     Item {
         section: Section::Fullscreen,
@@ -782,6 +789,53 @@ fn dataset_roots_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
     } else {
         if r.lost_focus() && parsed != s.dataset.roots {
             s.dataset.roots = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+/// 1 行に 1 組。読めない行があるうちは反映しない（打っている途中の行で組が消えないように）。
+fn search_groups_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("dataset.search_groups.edit");
+    let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| {
+        s.dataset
+            .search_groups
+            .iter()
+            .map(SearchGroup::to_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .hint_text("Patient = PatientID; PatientName")
+            .desired_rows(4)
+            .desired_width(420.0),
+    );
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let parsed: Vec<SearchGroup> = lines
+        .iter()
+        .filter_map(|l| SearchGroup::parse_line(l))
+        .collect();
+    let mut names = std::collections::HashSet::new();
+    let unique = parsed.iter().all(|g| names.insert(g.name.as_str()));
+    let valid = parsed.len() == lines.len() && unique;
+    if !valid {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            tr(
+                lang,
+                "Write each line as name = key; key, with a different name on each line.",
+            ),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && valid && parsed != s.dataset.search_groups {
+            s.dataset.search_groups = parsed;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));
@@ -1437,7 +1491,10 @@ mod tests {
         for i in &ITEMS {
             let (table, field) = i.key.split_once('.').unwrap();
             assert!(toml.contains(&format!("[{table}]")), "{}", i.key);
-            assert!(toml.contains(&format!("{field} = ")), "{}", i.key);
+            // 表の配列（検索のグループなど）は `[[table.field]]` の見出しで書かれる。
+            let as_value = toml.contains(&format!("{field} = "));
+            let as_tables = toml.contains(&format!("[[{}]]", i.key));
+            assert!(as_value || as_tables, "{}", i.key);
         }
     }
 

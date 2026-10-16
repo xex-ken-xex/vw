@@ -189,6 +189,22 @@ pub struct Condition {
     pub max: String,
 }
 
+impl Condition {
+    /// 値をまだ入れていない。検索のグループで並べた条件は、値を入れたものから効かせる。
+    ///
+    /// 空の値で「含む」を全件、「一致」を 0 件として効かせないのは、グループを選んで
+    /// 値を 1 つ入れた時点で、残りの空の行のせいで結果が消えたり変わったりしないため。
+    /// キーがあるかどうかは「exists」で探せる。
+    pub fn is_blank(&self) -> bool {
+        let empty = |s: &str| s.trim().is_empty();
+        match self.op {
+            Op::Contains | Op::Equals | Op::Regex => empty(&self.value),
+            Op::Range => empty(&self.value) && empty(&self.max),
+            Op::Exists => false,
+        }
+    }
+}
+
 /// 簡易検索の 1 行と、詳細検索の条件。すべて AND で組み合わせる。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Query {
@@ -278,7 +294,7 @@ pub fn search(index: &Index, query: &Query) -> Result<Vec<Hit>, String> {
     for term in query.text.split_whitespace() {
         checks.push(term_check(term));
     }
-    for c in &query.conditions {
+    for c in query.conditions.iter().filter(|c| !c.is_blank()) {
         checks.push(condition_check(c)?);
     }
     let mut hits = Vec::new();
@@ -575,6 +591,26 @@ mod tests {
             ..Query::default()
         };
         assert!(names(&i, &q).is_empty());
+    }
+
+    #[test]
+    fn conditions_without_a_value_are_left_out_until_filled() {
+        let i = sample();
+        let q = Query {
+            conditions: vec![
+                cond(meta("dicom", "0010,0020"), Op::Equals, "A"),
+                cond(meta("dicom", "0008,0060"), Op::Equals, " "),
+                cond(meta("dicom", "0008,0020"), Op::Contains, ""),
+                cond(meta("image", "width"), Op::Range, ""),
+            ],
+            ..Query::default()
+        };
+        let only_patient = Query {
+            conditions: q.conditions[..1].to_vec(),
+            ..Query::default()
+        };
+        assert_eq!(names(&i, &q), names(&i, &only_patient));
+        assert!(!names(&i, &q).is_empty());
     }
 
     #[test]
