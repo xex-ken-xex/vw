@@ -1,0 +1,45 @@
+name: Pages
+
+# site/ の紹介ページを GitHub Pages に出す。スクリーンショットは README と同じ docs/ のものを
+# 使い回し、ビルド時にコピーする（site/ に複製を置くと README と食い違うため）。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/screenshot.png'
+      - 'docs/images/**'
+      - 'packaging/icons/vw.png'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/images
+          cp site/*.html _site/
+          cp docs/screenshot.png docs/images/*.png packaging/icons/vw.png _site/images/
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

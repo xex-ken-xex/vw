@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vw – 速い画像ビューワ</title>
+<meta name="description" content="vw は Linux と Windows で動く、起動と表示がとても速い画像ビューワです。たくさんの画像を見て、選り分けて、探せるようにしまっておけます。無料・オープンソース。">
+<meta property="og:title" content="vw – 速い画像ビューワ">
+<meta property="og:description" content="Linux / Windows 向けの、起動と表示がとても速い画像ビューワ。見る・タグを付ける・カタログで管理する。">
+<meta property="og:image" content="https://xex-ken-xex.github.io/vw/images/screenshot.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="images/vw.png" type="image/png">
+<style>
+:root {
+  --bg: #1e1e1e; --panel: #252526; --line: #3c3c3c; --text: #d4d4d4; --muted: #9a9a9a;
+  --accent: #4fc1ff; --accent-2: #c586c0; --good: #6cc48a; --code: #2d2d2d;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #fafafa; --panel: #ffffff; --line: #dcdcdc; --text: #222; --muted: #666; --accent: #0b6fc2; --accent-2: #8a3a8a; --good: #2d8a4e; --code: #f0f0f0; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", Meiryo, system-ui, sans-serif; line-height: 1.7; font-size: 16px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+header { border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+header .wrap { display: flex; align-items: center; gap: 14px; height: 52px; }
+header img { width: 28px; height: 28px; }
+header .name { font-weight: 700; font-size: 18px; letter-spacing: .02em; }
+header nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
+header nav a { color: var(--text); }
+.hero { padding: 56px 0 32px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 36px; align-items: center; }
+.hero h1 { font-size: 40px; line-height: 1.2; margin: 0 0 14px; }
+.hero h1 small { display: block; font-size: 18px; font-weight: 400; color: var(--muted); margin-top: 8px; }
+.hero p.lead { font-size: 18px; margin: 0 0 22px; }
+.hero img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 600; font-size: 15px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:hover { text-decoration: none; filter: brightness(1.1); }
+.version { font-size: 13px; color: var(--muted); margin-top: 10px; }
+section { padding: 36px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 26px; margin: 0 0 18px; }
+h3 { font-size: 18px; margin: 22px 0 8px; }
+.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+.card .icon { font-size: 28px; }
+.card h3 { margin: 6px 0 8px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.card img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+ul.plain { padding-left: 1.2em; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: var(--panel); white-space: nowrap; }
+code, pre { font-family: Consolas, "Cascadia Mono", "Noto Sans Mono CJK JP", monospace; background: var(--code); border-radius: 4px; }
+code { padding: 1px 5px; font-size: 14px; }
+pre { padding: 12px 14px; overflow-x: auto; font-size: 14px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.two > div, .three > div { min-width: 0; }
+ol { padding-left: 1.4em; }
+.note { color: var(--muted); font-size: 14px; }
+footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
+footer a { color: var(--muted); text-decoration: underline; }
+.en { font-size: 15px; }
+@media (max-width: 820px) {
+  .hero { grid-template-columns: 1fr; padding-top: 32px; }
+  .hero h1 { font-size: 32px; }
+  .three, .two { grid-template-columns: 1fr; }
+  header nav { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <img src="images/vw.png" alt="">
+    <span class="name">vw</span>
+    <nav>
+      <a href="#features">できること</a>
+      <a href="#formats">対応形式</a>
+      <a href="#download">ダウンロード</a>
+      <a href="#install">インストール</a>
+      <a href="https://github.com/xex-ken-xex/vw#readme">使い方（README）</a>
+      <a href="https://github.com/xex-ken-xex/vw">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <h1>速い画像ビューワ <span style="color:var(--accent)">vw</span>
+        <small>Linux と Windows で、たくさんの画像を「見る・選り分ける・探す」</small></h1>
+      <p class="lead">起動してすぐ使え、数千枚のフォルダでも待たされません。16bit の画像を落とさずに読み、
+        ZIP / 7z の中もそのまま見られます。タグやカタログは別のファイルに保存するので、元の画像には一切手を加えません。</p>
+      <div class="buttons">
+        <a class="btn primary" id="dl-win" href="https://github.com/xex-ken-xex/vw/releases/latest">⬇ Windows 版をダウンロード</a>
+        <a class="btn" id="dl-linux" href="https://github.com/xex-ken-xex/vw/releases/latest">⬇ Linux 版 (x86_64)</a>
+        <a class="btn" href="https://github.com/xex-ken-xex/vw">GitHub でソースを見る</a>
+      </div>
+      <div class="version" id="version">最新版: <a href="https://github.com/xex-ken-xex/vw/releases/latest">Releases</a> を見る ・ 無料・オープンソース（MIT / Apache-2.0）</div>
+    </div>
+    <a href="images/screenshot.png"><img src="images/screenshot.png" alt="vw の画面。左にフォルダツリー、中央に画像のスロット、右にメタデータ、下にログ" width="1280" height="800"></a>
+  </div>
+
+  <section id="features">
+    <h2>できること</h2>
+    <div class="three">
+      <div class="card">
+        <div class="icon">🖼️</div>
+        <h3>画像を見る</h3>
+        <p>フォルダの画像を何枚も並べて、すばやく見比べます。拡大・縮小、スライドショー、アニメーション（WebP / GIF）の再生、
+          自動レイアウトとページ送り。新しい画像がフォルダに増えると自動で表示します。</p>
+        <img src="images/maximize-play.png" alt="最大化と再生バー" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🏷️</div>
+        <h3>タグを付ける</h3>
+        <p>「良い / 悪い」のフラグと、自分で決めたタグ（例: 山・海・花）をキー 1 つで付けます。
+          付けたもので絞り込み、別のフォルダへコピーしたり、CSV / JSONL に書き出したり。機械学習の学習データ作りにも。</p>
+        <img src="images/tagging.png" alt="タグ付けモード" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🗂️</div>
+        <h3>カタログで管理する</h3>
+        <p>フォルダを「データセット」として登録すると、中の画像の撮影情報などを集めた検索カタログを作ります。
+          「ISO 800 以上で撮った写真が入っているフォルダ」のように中身で探し、必要なものを取り出せます。</p>
+        <img src="images/dataset-search.png" alt="データセットの画面" loading="lazy">
+      </div>
+    </div>
+    <h3>ほかの特長</h3>
+    <ul class="plain">
+      <li><b>速い</b>: 画像の読み込みは裏で並行して行い、表示は GPU で描きます</li>
+      <li><b>画質を落とさない</b>: 16bit の画像も 8bit に落とさずに読み込みます</li>
+      <li><b>画像ファイルを書き換えない</b>: タグやカタログは別のファイルに保存します</li>
+      <li><b>ZIP / 7z の中もそのまま見られる</b>: パスワード付きのものも開けます</li>
+      <li><b>画素の変換を見る・変える</b>: 色導出のウインドウで、ファイルの値から表示までの段をたどり、式やレベル補正などのノードを足して見比べられます</li>
+      <li><b>日本語表示</b>: メニューや設定を日本語にできます（初期設定は英語）</li>
+      <li><b>無料・オープンソース</b>: MIT / Apache-2.0 のデュアルライセンス</li>
+    </ul>
+  </section>
+
+  <section id="formats">
+    <h2>対応している形式</h2>
+    <table>
+      <tr><th>形式</th><th>内容</th></tr>
+      <tr><td>PNG</td><td>1〜16bit、グレー / RGB / アルファ / パレット</td></tr>
+      <tr><td>JPEG</td><td>ベースライン / プログレッシブ、グレー / カラー / CMYK。EXIF の向きを反映し、撮影情報を表示</td></tr>
+      <tr><td>WebP</td><td>非可逆 / 可逆、透過、EXIF。アニメーションは全コマを 1 つのスロットに並べて再生</td></tr>
+      <tr><td>GIF</td><td>透過。アニメーションは全コマを 1 つのスロットに並べて再生</td></tr>
+      <tr><td>BMP</td><td>1〜32bit、パレット / RLE / ビットフィールド、上下逆の BMP も</td></tr>
+      <tr><td>TIFF</td><td>1〜16bit の整数と 32bit の実数、グレー / RGB / アルファ / パレット / CMYK、CCITT G3 / G4、LZW / Deflate / PackBits / JPEG 圧縮、タイル、BigTIFF、複数ページ</td></tr>
+      <tr><td>カメラ RAW</td><td>Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF（Canon CR2 / CR3、DNG も）。埋め込みプレビューを先に出し、裏で現像して精細な画像に差し替えます</td></tr>
+      <tr><td>ZIP / 7z</td><td>中の画像をフォルダと同じように開けます。パスワード付き（ZIP は ZipCrypto と AES、7z は AES）も可</td></tr>
+    </table>
+  </section>
+
+  <section id="download">
+    <h2>ダウンロード</h2>
+    <p><a href="https://github.com/xex-ken-xex/vw/releases">Releases</a> のページから、使っている OS のファイルをダウンロードします。</p>
+    <table>
+      <tr><th>ファイル</th><th>対象</th></tr>
+      <tr><td><a id="dl-win-2" href="https://github.com/xex-ken-xex/vw/releases/latest"><code>vw-windows-x64.zip</code></a></td><td>Windows 10 / 11（64bit）</td></tr>
+      <tr><td><a id="dl-linux-2" href="https://github.com/xex-ken-xex/vw/releases/latest"><code>vw-linux-x64.tar.gz</code></a></td><td>Ubuntu 22.04 以降など、x86_64 の Linux</td></tr>
+    </table>
+    <p class="note">Releases には <b>vX.Y.Z</b>（正式版。通常はこちら）と <b>最新ビルド (main)</b>（開発中の最新版。変更が入るたびに自動で置き換わります）があります。</p>
+  </section>
+
+  <section id="install">
+    <h2>インストール</h2>
+    <div class="two">
+      <div>
+        <h3>Windows</h3>
+        <p>インストーラーはありません。zip を展開するだけで使えます。</p>
+        <ol>
+          <li><code>vw-windows-x64.zip</code> をダウンロードします</li>
+          <li>zip を右クリック → <b>すべて展開</b> で、好きな場所（例: <code>C:\Tools\vw</code>）に展開します</li>
+          <li>展開したフォルダの <code>vw.exe</code> をダブルクリックすると起動します</li>
+        </ol>
+        <p class="note">Chrome で「一般的にダウンロードされていないファイルです」と止められたときは、<code>chrome://downloads</code> を開き、vw の行の <b>保存</b> を押します。
+          初回起動で「Windows によって PC が保護されました」と出たら、<b>詳細情報</b> → <b>実行</b> で起動できます。どちらも、vw にまだ署名がないために出る表示です。</p>
+        <p class="note">アンインストールは、展開したフォルダと <code>%APPDATA%\vw</code> を消すだけです。レジストリは使っていません。</p>
+      </div>
+      <div>
+        <h3>Ubuntu</h3>
+<pre>tar xzf vw-linux-x64.tar.gz
+cd vw
+./install.sh</pre>
+        <p><code>install.sh</code> は <code>vw</code> を <code>~/.local/bin</code> に置き、アプリ一覧に登録します（管理者権限は使いません）。
+          インストールせずに <code>./vw</code> を実行して使うこともできます。</p>
+        <p class="note">サーバー版や最小構成で起動しない場合:</p>
+<pre>sudo apt install libxkbcommon-x11-0 libgl1 libegl1 \
+  libxcursor1 libxrandr2 libxi6 fonts-noto-cjk</pre>
+        <p class="note">アンインストールは <code>./install.sh --uninstall</code> です。</p>
+      </div>
+    </div>
+    <h3>日本語表示にする</h3>
+    <p>vw は初めは英語で表示されます。左下の歯車（または Ctrl+,）で設定画面を開き、<b>Appearance</b> の <b>Language</b> を <b>日本語</b> にします。その場で切り替わります。</p>
+    <h3>次に読むもの</h3>
+    <ul class="plain">
+      <li><a href="https://github.com/xex-ken-xex/vw#はじめの-5-分">はじめの 5 分</a> — 写真を見る、タグを付ける、カタログを作る、をひととおり</li>
+      <li><a href="https://github.com/xex-ken-xex/vw#キー操作の一覧">キー操作の一覧</a></li>
+      <li><a href="https://github.com/xex-ken-xex/vw#よくある質問と困ったとき">よくある質問と困ったとき</a></li>
+      <li><a href="https://github.com/xex-ken-xex/vw/issues">不具合の報告・要望（GitHub Issues）</a></li>
+    </ul>
+  </section>
+
+  <section id="english" class="en">
+    <h2>English</h2>
+    <p><b>vw</b> is a fast image viewer for Linux and Windows: it starts instantly, shows thousands of images without waiting,
+      keeps 16-bit data intact, and opens ZIP / 7z archives in place. Flag and tag images with one key, filter and export them
+      (CSV / JSONL, or copies per tag for machine-learning datasets), and register folders as datasets to build a searchable
+      catalog of their metadata. Supports PNG, JPEG, WebP, GIF, BMP, TIFF and camera RAW (Nikon, Sony, Fujifilm; Canon and DNG too).
+      The UI is English by default, with Japanese available. Free and open source under MIT OR Apache-2.0.</p>
+    <p><a href="https://github.com/xex-ken-xex/vw/releases/latest">Download the latest release</a> ·
+      <a href="https://github.com/xex-ken-xex/vw">Source on GitHub</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    Copyright (c) 2026 vw contributors · 作者: xex（<a href="https://github.com/xex-ken-xex">xex-ken-xex</a>） ·
+    <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-MIT">MIT</a> OR <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-APACHE">Apache-2.0</a>
+  </div>
+</footer>
+
+<script>
+// 最新の正式版の番号と直接のダウンロード先を Releases から取る。取れなければ Releases のページへのリンクのまま。
+fetch("https://api.github.com/repos/xex-ken-xex/vw/releases/latest")
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(rel => {
+    const asset = name => (rel.assets || []).find(a => a.name === name);
+    const win = asset("vw-windows-x64.zip"), linux = asset("vw-linux-x64.tar.gz");
+    if (win) for (const id of ["dl-win", "dl-win-2"]) document.getElementById(id).href = win.browser_download_url;
+    if (linux) for (const id of ["dl-linux", "dl-linux-2"]) document.getElementById(id).href = linux.browser_download_url;
+    const date = rel.published_at ? new Date(rel.published_at).toLocaleDateString("ja-JP") : "";
+    document.getElementById("version").innerHTML =
+      `最新版: <a href="${rel.html_url}">${rel.tag_name}</a>${date ? "（" + date + "）" : ""} ・ 無料・オープンソース（MIT / Apache-2.0）`;
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>
