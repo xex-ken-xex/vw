@@ -3766,6 +3766,7 @@ dependencies = [
  "dicom-pixeldata",
  "dicom-transfer-syntax-registry",
  "dicom-ul",
+ "encoding",
  "vw-core",
 ]
 

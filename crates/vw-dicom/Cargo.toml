@@ -14,6 +14,7 @@ dicom-pixeldata = { version = "0.10", default-features = false, features = ["jpe
 dicom-ul = "0.10"
 dicom-encoding = "0.10"
 dicom-transfer-syntax-registry = { version = "0.10", default-features = false }
+encoding = "0.2"
 
 [dev-dependencies]
 charls = { version = "0.4.2", features = ["static"] }
