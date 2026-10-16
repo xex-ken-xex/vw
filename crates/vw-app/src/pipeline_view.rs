@@ -23,6 +23,7 @@ use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
 
 use egui_phosphor::regular as icon;
 
+use crate::format_stages::{self, Stage};
 use crate::i18n::{tr, tr_text};
 use crate::loader::ImageInfo;
 use crate::nodes::{self, Chain};
@@ -72,6 +73,8 @@ enum Node {
     Voi,
     Presentation,
     ColorSpace,
+    /// DICOM 以外の形式の、ファイルの段の `i` 番目（[`format_stages`]）。
+    Stage(usize),
     /// 自由なノードの鎖の `i` 番目。
     Chain(usize),
     Display,
@@ -91,14 +94,13 @@ const GRAY_FILE: [Node; 5] = [
     Node::Presentation,
 ];
 const COLOR_FILE: [Node; 2] = [Node::Stored, Node::ColorSpace];
-const PLAIN_FILE: [Node; 1] = [Node::Stored];
 
 /// ノードの配置を形式ごとに分けて覚えるための鍵。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {
     Gray,
     Color,
-    /// DICOM 以外。ファイルの段は 1 つにまとめて出す。
+    /// DICOM 以外。ファイルの段はメタデータから組む。
     Plain,
 }
 
@@ -111,15 +113,16 @@ impl Kind {
         }
     }
 
-    fn file_nodes(self) -> &'static [Node] {
+    /// ファイルの段のノード。`stages` は DICOM 以外の形式の段の数。
+    fn file_nodes(self, stages: usize) -> Vec<Node> {
         match self {
-            Kind::Gray => &GRAY_FILE,
-            Kind::Color => &COLOR_FILE,
-            Kind::Plain => &PLAIN_FILE,
+            Kind::Gray => GRAY_FILE.to_vec(),
+            Kind::Color => COLOR_FILE.to_vec(),
+            Kind::Plain => (0..stages).map(Node::Stage).collect(),
         }
     }
 
-    fn groups(self, chain_len: usize) -> Vec<Group> {
+    fn groups(self, stages: usize, chain_len: usize) -> Vec<Group> {
         let mut groups = match self {
             Kind::Gray => vec![
                 Group {
@@ -135,7 +138,12 @@ impl Kind {
                     nodes: vec![Node::Presentation],
                 },
             ],
-            Kind::Color | Kind::Plain => Vec::new(),
+            Kind::Color => Vec::new(),
+            Kind::Plain if stages > 1 => vec![Group {
+                title: "File",
+                nodes: (1..stages).map(Node::Stage).collect(),
+            }],
+            Kind::Plain => Vec::new(),
         };
         if chain_len > 0 {
             groups.push(Group {
@@ -166,6 +174,7 @@ impl Node {
             Node::Voi => "voi",
             Node::Presentation => "presentation",
             Node::ColorSpace => "color_space",
+            Node::Stage(_) => "stage",
             Node::Chain(_) => "chain",
             Node::Display => "display",
         }
@@ -189,7 +198,7 @@ enum Loaded {
     Gray(Box<GrayState>),
     Color(Color),
     /// DICOM 以外。ファイルの段は変えられず、ノードの鎖だけを当てる。
-    Plain,
+    Plain(Vec<Stage>),
     Failed(String),
 }
 
@@ -198,7 +207,7 @@ impl Loaded {
         match self {
             Loaded::Gray(_) => Some(Kind::Gray),
             Loaded::Color(_) => Some(Kind::Color),
-            Loaded::Plain => Some(Kind::Plain),
+            Loaded::Plain(_) => Some(Kind::Plain),
             Loaded::Reading(_) | Loaded::Failed(_) => None,
         }
     }
@@ -235,7 +244,7 @@ impl PipelineView {
     pub fn node_positions(&self) -> BTreeMap<String, [f32; 2]> {
         self.positions
             .iter()
-            .filter(|((_, node), _)| !matches!(node, Node::Chain(_)))
+            .filter(|((_, node), _)| !matches!(node, Node::Chain(_) | Node::Stage(_)))
             .map(|((kind, node), p)| (format!("{}.{}", kind.key(), node.key()), [p.x, p.y]))
             .collect()
     }
@@ -317,7 +326,7 @@ impl PipelineView {
     fn values(&self) -> Option<Values> {
         let params = match self.loaded.as_ref()? {
             Loaded::Gray(g) => (g.params != g.file).then_some(g.params),
-            Loaded::Color(_) | Loaded::Plain => None,
+            Loaded::Color(_) | Loaded::Plain(_) => None,
             Loaded::Reading(_) | Loaded::Failed(_) => return None,
         };
         Some(Values {
@@ -332,10 +341,17 @@ impl PipelineView {
         let path = target.map(|t| t.path.to_path_buf());
         if path != self.path {
             self.path = path.clone();
-            self.loaded = path.map(|p| match target.map(|t| t.info.plugin.as_str()) {
-                Some("DICOM") => Loaded::Reading(pixel_pipeline::read_in_background(ctx, &p)),
-                _ => Loaded::Plain,
+            self.loaded = target.map(|t| match t.info.plugin.as_str() {
+                "DICOM" => Loaded::Reading(pixel_pipeline::read_in_background(ctx, t.path)),
+                _ => Loaded::Plain(Vec::new()),
             });
+        }
+        // RAW は現像が終わると段が増えるので、パスが同じでも段は毎フレーム合わせる。
+        if let (Some(Loaded::Plain(stages)), Some(t)) = (&mut self.loaded, target) {
+            let now = format_stages::stages(t.info);
+            if *stages != now {
+                *stages = now;
+            }
         }
         self.chain = target
             .and_then(|t| t.values)
@@ -516,14 +532,17 @@ impl PipelineView {
             }
             Some(loaded) => loaded.kind().expect("loaded kinds are matched above"),
         };
+        let stages = match &self.loaded {
+            Some(Loaded::Plain(s)) => s.len(),
+            _ => 0,
+        };
         let flow: Vec<Node> = kind
-            .file_nodes()
-            .iter()
-            .copied()
+            .file_nodes(stages)
+            .into_iter()
             .chain((0..self.chain.len()).map(Node::Chain))
             .chain([Node::Display])
             .collect();
-        let groups = kind.groups(self.chain.len());
+        let groups = kind.groups(stages, self.chain.len());
         let Some(info) = info else {
             return edited;
         };
@@ -704,8 +723,13 @@ impl PipelineView {
         }
 
         // 鎖のノードは並び順で置く（足す・外す・入れ替えるたびに番号が変わるので、覚えない）。
-        // 表示のノードは覚えた位置を鎖の長さの分だけ右にずらす。
-        let chain_shift = vec2(self.chain.len() as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
+        // 形式ごとの段も同じ（形式が変わると数が変わる）。表示のノードは覚えた位置を、
+        // 鎖の長さと「段が 1 つのとき」からの増えた分だけ右にずらす。
+        let stage_count = flow.iter().filter(|n| matches!(n, Node::Stage(_))).count();
+        let chain_shift = vec2(
+            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP),
+            0.0,
+        );
         let mut chain_edit: Option<(usize, ChainEdit)> = None;
         for (i, &node) in flow.iter().enumerate() {
             let default = pos2(i as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
@@ -714,7 +738,7 @@ impl PipelineView {
                 _ => Vec2::ZERO,
             };
             let pos = match node {
-                Node::Chain(_) => default,
+                Node::Chain(_) | Node::Stage(_) => default,
                 _ => self
                     .positions
                     .get(&(kind, node))
@@ -725,7 +749,7 @@ impl PipelineView {
             edited |= body_edited;
             chain_edit = chain_edit.or(chain.map(|c| (i, c)));
             self.rects.insert(node, transform.inverse().mul_rect(rect));
-            if moved != Vec2::ZERO && !matches!(node, Node::Chain(_)) {
+            if moved != Vec2::ZERO && !matches!(node, Node::Chain(_) | Node::Stage(_)) {
                 self.positions
                     .insert((kind, node), pos + moved / scale - shift);
             }
@@ -859,8 +883,12 @@ impl PipelineView {
                 let kind = self.chain.get(i).map_or("", nodes::Node::kind);
                 format!("{}  {}", i + 1, tr(lang, nodes::Node::title(kind)))
             }
+            Node::Stage(i) => match &self.loaded {
+                Some(Loaded::Plain(s)) => tr(lang, s.get(i).map_or("", |s| s.title)).to_owned(),
+                _ => String::new(),
+            },
             Node::Display => match &self.loaded {
-                Some(Loaded::Plain) | Some(Loaded::Color(_)) => tr(lang, "Display").to_owned(),
+                Some(Loaded::Plain(_)) | Some(Loaded::Color(_)) => tr(lang, "Display").to_owned(),
                 _ => tr(lang, node_title(node)).to_owned(),
             },
             _ => tr(lang, node_title(node)).to_owned(),
@@ -888,8 +916,8 @@ impl PipelineView {
                 color_body(ui, lang, node, c);
                 false
             }
-            Some(Loaded::Plain) => {
-                plain_body(ui, lang, node, info);
+            Some(Loaded::Plain(stages)) => {
+                plain_body(ui, lang, node, info, stages);
                 false
             }
             _ => false,
@@ -977,6 +1005,7 @@ fn node_title(node: Node) -> &'static str {
         Node::Voi => "VOI LUT",
         Node::Presentation => "Presentation LUT",
         Node::ColorSpace => "Color space",
+        Node::Stage(_) => "Stage",
         Node::Chain(_) => "Node",
         Node::Display => "Display",
     }
@@ -1219,24 +1248,46 @@ fn gray_body(
                 ));
             }
         }
-        Node::ColorSpace | Node::Chain(_) => {}
+        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) => {}
     }
     edited
 }
 
-/// DICOM 以外の形式。ファイルの段は変えられないので、画像の情報だけを出す。
-fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo) {
+/// DICOM 以外の形式。ファイルの段は変えられないので、メタデータから組んだ段の値を出す。
+fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, stages: &[Stage]) {
     match node {
-        Node::Stored => {
-            ui.label(&info.plugin);
-            ui.label(format!(
-                "{} × {}  {} bit  {}",
-                info.width,
-                info.height,
-                info.significant_bits,
-                color_name(lang, info.color)
-            ));
-            ui.weak(tr(lang, "This format has no editable file stages."));
+        Node::Stage(i) => {
+            let Some(stage) = stages.get(i) else {
+                return;
+            };
+            if i == 0 {
+                ui.label(format!(
+                    "{} × {}  {} bit  {}",
+                    info.width,
+                    info.height,
+                    info.significant_bits,
+                    color_name(lang, info.color)
+                ));
+            }
+            if !stage.lines.is_empty() {
+                egui::Grid::new(("stage", i))
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        for (name, value) in &stage.lines {
+                            ui.weak(tr_text(lang, name));
+                            // 長い値（EXIF の文など）でノードが横に伸びないよう切り詰める。
+                            ui.add(egui::Label::new(value).truncate());
+                            ui.end_row();
+                        }
+                    });
+            }
+            if let Some(note) = stage.note {
+                ui.weak(tr(lang, note));
+            }
+            if i == 0 {
+                ui.weak(tr(lang, "This format has no editable file stages."));
+            }
         }
         Node::Display => {
             ui.label(if info.color.channels() >= 3 {
@@ -1523,7 +1574,7 @@ mod tests {
     #[test]
     fn values_keep_file_stage_values_only_when_they_differ_from_the_file() {
         let mut view = PipelineView {
-            loaded: Some(Loaded::Plain),
+            loaded: Some(Loaded::Plain(Vec::new())),
             ..Default::default()
         };
         assert_eq!(view.values(), Some(Values::default()));

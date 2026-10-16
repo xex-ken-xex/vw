@@ -109,10 +109,51 @@ fn developed(
     raw_metadata: Option<&RawMetadata>,
     preview: Option<&DynamicImage>,
 ) -> Result<VwImage, DecodeError> {
-    let mut img = develop(decoder, source, params, preview)?;
+    let (mut img, steps) = develop(decoder, source, params, preview)?;
     img.metadata = metadata(raw_metadata, Some(Shown::Developed));
+    steps.push_to(&mut img.metadata);
     img.apply_orientation(orientation(raw_metadata).into());
     Ok(img)
+}
+
+/// 現像で使った値。色導出の図に段として出す。
+struct DevelopSteps {
+    black: Vec<f32>,
+    white: Vec<u32>,
+    white_balance: [f32; 4],
+    gain: f32,
+}
+
+impl DevelopSteps {
+    fn push_to(&self, m: &mut Metadata) {
+        let list = |v: &[String]| v.join(", ");
+        m.push(
+            "RAW",
+            "Black level",
+            list(
+                &self
+                    .black
+                    .iter()
+                    .map(|b| trim(f64::from(*b)))
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        m.push(
+            "RAW",
+            "White level",
+            list(&self.white.iter().map(u32::to_string).collect::<Vec<_>>()),
+        );
+        let wb: Vec<String> = self
+            .white_balance
+            .iter()
+            .filter(|c| c.is_finite() && **c != 0.0)
+            .map(|c| format!("{c:.3}"))
+            .collect();
+        if !wb.is_empty() {
+            m.push("RAW", "White balance", list(&wb));
+        }
+        m.push("RAW", "Brightness gain", format!("{:.2}", self.gain));
+    }
 }
 
 /// EXIF の向き（1〜8）。分からなければ 1。
@@ -152,8 +193,14 @@ fn develop(
     source: &RawSource,
     params: &RawDecodeParams,
     preview: Option<&DynamicImage>,
-) -> Result<VwImage, DecodeError> {
+) -> Result<(VwImage, DevelopSteps), DecodeError> {
     let raw = decoder.raw_image(source, params, false).map_err(invalid)?;
+    let mut used = DevelopSteps {
+        black: raw.blacklevel.as_vec(),
+        white: raw.whitelevel.0.clone(),
+        white_balance: raw.wb_coeffs,
+        gain: 1.0,
+    };
     // sRGB のガンマは、明るさを合わせてから自分で掛ける。明るさは光の量に比例する
     // ガンマ前の値で掛け合わせないと、色の比が崩れるため。
     let mut steps = RawDevelop::default();
@@ -162,6 +209,7 @@ fn develop(
     let gain = preview.map_or(1.0, |p| {
         brightness_gain(median_luminance_of_preview(p), median_luminance(&linear))
     });
+    used.gain = gain;
     let encode = |v: f32| srgb_apply_gamma((v * gain).clamp(0.0, 1.0));
     match &mut linear {
         Intermediate::Monochrome(p) => p.for_each(encode),
@@ -171,7 +219,7 @@ fn develop(
     let developed = linear
         .to_dynamic_image()
         .ok_or_else(|| DecodeError::Invalid("developed image has no pixels".into()))?;
-    from_dynamic(developed)
+    Ok((from_dynamic(developed)?, used))
 }
 
 /// 中央値を測るのに使う画素の数の目安。全画素を使わないのは、数千万画素を並べ替えると
