@@ -7,6 +7,7 @@ use vw_core::{PixelData, VwImage};
 use vw_dicom::pipeline::{Gray, Pipeline};
 
 use crate::frames;
+use crate::nodes::Float;
 
 /// VOI LUT Function（DICOM PS3.3 C.11.2.1.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,37 +191,104 @@ pub fn stored_value(image: &VwImage, decoded: &Decoded, i: usize) -> f64 {
     decoded.stored(&image.data, i)
 }
 
-/// 画像の `i` 番目のサンプルを `p` の値で描いたときの明るさ。
-pub fn display_value(image: &VwImage, decoded: &Decoded, p: &Params, i: usize) -> u8 {
-    brightness(decoded.stored(&image.data, i) * p.slope + p.intercept, p)
+/// 物理量 `modality` を `p` の窓で 0〜1 に写した表示の値。
+fn unit_brightness(modality: f64, p: &Params) -> f64 {
+    let y = p.function.apply(modality, p.center, p.width);
+    if p.invert {
+        1.0 - y
+    } else {
+        y
+    }
 }
 
 fn brightness(modality: f64, p: &Params) -> u8 {
-    let y = p.function.apply(modality, p.center, p.width);
-    let y = if p.invert { 1.0 - y } else { y };
-    (y * 255.0).round() as u8
+    (unit_brightness(modality, p) * 255.0).round() as u8
 }
 
-/// `p` の値で描いた画像。
-pub fn render(image: &VwImage, decoded: &Decoded, p: &Params) -> ColorImage {
+/// `p` の値で描いた表示の値（0〜1、グレー 1 チャンネル）。自由なノードはこの後ろに当てる。
+pub fn float_of_params(image: &VwImage, decoded: &Decoded, p: &Params) -> Float {
     let (w, h) = (image.width as usize, image.height as usize);
-    let mut pixels = vec![Color32::BLACK; w * h];
+    let mut data = vec![0.0f32; w * h];
     let rows_per = h.div_ceil(threads(w * h)).max(1);
     std::thread::scope(|scope| {
-        for (chunk_index, chunk) in pixels.chunks_mut(rows_per * w).enumerate() {
+        for (chunk_index, chunk) in data.chunks_mut(rows_per * w).enumerate() {
             scope.spawn(move || {
                 let first = chunk_index * rows_per * w;
-                for (k, px) in chunk.iter_mut().enumerate() {
+                for (k, out) in chunk.iter_mut().enumerate() {
                     let m = decoded.stored(&image.data, first + k) * p.slope + p.intercept;
-                    let g = brightness(m, p);
-                    *px = Color32::from_gray(g);
+                    *out = unit_brightness(m, p) as f32;
                 }
             });
         }
     });
-    ColorImage::new([w, h], pixels)
+    Float::new(w, h, 1, data)
 }
 
+/// 標準の写し方（[`vw_core::display::to_display`] と同じ式）で 0〜1 にした表示の値。
+/// DICOM 以外の画像と、カラーの DICOM に使う。U16 は有効ビットの全範囲、F32 は
+/// 画像の窓か最小〜最大を 0〜1 に写すので、8bit に落とす前の階調が残る。
+pub fn float_of_display(image: &VwImage) -> Float {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let samples = image.color.channels();
+    let channels = if samples >= 3 { 3 } else { 1 };
+    let n = w * h;
+    let mut data = Vec::with_capacity(n * channels);
+    let mut push = |sample: &dyn Fn(usize) -> f32| {
+        for i in 0..n {
+            for c in 0..channels {
+                data.push(sample(i * samples + c));
+            }
+        }
+    };
+    match &image.data {
+        PixelData::U8(v) => match image.window {
+            None => push(&|i| f32::from(v[i]) * (1.0 / 255.0)),
+            Some((lo, hi)) => {
+                let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
+                push(&|i| ((f32::from(v[i]) - lo) * scale).clamp(0.0, 255.0) / 255.0);
+            }
+        },
+        PixelData::U16(v) => {
+            let max = ((1u32 << image.significant_bits.clamp(1, 16)) - 1) as f32;
+            let (lo, hi) = image.window.unwrap_or((0.0, max));
+            let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
+            push(&|i| ((f32::from(v[i]) - lo) * scale).clamp(0.0, 255.0) / 255.0);
+        }
+        PixelData::F32(v) => {
+            let (lo, hi) = image.window.unwrap_or_else(|| {
+                v.iter()
+                    .filter(|x| x.is_finite())
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)))
+            });
+            let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
+            push(&|i| ((v[i] - lo) * scale).clamp(0.0, 255.0) / 255.0);
+        }
+    }
+    Float::new(w, h, channels, data)
+}
+
+/// 標準の表示（RGBA）。
+pub fn standard_display(image: &VwImage) -> Vec<u8> {
+    // 大きな画像も縮めない（ノードは全画素に当てるので、標準も同じ大きさで要る）。
+    let params = vw_core::DisplayParams {
+        max_side: u32::MAX,
+        ..Default::default()
+    };
+    vw_core::display::to_display(image, &params).rgba
+}
+
+/// `float` を丸めた表示と、標準の表示のアルファを合わせた画像。
+pub fn to_color_image(float: &Float, standard_rgba: &[u8]) -> ColorImage {
+    let rgb = float.to_rgb8();
+    let pixels = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(standard_rgba.as_chunks::<4>().0)
+        .map(|(c, s)| Color32::from_rgba_premultiplied(c[0], c[1], c[2], s[3]))
+        .collect();
+    ColorImage::new([float.width, float.height], pixels)
+}
 /// 小さな画像はスレッドを分けない（立ち上げの方が高くつく）。
 fn threads(pixels: usize) -> usize {
     if pixels < 512 * 512 {
@@ -269,26 +337,20 @@ pub struct Mismatch {
     pub max: u8,
 }
 
-/// 標準の表示の明るさ（グレースケールなので R だけ）。
-pub fn standard_gray(image: &VwImage) -> Vec<u8> {
-    let shown = vw_core::display::to_display(image, &vw_core::DisplayParams::default());
-    shown.rgba.iter().step_by(4).copied().collect()
-}
-
-/// ファイルの値 `file` で描いた画像が標準の表示 `standard` と同じか確かめる。
+/// 何も変えていない `float` を丸めた表示が、標準の表示 `standard_rgba` と同じか確かめる。
 ///
-/// 色導出は「標準と同じ画像から、値を変えたところだけが変わる」ことが前提なので、
+/// 色導出は「標準と同じ画像から、変えたところだけが変わる」ことが前提なので、
 /// 食い違うファイル（VOI LUT Function が SIGMOID など、標準が表せない変換）では使わない。
-pub fn check_standard(
-    image: &VwImage,
-    decoded: &Decoded,
-    file: &Params,
-    standard: &[u8],
-) -> Result<(), Mismatch> {
-    let n = image.width as usize * image.height as usize;
+pub fn check_standard(float: &Float, standard_rgba: &[u8]) -> Result<(), Mismatch> {
+    let rgb = float.to_rgb8();
     let (mut pixels, mut max) = (0usize, 0u8);
-    for (i, &s) in standard.iter().enumerate().take(n) {
-        let d = display_value(image, decoded, file, i).abs_diff(s);
+    for (c, s) in rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(standard_rgba.as_chunks::<4>().0)
+    {
+        let d = (0..3).map(|k| c[k].abs_diff(s[k])).max().unwrap_or(0);
         if d > 0 {
             pixels += 1;
             max = max.max(d);
@@ -301,14 +363,19 @@ pub fn check_standard(
     }
 }
 
-/// 変更後と標準の明るさの差 |変更後 − 標準| のヒートマップと、差の最大。
+/// 変更後と標準の明るさの差 |変更後 − 標準|（RGB の最大）のヒートマップと、差の最大。
 /// 色の目盛りは差の最大に合わせる（差が小さくても見えるように）。
-pub fn difference(derived: &ColorImage, standard: &[u8]) -> (ColorImage, u8) {
+pub fn difference(derived: &ColorImage, standard_rgba: &[u8]) -> (ColorImage, u8) {
     let diffs: Vec<u8> = derived
         .pixels
         .iter()
-        .zip(standard)
-        .map(|(c, &s)| c.r().abs_diff(s))
+        .zip(standard_rgba.as_chunks::<4>().0)
+        .map(|(c, s)| {
+            c.r()
+                .abs_diff(s[0])
+                .max(c.g().abs_diff(s[1]))
+                .max(c.b().abs_diff(s[2]))
+        })
         .collect();
     let max = diffs.iter().copied().max().unwrap_or(0);
     let pixels = diffs
@@ -323,7 +390,6 @@ pub fn difference(derived: &ColorImage, standard: &[u8]) -> (ColorImage, u8) {
         .collect();
     (ColorImage::new(derived.size, pixels), max)
 }
-
 /// 0..=1 を 黒 → 赤 → 黄 → 白 の色にする。
 pub fn heat(t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0) * 3.0;
@@ -433,9 +499,8 @@ mod tests {
     #[test]
     fn render_uses_the_changed_window() {
         let image = ct(&[-1000.0, 40.0, 1000.0]);
-        let img = render(&image, &CT, &params(40.0, 400.0));
-        let gray: Vec<u8> = img.pixels.iter().map(|c| c.r()).collect();
-        assert_eq!(gray, vec![0, 128, 255]);
+        let float = float_of_params(&image, &CT, &params(40.0, 400.0));
+        assert_eq!(float.to_rgb8()[..7], [0, 0, 0, 128, 128, 128, 255]);
     }
 
     #[test]
@@ -484,7 +549,10 @@ mod tests {
         let (image, g) = synth_image(bytes);
         let decoded = Decoded::of(&g);
         let file = file_params(&g, &image, &decoded);
-        check_standard(&image, &decoded, &file, &standard_gray(&image))
+        check_standard(
+            &float_of_params(&image, &decoded, &file),
+            &standard_display(&image),
+        )
     }
 
     fn ramp_i16(n: usize, from: i16, step: i16) -> Vec<i16> {
@@ -537,6 +605,42 @@ mod tests {
         assert!(m.pixels > 0 && m.max > 1, "{m:?}");
     }
 
+    fn plain_matches(image: &VwImage) -> Result<(), Mismatch> {
+        check_standard(&float_of_display(image), &standard_display(image))
+    }
+
+    #[test]
+    fn plain_images_of_every_sample_type_reproduce_the_standard_display() {
+        use vw_core::ColorModel;
+        let gray8 =
+            VwImage::new(256, 1, ColorModel::Gray, PixelData::U8((0..=255).collect())).unwrap();
+        assert_eq!(plain_matches(&gray8), Ok(()));
+        let rgba8: Vec<u8> = (0..1024).map(|i| (i * 7 % 256) as u8).collect();
+        let rgba = VwImage::new(256, 1, ColorModel::Rgba, PixelData::U8(rgba8)).unwrap();
+        assert_eq!(plain_matches(&rgba), Ok(()));
+        for bits in [9u32, 10, 12, 14, 16] {
+            let max = (1u32 << bits) - 1;
+            // 標準の表示は長辺を縮めるので、全値を並べても縮まない幅に折り返す。
+            let width = (max + 1).min(4096);
+            let mut img = VwImage::new(
+                width,
+                (max + 1) / width,
+                ColorModel::Gray,
+                PixelData::U16((0..=max as u16).collect()),
+            )
+            .unwrap();
+            img.significant_bits = bits;
+            assert_eq!(plain_matches(&img), Ok(()), "{bits} bit");
+            img.window = Some((100.0, max as f32 * 0.6));
+            assert_eq!(plain_matches(&img), Ok(()), "{bits} bit, windowed");
+        }
+        let values: Vec<f32> = (0..2000).map(|i| i as f32 * 0.37 - 100.0).collect();
+        let mut f = VwImage::new(2000, 1, ColorModel::Gray, PixelData::F32(values)).unwrap();
+        assert_eq!(plain_matches(&f), Ok(()));
+        f.window = Some((-50.0, 300.0));
+        assert_eq!(plain_matches(&f), Ok(()));
+    }
+
     #[test]
     fn difference_scales_the_heat_to_the_largest_change() {
         let derived = ColorImage::new(
@@ -547,11 +651,12 @@ mod tests {
                 Color32::from_gray(100),
             ],
         );
-        let (heatmap, max) = difference(&derived, &[10, 40, 140]);
+        let standard = |g: [u8; 3]| -> Vec<u8> { g.iter().flat_map(|&v| [v, v, v, 255]).collect() };
+        let (heatmap, max) = difference(&derived, &standard([10, 40, 140]));
         assert_eq!(max, 40);
         assert_eq!(heatmap.pixels[0], Color32::BLACK);
         assert_eq!(heatmap.pixels[2], Color32::WHITE);
-        let (none, zero) = difference(&derived, &[10, 60, 100]);
+        let (none, zero) = difference(&derived, &standard([10, 60, 100]));
         assert_eq!(zero, 0);
         assert!(none.pixels.iter().all(|&c| c == Color32::BLACK));
     }

@@ -4,7 +4,7 @@
 
 use vw_core::VwImage;
 
-use crate::pixel_pipeline::{self, Decoded, Params};
+use crate::pixel_pipeline::{self, Decoded};
 use crate::roi::Region;
 
 /// 数える画素の添字。`region` がなければ画像全体。
@@ -103,21 +103,6 @@ pub fn levels_of_rgba(rgba: &[u8], width: u32, region: Option<Region>) -> Levels
     for i in indices(width, height, region) {
         let p = px[i];
         levels.add(p[0], p[1], p[2]);
-    }
-    levels
-}
-
-/// ピクセルパイプラインで手で変えた値 `p` で描いたときの明るさを数える。
-pub fn levels_of_params(
-    image: &VwImage,
-    decoded: &Decoded,
-    p: &Params,
-    region: Option<Region>,
-) -> Levels {
-    let mut levels = Levels::empty();
-    for i in indices(image.width, image.height, region) {
-        let g = pixel_pipeline::display_value(image, decoded, p, i);
-        levels.add(g, g, g);
     }
     levels
 }
@@ -259,7 +244,6 @@ pub fn level_stats(counts: &[u32]) -> Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pixel_pipeline::VoiFunction;
     use vw_core::{ColorModel, PixelData};
 
     fn ct(values: &[f32]) -> VwImage {
@@ -278,17 +262,6 @@ mod tests {
         negated: false,
     };
 
-    fn window(center: f64, width: f64) -> Params {
-        Params {
-            slope: 1.0,
-            intercept: -1024.0,
-            center,
-            width,
-            function: VoiFunction::Linear,
-            invert: false,
-        }
-    }
-
     #[test]
     fn gray_pixels_count_the_same_in_every_channel_and_are_not_color() {
         let l = levels_of_rgba(&[10, 10, 10, 255, 200, 200, 200, 0], 2, None);
@@ -306,15 +279,6 @@ mod tests {
         assert_eq!(l.red[255], 1);
         assert_eq!(l.green[0], 1);
         assert_eq!(l.luma[54], 1);
-    }
-
-    #[test]
-    fn changed_window_moves_pixels_to_other_levels() {
-        let image = ct(&[-1000.0, 40.0, 1000.0]);
-        let l = levels_of_params(&image, &CT, &window(40.0, 400.0), None);
-        assert_eq!((l.luma[0], l.luma[128], l.luma[255]), (1, 1, 1));
-        let narrow = levels_of_params(&image, &CT, &window(1000.0, 10.0), None);
-        assert_eq!(narrow.luma[0], 2);
     }
 
     #[test]

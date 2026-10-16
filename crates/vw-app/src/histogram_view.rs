@@ -28,6 +28,8 @@ pub struct Target<'a> {
     pub dicom: bool,
     /// ピクセルパイプラインで手で変えている値（この画像に当てているときだけ）。
     pub edited: Option<Params>,
+    /// 色導出で描いた画像（当てているときだけ）。明るさの軸の「変更後」に使う。
+    pub derived: Option<&'a Arc<egui::ColorImage>>,
     /// スロットに描いた対象と背景の ROI。
     pub target_roi: Option<Region>,
     pub background_roi: Option<Region>,
@@ -118,6 +120,7 @@ struct Key {
     image: usize,
     axis: Axis,
     edited: Option<Params>,
+    derived: Option<usize>,
     region: Option<Region>,
 }
 
@@ -304,6 +307,7 @@ impl HistogramView {
             image: Arc::as_ptr(image) as usize,
             axis: self.axis,
             edited: t.edited.filter(|_| gray.is_some()),
+            derived: t.derived.map(|d| Arc::as_ptr(d) as usize),
             region: self.range.region(t),
         };
         let done = self.counted.as_ref().is_some_and(|(k, _)| *k == key);
@@ -316,6 +320,7 @@ impl HistogramView {
             (g.decoded, file, g.unit.clone())
         });
         let (axis, edited, region) = (key.axis, key.edited, key.region);
+        let derived = t.derived.cloned();
         let rx = crate::background::compute(ctx, move || match (axis, gray) {
             (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
                 histogram: histogram::physical(
@@ -329,13 +334,12 @@ impl HistogramView {
                 edited,
                 unit,
             },
-            (_, gray) => {
+            _ => {
                 let shown = display::to_display(&image, &DisplayParams::default());
                 Counted::Levels {
                     before: histogram::levels_of_rgba(&shown.rgba, image.width, region),
-                    after: gray.zip(edited).map(|((decoded, _, _), p)| {
-                        histogram::levels_of_params(&image, &decoded, &p, region)
-                    }),
+                    after: derived
+                        .map(|d| histogram::levels_of_rgba(d.as_raw(), image.width, region)),
                 }
             }
         });
