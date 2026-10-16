@@ -154,6 +154,8 @@ pub struct VwApp {
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
+    /// 読み込みの流れ。ターミナル風のログ欄の上の行に出す。
+    throughput: crate::status::Throughput,
     first_frame: bool,
     /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
     state_path: Option<PathBuf>,
@@ -501,6 +503,7 @@ impl VwApp {
             last_extract_dir: saved.extract_dir.clone(),
             log,
             started,
+            throughput: crate::status::Throughput::new(started),
             first_frame: true,
             state_path,
             restoring,
@@ -2789,26 +2792,36 @@ impl VwApp {
         }
     }
 
-    /// ZIP の展開・データセットの読み込みや取り出し・書き出しの進み具合（0〜1）。何もしていなければ `None`。
-    fn activity(&self) -> Option<f32> {
+    /// 進めている処理の名前と (済んだ数, 全部の数)。ZIP の展開・データセットの読み込みや取り出し・書き出し・送信。
+    fn jobs(&self) -> Vec<(&'static str, usize, usize)> {
         let jobs = [
-            self.archives.progress(),
-            self.dataset_dialog.as_ref().and_then(|d| d.progress()),
-            self.export
-                .as_ref()
-                .and_then(|d| d.job.as_ref())
-                .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
-            self.send_job.as_ref().and_then(|j| j.progress()),
+            ("Extracting ZIP", self.archives.progress()),
+            (
+                "Dataset job",
+                self.dataset_dialog.as_ref().and_then(|d| d.progress()),
+            ),
+            (
+                "Exporting",
+                self.export
+                    .as_ref()
+                    .and_then(|d| d.job.as_ref())
+                    .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
+            ),
+            ("Sending", self.send_job.as_ref().and_then(|j| j.progress())),
         ];
-        let mut busy = false;
-        let mut fraction: f32 = 1.0;
-        for (done, total) in jobs.into_iter().flatten() {
-            busy = true;
-            // 一番遅れているものに合わせる。合計で出すと、終わりかけのものに隠れて
-            // 長い処理がもうすぐ終わるように見えてしまうため。
-            fraction = fraction.min(done as f32 / total.max(1) as f32);
-        }
-        busy.then_some(fraction.clamp(0.0, 1.0))
+        jobs.into_iter()
+            .filter_map(|(name, p)| p.map(|(done, total)| (name, done, total)))
+            .collect()
+    }
+
+    /// 進めている処理の進み具合（0〜1）。何もしていなければ `None`。
+    fn activity(&self) -> Option<f32> {
+        let jobs = self.jobs();
+        // 一番遅れているものに合わせる。合計で出すと、終わりかけのものに隠れて
+        // 長い処理がもうすぐ終わるように見えてしまうため。
+        jobs.iter()
+            .map(|&(_, done, total)| (done as f32 / total.max(1) as f32).clamp(0.0, 1.0))
+            .reduce(f32::min)
     }
 
     /// ウィンドウの一番下の細い線。処理中は灰色の上を赤い線が右へ伸び、普段は背景と同じ色で見えない。
@@ -3882,6 +3895,7 @@ impl VwApp {
     /// 読み込みスレッドからの結果をすべて取り出し、テクスチャにしてスロットへ渡す。
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(r) = self.loader.rx.try_recv() {
+            self.throughput.record(Instant::now());
             if let Some(show) = self
                 .fullscreen
                 .as_mut()
@@ -4468,7 +4482,10 @@ impl VwApp {
                     let group_sel = MetaSelection::Group(group.clone());
                     let is_selected = selected.as_ref() == Some(&group_sel);
                     let (_, head, _) = state
-                        .show_header(ui, |ui| ui.selectable_label(is_selected, group.as_str()))
+                        .show_header(ui, |ui| {
+                            // 欄より長い見出しで欄が押し広げられ、その幅のまま戻らなくなるため省略する。
+                            ui.add(egui::Button::selectable(is_selected, group.as_str()).truncate())
+                        })
                         .body(|ui| {
                             let avail = ui.available_width();
                             let gap = ui.spacing().item_spacing.x;
@@ -4592,6 +4609,45 @@ impl VwApp {
         action
     }
 
+    /// ターミナル風の上の 2 行。動いているものがあれば回るしるしのために細かく描き直し、
+    /// 何もなくても波形が流れるよう 1 秒ごとに描き直す。
+    fn status_lines(&self, ctx: &egui::Context) -> [Vec<crate::status::Segment>; 2] {
+        use crate::status::{self, Snapshot, Words};
+        let lang = self.lang();
+        let now = Instant::now();
+        let counts = self.loader.counts();
+        let jobs: Vec<status::Job> = self
+            .jobs()
+            .into_iter()
+            .map(|(name, done, total)| status::Job {
+                name: tr(lang, name),
+                done,
+                total,
+            })
+            .collect();
+        let busy = counts.waiting + counts.running > 0 || !jobs.is_empty();
+        ctx.request_repaint_after(Duration::from_millis(if busy { 125 } else { 1000 }));
+        let snapshot = Snapshot {
+            waiting: counts.waiting,
+            running: counts.running,
+            workers: counts.workers,
+            sparkline: self.throughput.sparkline(now),
+            rate: self.throughput.rate(now),
+            resident: self.full_states().iter().filter_map(|f| f.resident).sum(),
+            limit: self.settings.settings.viewer.full_image_limit_bytes(),
+            jobs,
+            spinner: status::spinner(now.duration_since(self.started).as_secs_f64()),
+        };
+        let words = Words {
+            load: tr(lang, "Loading"),
+            waiting: tr(lang, "waiting"),
+            per_second: tr(lang, "files/s"),
+            full: tr(lang, "Full-res"),
+            idle: tr(lang, "Idle"),
+        };
+        status::lines(&snapshot, &words)
+    }
+
     fn log_action(&mut self, ctx: &egui::Context, action: LogAction) {
         match action {
             LogAction::Style(style) => {
@@ -4641,8 +4697,19 @@ impl VwApp {
         } else {
             egui::Frame::new()
         };
+        let status = terminal.then(|| self.status_lines(ui.ctx()));
         let mut menu_target: Option<egui::Response> = None;
         frame.show(ui, |ui| {
+            if let Some(status) = &status {
+                for line in status {
+                    ui.add(
+                        egui::Label::new(status_job(line))
+                            .extend()
+                            .selectable(false),
+                    );
+                }
+                ui.add_space(2.0);
+            }
             let scroll = if terminal {
                 egui::ScrollArea::both()
             } else {
@@ -5532,6 +5599,22 @@ fn terminal_line(line: &log::Line) -> egui::Label {
             .color(color),
     )
     .extend()
+}
+
+fn status_job(line: &[crate::status::Segment]) -> egui::text::LayoutJob {
+    use crate::status::Tone;
+    let font = egui::FontId::monospace(12.0);
+    let mut job = egui::text::LayoutJob::default();
+    for (text, tone) in line {
+        let color = match tone {
+            Tone::Label => Color32::from_rgb(0x8a, 0x8a, 0x8a),
+            Tone::Value => Color32::from_rgb(0xe6, 0xe6, 0xe6),
+            Tone::Accent => Color32::from_rgb(0xe0, 0x8a, 0x5a),
+            Tone::Dim => Color32::from_rgb(0x5c, 0x5c, 0x5c),
+        };
+        job.append(text, 0.0, egui::TextFormat::simple(font.clone(), color));
+    }
+    job
 }
 
 /// 時刻を薄く、本文を重さの色で。1 つのラベルにするのは、範囲選択でコピーしたときに時刻と本文が 1 行に並ぶようにするため。

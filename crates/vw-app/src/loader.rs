@@ -4,6 +4,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -130,7 +131,17 @@ pub struct Loader {
     /// 現像の要求。普通の読み込みとは別のスレッドで処理する。現像は 1 枚に数秒かかるので、
     /// 同じ待ち行列に並べると、フォルダを開いたときのサムネイルが現像の後ろで待たされるため。
     develop_queue: Arc<(Mutex<Queue>, Condvar)>,
+    /// 読んでいる最中の要求の数。
+    running: Arc<AtomicUsize>,
+    workers: usize,
     pub rx: Receiver<LoadResult>,
+}
+
+/// 読み込みの込み具合。
+pub struct Counts {
+    pub waiting: usize,
+    pub running: usize,
+    pub workers: usize,
 }
 
 /// 現像に使うスレッドの数。
@@ -147,17 +158,25 @@ impl Loader {
         let queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
         let workers = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 8));
         let develop_queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
+        let running: Arc<AtomicUsize> = Arc::default();
         let queues = std::iter::repeat_n(&queue, workers)
             .chain(std::iter::repeat_n(&develop_queue, DEVELOP_WORKERS));
         for queue in queues {
-            let (registry, queue, tx, ctx) =
-                (registry.clone(), queue.clone(), tx.clone(), ctx.clone());
-            std::thread::spawn(move || worker(&registry, &queue, &tx, &ctx));
+            let (registry, queue, tx, ctx, running) = (
+                registry.clone(),
+                queue.clone(),
+                tx.clone(),
+                ctx.clone(),
+                running.clone(),
+            );
+            std::thread::spawn(move || worker(&registry, &queue, &tx, &ctx, &running));
         }
         Self {
             registry,
             queue,
             develop_queue,
+            running,
+            workers: workers + DEVELOP_WORKERS,
             rx,
         }
     }
@@ -176,6 +195,18 @@ impl Loader {
         let (lock, cvar) = &**queue;
         lock.lock().unwrap().jobs.push_back(job);
         cvar.notify_one();
+    }
+
+    pub fn counts(&self) -> Counts {
+        let waiting = [&self.queue, &self.develop_queue]
+            .iter()
+            .map(|q| q.0.lock().unwrap().jobs.len())
+            .sum();
+        Counts {
+            waiting,
+            running: self.running.load(Ordering::Relaxed),
+            workers: self.workers,
+        }
     }
 
     /// まだ始まっていない要求を取り消す。始まったものは最後まで読むが、結果は要求番号で捨てられる。
@@ -199,6 +230,7 @@ fn worker(
     queue: &(Mutex<Queue>, Condvar),
     tx: &Sender<LoadResult>,
     ctx: &egui::Context,
+    running: &AtomicUsize,
 ) {
     let (lock, cvar) = queue;
     loop {
@@ -214,11 +246,13 @@ fn worker(
                 q = cvar.wait(q).unwrap();
             }
         };
+        running.fetch_add(1, Ordering::Relaxed);
         let result = if job.develop {
             develop(registry, &job.path)
         } else {
             load_fit(registry, &job.path, job.thumb, job.full, job.fit_side)
         };
+        running.fetch_sub(1, Ordering::Relaxed);
         let sent = tx.send(LoadResult {
             slot: job.slot,
             request: job.request,

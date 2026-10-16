@@ -39,6 +39,7 @@ mod settings_ui;
 mod slideshow;
 mod sort;
 mod state;
+mod status;
 mod theme;
 mod toml_reader;
 mod transfer;
