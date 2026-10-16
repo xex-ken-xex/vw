@@ -17,6 +17,7 @@ use crate::i18n::tr;
 use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
 use crate::probe::{self, Mark};
+use crate::roi::{self, Region, Roi};
 use crate::settings::Language;
 
 /// 表示中の画像。縮小画像のテクスチャと、ログ・メタデータ表示用の情報を持つ。
@@ -221,6 +222,12 @@ pub struct Slot {
     pub marks: Vec<Mark>,
     /// 選んでいる十字（[`Slot::marks`] の添字）。
     selected_mark: Option<usize>,
+    /// 関心領域。十字と同じく、ファイルには書かずスロットを閉じると消える。
+    pub rois: Vec<Roi>,
+    /// 選んでいる ROI（[`Slot::rois`] の添字）。
+    selected_roi: Option<usize>,
+    /// ドラッグで描いている途中の ROI（種類と始点の画素）。
+    drawing: Option<(roi::Kind, (u32, u32))>,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -234,6 +241,8 @@ pub struct SlotLook<'a> {
     pub label: &'a Label,
     /// 画素値の確認ツールを使っている（クリックで十字を置き、カーソル位置の値を出す）。
     pub probe: bool,
+    /// ROI ツールを使っている（ドラッグで矩形を描く。左ドラッグはパンではなく描画になる）。
+    pub roi: bool,
     /// 右クリックの「送信 ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
 }
@@ -289,6 +298,14 @@ const ZOOM_BUTTON: PointerButton = PointerButton::Secondary;
 const MARK_ARM: f32 = 8.0;
 /// 十字をクリックで選べる距離（論理ピクセル）。
 const MARK_HIT: f32 = 8.0;
+
+/// ROI の色。対象は赤、背景は青（品質評価の資料と同じ色分け）。
+fn roi_color(kind: roi::Kind) -> Color32 {
+    match kind {
+        roi::Kind::Target => Color32::from_rgb(255, 80, 80),
+        roi::Kind::Background => Color32::from_rgb(90, 160, 255),
+    }
+}
 
 /// ホイールの回転量 `delta`（論理ピクセル、上に回すと正）を `acc` に足し、
 /// 1 段分たまるごとに送る枚数を返す。上に回すと前（負）、下に回すと次（正）。
@@ -449,6 +466,117 @@ impl Slot {
             last_body: None,
             marks: Vec::new(),
             selected_mark: None,
+            rois: Vec::new(),
+            selected_roi: None,
+            drawing: None,
+        }
+    }
+
+    /// 表示中の画像の ROI のうち、`kind` のもの。種類ごとに 1 つだけ持つ。
+    pub fn roi_of(&self, kind: roi::Kind) -> Option<Region> {
+        let shown = self.shown.as_ref()?;
+        self.rois
+            .iter()
+            .find(|r| r.path == shown.path && r.kind == kind)
+            .map(|r| r.region)
+    }
+
+    fn selected_shown_roi(&self) -> Option<&Roi> {
+        let shown = self.shown.as_ref()?;
+        self.selected_roi
+            .and_then(|i| self.rois.get(i))
+            .filter(|r| r.path == shown.path)
+    }
+
+    /// ROI の中の統計。元の画像を読み込み中なら `None`。
+    fn roi_stats(&self, region: Region) -> Option<crate::histogram::Stats> {
+        let shown = self.shown.as_ref()?;
+        let full = shown.full.as_ref()?;
+        Some(roi::stats(&full.image, &shown.info.metadata, region))
+    }
+
+    /// 選んでいる ROI をコピーするときの文字。
+    pub fn selected_roi_text(&self) -> Option<String> {
+        let r = self.selected_shown_roi()?;
+        let stats = self.roi_stats(r.region);
+        Some(roi::clipboard_text(
+            r.kind.title(),
+            r.region,
+            stats.as_ref(),
+        ))
+    }
+
+    /// 選んでいる ROI を消す。消したら `true`。
+    pub fn delete_selected_roi(&mut self) -> bool {
+        if self.selected_shown_roi().is_none() {
+            return false;
+        }
+        if let Some(i) = self.selected_roi.take() {
+            self.rois.remove(i);
+        }
+        true
+    }
+
+    /// 表示中の画像の ROI を描く。対象は赤、背景は青の破線。
+    fn draw_rois(
+        &self,
+        ui: &egui::Ui,
+        body: Rect,
+        lang: Language,
+        region_rect: &dyn Fn(Region) -> Rect,
+        drawing: Option<(roi::Kind, Region)>,
+    ) {
+        let Some(shown) = &self.shown else { return };
+        let painter = ui.painter_at(body);
+        let selected = self.selected_shown_roi();
+        let unit = roi::unit(&shown.info.metadata);
+        let shown_rois = self
+            .rois
+            .iter()
+            .filter(|r| r.path == shown.path)
+            .map(|r| (r.kind, r.region, selected == Some(r), true));
+        let in_progress = drawing.map(|(kind, region)| (kind, region, false, false));
+        for (kind, region, is_selected, finished) in shown_rois.chain(in_progress) {
+            let rect = region_rect(region);
+            // 選んでいる ROI は太くする。選択色に変えると背景（青）の ROI と見分けがつかないため。
+            let stroke_color = roi_color(kind);
+            let width = if is_selected { 2.5 } else { 1.0 };
+            let corners = [
+                rect.left_top(),
+                rect.right_top(),
+                rect.right_bottom(),
+                rect.left_bottom(),
+                rect.left_top(),
+            ];
+            // 明るい画像でも暗い画像でも見えるよう、黒い縁の上に破線を描く。
+            painter.add(egui::Shape::closed_line(
+                corners[..4].to_vec(),
+                egui::Stroke::new(3.0, Color32::from_black_alpha(140)),
+            ));
+            for pair in corners.windows(2) {
+                painter.add(egui::Shape::dashed_line(
+                    pair,
+                    egui::Stroke::new(width, stroke_color),
+                    6.0,
+                    4.0,
+                ));
+            }
+            let stats = finished.then(|| self.roi_stats(region)).flatten();
+            let text = roi::label(tr(lang, kind.title()), region, stats.as_ref(), unit);
+            let galley =
+                painter.layout_no_wrap(text, egui::FontId::proportional(12.0), stroke_color);
+            let pad = vec2(4.0, 1.0);
+            let size = galley.size() + 2.0 * pad;
+            // 矩形の上に出し、枠の上端で切れるときは矩形の中に入れる。
+            let y = if rect.top() - size.y - 2.0 >= body.top() {
+                rect.top() - size.y - 2.0
+            } else {
+                rect.top() + 2.0
+            };
+            let x = rect.left().max(body.left()).min(body.right() - size.x);
+            let pill = Rect::from_min_size(pos2(x, y), size);
+            painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
+            painter.galley(pill.min + pad, galley, stroke_color);
         }
     }
 
@@ -610,6 +738,7 @@ impl Slot {
             empty_hint,
             label: image_label,
             probe: probing,
+            roi: roi_tool,
             destinations,
         } = look;
         let mut out = SlotResponse::default();
@@ -656,7 +785,7 @@ impl Slot {
         self.last_body = Some(body.size());
         let base = self.base_scale(body);
         if let Some(shown) = &self.shown {
-            if response.dragged_by(PAN_BUTTON) {
+            if response.dragged_by(PAN_BUTTON) && !roi_tool {
                 self.pan += response.drag_delta();
             }
             if response.dragged_by(ZOOM_BUTTON) {
@@ -700,15 +829,65 @@ impl Slot {
             };
             let mark_pos =
                 |m: &Mark| img_rect.min + vec2(m.x as f32 + 0.5, m.y as f32 + 0.5) * scale;
+            // 画像の外にはみ出したドラッグも、端の画素に丸めて矩形にする。
+            let pixel_clamped = |p: Pos2| {
+                let v = (p - img_rect.min) / scale;
+                (
+                    (v.x.max(0.0) as u32).min(shown.info.width.saturating_sub(1)),
+                    (v.y.max(0.0) as u32).min(shown.info.height.saturating_sub(1)),
+                )
+            };
+            let region_rect = |r: Region| {
+                Rect::from_min_max(
+                    img_rect.min + vec2(r.x as f32, r.y as f32) * scale,
+                    img_rect.min + vec2(r.right() as f32, r.bottom() as f32) * scale,
+                )
+            };
             let pointer = response.interact_pointer_pos();
             let hit = pointer.and_then(|p| {
                 self.marks
                     .iter()
                     .position(|m| m.path == shown.path && mark_pos(m).distance(p) <= MARK_HIT)
             });
+            let roi_hit = pointer.and_then(|p| {
+                self.rois.iter().position(|r| {
+                    r.path == shown.path && region_rect(r.region).expand(2.0).contains(p)
+                })
+            });
+            let mut drawing = None;
+            if roi_tool {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if response.drag_started_by(PAN_BUTTON) {
+                    let kind = if ui.input(|i| i.modifiers.shift) {
+                        roi::Kind::Background
+                    } else {
+                        roi::Kind::Target
+                    };
+                    self.drawing = pointer.map(|p| (kind, pixel_clamped(p)));
+                }
+                if let (Some((kind, start)), Some(p)) = (self.drawing, pointer) {
+                    let region = Region::from_corners(start, pixel_clamped(p));
+                    if response.dragged_by(PAN_BUTTON) {
+                        drawing = Some((kind, region));
+                    }
+                    if response.drag_stopped_by(PAN_BUTTON) {
+                        self.drawing = None;
+                        // 同じ画像の同じ種類はひとつだけなので、前のものと入れ替える。
+                        let path = shown.path.clone();
+                        self.rois.retain(|r| !(r.path == path && r.kind == kind));
+                        self.rois.push(Roi { path, kind, region });
+                        self.selected_roi = Some(self.rois.len() - 1);
+                    }
+                }
+            } else {
+                self.drawing = None;
+            }
             if response.clicked() {
-                if !probing {
+                if roi_tool {
+                    self.selected_roi = roi_hit;
+                } else if !probing {
                     self.selected_mark = None;
+                    self.selected_roi = None;
                 } else if let Some(i) = hit {
                     self.selected_mark = Some(i);
                 } else if let Some((x, y)) = pointer.and_then(pixel_at) {
@@ -724,10 +903,15 @@ impl Slot {
                 if let Some(i) = hit {
                     self.selected_mark = Some(i);
                 }
+                if let Some(i) = roi_hit {
+                    self.selected_roi = Some(i);
+                }
             }
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
+            let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
-            out.wants_full |= has_marks || (probing && response.hovered());
+            out.wants_full |= has_marks || has_rois || (probing && response.hovered());
+            self.draw_rois(ui, body, lang, &region_rect, drawing);
             self.draw_marks(ui, body, &mark_pos);
             if probing {
                 let hover = response.hover_pos().and_then(pixel_at);
@@ -801,7 +985,9 @@ impl Slot {
 
         if self.shown.is_some() {
             let mark_text = self.selected_mark_text();
+            let roi_text = self.selected_roi_text();
             let mut delete_mark = false;
+            let mut delete_roi = false;
             response.context_menu(|ui| {
                 if let Some(text) = &mark_text {
                     if ui.button(tr(lang, "Copy point value")).clicked() {
@@ -810,6 +996,17 @@ impl Slot {
                     }
                     if ui.button(tr(lang, "Delete point")).clicked() {
                         delete_mark = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                }
+                if let Some(text) = &roi_text {
+                    if ui.button(tr(lang, "Copy ROI statistics")).clicked() {
+                        out.copy_text = Some(text.clone());
+                        ui.close();
+                    }
+                    if ui.button(tr(lang, "Delete ROI")).clicked() {
+                        delete_roi = true;
                         ui.close();
                     }
                     ui.separator();
@@ -849,6 +1046,9 @@ impl Slot {
             });
             if delete_mark {
                 self.delete_selected_mark();
+            }
+            if delete_roi {
+                self.delete_selected_roi();
             }
         }
         // ヘッダ: ファイル名、表示倍率、閉じるボタン。

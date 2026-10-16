@@ -12,6 +12,7 @@ use vw_dicom::pipeline::Pipeline;
 use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
 use crate::i18n::tr;
 use crate::pixel_pipeline::{self, Decoded, Params};
+use crate::roi::Region;
 use crate::settings::Language;
 use crate::sub_window::SubWindow;
 
@@ -24,6 +25,36 @@ pub struct Target<'a> {
     pub dicom: bool,
     /// ピクセルパイプラインで手で変えている値（この画像に当てているときだけ）。
     pub edited: Option<Params>,
+    /// スロットに描いた対象と背景の ROI。
+    pub target_roi: Option<Region>,
+    pub background_roi: Option<Region>,
+}
+
+/// 数える範囲。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Range {
+    #[default]
+    Whole,
+    Target,
+    Background,
+}
+
+impl Range {
+    fn title(self) -> &'static str {
+        match self {
+            Range::Whole => "Whole image",
+            Range::Target => "Target ROI",
+            Range::Background => "Background ROI",
+        }
+    }
+
+    fn region(self, t: &Target<'_>) -> Option<Region> {
+        match self {
+            Range::Whole => None,
+            Range::Target => t.target_roi,
+            Range::Background => t.background_roi,
+        }
+    }
 }
 
 /// 横軸。
@@ -67,6 +98,7 @@ struct Key {
     image: usize,
     axis: Axis,
     edited: Option<Params>,
+    region: Option<Region>,
 }
 
 enum Counted {
@@ -89,6 +121,7 @@ pub struct HistogramView {
     axis: Axis,
     channel: Shown,
     log: bool,
+    range: Range,
     path: Option<PathBuf>,
     gray: Option<Gray>,
     counted: Option<(Key, Counted)>,
@@ -113,6 +146,9 @@ impl HistogramView {
             self.count(ctx, t);
         }
         let title = crate::sub_window::title(lang, "Histogram", self.path.as_deref());
+        let rois = target.as_ref().map_or((false, false), |t| {
+            (t.target_roi.is_some(), t.background_roi.is_some())
+        });
         let mut close = false;
         let has_image = target.as_ref().is_some_and(|t| t.image.is_some());
         let has_target = target.is_some();
@@ -133,7 +169,7 @@ impl HistogramView {
                     } else if !has_image {
                         ui.centered_and_justified(|ui| ui.spinner());
                     } else {
-                        self.contents(ui, lang);
+                        self.contents(ui, lang, rois);
                     }
                 });
             },
@@ -185,11 +221,16 @@ impl HistogramView {
             Some(Gray::Loaded(g)) => Some(g),
             _ => None,
         };
+        // 選んだ範囲の ROI が消えていたら画像全体に戻る。
+        if self.range.region(t).is_none() {
+            self.range = Range::Whole;
+        }
         let key = Key {
             path: t.path.to_path_buf(),
             image: Arc::as_ptr(image) as usize,
             axis: self.axis,
             edited: t.edited.filter(|_| gray.is_some()),
+            region: self.range.region(t),
         };
         let done = self.counted.as_ref().is_some_and(|(k, _)| *k == key);
         if done || self.counting.is_some() {
@@ -200,7 +241,7 @@ impl HistogramView {
             let file = pixel_pipeline::file_params(&g.info, &image, &g.decoded);
             (g.decoded, file, g.unit.clone())
         });
-        let (axis, edited) = (key.axis, key.edited);
+        let (axis, edited, region) = (key.axis, key.edited, key.region);
         let rx = crate::background::compute(ctx, move || match (axis, gray) {
             (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
                 histogram: histogram::physical(
@@ -208,6 +249,7 @@ impl HistogramView {
                     &decoded,
                     (file.slope, file.intercept),
                     edited.map(|p| (p.slope, p.intercept)),
+                    region,
                 ),
                 file,
                 edited,
@@ -216,9 +258,9 @@ impl HistogramView {
             (_, gray) => {
                 let shown = display::to_display(&image, &DisplayParams::default());
                 Counted::Levels {
-                    before: histogram::levels_of_rgba(&shown.rgba),
+                    before: histogram::levels_of_rgba(&shown.rgba, image.width, region),
                     after: gray.zip(edited).map(|((decoded, _, _), p)| {
-                        histogram::levels_of_params(&image, &decoded, &p)
+                        histogram::levels_of_params(&image, &decoded, &p, region)
                     }),
                 }
             }
@@ -226,7 +268,7 @@ impl HistogramView {
         self.counting = Some((key, rx));
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, lang: Language) {
+    fn contents(&mut self, ui: &mut egui::Ui, lang: Language, rois: (bool, bool)) {
         let physical_available = matches!(self.gray, Some(Gray::Loaded(_)));
         let color =
             matches!(&self.counted, Some((_, Counted::Levels { before, .. })) if before.color);
@@ -269,6 +311,27 @@ impl HistogramView {
                     });
             }
             ui.checkbox(&mut self.log, tr(lang, "Logarithmic vertical axis"));
+            if rois.0 || rois.1 {
+                ui.label(tr(lang, "Range"));
+                egui::ComboBox::from_id_salt("histogram_range")
+                    .selected_text(tr(lang, self.range.title()))
+                    .show_ui(ui, |ui| {
+                        let choices = [
+                            (Range::Whole, true),
+                            (Range::Target, rois.0),
+                            (Range::Background, rois.1),
+                        ];
+                        for (choice, available) in choices {
+                            if available {
+                                ui.selectable_value(
+                                    &mut self.range,
+                                    choice,
+                                    tr(lang, choice.title()),
+                                );
+                            }
+                        }
+                    });
+            }
             if self.counting.is_some() {
                 ui.spinner();
             }

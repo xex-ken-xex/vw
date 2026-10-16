@@ -5,6 +5,25 @@
 use vw_core::VwImage;
 
 use crate::pixel_pipeline::{self, Decoded, Params};
+use crate::roi::Region;
+
+/// 数える画素の添字。`region` がなければ画像全体。
+fn indices(width: u32, height: u32, region: Option<Region>) -> Box<dyn Iterator<Item = usize>> {
+    match region {
+        Some(r) => Box::new(r.indices(width)),
+        None => Box::new(0..width as usize * height as usize),
+    }
+}
+
+/// 整数の値は小数点を付けずに、そうでない値は小数第 2 位まで出す。
+/// 一律に小数で出すと、ほとんどが整数の HU や 8bit の値が `-35.00` のように読みにくくなるため。
+pub fn number(v: f64) -> String {
+    if (v - v.round()).abs() < 0.005 {
+        format!("{:.0}", v.round())
+    } else {
+        format!("{v:.2}")
+    }
+}
 
 /// 明るさの段の数。
 pub const LEVELS: usize = 256;
@@ -76,20 +95,27 @@ pub fn luma(r: u8, g: u8, b: u8) -> u8 {
     (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)).round() as u8
 }
 
-/// 表示用に変換した画像（RGBA）の明るさを数える。透明度は見ない。
-pub fn levels_of_rgba(rgba: &[u8]) -> Levels {
+/// 表示用に変換した画像（RGBA、幅 `width`）の明るさを数える。透明度は見ない。
+pub fn levels_of_rgba(rgba: &[u8], width: u32, region: Option<Region>) -> Levels {
+    let px = rgba.as_chunks::<4>().0;
+    let height = (px.len() / width.max(1) as usize) as u32;
     let mut levels = Levels::empty();
-    for px in rgba.as_chunks::<4>().0 {
-        levels.add(px[0], px[1], px[2]);
+    for i in indices(width, height, region) {
+        let p = px[i];
+        levels.add(p[0], p[1], p[2]);
     }
     levels
 }
 
 /// ピクセルパイプラインで手で変えた値 `p` で描いたときの明るさを数える。
-pub fn levels_of_params(image: &VwImage, decoded: &Decoded, p: &Params) -> Levels {
-    let n = image.width as usize * image.height as usize;
+pub fn levels_of_params(
+    image: &VwImage,
+    decoded: &Decoded,
+    p: &Params,
+    region: Option<Region>,
+) -> Levels {
     let mut levels = Levels::empty();
-    for i in 0..n {
+    for i in indices(image.width, image.height, region) {
         let g = pixel_pipeline::display_value(image, decoded, p, i);
         levels.add(g, g, g);
     }
@@ -114,11 +140,11 @@ pub fn physical(
     decoded: &Decoded,
     before: (f64, f64),
     after: Option<(f64, f64)>,
+    region: Option<Region>,
 ) -> Physical {
     let after = after.filter(|a| *a != before);
-    let n = image.width as usize * image.height as usize;
     let values = |(slope, intercept): (f64, f64)| {
-        (0..n)
+        indices(image.width, image.height, region)
             .map(move |i| pixel_pipeline::stored_value(image, decoded, i) * slope + intercept)
             .filter(|v| v.is_finite())
     };
@@ -171,7 +197,7 @@ pub struct Stats {
 }
 
 #[derive(Default)]
-struct Accumulator {
+pub struct Accumulator {
     n: u64,
     sum: f64,
     sum_sq: f64,
@@ -180,7 +206,7 @@ struct Accumulator {
 }
 
 impl Accumulator {
-    fn add(&mut self, v: f64) {
+    pub fn add(&mut self, v: f64) {
         if self.n == 0 {
             (self.min, self.max) = (v, v);
         }
@@ -206,7 +232,7 @@ impl Accumulator {
         self.max = self.max.max(v);
     }
 
-    fn stats(&self) -> Stats {
+    pub fn stats(&self) -> Stats {
         if self.n == 0 {
             return Stats::default();
         }
@@ -265,7 +291,7 @@ mod tests {
 
     #[test]
     fn gray_pixels_count_the_same_in_every_channel_and_are_not_color() {
-        let l = levels_of_rgba(&[10, 10, 10, 255, 200, 200, 200, 0]);
+        let l = levels_of_rgba(&[10, 10, 10, 255, 200, 200, 200, 0], 2, None);
         for c in [Channel::Luma, Channel::Red, Channel::Green, Channel::Blue] {
             assert_eq!(l.channel(c)[10], 1);
             assert_eq!(l.channel(c)[200], 1);
@@ -275,7 +301,7 @@ mod tests {
 
     #[test]
     fn color_pixels_are_counted_per_channel_and_by_luminance() {
-        let l = levels_of_rgba(&[255, 0, 0, 255]);
+        let l = levels_of_rgba(&[255, 0, 0, 255], 1, None);
         assert!(l.color);
         assert_eq!(l.red[255], 1);
         assert_eq!(l.green[0], 1);
@@ -285,9 +311,9 @@ mod tests {
     #[test]
     fn changed_window_moves_pixels_to_other_levels() {
         let image = ct(&[-1000.0, 40.0, 1000.0]);
-        let l = levels_of_params(&image, &CT, &window(40.0, 400.0));
+        let l = levels_of_params(&image, &CT, &window(40.0, 400.0), None);
         assert_eq!((l.luma[0], l.luma[128], l.luma[255]), (1, 1, 1));
-        let narrow = levels_of_params(&image, &CT, &window(1000.0, 10.0));
+        let narrow = levels_of_params(&image, &CT, &window(1000.0, 10.0), None);
         assert_eq!(narrow.luma[0], 2);
     }
 
@@ -306,7 +332,7 @@ mod tests {
     #[test]
     fn physical_histogram_spans_both_before_and_after_on_one_axis() {
         let image = ct(&[-1000.0, 0.0, 1000.0]);
-        let p = physical(&image, &CT, (1.0, -1024.0), Some((1.0, -24.0)));
+        let p = physical(&image, &CT, (1.0, -1024.0), Some((1.0, -24.0)), None);
         assert_eq!((p.lo, p.hi), (-1000.0, 2000.0));
         assert_eq!(p.before.iter().sum::<u32>(), 3);
         assert_eq!(p.after.as_ref().unwrap().iter().sum::<u32>(), 3);
@@ -317,14 +343,34 @@ mod tests {
     #[test]
     fn unchanged_rescale_has_no_after_histogram() {
         let image = ct(&[0.0, 1.0]);
-        let p = physical(&image, &CT, (1.0, -1024.0), Some((1.0, -1024.0)));
+        let p = physical(&image, &CT, (1.0, -1024.0), Some((1.0, -1024.0)), None);
         assert!(p.after.is_none());
+    }
+
+    #[test]
+    fn region_limits_the_count_to_its_pixels() {
+        let image = ct(&[0.0, 10.0, 20.0, 30.0]);
+        let region = Region {
+            x: 1,
+            y: 0,
+            w: 2,
+            h: 1,
+        };
+        let p = physical(&image, &CT, (1.0, -1024.0), None, Some(region));
+        assert_eq!((p.lo, p.hi), (10.0, 20.0));
+        assert_eq!(p.before.iter().sum::<u32>(), 2);
+        let l = levels_of_rgba(
+            &[0, 0, 0, 255, 9, 9, 9, 255, 1, 1, 1, 255, 2, 2, 2, 255],
+            4,
+            Some(region),
+        );
+        assert_eq!((l.luma[9], l.luma[1], l.luma[0]), (1, 1, 0));
     }
 
     #[test]
     fn single_valued_image_lands_in_one_bin() {
         let image = ct(&[5.0, 5.0]);
-        let p = physical(&image, &CT, (1.0, -1024.0), None);
+        let p = physical(&image, &CT, (1.0, -1024.0), None, None);
         assert_eq!(p.before[0], 2);
         assert_eq!(p.before_stats.std_dev, 0.0);
     }

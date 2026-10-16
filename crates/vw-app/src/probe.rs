@@ -55,14 +55,18 @@ fn inverted(meta: &Metadata) -> bool {
 
 /// CT の値は HU（Rescale を当てた値）なので単位を付ける。ほかは単位のない生の値。
 fn unit(meta: &Metadata) -> Option<&'static str> {
-    meta.get("DICOM", "Modality")
-        .is_some_and(|m| m.trim() == "CT")
-        .then_some("HU")
+    crate::roi::unit(meta)
 }
 
 /// 画素の値を画面とコピーに出す文字にする。
 pub fn value_text(color: ColorModel, meta: &Metadata, values: &[f64]) -> String {
-    let n = |i: usize| values.get(i).copied().map(number).unwrap_or_default();
+    let n = |i: usize| {
+        values
+            .get(i)
+            .copied()
+            .map(crate::histogram::number)
+            .unwrap_or_default()
+    };
     match color {
         ColorModel::Gray => match unit(meta) {
             Some(unit) => format!("{} {unit}", n(0)),
@@ -71,16 +75,6 @@ pub fn value_text(color: ColorModel, meta: &Metadata, values: &[f64]) -> String 
         ColorModel::GrayAlpha => format!("{} A {}", n(0), n(1)),
         ColorModel::Rgb => format!("R {} G {} B {}", n(0), n(1), n(2)),
         ColorModel::Rgba => format!("R {} G {} B {} A {}", n(0), n(1), n(2), n(3)),
-    }
-}
-
-/// 整数の値は小数点を付けずに、そうでない値は小数第 2 位まで出す。
-/// 一律に小数で出すと、ほとんどが整数の HU や 8bit の値が `-35.00` のように読みにくくなるため。
-fn number(v: f64) -> String {
-    if (v - v.round()).abs() < 0.005 {
-        format!("{:.0}", v.round())
-    } else {
-        format!("{v:.2}")
     }
 }
 

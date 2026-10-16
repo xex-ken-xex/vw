@@ -90,10 +90,16 @@ impl VwApp {
                     self.copy_text(ctx, text, &format!("metadata {}", selection_name(&sel)));
                 }
             }
-            Focus::Images => match self.slots[self.active].selected_mark_text() {
-                Some(text) => self.copy_text(ctx, text, "probe point"),
-                None => self.copy_image(ctx, self.active),
-            },
+            Focus::Images => {
+                let slot = &self.slots[self.active];
+                if let Some(text) = slot.selected_mark_text() {
+                    self.copy_text(ctx, text, "probe point");
+                } else if let Some(text) = slot.selected_roi_text() {
+                    self.copy_text(ctx, text, "ROI statistics");
+                } else {
+                    self.copy_image(ctx, self.active);
+                }
+            }
             // egui がラベルで選んだ範囲をコピーする。知らせだけを出す。
             Focus::Log => self.copied(ctx, "log text"),
         }

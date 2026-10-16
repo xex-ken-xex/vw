@@ -245,10 +245,13 @@ impl VwApp {
             for tool in Tool::ALL {
                 let button =
                     egui::Button::selectable(self.tool == tool, big(tool.icon())).min_size(size);
-                let tip = match tool.action() {
+                let mut tip = match tool.action() {
                     Some(action) => self.with_key(tr(lang, tool.title()), action),
                     None => tr(lang, tool.title()).to_owned(),
                 };
+                if let Some(hint) = tool.hint() {
+                    tip = format!("{tip}\n{}", tr(lang, hint));
+                }
                 let r = ui
                     .add_enabled(tool.available(), button)
                     .on_hover_text(tip)

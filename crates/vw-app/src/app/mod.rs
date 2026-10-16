@@ -58,15 +58,17 @@ enum Tool {
     Pan,
     Zoom,
     PixelProbe,
+    Roi,
     Measure,
 }
 
 impl Tool {
-    const ALL: [Tool; 5] = [
+    const ALL: [Tool; 6] = [
         Tool::Browse,
         Tool::Pan,
         Tool::Zoom,
         Tool::PixelProbe,
+        Tool::Roi,
         Tool::Measure,
     ];
 
@@ -76,6 +78,7 @@ impl Tool {
             Tool::Pan => icon::HAND_GRABBING,
             Tool::Zoom => icon::MAGNIFYING_GLASS_PLUS,
             Tool::PixelProbe => icon::EYEDROPPER,
+            Tool::Roi => icon::SELECTION,
             Tool::Measure => icon::RULER,
         }
     }
@@ -86,17 +89,30 @@ impl Tool {
             Tool::Pan => "Pan",
             Tool::Zoom => "Zoom",
             Tool::PixelProbe => "Pixel probe",
+            Tool::Roi => "ROI",
             Tool::Measure => "Measure",
         }
     }
 
     fn available(self) -> bool {
-        matches!(self, Tool::Browse | Tool::PixelProbe)
+        matches!(self, Tool::Browse | Tool::PixelProbe | Tool::Roi)
     }
 
     /// キーで切り替えられるツールの操作。
     fn action(self) -> Option<Action> {
-        (self == Tool::PixelProbe).then_some(Action::TogglePixelProbe)
+        match self {
+            Tool::PixelProbe => Some(Action::TogglePixelProbe),
+            Tool::Roi => Some(Action::ToggleRoi),
+            _ => None,
+        }
+    }
+
+    /// ツールの説明に添える使い方。
+    fn hint(self) -> Option<&'static str> {
+        match self {
+            Tool::Roi => Some("Drag to draw the target ROI, Shift+drag for the background ROI"),
+            _ => None,
+        }
     }
 }
 
@@ -601,6 +617,14 @@ impl VwApp {
         &self.settings.settings
     }
 
+    fn toggle_tool(&mut self, tool: Tool) {
+        self.tool = if self.tool == tool {
+            Tool::Browse
+        } else {
+            tool
+        };
+    }
+
     fn lang(&self) -> Language {
         self.settings().appearance.language
     }
@@ -639,15 +663,13 @@ impl VwApp {
                 self.step_image_slot(1, true);
             }
             Action::ToggleTagging => self.tagging ^= true,
-            Action::TogglePixelProbe => {
-                self.tool = if self.tool == Tool::PixelProbe {
-                    Tool::Browse
-                } else {
-                    Tool::PixelProbe
-                };
-            }
+            Action::TogglePixelProbe => self.toggle_tool(Tool::PixelProbe),
+            Action::ToggleRoi => self.toggle_tool(Tool::Roi),
             Action::DeleteProbePoint => {
-                self.slots[self.active].delete_selected_mark();
+                let slot = &mut self.slots[self.active];
+                if !slot.delete_selected_mark() {
+                    slot.delete_selected_roi();
+                }
             }
             Action::FilterAll => self.set_filter(ctx, Filter::All),
             Action::FilterGood => self.set_filter(ctx, Filter::Flag(Some(Flag::Good))),
