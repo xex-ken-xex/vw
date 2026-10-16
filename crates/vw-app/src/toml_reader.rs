@@ -72,6 +72,44 @@ impl<'a> Reader<'a> {
     }
 }
 
+impl<'a> Reader<'a> {
+    /// 1 つの節の項目を続けて読むときの、節の名前を省いた入口。
+    pub fn at<'r>(&'r mut self, section: &'static str) -> Section<'r, 'a> {
+        Section {
+            reader: self,
+            section,
+        }
+    }
+}
+
+/// [`Reader`] の 1 つの節。
+pub struct Section<'r, 'a> {
+    reader: &'r mut Reader<'a>,
+    section: &'static str,
+}
+
+impl Section<'_, '_> {
+    pub fn get<T: DeserializeOwned>(&mut self, key: &str) -> Option<T> {
+        self.reader.get(self.section, key)
+    }
+
+    pub fn get_valid<T: DeserializeOwned>(
+        &mut self,
+        key: &str,
+        valid: impl Fn(&T) -> bool,
+        rule: &str,
+    ) -> Option<T> {
+        self.reader.get_valid(self.section, key, valid, rule)
+    }
+
+    /// 項目の中の一部だけを捨てたときなど、読み取りとは別に報告する。
+    pub fn problem(&mut self, key: &str, text: impl std::fmt::Display) {
+        self.reader
+            .problems
+            .push(format!("{}.{key}: {text}", self.section));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
