@@ -70,13 +70,56 @@ pub enum Node {
         #[serde(default = "identity")]
         matrix: [[f32; 3]; 3],
     },
+    /// ガウスぼかし。`radius` は σ（画素）。
+    Blur {
+        #[serde(default = "one")]
+        radius: f32,
+    },
+    /// ガウスノイズの付加。`sigma` は 0〜1 の値に対する標準偏差、`seed` は乱数の種。
+    Noise {
+        #[serde(default = "default_sigma")]
+        sigma: f32,
+        #[serde(default)]
+        seed: u32,
+    },
+    /// メディアンによるノイズ除去。`size` は窓の一辺（3 か 5）。
+    Median {
+        #[serde(default = "three")]
+        size: u32,
+    },
+    /// 明るさ・コントラスト・S 字。
+    Tone {
+        #[serde(default)]
+        brightness: f32,
+        #[serde(default = "one")]
+        contrast: f32,
+        #[serde(default)]
+        curve: f32,
+    },
+}
+
+fn default_sigma() -> f32 {
+    0.05
+}
+
+fn three() -> u32 {
+    3
 }
 
 pub type Chain = Vec<Node>;
 
 impl Node {
     /// 追加のメニューに並べる順。
-    pub const KINDS: [&'static str; 4] = ["expression", "levels", "invert", "mix"];
+    pub const KINDS: [&'static str; 8] = [
+        "expression",
+        "levels",
+        "invert",
+        "mix",
+        "blur",
+        "noise",
+        "median",
+        "tone",
+    ];
 
     pub fn new(kind: &str) -> Option<Self> {
         Some(match kind {
@@ -88,6 +131,17 @@ impl Node {
             },
             "invert" => Node::Invert,
             "mix" => Node::Mix { matrix: identity() },
+            "blur" => Node::Blur { radius: 1.0 },
+            "noise" => Node::Noise {
+                sigma: default_sigma(),
+                seed: 0,
+            },
+            "median" => Node::Median { size: 3 },
+            "tone" => Node::Tone {
+                brightness: 0.0,
+                contrast: 1.0,
+                curve: 0.0,
+            },
             _ => return None,
         })
     }
@@ -98,6 +152,10 @@ impl Node {
             Node::Levels { .. } => "levels",
             Node::Invert => "invert",
             Node::Mix { .. } => "mix",
+            Node::Blur { .. } => "blur",
+            Node::Noise { .. } => "noise",
+            Node::Median { .. } => "median",
+            Node::Tone { .. } => "tone",
         }
     }
 
@@ -108,6 +166,10 @@ impl Node {
             "levels" => "Levels",
             "invert" => "Invert",
             "mix" => "Channel mix",
+            "blur" => "Blur",
+            "noise" => "Add noise",
+            "median" => "Median",
+            "tone" => "Tone",
             _ => "Node",
         }
     }
@@ -149,9 +211,157 @@ impl Node {
                     }
                 }
             }
+            Node::Blur { radius } => blur(img, *radius),
+            Node::Noise { sigma, seed } => add_noise(img, *sigma, *seed),
+            Node::Median { size } => median(img, *size as usize),
+            Node::Tone {
+                brightness,
+                contrast,
+                curve,
+            } => {
+                for v in &mut img.data {
+                    let t = ((*v - 0.5) * contrast + 0.5 + brightness).clamp(0.0, 1.0);
+                    // S 字は smoothstep との混ぜ合わせ。負なら逆向き（中間を伸ばす）。
+                    let s = t * t * (3.0 - 2.0 * t);
+                    *v = (t + curve * (s - t)).clamp(0.0, 1.0);
+                }
+            }
         }
         Ok(())
     }
+}
+
+/// 行を分けて並列に処理する。`f(先頭の行番号, その帯の行のデータ)`。
+fn for_row_bands(img: &mut Float, f: impl Fn(usize, &mut [f32]) + Sync) {
+    let (w, h, n) = (img.width, img.height, img.channels);
+    let rows_per = h.div_ceil(threads(w * h)).max(1);
+    std::thread::scope(|scope| {
+        for (band, rows) in img.data.chunks_mut(rows_per * w * n).enumerate() {
+            let f = &f;
+            scope.spawn(move || f(band * rows_per, rows));
+        }
+    });
+}
+
+/// ガウスぼかし。横と縦に分けて 2 回かける（2 次元の畳み込みより半径に対して速い）。
+fn blur(img: &mut Float, sigma: f32) {
+    if sigma <= 0.0 || img.data.is_empty() {
+        return;
+    }
+    let half = (sigma * 3.0).ceil() as usize;
+    let kernel: Vec<f32> = {
+        let raw: Vec<f32> = (0..=2 * half)
+            .map(|i| {
+                let d = i as f32 - half as f32;
+                (-d * d / (2.0 * sigma * sigma)).exp()
+            })
+            .collect();
+        let sum: f32 = raw.iter().sum();
+        raw.iter().map(|k| k / sum).collect()
+    };
+    let (w, h, n) = (img.width, img.height, img.channels);
+    // 横: 行ごとに独立なので、行を帯に分けてそのまま並列にできる。
+    for_row_bands(img, |_, rows| {
+        let mut line = vec![0.0f32; w * n];
+        for row in rows.chunks_exact_mut(w * n) {
+            line.copy_from_slice(row);
+            for x in 0..w {
+                for c in 0..n {
+                    let mut acc = 0.0;
+                    for (k, weight) in kernel.iter().enumerate() {
+                        let sx = (x + k).saturating_sub(half).min(w - 1);
+                        acc += line[sx * n + c] * weight;
+                    }
+                    row[x * n + c] = acc;
+                }
+            }
+        }
+    });
+    // 縦: 出力の行ごとに、横をぼかした画像の上下の行を読む。読むだけなので共有できる。
+    let source = img.data.clone();
+    for_row_bands(img, |first, rows| {
+        for (i, row) in rows.chunks_exact_mut(w * n).enumerate() {
+            let y = first + i;
+            row.fill(0.0);
+            for (k, weight) in kernel.iter().enumerate() {
+                let sy = (y + k).saturating_sub(half).min(h - 1);
+                let src = &source[sy * w * n..(sy + 1) * w * n];
+                for (o, s) in row.iter_mut().zip(src) {
+                    *o += s * weight;
+                }
+            }
+        }
+    });
+}
+
+/// ガウスノイズを足す。行ごとに種を変えた xorshift で、同じ種なら同じ模様になる。
+fn add_noise(img: &mut Float, sigma: f32, seed: u32) {
+    if sigma <= 0.0 {
+        return;
+    }
+    let (w, n) = (img.width, img.channels);
+    for_row_bands(img, |first, rows| {
+        for (i, row) in rows.chunks_exact_mut(w * n).enumerate() {
+            let mut state = splitmix(u64::from(seed) << 32 | (first + i) as u64);
+            for v in row.iter_mut() {
+                *v += gaussian(&mut state) * sigma;
+            }
+        }
+    });
+}
+
+fn splitmix(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)) | 1
+}
+
+fn xorshift(state: &mut u64) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    // 上位 24 ビットを 0〜1 の一様乱数にする。
+    (*state >> 40) as f32 / (1u32 << 24) as f32
+}
+
+/// 標準正規分布の乱数（Box–Muller）。
+fn gaussian(state: &mut u64) -> f32 {
+    let u1 = xorshift(state).max(1e-7);
+    let u2 = xorshift(state);
+    (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+}
+
+/// メディアンフィルタ。窓の一辺は 3 か 5（ほかは 3 にする）。
+fn median(img: &mut Float, size: usize) {
+    let size = if size >= 5 { 5 } else { 3 };
+    let half = size / 2;
+    let (w, h, n) = (img.width, img.height, img.channels);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let source = img.data.clone();
+    for_row_bands(img, |first, rows| {
+        let mut window = Vec::with_capacity(size * size);
+        for (i, row) in rows.chunks_exact_mut(w * n).enumerate() {
+            let y = first + i;
+            for x in 0..w {
+                for c in 0..n {
+                    window.clear();
+                    for dy in 0..size {
+                        let sy = (y + dy).saturating_sub(half).min(h - 1);
+                        for dx in 0..size {
+                            let sx = (x + dx).saturating_sub(half).min(w - 1);
+                            window.push(source[(sy * w + sx) * n + c]);
+                        }
+                    }
+                    let mid = window.len() / 2;
+                    let (_, m, _) = window.select_nth_unstable_by(mid, f32::total_cmp);
+                    row[x * n + c] = *m;
+                }
+            }
+        }
+    });
 }
 
 fn run_expression(program: &Program, img: &mut Float) {
@@ -322,6 +532,96 @@ mod tests {
     }
 
     #[test]
+    fn blur_spreads_a_point_symmetrically_and_keeps_the_total() {
+        // 9 × 9 なら σ = 1 の核（半径 3）が中央の点から端まで収まる。
+        let mut img = Float::new(9, 9, 1, vec![0.0; 81]);
+        img.data[40] = 1.0;
+        apply(&[Node::Blur { radius: 1.0 }], &mut img).unwrap();
+        let total: f32 = img.data.iter().sum();
+        assert!((total - 1.0).abs() < 1e-4, "{total}");
+        assert!(img.data[40] > img.data[31]);
+        assert_eq!(img.data[31], img.data[49]);
+        assert_eq!(img.data[39], img.data[41]);
+        // 平らな画像は変わらない（端は折り返す）。
+        let mut flat = Float::new(4, 3, 3, vec![0.25; 36]);
+        apply(&[Node::Blur { radius: 2.0 }], &mut flat).unwrap();
+        assert!(flat.data.iter().all(|v| (v - 0.25).abs() < 1e-5));
+    }
+
+    #[test]
+    fn noise_is_repeatable_per_seed_and_has_the_asked_spread() {
+        let flat = Float::new(200, 100, 1, vec![0.5; 20_000]);
+        let mut a = flat.clone();
+        let mut b = flat.clone();
+        let mut c = flat.clone();
+        let node = |seed| Node::Noise { sigma: 0.1, seed };
+        apply(&[node(1)], &mut a).unwrap();
+        apply(&[node(1)], &mut b).unwrap();
+        apply(&[node(2)], &mut c).unwrap();
+        assert_eq!(a.data, b.data);
+        assert_ne!(a.data, c.data);
+        let mean = a.data.iter().sum::<f32>() / a.data.len() as f32;
+        let sd =
+            (a.data.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / a.data.len() as f32).sqrt();
+        assert!((mean - 0.5).abs() < 0.005, "{mean}");
+        assert!((sd - 0.1).abs() < 0.005, "{sd}");
+    }
+
+    #[test]
+    fn median_removes_single_pixel_noise_and_keeps_edges() {
+        let mut img = Float::new(5, 5, 1, vec![0.0; 25]);
+        img.data[12] = 1.0;
+        apply(&[Node::Median { size: 3 }], &mut img).unwrap();
+        assert!(img.data.iter().all(|&v| v == 0.0));
+        let mut edge = Float::new(6, 3, 1, vec![0.0; 18]);
+        for y in 0..3 {
+            for x in 3..6 {
+                edge.data[y * 6 + x] = 1.0;
+            }
+        }
+        let before = edge.clone();
+        apply(&[Node::Median { size: 5 }], &mut edge).unwrap();
+        assert_eq!(edge, before);
+    }
+
+    #[test]
+    fn tone_moves_brightness_contrast_and_the_s_curve() {
+        let mut img = gray(&[0.0, 0.25, 0.5, 0.75, 1.0]);
+        apply(
+            &[Node::Tone {
+                brightness: 0.1,
+                contrast: 1.0,
+                curve: 0.0,
+            }],
+            &mut img,
+        )
+        .unwrap();
+        assert_eq!(img.data, vec![0.1, 0.35, 0.6, 0.85, 1.0]);
+        let mut img = gray(&[0.25, 0.5, 0.75]);
+        apply(
+            &[Node::Tone {
+                brightness: 0.0,
+                contrast: 2.0,
+                curve: 0.0,
+            }],
+            &mut img,
+        )
+        .unwrap();
+        assert_eq!(img.data, vec![0.0, 0.5, 1.0]);
+        let mut img = gray(&[0.25, 0.5, 0.75]);
+        apply(
+            &[Node::Tone {
+                brightness: 0.0,
+                contrast: 1.0,
+                curve: 1.0,
+            }],
+            &mut img,
+        )
+        .unwrap();
+        assert!(img.data[0] < 0.25 && img.data[1] == 0.5 && img.data[2] > 0.75);
+    }
+
+    #[test]
     fn nodes_round_trip_through_toml_with_defaults_for_missing_fields() {
         let chain = vec![
             Node::Expression {
@@ -334,6 +634,17 @@ mod tests {
             },
             Node::Invert,
             Node::Mix { matrix: identity() },
+            Node::Blur { radius: 2.5 },
+            Node::Noise {
+                sigma: 0.02,
+                seed: 7,
+            },
+            Node::Median { size: 5 },
+            Node::Tone {
+                brightness: -0.1,
+                contrast: 1.5,
+                curve: 0.3,
+            },
         ];
         let text = toml::to_string(&toml::Table::from_iter([(
             "nodes".to_owned(),
@@ -358,6 +669,18 @@ mod tests {
                 white: 1.0,
                 gamma: 1.0
             }]
+        );
+        let bare: Chain = "[[nodes]]\nkind = \"blur\"\n[[nodes]]\nkind = \"noise\"\n[[nodes]]\nkind = \"median\"\n[[nodes]]\nkind = \"tone\"\n"
+            .parse::<toml::Table>()
+            .unwrap()["nodes"]
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            bare,
+            ["blur", "noise", "median", "tone"]
+                .map(|k| Node::new(k).unwrap())
+                .to_vec()
         );
     }
 
