@@ -5,6 +5,8 @@
 
 ![vw の画面](docs/screenshot.png)
 
+紹介ページ: https://xex-ken-xex.github.io/vw/
+
 vw でできることは、大きく分けて 3 つです。
 
 | | できること | こんなときに |
