@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vw – a fast image viewer</title>
+<meta name="description" content="vw is a fast image viewer for Linux and Windows: it starts instantly, shows thousands of images without waiting, and helps you view, sort and catalog them. Free and open source.">
+<meta property="og:title" content="vw – a fast image viewer">
+<meta property="og:description" content="A fast image viewer for Linux and Windows. View, tag and catalog thousands of images.">
+<meta property="og:image" content="https://xex-ken-xex.github.io/vw/images/screenshot.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="../images/vw.png" type="image/png">
+<link rel="alternate" hreflang="ja" href="https://xex-ken-xex.github.io/vw/">
+<link rel="alternate" hreflang="en" href="https://xex-ken-xex.github.io/vw/en/">
+<style>
+:root {
+  --bg: #1e1e1e; --panel: #252526; --line: #3c3c3c; --text: #d4d4d4; --muted: #9a9a9a;
+  --accent: #4fc1ff; --accent-2: #c586c0; --good: #6cc48a; --code: #2d2d2d;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #fafafa; --panel: #ffffff; --line: #dcdcdc; --text: #222; --muted: #666; --accent: #0b6fc2; --accent-2: #8a3a8a; --good: #2d8a4e; --code: #f0f0f0; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", Meiryo, system-ui, sans-serif; line-height: 1.7; font-size: 16px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+header { border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+header .wrap { display: flex; align-items: center; gap: 14px; height: 52px; }
+header img { width: 28px; height: 28px; }
+header .name { font-weight: 700; font-size: 18px; letter-spacing: .02em; }
+header nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
+header nav a { color: var(--text); }
+header nav a.lang { color: var(--accent); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
+.hero { padding: 56px 0 32px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 36px; align-items: center; }
+.hero h1 { font-size: 40px; line-height: 1.2; margin: 0 0 14px; }
+.hero h1 small { display: block; font-size: 18px; font-weight: 400; color: var(--muted); margin-top: 8px; }
+.hero p.lead { font-size: 18px; margin: 0 0 22px; }
+.hero img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 600; font-size: 15px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:hover { text-decoration: none; filter: brightness(1.1); }
+.version { font-size: 13px; color: var(--muted); margin-top: 10px; }
+section { padding: 36px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 26px; margin: 0 0 18px; }
+h3 { font-size: 18px; margin: 22px 0 8px; }
+.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+.card .icon { font-size: 28px; }
+.card h3 { margin: 6px 0 8px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.card img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+ul.plain { padding-left: 1.2em; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: var(--panel); white-space: nowrap; }
+code, pre { font-family: Consolas, "Cascadia Mono", "Noto Sans Mono CJK JP", monospace; background: var(--code); border-radius: 4px; }
+code { padding: 1px 5px; font-size: 14px; }
+pre { padding: 12px 14px; overflow-x: auto; font-size: 14px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.two > div, .three > div { min-width: 0; }
+ol { padding-left: 1.4em; }
+.note { color: var(--muted); font-size: 14px; }
+footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
+footer a { color: var(--muted); text-decoration: underline; }
+.en { font-size: 15px; }
+@media (max-width: 820px) {
+  .hero { grid-template-columns: 1fr; padding-top: 32px; }
+  .hero h1 { font-size: 32px; }
+  .three, .two { grid-template-columns: 1fr; }
+  header nav a:not(.lang) { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <img src="../images/vw.png" alt="">
+    <span class="name">vw</span>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#formats">Formats</a>
+      <a href="#download">Download</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/xex-ken-xex/vw#readme">README (Japanese)</a>
+      <a href="https://github.com/xex-ken-xex/vw">GitHub</a>
+      <a class="lang" href="../" lang="ja">日本語</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <h1>A fast image viewer: <span style="color:var(--accent)">vw</span>
+        <small>View, sort and catalog thousands of images on Linux and Windows</small></h1>
+      <p class="lead">It starts instantly and never keeps you waiting, even in folders of thousands of images. 16-bit data stays
+        intact, and ZIP / 7z archives open in place. Tags and catalogs live in separate files, so your image files are never touched.</p>
+      <div class="buttons">
+        <a class="btn primary" id="dl-win" href="https://github.com/xex-ken-xex/vw/releases/latest">⬇ Download for Windows</a>
+        <a class="btn" id="dl-linux" href="https://github.com/xex-ken-xex/vw/releases/latest">⬇ Linux (x86_64)</a>
+        <a class="btn" href="https://github.com/xex-ken-xex/vw">Source on GitHub</a>
+      </div>
+      <div class="version" id="version">Latest: see <a href="https://github.com/xex-ken-xex/vw/releases/latest">Releases</a> · Free and open source (MIT / Apache-2.0)</div>
+    </div>
+    <a href="../images/screenshot.png"><img src="../images/screenshot.png" alt="The vw window: folder tree on the left, image slots in the middle, metadata on the right, log at the bottom" width="1280" height="800"></a>
+  </div>
+
+  <section id="features">
+    <h2>What vw does</h2>
+    <div class="three">
+      <div class="card">
+        <div class="icon">🖼️</div>
+        <h3>View</h3>
+        <p>Lay out many images from a folder side by side and compare them quickly. Zoom, slideshow, animated WebP / GIF
+          playback, automatic layouts with paging. New images that appear in the folder show up by themselves.</p>
+        <img src="../images/maximize-play.png" alt="A maximized slot with the play bar" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🏷️</div>
+        <h3>Tag</h3>
+        <p>Flag images good or bad and add your own tags (say, mountain, sea, flower) with a single key. Filter by them,
+          copy the matches to another folder, or export a list as CSV / JSONL. Handy for building machine-learning datasets.</p>
+        <img src="../images/tagging.png" alt="Tagging mode" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🗂️</div>
+        <h3>Catalog</h3>
+        <p>Register a folder as a dataset and vw builds a search catalog of the metadata inside. Find folders by what they
+          contain, such as "photos shot at ISO 800 or more", and extract just what you need.</p>
+        <img src="../images/dataset-search.png" alt="The datasets screen" loading="lazy">
+      </div>
+    </div>
+    <h3>More</h3>
+    <ul class="plain">
+      <li><b>Fast</b>: images decode in parallel in the background and are drawn by the GPU</li>
+      <li><b>No loss</b>: 16-bit images are loaded as 16-bit, not reduced to 8-bit</li>
+      <li><b>Never writes to your images</b>: tags and catalogs are stored in separate files</li>
+      <li><b>Looks inside ZIP / 7z</b>: password-protected archives too</li>
+      <li><b>Inspect and change the pixel pipeline</b>: a window that traces each format's stages from file values to the display, where you can add expression, levels and other nodes and compare</li>
+      <li><b>English and Japanese UI</b>: English by default</li>
+      <li><b>Free and open source</b>: dual-licensed MIT / Apache-2.0</li>
+    </ul>
+  </section>
+
+  <section id="formats">
+    <h2>Supported formats</h2>
+    <table>
+      <tr><th>Format</th><th>Notes</th></tr>
+      <tr><td>PNG</td><td>1–16 bit, gray / RGB / alpha / palette</td></tr>
+      <tr><td>JPEG</td><td>Baseline / progressive, gray / color / CMYK. EXIF orientation applied, shooting info shown</td></tr>
+      <tr><td>WebP</td><td>Lossy / lossless, transparency, EXIF. Animations play with all frames in one slot</td></tr>
+      <tr><td>GIF</td><td>Transparency. Animations play with all frames in one slot</td></tr>
+      <tr><td>BMP</td><td>1–32 bit, palette / RLE / bit fields, top-down files too</td></tr>
+      <tr><td>TIFF</td><td>1–16 bit integer and 32-bit float, gray / RGB / alpha / palette / CMYK, CCITT G3 / G4, LZW / Deflate / PackBits / JPEG compression, tiles, BigTIFF, multi-page</td></tr>
+      <tr><td>Camera RAW</td><td>Nikon NEF / NRW, Sony ARW / SR2 / SRF, Fujifilm RAF (Canon CR2 / CR3 and DNG too). The embedded preview shows first, then the sensor data is developed in the background</td></tr>
+      <tr><td>ZIP / 7z</td><td>Images inside open like a folder. Password-protected archives (ZipCrypto and AES for ZIP, AES for 7z) too</td></tr>
+    </table>
+  </section>
+
+  <section id="download">
+    <h2>Download</h2>
+    <p>Get the file for your OS from the <a href="https://github.com/xex-ken-xex/vw/releases">Releases</a> page.</p>
+    <table>
+      <tr><th>File</th><th>For</th></tr>
+      <tr><td><a id="dl-win-2" href="https://github.com/xex-ken-xex/vw/releases/latest"><code>vw-windows-x64.zip</code></a></td><td>Windows 10 / 11 (64-bit)</td></tr>
+      <tr><td><a id="dl-linux-2" href="https://github.com/xex-ken-xex/vw/releases/latest"><code>vw-linux-x64.tar.gz</code></a></td><td>x86_64 Linux such as Ubuntu 22.04 or later</td></tr>
+    </table>
+    <p class="note">Releases come in two kinds: <b>vX.Y.Z</b> (stable, use this normally) and <b>main-latest</b> (the development build, replaced automatically on every change).</p>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <div class="two">
+      <div>
+        <h3>Windows</h3>
+        <p>There is no installer. Just unpack the zip.</p>
+        <ol>
+          <li>Download <code>vw-windows-x64.zip</code></li>
+          <li>Right-click the zip → <b>Extract All</b> into a folder of your choice (say, <code>C:\Tools\vw</code>)</li>
+          <li>Double-click <code>vw.exe</code> in that folder</li>
+        </ol>
+        <p class="note">If Chrome blocks the download as "not commonly downloaded", open <code>chrome://downloads</code> and press <b>Keep</b> on the vw row.
+          If Windows shows "Windows protected your PC" on first start, choose <b>More info</b> → <b>Run anyway</b>. Both appear because vw is not code-signed yet.</p>
+        <p class="note">To uninstall, delete the folder and <code>%APPDATA%\vw</code>. The registry is not used.</p>
+      </div>
+      <div>
+        <h3>Ubuntu</h3>
+<pre>tar xzf vw-linux-x64.tar.gz
+cd vw
+./install.sh</pre>
+        <p><code>install.sh</code> puts <code>vw</code> in <code>~/.local/bin</code> and adds it to the app list (no root needed).
+          You can also run <code>./vw</code> from the unpacked folder without installing.</p>
+        <p class="note">If it does not start on a server or minimal install:</p>
+<pre>sudo apt install libxkbcommon-x11-0 libgl1 libegl1 \
+  libxcursor1 libxrandr2 libxi6 fonts-noto-cjk</pre>
+        <p class="note">Uninstall with <code>./install.sh --uninstall</code>.</p>
+      </div>
+    </div>
+    <h3>Read next</h3>
+    <ul class="plain">
+      <li><a href="https://github.com/xex-ken-xex/vw#readme">The README</a> — the full guide (in Japanese): first five minutes, every feature, key bindings, FAQ</li>
+      <li><a href="https://github.com/xex-ken-xex/vw/issues">Bug reports and requests (GitHub Issues)</a></li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    Copyright (c) 2026 vw contributors · by xex (<a href="https://github.com/xex-ken-xex">xex-ken-xex</a>) ·
+    <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-MIT">MIT</a> OR <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-APACHE">Apache-2.0</a>
+  </div>
+</footer>
+
+<script>
+// Fill in the latest release and direct download links; fall back to the Releases page links.
+fetch("https://api.github.com/repos/xex-ken-xex/vw/releases/latest")
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(rel => {
+    const asset = name => (rel.assets || []).find(a => a.name === name);
+    const win = asset("vw-windows-x64.zip"), linux = asset("vw-linux-x64.tar.gz");
+    if (win) for (const id of ["dl-win", "dl-win-2"]) document.getElementById(id).href = win.browser_download_url;
+    if (linux) for (const id of ["dl-linux", "dl-linux-2"]) document.getElementById(id).href = linux.browser_download_url;
+    const date = rel.published_at ? new Date(rel.published_at).toLocaleDateString("en-US") : "";
+    document.getElementById("version").innerHTML =
+      `Latest: <a href="${rel.html_url}">${rel.tag_name}</a>${date ? " (" + date + ")" : ""} · Free and open source (MIT / Apache-2.0)`;
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>

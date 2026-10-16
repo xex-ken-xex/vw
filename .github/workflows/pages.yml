@@ -33,7 +33,7 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir -p _site/images
-          cp site/*.html _site/
+          cp -r site/. _site/
           cp docs/screenshot.png docs/images/*.png packaging/icons/vw.png _site/images/
       - uses: actions/configure-pages@v5
         with:

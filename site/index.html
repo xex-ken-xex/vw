@@ -10,6 +10,8 @@
 <meta property="og:image" content="https://xex-ken-xex.github.io/vw/images/screenshot.png">
 <meta property="og:type" content="website">
 <link rel="icon" href="images/vw.png" type="image/png">
+<link rel="alternate" hreflang="ja" href="https://xex-ken-xex.github.io/vw/">
+<link rel="alternate" hreflang="en" href="https://xex-ken-xex.github.io/vw/en/">
 <style>
 :root {
   --bg: #1e1e1e; --panel: #252526; --line: #3c3c3c; --text: #d4d4d4; --muted: #9a9a9a;
@@ -30,6 +32,7 @@ header img { width: 28px; height: 28px; }
 header .name { font-weight: 700; font-size: 18px; letter-spacing: .02em; }
 header nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
 header nav a { color: var(--text); }
+header nav a.lang { color: var(--accent); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
 .hero { padding: 56px 0 32px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 36px; align-items: center; }
 .hero h1 { font-size: 40px; line-height: 1.2; margin: 0 0 14px; }
 .hero h1 small { display: block; font-size: 18px; font-weight: 400; color: var(--muted); margin-top: 8px; }
@@ -67,7 +70,7 @@ footer a { color: var(--muted); text-decoration: underline; }
   .hero { grid-template-columns: 1fr; padding-top: 32px; }
   .hero h1 { font-size: 32px; }
   .three, .two { grid-template-columns: 1fr; }
-  header nav { display: none; }
+  header nav a:not(.lang) { display: none; }
 }
 </style>
 </head>
@@ -83,6 +86,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       <a href="#install">インストール</a>
       <a href="https://github.com/xex-ken-xex/vw#readme">使い方（README）</a>
       <a href="https://github.com/xex-ken-xex/vw">GitHub</a>
+      <a class="lang" href="en/" lang="en">English</a>
     </nav>
   </div>
 </header>
@@ -206,16 +210,6 @@ cd vw
     </ul>
   </section>
 
-  <section id="english" class="en">
-    <h2>English</h2>
-    <p><b>vw</b> is a fast image viewer for Linux and Windows: it starts instantly, shows thousands of images without waiting,
-      keeps 16-bit data intact, and opens ZIP / 7z archives in place. Flag and tag images with one key, filter and export them
-      (CSV / JSONL, or copies per tag for machine-learning datasets), and register folders as datasets to build a searchable
-      catalog of their metadata. Supports PNG, JPEG, WebP, GIF, BMP, TIFF and camera RAW (Nikon, Sony, Fujifilm; Canon and DNG too).
-      The UI is English by default, with Japanese available. Free and open source under MIT OR Apache-2.0.</p>
-    <p><a href="https://github.com/xex-ken-xex/vw/releases/latest">Download the latest release</a> ·
-      <a href="https://github.com/xex-ken-xex/vw">Source on GitHub</a></p>
-  </section>
 </main>
 
 <footer>
