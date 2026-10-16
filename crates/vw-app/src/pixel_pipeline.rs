@@ -175,6 +175,16 @@ pub fn trace(image: &VwImage, decoded: &Decoded, p: &Params, x: u32, y: u32) -> 
     })
 }
 
+/// 画像の `i` 番目のサンプルの格納値。
+pub fn stored_value(image: &VwImage, decoded: &Decoded, i: usize) -> f64 {
+    decoded.stored(&image.data, i)
+}
+
+/// 画像の `i` 番目のサンプルを `p` の値で描いたときの明るさ。
+pub fn display_value(image: &VwImage, decoded: &Decoded, p: &Params, i: usize) -> u8 {
+    brightness(decoded.stored(&image.data, i) * p.slope + p.intercept, p)
+}
+
 fn brightness(modality: f64, p: &Params) -> u8 {
     let y = p.function.apply(modality, p.center, p.width);
     let y = if p.invert { 1.0 - y } else { y };

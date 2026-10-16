@@ -76,6 +76,8 @@ pub enum Action {
     TogglePixelProbe,
     DeleteProbePoint,
     TogglePixelPipeline,
+    ToggleHistogram,
+    ToggleZoomMap,
     ShowAbout,
 }
 
@@ -89,7 +91,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 62] = [
+    pub const ALL: [Action; 64] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -116,6 +118,8 @@ impl Action {
         Action::TogglePixelProbe,
         Action::DeleteProbePoint,
         Action::TogglePixelPipeline,
+        Action::ToggleHistogram,
+        Action::ToggleZoomMap,
         Action::ToggleTagging,
         Action::FlagGood,
         Action::FlagBad,
@@ -209,6 +213,8 @@ impl Action {
             Action::TrashBadImages => "trash_bad_images",
             Action::CancelSending => "cancel_sending",
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
+            Action::ToggleHistogram => "toggle_histogram",
+            Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ShowAbout => "show_about",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
@@ -280,6 +286,8 @@ impl Action {
             Action::TrashBadImages => "Move bad images to trash...",
             Action::CancelSending => "Cancel sending",
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
+            Action::ToggleHistogram => "Show/hide histogram",
+            Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ShowAbout => "About vw",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
@@ -437,6 +445,8 @@ impl Action {
             Action::TrashBadImages => vec![],
             Action::CancelSending => vec![],
             Action::TogglePixelPipeline => vec![],
+            Action::ToggleHistogram => vec![],
+            Action::ToggleZoomMap => vec![],
             Action::ShowAbout => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],

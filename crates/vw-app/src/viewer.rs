@@ -362,6 +362,36 @@ pub fn zoom_at(zoom: f32, pan: Vec2, factor: f32, base: f32, cursor: Option<Vec2
     (new_zoom, pan)
 }
 
+/// 枠（大きさ `body`）に見えている画像の範囲。画像の左上を (0, 0)、右下を (1, 1) とした
+/// 割合で、画像の外にはみ出す分は切り取る。`scale` は実寸に対する表示倍率、
+/// `pan` は枠の中心から画像の中心までのずれ。
+pub fn visible_part(body: Vec2, image: Vec2, scale: f32, pan: Vec2) -> Rect {
+    let shown = image * scale;
+    if shown.x <= 0.0 || shown.y <= 0.0 {
+        return Rect::NOTHING;
+    }
+    let to_image = |q: Vec2| ((q - pan) / shown + vec2(0.5, 0.5)).to_pos2();
+    let r = Rect::from_min_max(to_image(-body / 2.0), to_image(body / 2.0));
+    r.intersect(Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)))
+}
+
+/// 画像の `at`（[`visible_part`] と同じ割合）を枠の中心に持ってくるパン。
+pub fn pan_to_center(at: Pos2, image: Vec2, scale: f32) -> Vec2 {
+    -(at.to_vec2() - vec2(0.5, 0.5)) * image * scale
+}
+
+/// ズームマップに渡す、スロットの今の表示。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewWindow {
+    /// 見えている範囲（[`visible_part`]）。
+    pub visible: Rect,
+    /// 実寸に対する表示倍率。
+    pub scale: f32,
+    /// 選べる倍率の範囲。
+    pub min_scale: f32,
+    pub max_scale: f32,
+}
+
 /// 長辺 `shown_side`（物理ピクセル）で表示するのに、長辺 `thumb_side` の縮小画像では
 /// 画素が足りないか。元画像（長辺 `image_side`）が縮小されていない小さな画像なら、
 /// 縮小画像がそのまま元の画素なので要らない。
@@ -477,6 +507,35 @@ impl Slot {
         match self.last_body {
             Some(size) => self.base_scale(Rect::from_min_size(Pos2::ZERO, size)),
             None => 1.0,
+        }
+    }
+
+    /// 今の表示（まだ一度も描いていなければ `None`）。
+    pub fn view_window(&self) -> Option<ViewWindow> {
+        let (shown, body) = (self.shown.as_ref()?, self.last_body?);
+        let base = self.last_base();
+        let image = vec2(shown.info.width as f32, shown.info.height as f32);
+        let scale = base * self.zoom;
+        Some(ViewWindow {
+            visible: visible_part(body, image, scale, self.pan),
+            scale,
+            min_scale: base * MIN_ZOOM,
+            max_scale: MAX_PIXEL_SCALE,
+        })
+    }
+
+    /// 画像の `at`（[`visible_part`] と同じ割合）を枠の中心に持ってくる。倍率は変えない。
+    pub fn center_at(&mut self, at: Pos2) {
+        let Some(shown) = &self.shown else { return };
+        let image = vec2(shown.info.width as f32, shown.info.height as f32);
+        self.pan = pan_to_center(at, image, self.last_base() * self.zoom);
+    }
+
+    /// 実寸に対する表示倍率を `scale` にする。枠の中心にある点はそのまま。
+    pub fn set_scale(&mut self, scale: f32) {
+        let current = self.last_base() * self.zoom;
+        if current > 0.0 {
+            self.zoom_by(scale / current);
         }
     }
 
@@ -1002,6 +1061,37 @@ impl Slot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_image_is_visible_when_it_fits() {
+        let r = visible_part(vec2(200.0, 100.0), vec2(100.0, 100.0), 1.0, Vec2::ZERO);
+        assert_eq!(r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)));
+    }
+
+    #[test]
+    fn zoomed_in_view_shows_the_middle_part_shifted_by_the_pan() {
+        let r = visible_part(vec2(100.0, 100.0), vec2(100.0, 100.0), 4.0, Vec2::ZERO);
+        assert_eq!(
+            r,
+            Rect::from_min_max(pos2(0.375, 0.375), pos2(0.625, 0.625))
+        );
+        // 画像を右へずらすと、見えるのは画像の左寄り。
+        let r = visible_part(
+            vec2(100.0, 100.0),
+            vec2(100.0, 100.0),
+            4.0,
+            vec2(100.0, 0.0),
+        );
+        assert_eq!(r.min.x, 0.125);
+    }
+
+    #[test]
+    fn centering_a_point_makes_it_the_middle_of_the_visible_part() {
+        let (body, image, scale) = (vec2(100.0, 80.0), vec2(300.0, 200.0), 2.0);
+        let at = pos2(0.2, 0.7);
+        let r = visible_part(body, image, scale, pan_to_center(at, image, scale));
+        assert!((r.center() - at).length() < 1e-5, "{r:?}");
+    }
 
     #[test]
     fn nearest_minify_uses_no_mipmaps_so_only_original_values_are_shown() {

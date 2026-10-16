@@ -33,6 +33,7 @@ use crate::settings::{parse_hex_color, HeaderClick, Language, LoadInto, LogStyle
 use crate::settings_ui::{fps_input, layout_title, SettingsUi};
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::state::{self, AppState, Monitor, Placement, WindowState};
+use crate::sub_window::SubWindow;
 use crate::theme;
 use crate::transfer::{Op, Transfer};
 use crate::tree::{self, FolderTree, TreeAction};
@@ -134,6 +135,8 @@ pub struct VwApp {
     send_job: Option<crate::dicom_send::Job>,
     /// 画素の変換の図のウインドウ。
     pipeline: crate::pipeline_view::PipelineView,
+    histogram: crate::histogram_view::HistogramView,
+    zoom_map: crate::zoom_map::ZoomMap,
     about: crate::about::About,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
@@ -492,6 +495,28 @@ impl VwApp {
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
                 view.restore_node_positions(&saved.pipeline_nodes);
+                view
+            },
+            histogram: {
+                let mut view = crate::histogram_view::HistogramView::default();
+                view.window = SubWindow::restored(
+                    saved
+                        .sub_windows
+                        .get("histogram")
+                        .copied()
+                        .unwrap_or_default(),
+                );
+                view
+            },
+            zoom_map: {
+                let mut view = crate::zoom_map::ZoomMap::default();
+                view.window = SubWindow::restored(
+                    saved
+                        .sub_windows
+                        .get("zoom_map")
+                        .copied()
+                        .unwrap_or_default(),
+                );
                 view
             },
             show_settings: false,
@@ -2576,6 +2601,80 @@ impl VwApp {
         self.apply_pipeline(changes);
     }
 
+    fn toggle_histogram(&mut self) {
+        if self.histogram.open {
+            self.histogram.close();
+        } else {
+            self.histogram.open = true;
+        }
+    }
+
+    /// 画像全体のヒストグラム。色導出画面で値を変えていれば、変更後も重ねる。
+    fn histogram_ui(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.pipeline.open_histogram) {
+            self.histogram.open = true;
+        }
+        if !self.histogram.open {
+            return;
+        }
+        let lang = self.lang();
+        let target = self.slots.get(self.active).and_then(|slot| {
+            let shown = slot.shown.as_ref()?;
+            Some(crate::histogram_view::Target {
+                path: &shown.path,
+                image: shown.full.as_ref().map(|f| &f.image),
+                dicom: shown.info.plugin == "DICOM",
+                edited: self.pipeline.edited_for(&shown.path),
+            })
+        });
+        self.histogram.ui(ctx, lang, target);
+    }
+
+    /// ズームマップ。枠やつまみの操作をアクティブなスロットの表示に当てる。
+    fn zoom_map_ui(&mut self, ctx: &egui::Context) {
+        use crate::zoom_map::Command;
+        if std::mem::take(&mut self.pipeline.open_zoom_map) {
+            self.zoom_map.open = true;
+        }
+        if !self.zoom_map.open {
+            return;
+        }
+        let lang = self.lang();
+        let applied = self.pipeline.applied();
+        let target = self.slots.get(self.active).and_then(|slot| {
+            let shown = slot.shown.as_ref()?;
+            let after = shown
+                .full
+                .as_ref()
+                .filter(|_| applied == Some(shown.path.as_path()))
+                .map(|f| &f.texture);
+            let name = crate::frames::file_of(&shown.path);
+            Some(crate::zoom_map::Target {
+                title: name
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                before: &shown.thumb,
+                after,
+                size: [shown.info.width, shown.info.height],
+                view: slot.view_window()?,
+            })
+        });
+        let commands = self.zoom_map.ui(ctx, lang, target);
+        let Some(slot) = self.slots.get_mut(self.active) else {
+            return;
+        };
+        for c in commands {
+            match c {
+                Command::CenterAt(at) => slot.center_at(at),
+                Command::SetScale(scale) => slot.set_scale(scale),
+                Command::Fit => slot.reset_view(),
+                Command::ActualSize => slot.actual_size(),
+            }
+        }
+    }
+
     fn apply_pipeline(&mut self, changes: Vec<crate::pipeline_view::Change>) {
         use crate::pipeline_view::Change;
         let options = self.texture_options;
@@ -3545,6 +3644,8 @@ impl VwApp {
             Action::TrashBadImages => self.ask_trash_bad(),
             Action::CancelSending => self.cancel_send(),
             Action::TogglePixelPipeline => self.toggle_pipeline(),
+            Action::ToggleHistogram => self.toggle_histogram(),
+            Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ShowAbout => self.about.open = true,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
@@ -3837,6 +3938,14 @@ impl VwApp {
             extract_dir: self.last_extract_dir.clone(),
             fullscreen_root: self.last_fullscreen_root.clone(),
             pipeline_nodes: self.pipeline.node_positions(),
+            sub_windows: [
+                ("histogram", self.histogram.window.saved()),
+                ("zoom_map", self.zoom_map.window.saved()),
+            ]
+            .into_iter()
+            .filter(|(_, saved)| saved.rect.is_some() || saved.on_top)
+            .map(|(name, saved)| (name.to_owned(), saved))
+            .collect(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {
@@ -4220,6 +4329,14 @@ impl VwApp {
                 let pipeline = self.pipeline.open;
                 if self.menu_item(ui, Action::TogglePixelPipeline, Some(pipeline)) {
                     chosen = Some(Action::TogglePixelPipeline);
+                }
+                let histogram = self.histogram.open;
+                if self.menu_item(ui, Action::ToggleHistogram, Some(histogram)) {
+                    chosen = Some(Action::ToggleHistogram);
+                }
+                let zoom_map = self.zoom_map.open;
+                if self.menu_item(ui, Action::ToggleZoomMap, Some(zoom_map)) {
+                    chosen = Some(Action::ToggleZoomMap);
                 }
                 ui.separator();
                 let maximized = self.maximized.is_some();
@@ -5058,8 +5175,9 @@ impl VwApp {
                     self.toggle_pipeline();
                 }
             }
-            // 変換の図は画素を読むので、開いている間はアクティブなスロットにフル解像度の画像を持たせる。
-            let pipeline_wants = self.pipeline.open && i == self.active;
+            // 変換の図とヒストグラムは画素を読むので、開いている間はアクティブなスロットに
+            // フル解像度の画像を持たせる。
+            let pipeline_wants = (self.pipeline.open || self.histogram.open) && i == self.active;
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
@@ -5231,6 +5349,8 @@ impl eframe::App for VwApp {
         self.activity_line(ui);
         self.send_ui(&ctx);
         self.pipeline_ui(&ctx);
+        self.histogram_ui(&ctx);
+        self.zoom_map_ui(&ctx);
         if let Some(e) = self.about.ui(&ctx, self.lang()) {
             self.log
                 .error(format!("Third-party licenses: cannot open {e}"));
@@ -5535,6 +5655,8 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
         Action::TogglePixelPipeline => "Pixel pipeline",
+        Action::ToggleHistogram => "Histogram",
+        Action::ToggleZoomMap => "Zoom map",
         other => other.title(),
     }
 }
