@@ -80,6 +80,8 @@ pub enum Action {
     ToggleHistogram,
     ToggleZoomMap,
     ShowAbout,
+    ShowAiModels,
+    AiTagFolder,
 }
 
 /// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
@@ -92,7 +94,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 65] = [
+    pub const ALL: [Action; 67] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -152,6 +154,8 @@ impl Action {
         Action::ToggleSettings,
         Action::ToggleDatasets,
         Action::ShowAbout,
+        Action::ShowAiModels,
+        Action::AiTagFolder,
         Action::FullscreenNext,
         Action::FullscreenPrevious,
         Action::FullscreenNextFolder,
@@ -218,6 +222,8 @@ impl Action {
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ShowAbout => "show_about",
+            Action::ShowAiModels => "show_ai_models",
+            Action::AiTagFolder => "ai_tag_folder",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
             Action::FullscreenNext => "fullscreen_next",
@@ -292,6 +298,8 @@ impl Action {
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ShowAbout => "About vw",
+            Action::ShowAiModels => "AI models...",
+            Action::AiTagFolder => "Add AI tags to this folder",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -452,6 +460,8 @@ impl Action {
             Action::ToggleHistogram => vec![],
             Action::ToggleZoomMap => vec![],
             Action::ShowAbout => vec![],
+            Action::ShowAiModels => vec![],
+            Action::AiTagFolder => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::ToggleRoi => vec![KeyCombo::plain(R)],

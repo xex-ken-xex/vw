@@ -113,6 +113,10 @@ impl VwApp {
                 }
             });
             ui.menu_button(tr(lang, "Help"), |ui| {
+                if self.menu_item(ui, Action::ShowAiModels, None) {
+                    chosen = Some(Action::ShowAiModels);
+                }
+                ui.separator();
                 if self.menu_item(ui, Action::ShowAbout, None) {
                     chosen = Some(Action::ShowAbout);
                 }
@@ -169,6 +173,10 @@ impl VwApp {
         }
         if self.menu_item(ui, Action::TrashBadImages, None) {
             chosen = Some(Action::TrashBadImages);
+        }
+        ui.separator();
+        if self.menu_item(ui, Action::AiTagFolder, None) {
+            chosen = Some(Action::AiTagFolder);
         }
         chosen
     }

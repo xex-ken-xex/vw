@@ -542,6 +542,15 @@ impl VwApp {
                 }
                 continue;
             }
+            if c.path
+                .file_name()
+                .is_some_and(|n| n == crate::ai_tags::FILE_NAME)
+            {
+                if let Some(dir) = c.path.parent() {
+                    self.ai_tags.forget(dir);
+                }
+                continue;
+            }
             // 消えたファイルは中身を読めないので、拡張子で決まらないものは画像だったとみなす。
             // 画像でないファイルが消えても、フォルダを読み直して件数をログに出すだけで済む。
             let image = match c.kind {

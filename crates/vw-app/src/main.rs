@@ -7,6 +7,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod about;
+mod ai_models;
+mod ai_tags;
 mod app;
 mod archive;
 mod autoload;
@@ -52,6 +54,7 @@ mod sort;
 mod state;
 mod status;
 mod sub_window;
+mod tagger;
 mod theme;
 mod toml_reader;
 mod transfer;

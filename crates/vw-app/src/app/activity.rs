@@ -26,6 +26,8 @@ impl VwApp {
                     .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
             ),
             ("Sending", self.send_job.as_ref().and_then(|j| j.progress())),
+            ("AI tagging", self.ai_job.as_ref().map(|j| j.progress())),
+            ("Downloading AI models", self.ai_models.progress()),
         ];
         jobs.into_iter()
             .filter_map(|(name, p)| p.map(|(done, total)| (name, done, total)))

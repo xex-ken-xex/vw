@@ -32,11 +32,12 @@ enum Section {
     DicomSend,
     Log,
     Quality,
+    Ai,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 12] = [
+    const ALL: [Section; 13] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -48,6 +49,7 @@ impl Section {
         Section::DicomSend,
         Section::Log,
         Section::Quality,
+        Section::Ai,
         Section::Keys,
     ];
 
@@ -64,6 +66,7 @@ impl Section {
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
             Section::Quality => "Quality evaluation",
+            Section::Ai => "AI tags",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -79,7 +82,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 50] = [
+const ITEMS: [Item; 53] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -338,6 +341,27 @@ const ITEMS: [Item; 50] = [
         title: "Sharpness verdict",
         description: "Variance of the Laplacian over the whole image. Blur lowers it.",
         widget: quality_sharpness_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.general_threshold",
+        title: "General tag threshold",
+        description: "Confidence (0 to 1) a general tag needs to be added. Lower adds more tags.",
+        widget: ai_general_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.character_threshold",
+        title: "Character tag threshold",
+        description: "Confidence (0 to 1) a character tag needs to be added.",
+        widget: ai_character_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.threads",
+        title: "Inference threads",
+        description: "CPU threads used by the tagger. 0 lets ONNX Runtime decide.",
+        widget: ai_threads_widget,
     },
     Item {
         section: Section::Fullscreen,
@@ -832,6 +856,30 @@ fn log_file_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
 
 fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     let r = ui.add(egui::DragValue::new(&mut s.log.keep_files).range(LogSettings::KEEP_RANGE));
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn ai_general_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    unit_widget(&mut s.ai.general_threshold, ui)
+}
+
+fn ai_character_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    unit_widget(&mut s.ai.character_threshold, ui)
+}
+
+fn unit_widget(v: &mut f32, ui: &mut egui::Ui) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(v)
+            .range(0.0..=1.0)
+            .speed(0.01)
+            .fixed_decimals(2),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn ai_threads_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r =
+        ui.add(egui::DragValue::new(&mut s.ai.threads).range(crate::settings::Ai::THREADS_RANGE));
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 

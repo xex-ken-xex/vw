@@ -586,6 +586,11 @@ impl VwApp {
             if resp.reference {
                 self.set_quality_reference(i);
             }
+            if resp.ai_tag {
+                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+                    self.ai_tag_paths(ui.ctx(), vec![path]);
+                }
+            }
             // 変換の図と解析は画素を読むので、開いている間はアクティブなスロットと
             // 評価の基準のスロットにフル解像度の画像を持たせる。
             let analysis_open = self.pipeline.open || self.histogram.open;

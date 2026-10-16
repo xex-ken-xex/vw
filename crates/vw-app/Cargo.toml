@@ -32,6 +32,10 @@ trash = { version = "5.2", default-features = false, features = ["coinit_apartme
 # 読むだけなので、圧縮側（zopfli）や C ライブラリの要る方式は入れない。
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "aes-crypto"] }
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "bzip2", "ppmd"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "platform-verifier"] }
+ort = { version = "2.0.0-rc.14", default-features = false, features = ["load-dynamic"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 
 [dev-dependencies]
 png = "0.18"

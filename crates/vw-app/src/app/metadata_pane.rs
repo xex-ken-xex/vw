@@ -72,6 +72,9 @@ impl VwApp {
             file_rows.insert(1, row("Frame", format!("{} / {total}", i + 1)));
         }
         let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
+        if let Some(rows) = self.ai_tag_rows(&shown.path) {
+            groups.push((tr(lang, "AI tags").to_owned(), rows));
+        }
         groups.extend(
             group_metadata(&info.metadata.entries)
                 .into_iter()
