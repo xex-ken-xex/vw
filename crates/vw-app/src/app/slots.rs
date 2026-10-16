@@ -568,6 +568,7 @@ impl VwApp {
                     empty_hint,
                     label: &label,
                     probe: self.tool == Tool::PixelProbe,
+                    roi: self.tool == Tool::Roi,
                     destinations: &destinations,
                 },
             );
@@ -595,7 +596,7 @@ impl VwApp {
                 self.copy_image(ui.ctx(), i);
             }
             if let Some(text) = resp.copy_text {
-                self.copy_text(ui.ctx(), text, "probe point");
+                self.copy_text(ui.ctx(), text, "measurement");
             }
             if let Some(choice) = resp.send {
                 send = Some((choice, self.slot_send_targets(i)));
@@ -644,6 +645,7 @@ impl VwApp {
                         empty_hint: hint,
                         label: &Default::default(),
                         probe: false,
+                        roi: false,
                         destinations: &[],
                     },
                 );

@@ -64,6 +64,8 @@ impl VwApp {
                 image: shown.full.as_ref().map(|f| &f.image),
                 dicom: shown.info.plugin == "DICOM",
                 edited: self.pipeline.edited_for(&shown.path),
+                target_roi: slot.roi_of(crate::roi::Kind::Target),
+                background_roi: slot.roi_of(crate::roi::Kind::Background),
             })
         });
         self.histogram.ui(ctx, lang, target);

@@ -36,6 +36,7 @@ mod memory;
 mod pipeline_view;
 mod pixel_pipeline;
 mod probe;
+mod roi;
 mod series;
 mod settings;
 mod settings_ui;
