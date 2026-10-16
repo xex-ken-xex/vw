@@ -157,6 +157,51 @@ impl Default for Behavior {
     }
 }
 
+/// ログ欄の見た目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogStyle {
+    /// 時刻と本文。文字は普通の字体で、長い行は折り返す。
+    #[default]
+    Normal,
+    /// 黒地に等幅の字体で、起動からの経過秒と本文。長い行は折り返さず横に流す。
+    Terminal,
+}
+
+impl LogStyle {
+    pub const ALL: [LogStyle; 2] = [LogStyle::Normal, LogStyle::Terminal];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            LogStyle::Normal => "Normal",
+            LogStyle::Terminal => "Terminal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LogSettings {
+    pub style: LogStyle,
+    /// ログをファイルにも書く。
+    pub file: bool,
+    /// 残すログファイルの数（起動 1 回で 1 ファイル）。
+    pub keep_files: u32,
+}
+
+impl LogSettings {
+    pub const KEEP_RANGE: std::ops::RangeInclusive<u32> = 1..=1000;
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            style: LogStyle::Normal,
+            file: true,
+            keep_files: 20,
+        }
+    }
+}
+
 /// cd したフォルダの画像をスロットにどう入れるか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -504,6 +549,7 @@ pub struct Settings {
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
+    pub log: LogSettings,
     pub keys: Keymap,
 }
 
@@ -754,6 +800,18 @@ impl Settings {
                 )
                 .unwrap_or(d.fullscreen.path_size),
         };
+        let log = LogSettings {
+            style: r.get("log", "style").unwrap_or(d.log.style),
+            file: r.get("log", "file").unwrap_or(d.log.file),
+            keep_files: r
+                .get_valid(
+                    "log",
+                    "keep_files",
+                    |v: &u32| LogSettings::KEEP_RANGE.contains(v),
+                    "must be 1 to 1000",
+                )
+                .unwrap_or(d.log.keep_files),
+        };
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -775,6 +833,7 @@ impl Settings {
                 dicom_send,
                 dataset,
                 fullscreen,
+                log,
                 keys,
             },
             problems,
