@@ -9,6 +9,8 @@ use egui_phosphor::regular as icon;
 use crate::i18n::{tr, tr1, tr_text};
 use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal, Scope};
 use crate::layout::SlotLayout;
+use vw_quality::Thresholds;
+
 use crate::settings::{
     parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
     LoadModifier, LogSettings, LogStyle, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
@@ -29,11 +31,12 @@ enum Section {
     Dicom,
     DicomSend,
     Log,
+    Quality,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 11] = [
+    const ALL: [Section; 12] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -44,6 +47,7 @@ impl Section {
         Section::Dicom,
         Section::DicomSend,
         Section::Log,
+        Section::Quality,
         Section::Keys,
     ];
 
@@ -59,6 +63,7 @@ impl Section {
             Section::Dicom => "Medical images (DICOM)",
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
+            Section::Quality => "Quality evaluation",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -74,7 +79,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 45] = [
+const ITEMS: [Item; 50] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -298,6 +303,41 @@ const ITEMS: [Item; 45] = [
         title: "Log files kept",
         description: "How many log files to keep. Older ones are deleted at start.",
         widget: log_keep_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "quality.psnr",
+        title: "PSNR verdict",
+        description: "Peak signal-to-noise ratio against the reference image, in dB. Higher is better.",
+        widget: quality_psnr_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "quality.ssim",
+        title: "SSIM verdict",
+        description: "Structural similarity against the reference image, 0 to 1. Higher is better.",
+        widget: quality_ssim_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "quality.snr",
+        title: "SNR verdict",
+        description: "Signal-to-noise ratio of the target ROI (mean / standard deviation). Higher is better.",
+        widget: quality_snr_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "quality.cnr",
+        title: "CNR verdict",
+        description: "Contrast-to-noise ratio between the target and background ROIs. Higher is better.",
+        widget: quality_cnr_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "quality.sharpness",
+        title: "Sharpness verdict",
+        description: "Variance of the Laplacian over the whole image. Blur lowers it.",
+        widget: quality_sharpness_widget,
     },
     Item {
         section: Section::Fullscreen,
@@ -793,6 +833,50 @@ fn log_file_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
 fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     let r = ui.add(egui::DragValue::new(&mut s.log.keep_files).range(LogSettings::KEEP_RANGE));
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn quality_psnr_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    thresholds_widget(&mut s.quality.psnr, ui, lang, 1.0, 1)
+}
+
+fn quality_ssim_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    thresholds_widget(&mut s.quality.ssim, ui, lang, 0.01, 2)
+}
+
+fn quality_snr_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    thresholds_widget(&mut s.quality.snr, ui, lang, 0.1, 1)
+}
+
+fn quality_cnr_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    thresholds_widget(&mut s.quality.cnr, ui, lang, 0.1, 1)
+}
+
+fn quality_sharpness_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    thresholds_widget(&mut s.quality.sharpness, ui, lang, 10.0, 0)
+}
+
+/// 「適合」と「注意」の下限。適合の下限が注意の下限を下回るような途中の値は保存しない。
+fn thresholds_widget(
+    t: &mut Thresholds,
+    ui: &mut egui::Ui,
+    lang: Language,
+    speed: f64,
+    decimals: usize,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        for (label, value) in [("Good from", &mut t.good), ("Caution from", &mut t.caution)] {
+            ui.label(tr(lang, label));
+            let r = ui.add(
+                egui::DragValue::new(value)
+                    .speed(speed)
+                    .fixed_decimals(decimals),
+            );
+            changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        }
+        ui.weak(tr(lang, "Below caution is degraded."));
+    });
+    changed && t.valid()
 }
 
 fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
@@ -1566,11 +1650,13 @@ mod tests {
         let toml = Settings::default().to_toml();
         for i in &ITEMS {
             let (table, field) = i.key.split_once('.').unwrap();
-            assert!(toml.contains(&format!("[{table}]")), "{}", i.key);
-            // 表の配列（検索のグループなど）は `[[table.field]]` の見出しで書かれる。
-            let as_value = toml.contains(&format!("{field} = "));
+            // 表の配列（検索のグループなど）は `[[table.field]]`、入れ子の表（判定の閾値）は
+            // `[table.field]` の見出しで書かれる。
+            let as_value =
+                toml.contains(&format!("[{table}]")) && toml.contains(&format!("{field} = "));
             let as_tables = toml.contains(&format!("[[{}]]", i.key));
-            assert!(as_value || as_tables, "{}", i.key);
+            let as_table = toml.contains(&format!("[{}]", i.key));
+            assert!(as_value || as_tables || as_table, "{}", i.key);
         }
     }
 

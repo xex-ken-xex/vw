@@ -275,6 +275,8 @@ pub struct SlotResponse {
     pub send: Option<crate::dicom_send::Choice>,
     /// 右クリックメニューで「画素の変換」が選ばれた。
     pub pipeline: bool,
+    /// 右クリックメニューで「評価の基準にする」が選ばれた。
+    pub reference: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -1017,6 +1019,17 @@ impl Slot {
                 }
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.copy = true;
+                    ui.close();
+                }
+                if ui
+                    .button(tr(lang, "Use as evaluation reference"))
+                    .on_hover_text(tr(
+                        lang,
+                        "PSNR and SSIM in the analysis window compare the active image with this one.",
+                    ))
+                    .clicked()
+                {
+                    out.reference = true;
                     ui.close();
                 }
                 let developable = self

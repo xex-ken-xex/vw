@@ -34,10 +34,56 @@ impl VwApp {
                     .filter(|m| m.path == shown.path)
                     .map(|m| (m.x, m.y))
                     .collect(),
+                evaluation: Some((self.evaluation.report(), &self.settings.settings.quality)),
             })
         });
         let changes = self.pipeline.ui(ctx, lang, target);
         self.apply_pipeline(changes);
+    }
+
+    /// 定量評価。解析か色導出のウインドウが開いている間、アクティブなスロットの画像を評価する。
+    pub(super) fn update_evaluation(&mut self, ctx: &egui::Context) {
+        if !(self.pipeline.open || self.histogram.open) {
+            self.evaluation.clear();
+            return;
+        }
+        let reference = self.quality_reference.as_deref().and_then(|path| {
+            let shown = self
+                .slots
+                .iter()
+                .filter_map(|s| s.shown.as_ref())
+                .find(|s| s.path == path)?;
+            Some(crate::quality::Reference {
+                path,
+                image: shown.full.as_ref().map(|f| &f.image),
+            })
+        });
+        let input = self.slots.get(self.active).and_then(|slot| {
+            let shown = slot.shown.as_ref()?;
+            Some(crate::quality::Input {
+                path: &shown.path,
+                image: shown.full.as_ref().map(|f| &f.image),
+                edited: self.pipeline.edit_for(&shown.path),
+                target_roi: slot.roi_of(crate::roi::Kind::Target),
+                background_roi: slot.roi_of(crate::roi::Kind::Background),
+                // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
+                reference: reference.filter(|r| r.path != shown.path),
+            })
+        });
+        self.evaluation.update(ctx, input.as_ref());
+    }
+
+    /// スロット `index` の画像を PSNR・SSIM の基準にする。
+    pub(super) fn set_quality_reference(&mut self, index: usize) {
+        let Some(shown) = self.slots.get(index).and_then(|s| s.shown.as_ref()) else {
+            return;
+        };
+        self.quality_reference = Some(shown.path.clone());
+        self.log
+            .info(format!("Evaluation reference: {}", shown.path.display()));
+        if !self.histogram.open {
+            self.histogram.open = true;
+        }
     }
 
     pub(super) fn toggle_histogram(&mut self) {
@@ -68,7 +114,20 @@ impl VwApp {
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
             })
         });
-        self.histogram.ui(ctx, lang, target);
+        let evaluated = crate::histogram_view::Evaluated {
+            report: self.evaluation.report(),
+            computing: self.evaluation.computing(),
+            thresholds: &self.settings.settings.quality,
+        };
+        match self.histogram.ui(ctx, lang, target, evaluated) {
+            Some(crate::quality_view::Command::Copy(text)) => {
+                self.copy_text(ctx, text, "evaluation as CSV");
+            }
+            Some(crate::quality_view::Command::ClearReference) => {
+                self.quality_reference = None;
+            }
+            None => {}
+        }
     }
 
     /// ズームマップ。枠やつまみの操作をアクティブなスロットの表示に当てる。

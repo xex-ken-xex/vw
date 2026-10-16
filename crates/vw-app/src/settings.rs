@@ -16,6 +16,7 @@ use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 use crate::viewer::ScaleFilter;
+use vw_quality::{Metric, Thresholds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -317,6 +318,65 @@ impl LogSettings {
                     "must be 1 to 1000",
                 )
                 .unwrap_or(d.keep_files),
+        }
+    }
+}
+
+/// 定量評価（[`crate::quality`]）の判定の境目。指標ごとに「適合」と「注意」の下限。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Quality {
+    pub psnr: Thresholds,
+    pub ssim: Thresholds,
+    pub snr: Thresholds,
+    pub cnr: Thresholds,
+    pub sharpness: Thresholds,
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Self {
+            psnr: Metric::Psnr.default_thresholds(),
+            ssim: Metric::Ssim.default_thresholds(),
+            snr: Metric::Snr.default_thresholds(),
+            cnr: Metric::Cnr.default_thresholds(),
+            sharpness: Metric::Sharpness.default_thresholds(),
+        }
+    }
+}
+
+impl Quality {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let mut r = r.at("quality");
+        let mut q = Self::default();
+        for m in Metric::ALL {
+            if let Some(t) = r.get_valid(
+                m.key(),
+                |t: &Thresholds| t.valid(),
+                "good and caution must be numbers with good >= caution",
+            ) {
+                *q.get_mut(m) = t;
+            }
+        }
+        q
+    }
+
+    pub fn get(&self, m: Metric) -> Thresholds {
+        match m {
+            Metric::Psnr => self.psnr,
+            Metric::Ssim => self.ssim,
+            Metric::Snr => self.snr,
+            Metric::Cnr => self.cnr,
+            Metric::Sharpness => self.sharpness,
+        }
+    }
+
+    pub fn get_mut(&mut self, m: Metric) -> &mut Thresholds {
+        match m {
+            Metric::Psnr => &mut self.psnr,
+            Metric::Ssim => &mut self.ssim,
+            Metric::Snr => &mut self.snr,
+            Metric::Cnr => &mut self.cnr,
+            Metric::Sharpness => &mut self.sharpness,
         }
     }
 }
@@ -835,6 +895,7 @@ pub struct Settings {
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
     pub log: LogSettings,
+    pub quality: Quality,
     pub keys: Keymap,
 }
 
@@ -856,6 +917,7 @@ impl Settings {
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
         let log = LogSettings::read(&mut r);
+        let quality = Quality::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -878,6 +940,7 @@ impl Settings {
                 dataset,
                 fullscreen,
                 log,
+                quality,
                 keys,
             },
             problems,
@@ -1166,6 +1229,10 @@ mod tests {
         s.tree.confirm_every = true;
         s.tree.confirm_chunk = 200;
         s.dataset.roots = vec!["/data/sets".into(), r"D:\test data".into()];
+        s.quality.psnr = Thresholds {
+            good: 40.0,
+            caution: 30.0,
+        };
         s.dataset.fields = vec!["Source".into(), "入手元".into()];
         s.fullscreen = Fullscreen {
             mode: FullscreenMode::Newest,
@@ -1721,5 +1788,27 @@ ae_title = "PACS"
     fn saving_without_a_settings_directory_fails_cleanly() {
         let (mut store, _) = SettingsStore::open(None);
         assert!(store.save().is_err());
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+
+    #[test]
+    fn quality_thresholds_are_read_per_metric_and_bad_ones_fall_back() {
+        let text =
+            "[quality]\npsnr = { good = 40, caution = 30 }\nssim = { good = 0.5, caution = 0.9 }\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(
+            s.quality.psnr,
+            Thresholds {
+                good: 40.0,
+                caution: 30.0
+            }
+        );
+        assert_eq!(s.quality.ssim, Metric::Ssim.default_thresholds());
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].starts_with("quality.ssim:"), "{}", problems[0]);
     }
 }

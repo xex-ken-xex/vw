@@ -3728,6 +3728,7 @@ dependencies = [
  "vw-gif",
  "vw-jpeg",
  "vw-png",
+ "vw-quality",
  "vw-raw",
  "vw-tiff",
  "vw-webp",
@@ -3794,6 +3795,13 @@ version = "0.5.0"
 dependencies = [
  "png",
  "vw-core",
+]
+
+[[package]]
+name = "vw-quality"
+version = "0.5.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

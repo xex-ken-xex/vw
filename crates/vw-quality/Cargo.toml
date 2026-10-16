@@ -1,0 +1,11 @@
+[package]
+name = "vw-quality"
+description = "Image quality metrics (PSNR, SSIM, SNR, CNR, sharpness) on plain pixel arrays"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

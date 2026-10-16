@@ -31,6 +31,11 @@ pub struct Target<'a> {
     pub image: Option<&'a Arc<VwImage>>,
     /// その画像に置いた十字の位置。
     pub marks: Vec<(u32, u32)>,
+    /// 定量評価の結果と判定の閾値。
+    pub evaluation: Option<(
+        Option<&'a crate::quality::Report>,
+        &'a crate::settings::Quality,
+    )>,
 }
 
 /// スロットの表示に当てる変更。
@@ -184,9 +189,14 @@ impl PipelineView {
 
     /// `path` の画像に手で変えた値を当てていれば、その値。
     pub fn edited_for(&self, path: &Path) -> Option<Params> {
+        self.edit_for(path).map(|(p, _)| p)
+    }
+
+    /// `path` の画像に手で変えた値を当てていれば、その値と、画像のデコードの仕方。
+    pub fn edit_for(&self, path: &Path) -> Option<(Params, Decoded)> {
         match &self.loaded {
             Some(Loaded::Gray(g)) if self.path.as_deref() == Some(path) && g.params != g.file => {
-                Some(g.params)
+                Some((g.params, g.decoded))
             }
             _ => None,
         }
@@ -223,6 +233,7 @@ impl PipelineView {
         let mut out = self.follow(ctx, target.as_ref());
         let title = crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref());
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
+        let evaluation = target.as_ref().and_then(|t| t.evaluation);
         let mut close = false;
         let mut edited = false;
         ctx.show_viewport_immediate(
@@ -233,6 +244,11 @@ impl PipelineView {
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     close = true;
+                }
+                if let Some((report, thresholds)) = evaluation {
+                    egui::Panel::bottom("pipeline_evaluation").show(ctx, |ui| {
+                        crate::quality_view::summary(ui, lang, report, thresholds);
+                    });
                 }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(ctx.style().visuals.extreme_bg_color))
@@ -364,7 +380,7 @@ impl PipelineView {
                 if ui.button(tr(lang, "Fit to window")).clicked() {
                     self.transform = None;
                 }
-                if ui.button(tr(lang, "Histogram")).clicked() {
+                if ui.button(tr(lang, "Analysis")).clicked() {
                     self.open_histogram = true;
                 }
                 if ui.button(tr(lang, "Zoom map")).clicked() {

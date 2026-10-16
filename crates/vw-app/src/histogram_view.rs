@@ -1,4 +1,5 @@
-//! 画像全体のヒストグラムの別ウインドウ。アクティブなスロットの画像に追従し、
+//! 解析ウインドウ。アクティブなスロットの画像に追従し、画像全体のヒストグラムと
+//! 定量評価（[`crate::quality_view`]）をタブで切り替えて出す。十分に高いウインドウでは両方を上下に並べる。
 //! ピクセルパイプラインで値を変えているときは、変更前（グレーの塗り）と変更後（線）を重ねる。
 
 use std::path::{Path, PathBuf};
@@ -12,8 +13,10 @@ use vw_dicom::pipeline::Pipeline;
 use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
 use crate::i18n::tr;
 use crate::pixel_pipeline::{self, Decoded, Params};
+use crate::quality::Report;
+use crate::quality_view::{self, Command};
 use crate::roi::Region;
-use crate::settings::Language;
+use crate::settings::{Language, Quality};
 use crate::sub_window::SubWindow;
 
 /// ウインドウに渡す、アクティブなスロットの画像。
@@ -29,6 +32,23 @@ pub struct Target<'a> {
     pub target_roi: Option<Region>,
     pub background_roi: Option<Region>,
 }
+
+/// 定量評価の結果。ウインドウの外（[`crate::quality::Evaluation`]）が持つ。
+pub struct Evaluated<'a> {
+    pub report: Option<&'a Report>,
+    pub computing: bool,
+    pub thresholds: &'a Quality,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Histogram,
+    Evaluation,
+}
+
+/// 両方を上下に並べるのに要るウインドウの高さ。
+const BOTH_HEIGHT: f32 = 700.0;
 
 /// 数える範囲。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -118,6 +138,7 @@ enum Counted {
 pub struct HistogramView {
     pub open: bool,
     pub window: SubWindow,
+    tab: Tab,
     axis: Axis,
     channel: Shown,
     log: bool,
@@ -137,24 +158,32 @@ impl HistogramView {
         self.counting = None;
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, lang: Language, target: Option<Target<'_>>) {
+    /// 1 フレーム分。評価の表から頼まれたことを返す。
+    pub fn ui(
+        &mut self,
+        ctx: &egui::Context,
+        lang: Language,
+        target: Option<Target<'_>>,
+        evaluated: Evaluated<'_>,
+    ) -> Option<Command> {
         if !self.open {
-            return;
+            return None;
         }
         self.follow(ctx, target.as_ref());
         if let Some(t) = &target {
             self.count(ctx, t);
         }
-        let title = crate::sub_window::title(lang, "Histogram", self.path.as_deref());
+        let title = crate::sub_window::title(lang, "Analysis", self.path.as_deref());
         let rois = target.as_ref().map_or((false, false), |t| {
             (t.target_roi.is_some(), t.background_roi.is_some())
         });
         let mut close = false;
+        let mut command = None;
         let has_image = target.as_ref().is_some_and(|t| t.image.is_some());
         let has_target = target.is_some();
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("histogram"),
-            self.window.builder(title, [760.0, 440.0]),
+            self.window.builder(title, [760.0, 480.0]),
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     close = true;
@@ -169,13 +198,58 @@ impl HistogramView {
                     } else if !has_image {
                         ui.centered_and_justified(|ui| ui.spinner());
                     } else {
-                        self.contents(ui, lang, rois);
+                        command = self.tabs(ui, lang, rois, &evaluated);
                     }
                 });
             },
         );
         if close {
             self.close();
+        }
+        command
+    }
+
+    /// タブの行と、選んだタブの中身。ウインドウが高ければタブを出さずに両方を並べる。
+    fn tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        rois: (bool, bool),
+        evaluated: &Evaluated<'_>,
+    ) -> Option<Command> {
+        let evaluation = |ui: &mut egui::Ui| {
+            quality_view::table(
+                ui,
+                lang,
+                evaluated.report,
+                evaluated.thresholds,
+                evaluated.computing,
+            )
+        };
+        if ui.available_height() >= BOTH_HEIGHT {
+            let mut command = None;
+            egui::Panel::bottom("analysis_evaluation")
+                .resizable(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.strong(tr(lang, "Evaluation"));
+                    command = evaluation(ui);
+                });
+            ui.strong(tr(lang, "Histogram"));
+            self.contents(ui, lang, rois);
+            return command;
+        }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.tab, Tab::Histogram, tr(lang, "Histogram"));
+            ui.selectable_value(&mut self.tab, Tab::Evaluation, tr(lang, "Evaluation"));
+        });
+        ui.separator();
+        match self.tab {
+            Tab::Histogram => {
+                self.contents(ui, lang, rois);
+                None
+            }
+            Tab::Evaluation => evaluation(ui),
         }
     }
 
