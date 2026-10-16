@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use vw_core::VwImage;
 
 use crate::derive::{self, Derive, View};
-use crate::i18n::tr;
+use crate::faces::FaceMark;
+use crate::i18n::{tr, tr1};
 use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
 use crate::probe::{self, Mark};
@@ -230,6 +231,8 @@ pub struct Slot {
     selected_roi: Option<usize>,
     /// ドラッグで描いている途中の ROI（種類と始点の画素）。
     drawing: Option<(roi::Kind, (u32, u32))>,
+    /// 右クリックした顔の枠（画像と、その画像の枠の番号）。
+    selected_face: Option<(PathBuf, usize)>,
     /// 色導出。`None` は標準の表示。起動をまたいでは残さない。
     pub derive: Option<Derive>,
 }
@@ -253,6 +256,18 @@ pub struct SlotLook<'a> {
     pub presets: &'a [crate::pipelines::Preset],
     /// 色導出で描いた画像のテクスチャの補間。
     pub texture_options: TextureOptions,
+    /// 表示中の画像で見つけた顔の枠。空なら描かない。
+    pub faces: &'a [FaceMark],
+    /// 顔の枠の右クリックの「この人物として登録 ▸」に並べる人物。
+    pub people: &'a [String],
+}
+
+/// 顔の枠の右クリックで選ばれた操作。番号は表示中の画像の枠の番号。
+#[derive(Debug, Clone, PartialEq)]
+pub enum FaceAction {
+    Assign(usize, String),
+    NewPerson(usize),
+    Clear(usize),
 }
 
 /// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
@@ -287,6 +302,10 @@ pub struct SlotResponse {
     pub reference: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
+    /// 右クリックメニューで「顔を探す」が選ばれた。
+    pub find_faces: bool,
+    /// 顔の枠の右クリックで選ばれた操作（表示中の画像に対して）。
+    pub face: Option<(PathBuf, FaceAction)>,
     /// 色導出から知らせること（ログに出す）。
     pub derive: Option<derive::Event>,
 }
@@ -499,6 +518,7 @@ impl Slot {
             rois: Vec::new(),
             selected_roi: None,
             drawing: None,
+            selected_face: None,
             derive: None,
         }
     }
@@ -949,6 +969,8 @@ impl Slot {
             destinations,
             presets,
             texture_options,
+            faces,
+            people,
         } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
@@ -1162,6 +1184,13 @@ impl Slot {
                     self.selected_mark = Some(self.marks.len() - 1);
                 }
             }
+            let face_rect = |m: &FaceMark| {
+                let (w, h) = (shown.info.width as f32, shown.info.height as f32);
+                Rect::from_min_size(
+                    img_rect.min + vec2(m.rect[0] * w, m.rect[1] * h) * scale,
+                    vec2(m.rect[2] * w, m.rect[3] * h) * scale,
+                )
+            };
             if response.secondary_clicked() {
                 if let Some(i) = hit {
                     self.selected_mark = Some(i);
@@ -1169,7 +1198,21 @@ impl Slot {
                 if let Some(i) = roi_hit {
                     self.selected_roi = Some(i);
                 }
+                // 重なった枠は小さいほうを選ぶ。大きな顔の中に小さな顔が写り込むことがあるため。
+                self.selected_face = pointer
+                    .and_then(|p| {
+                        faces
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, m)| face_rect(m).contains(p))
+                            .min_by(|a, b| {
+                                (a.1.rect[2] * a.1.rect[3]).total_cmp(&(b.1.rect[2] * b.1.rect[3]))
+                            })
+                            .map(|(i, _)| i)
+                    })
+                    .map(|i| (shown.path.clone(), i));
             }
+            draw_faces(ui, body, lang, faces, &face_rect);
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
@@ -1255,7 +1298,40 @@ impl Slot {
             let roi_text = self.selected_roi_text();
             let mut delete_mark = false;
             let mut delete_roi = false;
+            let face_menu = self
+                .selected_face
+                .as_ref()
+                .filter(|(p, i)| {
+                    Some(p) == self.shown.as_ref().map(|s| &s.path) && *i < faces.len()
+                })
+                .map(|(p, i)| (p.clone(), *i, faces[*i].person.clone()));
             response.context_menu(|ui| {
+                if let Some((path, i, person)) = &face_menu {
+                    let title = match person {
+                        Some(name) => tr1(lang, "Face {}", &format!("{}: {name}", i + 1)),
+                        None => tr1(lang, "Face {}", &format!("{}", i + 1)),
+                    };
+                    ui.weak(title);
+                    if !people.is_empty() {
+                        ui.menu_button(tr(lang, "Register as"), |ui| {
+                            for name in people {
+                                if ui.button(name).clicked() {
+                                    out.face = Some((path.clone(), FaceAction::Assign(*i, name.clone())));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if ui.button(tr(lang, "Register as a new person...")).clicked() {
+                        out.face = Some((path.clone(), FaceAction::NewPerson(*i)));
+                        ui.close();
+                    }
+                    if person.is_some() && ui.button(tr(lang, "Unlink person")).clicked() {
+                        out.face = Some((path.clone(), FaceAction::Clear(*i)));
+                        ui.close();
+                    }
+                    ui.separator();
+                }
                 if let Some(text) = &mark_text {
                     if ui.button(tr(lang, "Copy point value")).clicked() {
                         out.copy_text = Some(text.clone());
@@ -1299,6 +1375,10 @@ impl Slot {
                 }
                 if ui.button(tr(lang, "Add AI tags")).clicked() {
                     out.ai_tag = true;
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Find faces")).clicked() {
+                    out.find_faces = true;
                     ui.close();
                 }
                 let developable = self
@@ -1558,6 +1638,54 @@ impl Slot {
             );
         }
         out
+    }
+}
+
+/// 顔の枠を描く。人物が分かった顔は緑で名前を添え、分からない顔は黄色。
+fn draw_faces(
+    ui: &egui::Ui,
+    body: Rect,
+    lang: Language,
+    faces: &[FaceMark],
+    face_rect: &dyn Fn(&FaceMark) -> Rect,
+) {
+    let painter = ui.painter_at(body);
+    for (i, m) in faces.iter().enumerate() {
+        let rect = face_rect(m);
+        let color = if m.person.is_some() {
+            Color32::from_rgb(80, 220, 120)
+        } else {
+            Color32::from_rgb(240, 200, 60)
+        };
+        // 明るい画像でも暗い画像でも見えるよう、黒い縁の上に描く。
+        painter.rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(3.0, Color32::from_black_alpha(140)),
+            egui::StrokeKind::Middle,
+        );
+        painter.rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.5, color),
+            egui::StrokeKind::Middle,
+        );
+        let text = match &m.person {
+            Some(name) => name.clone(),
+            None => format!("{} {}", tr(lang, "Face"), i + 1),
+        };
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), color);
+        let pad = vec2(4.0, 1.0);
+        let size = galley.size() + 2.0 * pad;
+        let y = if rect.bottom() + size.y + 2.0 <= body.bottom() {
+            rect.bottom() + 2.0
+        } else {
+            rect.bottom() - size.y - 2.0
+        };
+        let x = rect.left().max(body.left()).min(body.right() - size.x);
+        let pill = Rect::from_min_size(pos2(x, y), size);
+        painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
+        painter.galley(pill.min + pad, galley, color);
     }
 }
 

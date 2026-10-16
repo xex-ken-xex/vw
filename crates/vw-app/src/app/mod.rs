@@ -45,6 +45,7 @@ mod labeling;
 mod log_pane;
 mod menu;
 mod metadata_pane;
+mod people_ui;
 mod persist;
 mod playback;
 mod screens;
@@ -176,8 +177,15 @@ pub struct VwApp {
     ai_tags: crate::ai_tags::AiTagStore,
     /// 走っている AI タグ付け。一度に 1 つ。
     ai_job: Option<ai_tagging::Job>,
-    /// 走っている仕事が終わったら付ける画像。
-    ai_queue: Vec<PathBuf>,
+    /// 走っている仕事が終わったら処理する画像。
+    ai_queue: Vec<(ai_tagging::Work, PathBuf)>,
+    /// 人物（設定フォルダの people.json）。
+    people: crate::people::People,
+    /// 見つけた顔の特徴（設定フォルダの faces）。
+    face_store: crate::face_store::FaceStore,
+    people_window: people_ui::PeopleWindow,
+    /// 顔の枠をスロットに描く。
+    show_faces: bool,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
     /// Datasets 画面を出している（設定画面と同じくメインの領域を置き換える）。
@@ -523,6 +531,16 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("labels"));
         let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
+        let settings_dir = settings
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        let (people, people_problem) = crate::people::People::open(settings_dir.as_deref());
+        if let Some(p) = people_problem {
+            log.error(p);
+        }
+        let face_store = crate::face_store::FaceStore::new(settings_dir.map(|d| d.join("faces")));
         let ai_tag_fallback = settings
             .path
             .as_deref()
@@ -552,6 +570,10 @@ impl VwApp {
             ai_tags: crate::ai_tags::AiTagStore::new(ai_tag_fallback),
             ai_job: None,
             ai_queue: Vec::new(),
+            people,
+            face_store,
+            people_window: Default::default(),
+            show_faces: true,
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
                 view.restore_node_positions(&saved.pipeline_nodes);
@@ -721,7 +743,10 @@ impl VwApp {
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ShowAbout => self.about.open = true,
             Action::ShowAiModels => self.ai_models.open = true,
-            Action::AiTagFolder => self.ai_tag_current_folder(ctx),
+            Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
+            Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
+            Action::ShowPeople => self.people_window.open = true,
+            Action::ToggleFaceFrames => self.show_faces = !self.show_faces,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
             Action::Tag1
@@ -1102,6 +1127,10 @@ impl eframe::App for VwApp {
                         }
                         TreeAction::AiTagFolder(p) => {
                             self.ai_tag_folder(&ctx, &p);
+                            return;
+                        }
+                        TreeAction::FindFaces(p) => {
+                            self.find_faces_folder(&ctx, &p);
                             return;
                         }
                         TreeAction::Copy(p) => {

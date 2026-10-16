@@ -236,7 +236,7 @@ impl Tagger {
 }
 
 /// ONNX Runtime はプロセスに 1 つしか読み込めないので、最初に読んだものを持ち続ける。
-fn environment(runtime: &Path) -> Result<ort::environment::Environment, String> {
+pub fn environment(runtime: &Path) -> Result<ort::environment::Environment, String> {
     static ENV: OnceLock<Result<ort::environment::Environment, String>> = OnceLock::new();
     ENV.get_or_init(|| {
         ort::init_from(runtime)

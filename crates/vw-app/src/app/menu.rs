@@ -175,8 +175,17 @@ impl VwApp {
             chosen = Some(Action::TrashBadImages);
         }
         ui.separator();
-        if self.menu_item(ui, Action::AiTagFolder, None) {
-            chosen = Some(Action::AiTagFolder);
+        for action in [
+            Action::AiTagFolder,
+            Action::FindFacesFolder,
+            Action::ShowPeople,
+        ] {
+            if self.menu_item(ui, action, None) {
+                chosen = Some(action);
+            }
+        }
+        if self.menu_item(ui, Action::ToggleFaceFrames, Some(self.show_faces)) {
+            chosen = Some(Action::ToggleFaceFrames);
         }
         chosen
     }

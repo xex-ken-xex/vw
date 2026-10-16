@@ -536,6 +536,7 @@ impl VwApp {
         let lang = self.lang();
         let hint = empty_slot_hint(self.current.is_some());
         let destinations = self.destination_names();
+        let people = self.people.names();
         let mut send = None;
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
@@ -558,6 +559,10 @@ impl VwApp {
                 .as_deref()
                 .map(|p| self.labels.get(p))
                 .unwrap_or_default();
+            let faces = match (&self.slots[i].shown, self.show_faces) {
+                (Some(s), true) => self.ai_tags.faces(&crate::frames::file_of(&s.path)),
+                _ => Vec::new(),
+            };
             let resp = self.slots[i].ui(
                 ui,
                 rect,
@@ -572,6 +577,8 @@ impl VwApp {
                     destinations: &destinations,
                     presets: self.presets.presets(),
                     texture_options: self.texture_options,
+                    faces: &faces,
+                    people: &people,
                 },
             );
             if let Some(event) = resp.derive {
@@ -589,6 +596,19 @@ impl VwApp {
             if resp.ai_tag {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.ai_tag_paths(ui.ctx(), vec![path]);
+                }
+            }
+            if resp.find_faces {
+                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+                    self.find_faces_paths(ui.ctx(), vec![path]);
+                }
+            }
+            if let Some((path, action)) = resp.face {
+                let file = crate::frames::file_of(&path);
+                match action {
+                    crate::viewer::FaceAction::Assign(f, name) => self.assign_face(&file, f, &name),
+                    crate::viewer::FaceAction::NewPerson(f) => self.people_window.ask_name(file, f),
+                    crate::viewer::FaceAction::Clear(f) => self.clear_face(&file, f),
                 }
             }
             // 変換の図と解析は画素を読むので、開いている間はアクティブなスロットと
@@ -665,6 +685,8 @@ impl VwApp {
                         destinations: &[],
                         presets: &[],
                         texture_options: self.texture_options,
+                        faces: &[],
+                        people: &[],
                     },
                 );
                 if resp.clicked {

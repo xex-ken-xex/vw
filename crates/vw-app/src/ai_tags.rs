@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::faces::FaceMark;
 use crate::tagger::Tags;
 
 pub const FILE_NAME: &str = ".vw-ai-tags.json";
@@ -20,9 +21,27 @@ const VERSION: u32 = 1;
 /// 1 枚の画像の AI タグと、付けたモデルの名前。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
+    /// タグを付けたモデル。顔だけを探した画像では空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
     #[serde(flatten)]
     pub tags: Tags,
+    /// 見つけた顔の枠と人物。特徴ベクトルは個人情報なのでここには書かない（[`crate::face_store`]）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FaceMark>,
+}
+
+impl Entry {
+    /// 写っている人物の名前（重なりなし、見つけた順）。
+    pub fn people(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = Vec::new();
+        for n in self.faces.iter().filter_map(|f| f.person.as_deref()) {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        names
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -58,16 +77,27 @@ impl AiTagStore {
         self.with_dir(dir, |d| d.file.files.get(&name).cloned())
     }
 
-    pub fn set(&mut self, path: &Path, entry: Entry) -> Result<(), String> {
+    /// 画像の記録の一部を書き換えて保存する。タグ付けと顔探しは別々に走るので、
+    /// 片方の結果でもう片方を消さないよう、丸ごと置き換えずにここを通す。
+    pub fn update(&mut self, path: &Path, change: impl FnOnce(&mut Entry)) -> Result<(), String> {
         let (dir, name) =
             split(path).ok_or_else(|| format!("{}: not a file in a folder", path.display()))?;
         self.with_dir(dir, |_| ());
         {
             let mut dirs = self.dirs.borrow_mut();
             let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
-            files.insert(name, entry);
+            change(files.entry(name).or_default());
         }
         self.save(dir)
+    }
+
+    /// 画像の顔の枠。
+    pub fn faces(&self, path: &Path) -> Vec<FaceMark> {
+        split(path)
+            .and_then(|(dir, name)| {
+                self.with_dir(dir, |d| d.file.files.get(&name).map(|e| e.faces.clone()))
+            })
+            .unwrap_or_default()
     }
 
     pub fn forget(&self, dir: &Path) {
@@ -139,18 +169,23 @@ impl AiTagStore {
     }
 
     fn fallback_path(&self, dir: &Path) -> Option<PathBuf> {
-        let base = self.fallback_dir.as_ref()?;
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        dir.hash(&mut h);
-        let name: String = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect();
-        Some(base.join(format!("{name}-{:016x}.json", h.finish())))
+        Some(self.fallback_dir.as_ref()?.join(folder_file_name(dir)))
     }
+}
+
+/// フォルダの外（設定フォルダの下）にフォルダごとの記録を置くときのファイル名。
+/// 同じ名前のフォルダが別の場所にあっても重ならないよう、パスのハッシュを添える。
+pub fn folder_file_name(dir: &Path) -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut h);
+    let name: String = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{name}-{:016x}.json", h.finish())
 }
 
 fn split(path: &Path) -> Option<(&Path, String)> {
@@ -174,6 +209,7 @@ mod tests {
                 }],
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 
@@ -182,11 +218,32 @@ mod tests {
         let dir = tempfile_dir();
         let img = dir.join("a.png");
         let mut store = AiTagStore::new(None);
-        store.set(&img, entry("1girl", 0.9)).unwrap();
+        store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
         assert!(dir.join(FILE_NAME).exists());
         let fresh = AiTagStore::new(None);
         assert_eq!(fresh.get(&img), Some(entry("1girl", 0.9)));
         assert_eq!(fresh.get(&dir.join("b.png")), None);
+    }
+
+    #[test]
+    fn updating_faces_keeps_the_tags() {
+        let dir = tempfile_dir();
+        let img = dir.join("a.png");
+        let mut store = AiTagStore::new(None);
+        store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
+        store
+            .update(&img, |e| {
+                e.faces = vec![FaceMark {
+                    rect: [0.1, 0.1, 0.2, 0.2],
+                    score: 0.95,
+                    person: Some("A".into()),
+                    similarity: 0.5,
+                }]
+            })
+            .unwrap();
+        let got = AiTagStore::new(None).get(&img).unwrap();
+        assert_eq!(got.tags.general[0].name, "1girl");
+        assert_eq!(got.people(), ["A"]);
     }
 
     #[test]
@@ -196,7 +253,9 @@ mod tests {
         let mut store = AiTagStore::new(None);
         assert_eq!(store.get(&dir.join("a.png")), None);
         assert_eq!(store.take_problems().len(), 1);
-        store.set(&dir.join("a.png"), entry("x", 0.5)).unwrap();
+        store
+            .update(&dir.join("a.png"), |e| *e = entry("x", 0.5))
+            .unwrap();
         assert!(dir.join(".vw-ai-tags.json.bak").exists());
     }
 

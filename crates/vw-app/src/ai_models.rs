@@ -24,15 +24,17 @@ pub const TAGGER_NAME: &str = "wd-vit-tagger-v3";
 pub enum Item {
     Runtime,
     Tagger,
+    Faces,
 }
 
 impl Item {
-    pub const ALL: [Item; 2] = [Item::Runtime, Item::Tagger];
+    pub const ALL: [Item; 3] = [Item::Runtime, Item::Tagger, Item::Faces];
 
     pub fn title(self) -> &'static str {
         match self {
             Item::Runtime => "ONNX Runtime",
             Item::Tagger => "WD tagger v3 (ViT)",
+            Item::Faces => "YuNet + SFace (faces)",
         }
     }
 
@@ -40,6 +42,7 @@ impl Item {
         match self {
             Item::Runtime => "MIT",
             Item::Tagger => "Apache-2.0",
+            Item::Faces => "MIT / Apache-2.0",
         }
     }
 
@@ -48,6 +51,7 @@ impl Item {
         match self {
             Item::Runtime => "~60 MB",
             Item::Tagger => "~380 MB",
+            Item::Faces => "~39 MB",
         }
     }
 
@@ -55,6 +59,7 @@ impl Item {
         match self {
             Item::Runtime => "https://github.com/microsoft/onnxruntime/releases",
             Item::Tagger => "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3",
+            Item::Faces => "https://github.com/opencv/opencv_zoo",
         }
     }
 
@@ -76,9 +81,28 @@ impl Item {
                     extract: None,
                 })
                 .collect(),
+            // github.com の raw は Git LFS の中身へ転送されるが、転送先を直接指す。
+            // 転送を挟むと、プロキシのある環境で弾かれることがあるため。
+            Item::Faces => [FACE_DETECTOR, FACE_RECOGNIZER]
+                .into_iter()
+                .map(|(dir, f)| Source {
+                    url: format!(
+                        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/{dir}/{f}"
+                    ),
+                    target: PathBuf::from(FACES_DIR).join(f),
+                    extract: None,
+                })
+                .collect(),
         }
     }
 }
+
+const FACES_DIR: &str = "faces";
+const FACE_DETECTOR: (&str, &str) = ("face_detection_yunet", "face_detection_yunet_2023mar.onnx");
+const FACE_RECOGNIZER: (&str, &str) = (
+    "face_recognition_sface",
+    "face_recognition_sface_2021dec.onnx",
+);
 
 struct Source {
     url: String,
@@ -147,15 +171,18 @@ impl Store {
         self.dir.join(TAGGER_NAME).join("selected_tags.csv")
     }
 
+    pub fn face_detector(&self) -> PathBuf {
+        self.dir.join(FACES_DIR).join(FACE_DETECTOR.1)
+    }
+
+    pub fn face_recognizer(&self) -> PathBuf {
+        self.dir.join(FACES_DIR).join(FACE_RECOGNIZER.1)
+    }
+
     pub fn has(&self, item: Item) -> bool {
         item.sources()
             .iter()
             .all(|s| self.dir.join(&s.target).is_file())
-    }
-
-    /// 足りないもの。
-    pub fn missing(&self) -> Vec<Item> {
-        Item::ALL.into_iter().filter(|&i| !self.has(i)).collect()
     }
 }
 
@@ -440,7 +467,7 @@ impl Dialog {
                     }
                     ui.label(tr(
                         lang,
-                        "Both are needed for AI tags. Models run on the CPU.",
+                        "AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU.",
                     ));
                 });
             });
@@ -464,10 +491,11 @@ mod tests {
         let settings = dir.join("settings.toml");
         let store = Store::new(Some(&settings)).unwrap();
         assert_eq!(store.dir, dir.join("models"));
-        assert_eq!(store.missing(), vec![Item::Runtime, Item::Tagger]);
+        assert!(Item::ALL.iter().all(|&i| !store.has(i)));
         std::fs::create_dir_all(store.runtime().parent().unwrap()).unwrap();
         std::fs::write(store.runtime(), b"").unwrap();
-        assert_eq!(store.missing(), vec![Item::Tagger]);
+        assert!(store.has(Item::Runtime));
+        assert!(!store.has(Item::Tagger) && !store.has(Item::Faces));
     }
 
     /// 本物の ONNX Runtime を GitHub から取る。ネットワークが要るので普段は走らせない。

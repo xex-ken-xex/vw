@@ -102,6 +102,8 @@ pub enum TreeAction {
     OpenInFileManager(PathBuf),
     /// フォルダの画像に AI タグを付ける（右クリックメニュー）。
     AiTagFolder(PathBuf),
+    /// フォルダの画像の顔を探す（右クリックメニュー）。
+    FindFaces(PathBuf),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
@@ -473,6 +475,10 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
         }
         if ui.button(tr(lang, "Add AI tags to this folder")).clicked() {
             *out = Some(TreeAction::AiTagFolder(path.to_owned()));
+            ui.close();
+        }
+        if ui.button(tr(lang, "Find faces in this folder")).clicked() {
+            *out = Some(TreeAction::FindFaces(path.to_owned()));
             ui.close();
         }
         ui.separator();

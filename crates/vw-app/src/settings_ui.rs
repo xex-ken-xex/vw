@@ -82,7 +82,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 53] = [
+const ITEMS: [Item; 54] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -355,6 +355,13 @@ const ITEMS: [Item; 53] = [
         title: "Character tag threshold",
         description: "Confidence (0 to 1) a character tag needs to be added.",
         widget: ai_character_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.face_threshold",
+        title: "Face match threshold",
+        description: "Similarity (0 to 1) a face needs to be named as a registered person. Higher means fewer but surer matches.",
+        widget: ai_face_widget,
     },
     Item {
         section: Section::Ai,
@@ -861,6 +868,10 @@ fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool
 
 fn ai_general_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     unit_widget(&mut s.ai.general_threshold, ui)
+}
+
+fn ai_face_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    unit_widget(&mut s.ai.face_threshold, ui)
 }
 
 fn ai_character_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {

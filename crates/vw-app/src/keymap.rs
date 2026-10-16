@@ -82,6 +82,9 @@ pub enum Action {
     ShowAbout,
     ShowAiModels,
     AiTagFolder,
+    FindFacesFolder,
+    ShowPeople,
+    ToggleFaceFrames,
 }
 
 /// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
@@ -94,7 +97,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 67] = [
+    pub const ALL: [Action; 70] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -156,6 +159,9 @@ impl Action {
         Action::ShowAbout,
         Action::ShowAiModels,
         Action::AiTagFolder,
+        Action::FindFacesFolder,
+        Action::ShowPeople,
+        Action::ToggleFaceFrames,
         Action::FullscreenNext,
         Action::FullscreenPrevious,
         Action::FullscreenNextFolder,
@@ -224,6 +230,9 @@ impl Action {
             Action::ShowAbout => "show_about",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
+            Action::FindFacesFolder => "find_faces_folder",
+            Action::ShowPeople => "show_people",
+            Action::ToggleFaceFrames => "toggle_face_frames",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
             Action::FullscreenNext => "fullscreen_next",
@@ -300,6 +309,9 @@ impl Action {
             Action::ShowAbout => "About vw",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
+            Action::FindFacesFolder => "Find faces in this folder",
+            Action::ShowPeople => "People...",
+            Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -462,6 +474,9 @@ impl Action {
             Action::ShowAbout => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
+            Action::FindFacesFolder => vec![],
+            Action::ShowPeople => vec![],
+            Action::ToggleFaceFrames => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::ToggleRoi => vec![KeyCombo::plain(R)],
