@@ -162,6 +162,9 @@ pub struct VwApp {
     pipeline: crate::pipeline_view::PipelineView,
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
+    evaluation: crate::quality::Evaluation,
+    /// 「評価の基準にする」で選んだスロットの画像。PSNR・SSIM をこれと比べる。
+    quality_reference: Option<PathBuf>,
     about: crate::about::About,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
     show_settings: bool,
@@ -533,6 +536,8 @@ impl VwApp {
                 );
                 view
             },
+            evaluation: Default::default(),
+            quality_reference: None,
             zoom_map: {
                 let mut view = crate::zoom_map::ZoomMap::default();
                 view.window = SubWindow::restored(
@@ -850,6 +855,7 @@ impl eframe::App for VwApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.activity_line(ui);
         self.send_ui(&ctx);
+        self.update_evaluation(&ctx);
         self.pipeline_ui(&ctx);
         self.histogram_ui(&ctx);
         self.zoom_map_ui(&ctx);
@@ -1157,7 +1163,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
         Action::TogglePixelPipeline => "Pixel pipeline",
-        Action::ToggleHistogram => "Histogram",
+        Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
         other => other.title(),
     }

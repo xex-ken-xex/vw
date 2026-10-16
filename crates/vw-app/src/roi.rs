@@ -8,48 +8,7 @@ use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
 use crate::histogram::{self, Accumulator, Stats};
 
-/// 画像の中の矩形（画素の単位、`x..x+w` × `y..y+h`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Region {
-    pub x: u32,
-    pub y: u32,
-    pub w: u32,
-    pub h: u32,
-}
-
-impl Region {
-    /// 2 つの角から作る。どちらの角が先でもよい。
-    pub fn from_corners(a: (u32, u32), b: (u32, u32)) -> Self {
-        let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
-        let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
-        Self {
-            x: x0,
-            y: y0,
-            w: x1 - x0 + 1,
-            h: y1 - y0 + 1,
-        }
-    }
-
-    pub fn right(self) -> u32 {
-        self.x + self.w
-    }
-
-    pub fn bottom(self) -> u32 {
-        self.y + self.h
-    }
-
-    pub fn area(self) -> usize {
-        self.w as usize * self.h as usize
-    }
-
-    /// 幅 `width` の画像の中で、この矩形に入る画素の添字。
-    pub fn indices(self, width: u32) -> impl Iterator<Item = usize> {
-        let (x, w, width) = (self.x as usize, self.w as usize, width as usize);
-        (self.y..self.bottom())
-            .map(move |row| row as usize * width + x)
-            .flat_map(move |start| start..start + w)
-    }
-}
+pub use vw_quality::Region;
 
 /// 対象と背景の 2 種類。SNR は対象だけ、CNR は両方から求める（後の品質評価のため）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,26 +117,6 @@ mod tests {
             m.push("DICOM", *k, *v);
         }
         m
-    }
-
-    #[test]
-    fn corners_in_any_order_give_the_same_inclusive_region() {
-        let a = Region::from_corners((5, 7), (2, 3));
-        let b = Region::from_corners((2, 3), (5, 7));
-        assert_eq!(a, b);
-        assert_eq!((a.x, a.y, a.w, a.h), (2, 3, 4, 5));
-        assert_eq!((a.right(), a.bottom(), a.area()), (6, 8, 20));
-    }
-
-    #[test]
-    fn indices_walk_the_rows_inside_the_region() {
-        let r = Region {
-            x: 1,
-            y: 1,
-            w: 2,
-            h: 2,
-        };
-        assert_eq!(r.indices(4).collect::<Vec<_>>(), vec![5, 6, 9, 10]);
     }
 
     #[test]

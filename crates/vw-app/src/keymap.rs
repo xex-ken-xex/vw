@@ -289,7 +289,7 @@ impl Action {
             Action::TrashBadImages => "Move bad images to trash...",
             Action::CancelSending => "Cancel sending",
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
-            Action::ToggleHistogram => "Show/hide histogram",
+            Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ShowAbout => "About vw",
             Action::ParentFolder => "Up one folder",

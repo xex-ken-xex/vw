@@ -578,9 +578,15 @@ impl VwApp {
                     self.toggle_pipeline();
                 }
             }
-            // 変換の図とヒストグラムは画素を読むので、開いている間はアクティブなスロットに
-            // フル解像度の画像を持たせる。
-            let pipeline_wants = (self.pipeline.open || self.histogram.open) && i == self.active;
+            if resp.reference {
+                self.set_quality_reference(i);
+            }
+            // 変換の図と解析は画素を読むので、開いている間はアクティブなスロットと
+            // 評価の基準のスロットにフル解像度の画像を持たせる。
+            let analysis_open = self.pipeline.open || self.histogram.open;
+            let is_reference = self.quality_reference.is_some()
+                && self.slots[i].shown.as_ref().map(|s| &s.path) == self.quality_reference.as_ref();
+            let pipeline_wants = analysis_open && (i == self.active || is_reference);
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
