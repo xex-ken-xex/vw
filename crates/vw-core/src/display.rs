@@ -57,7 +57,7 @@ pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
             convert(
                 img,
                 params,
-                |i| ((v[i] - lo) * scale).clamp(0.0, 255.0) as u8,
+                |i| ((v[i] - lo) * scale).round().clamp(0.0, 255.0) as u8,
                 |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
             )
         }
@@ -329,7 +329,7 @@ mod tests {
         .unwrap();
         let d = to_display(&img, &DisplayParams::default());
         let grays: Vec<u8> = d.rgba.iter().step_by(4).copied().collect();
-        assert_eq!(&grays[..3], &[0, 127, 255]);
+        assert_eq!(&grays[..3], &[0, 128, 255]);
     }
 
     #[test]

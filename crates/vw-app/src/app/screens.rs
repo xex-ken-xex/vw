@@ -10,8 +10,8 @@ impl VwApp {
     /// 右クリックの「送信 ▸」で選ばれたものを処理する。送るのは確かめてから。
     pub(super) fn toggle_pipeline(&mut self) {
         if self.pipeline.open {
-            let changes = self.pipeline.close();
-            self.apply_pipeline(changes);
+            let commands = self.pipeline.close();
+            self.apply_pipeline(commands);
         } else {
             self.pipeline.open = true;
         }
@@ -35,10 +35,128 @@ impl VwApp {
                     .map(|m| (m.x, m.y))
                     .collect(),
                 evaluation: Some((self.evaluation.report(), &self.settings.settings.quality)),
+                params: slot.derive.as_ref().map(|d| d.params),
+                preset: slot
+                    .derive
+                    .as_ref()
+                    .and_then(|d| Some((d.preset.as_deref()?, d.modified))),
+                saved: self
+                    .presets
+                    .presets()
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect(),
             })
         });
-        let changes = self.pipeline.ui(ctx, lang, target);
-        self.apply_pipeline(changes);
+        let commands = self.pipeline.ui(ctx, lang, target);
+        self.apply_pipeline(commands);
+    }
+
+    /// 色導出のウインドウでの操作を、アクティブなスロットと保存したパイプラインに当てる。
+    pub(super) fn apply_pipeline(&mut self, commands: Vec<crate::pipeline_view::Command>) {
+        use crate::pipeline_view::Command;
+        for command in commands {
+            let stored = match command {
+                Command::Edit { params, at_file } => {
+                    if let Some(slot) = self.slots.get_mut(self.active) {
+                        crate::derive::edit(
+                            &mut slot.derive,
+                            params,
+                            at_file,
+                            self.presets.presets(),
+                        );
+                    }
+                    continue;
+                }
+                Command::Closed => {
+                    for slot in &mut self.slots {
+                        crate::derive::revert(&mut slot.derive, self.presets.presets());
+                    }
+                    continue;
+                }
+                Command::SaveAs(name, params) => {
+                    let result = self.presets.put(&name, params);
+                    if let (Ok(()), Some(slot)) = (&result, self.slots.get_mut(self.active)) {
+                        let d = slot
+                            .derive
+                            .get_or_insert_with(|| crate::derive::Derive::new(None, params));
+                        d.preset = Some(name.clone());
+                        d.params = params;
+                        d.modified = false;
+                    }
+                    result.map(|()| format!("Pipeline saved as \"{name}\""))
+                }
+                Command::Overwrite(name, params) => {
+                    let result = self.presets.put(&name, params);
+                    if let (Ok(()), Some(d)) = (
+                        &result,
+                        self.slots
+                            .get_mut(self.active)
+                            .and_then(|s| s.derive.as_mut()),
+                    ) {
+                        d.params = params;
+                        d.modified = false;
+                    }
+                    result.map(|()| format!("Pipeline \"{name}\" overwritten"))
+                }
+                Command::Delete(name) => self
+                    .presets
+                    .remove(&name)
+                    .map(|()| format!("Pipeline \"{name}\" deleted")),
+            };
+            match stored {
+                Ok(message) => self.log.info(message),
+                Err(e) => self.log.error(format!("Pipelines: {e}")),
+            }
+            self.sync_derived_slots();
+        }
+    }
+
+    fn sync_derived_slots(&mut self) {
+        let presets = self.presets.presets();
+        for d in self.slots.iter_mut().filter_map(|s| s.derive.as_mut()) {
+            d.sync(presets);
+        }
+    }
+
+    /// `pipelines.toml` が外部で書き換えられていたら読み直し、選んでいるスロットにも当てる。
+    pub(super) fn reload_presets(&mut self) {
+        let Some(problems) = self.presets.reload_if_changed() else {
+            return;
+        };
+        self.log.info("Pipelines reloaded from file");
+        for p in problems {
+            self.log.error(format!("Pipelines: {p}"));
+        }
+        self.sync_derived_slots();
+    }
+
+    pub(super) fn log_derive(&mut self, event: crate::derive::Event) {
+        use crate::derive::Event;
+        match event {
+            Event::Refused {
+                path,
+                mismatch,
+                left,
+            } => {
+                let what = if left {
+                    "Derived view not entered"
+                } else {
+                    "Shown in the standard display"
+                };
+                self.log.error(format!(
+                    "{what}: {}: the file values do not reproduce the standard display \
+                     ({} pixels differ, by up to {})",
+                    path.display(),
+                    mismatch.pixels,
+                    mismatch.max
+                ));
+            }
+            Event::Failed(path, e) => self.log.error(format!(
+                "Derived view: {}: could not read the pipeline: {e}",
+                path.display()
+            )),
+        }
     }
 
     /// 定量評価。解析か色導出のウインドウが開いている間、アクティブなスロットの画像を評価する。
@@ -63,7 +181,7 @@ impl VwApp {
             Some(crate::quality::Input {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
-                edited: self.pipeline.edit_for(&shown.path),
+                edited: slot.derive.as_ref().and_then(|d| d.edit_for(&shown.path)),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
                 // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
@@ -109,7 +227,11 @@ impl VwApp {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
                 dicom: shown.info.plugin == "DICOM",
-                edited: self.pipeline.edited_for(&shown.path),
+                edited: slot
+                    .derive
+                    .as_ref()
+                    .and_then(|d| d.edit_for(&shown.path))
+                    .map(|(p, _)| p),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
             })
@@ -140,14 +262,13 @@ impl VwApp {
             return;
         }
         let lang = self.lang();
-        let applied = self.pipeline.applied();
         let target = self.slots.get(self.active).and_then(|slot| {
             let shown = slot.shown.as_ref()?;
-            let after = shown
-                .full
+            let after = slot
+                .derive
                 .as_ref()
-                .filter(|_| applied == Some(shown.path.as_path()))
-                .map(|f| &f.texture);
+                .and_then(|d| d.ready_for(shown))
+                .map(|r| &r.derived);
             let name = crate::frames::file_of(&shown.path);
             Some(crate::zoom_map::Target {
                 title: name
@@ -172,33 +293,6 @@ impl VwApp {
                 Command::Fit => slot.reset_view(),
                 Command::ActualSize => slot.actual_size(),
             }
-        }
-    }
-
-    pub(super) fn apply_pipeline(&mut self, changes: Vec<crate::pipeline_view::Change>) {
-        use crate::pipeline_view::Change;
-        let options = self.texture_options;
-        for change in changes {
-            let path = match &change {
-                Change::Show(path, _) | Change::Restore(path) => path,
-            };
-            let full = self
-                .slots
-                .iter_mut()
-                .filter_map(|s| s.shown.as_mut())
-                .filter(|s| &s.path == path)
-                .find_map(|s| s.full.as_mut());
-            // 当てる前にスロットが別の画像へ移った、またはフル解像度の画像が捨てられたなら、
-            // 表示はもうファイルの値なので何もしない。
-            let Some(full) = full else {
-                continue;
-            };
-            let size = full.texture.size();
-            let image = match change {
-                Change::Show(_, image) => crate::loader::fit_color_image(image, size),
-                Change::Restore(_) => crate::loader::default_color_image(&full.image, size),
-            };
-            full.texture.set(image, options);
         }
     }
 

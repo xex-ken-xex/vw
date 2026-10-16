@@ -13,6 +13,7 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use vw_core::VwImage;
 
+use crate::derive::{self, Derive, View};
 use crate::i18n::tr;
 use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
@@ -228,6 +229,8 @@ pub struct Slot {
     selected_roi: Option<usize>,
     /// ドラッグで描いている途中の ROI（種類と始点の画素）。
     drawing: Option<(roi::Kind, (u32, u32))>,
+    /// 色導出。`None` は標準の表示。起動をまたいでは残さない。
+    pub derive: Option<Derive>,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -245,6 +248,10 @@ pub struct SlotLook<'a> {
     pub roi: bool,
     /// 右クリックの「送信 ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
+    /// 下の帯のドロップダウンに並べる、保存したパイプライン。
+    pub presets: &'a [crate::pipelines::Preset],
+    /// 色導出で描いた画像のテクスチャの補間。
+    pub texture_options: TextureOptions,
 }
 
 /// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
@@ -277,10 +284,14 @@ pub struct SlotResponse {
     pub pipeline: bool,
     /// 右クリックメニューで「評価の基準にする」が選ばれた。
     pub reference: bool,
+    /// 色導出から知らせること（ログに出す）。
+    pub derive: Option<derive::Event>,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
 const HEADER: f32 = 20.0;
+/// 色導出を選ぶ下の帯の高さ。
+const DERIVE_BAR: f32 = 22.0;
 /// ズーム倍率の下限（全体表示に対して）。
 const MIN_ZOOM: f32 = 0.05;
 /// 実寸に対する拡大率の上限。画素を 1 つずつ確認できれば十分なので 200 倍で止める。
@@ -338,6 +349,20 @@ fn header_button(
         color,
     );
     response
+}
+
+/// 色導出の対象（DICOM のグレースケール）。
+fn is_derivable(shown: &Shown) -> bool {
+    shown.info.plugin == "DICOM" && shown.info.color == vw_core::ColorModel::Gray
+}
+
+/// 色導出の名前。保存したあとに変えた値は「*」を付ける。
+fn derive_name(d: &Derive, lang: Language) -> String {
+    match &d.preset {
+        Some(name) if d.modified => format!("{name} *"),
+        Some(name) => name.clone(),
+        None => tr(lang, "Unsaved").to_owned(),
+    }
 }
 
 /// 複数枚の並びの「何枚目 / 全部で何枚」。1 枚しかなければ出さない。
@@ -471,6 +496,7 @@ impl Slot {
             rois: Vec::new(),
             selected_roi: None,
             drawing: None,
+            derive: None,
         }
     }
 
@@ -727,6 +753,178 @@ impl Slot {
     }
 
     /// `rect` の範囲にスロットを描き、操作を処理する。
+    /// 比べるときの仕切りと左右の名前、差の最大。
+    fn derive_overlay(&mut self, ui: &egui::Ui, body: Rect, lang: Language) {
+        let (Some(d), Some(shown)) = (&mut self.derive, &self.shown) else {
+            return;
+        };
+        let painter = ui.painter_at(body);
+        let pill = |text: String, anchor: Pos2, align: egui::Align2| {
+            let galley = painter.layout_no_wrap(
+                text,
+                egui::FontId::proportional(12.0),
+                Color32::from_gray(230),
+            );
+            let pad = vec2(5.0, 2.0);
+            let rect = align.anchor_size(anchor, galley.size() + 2.0 * pad);
+            painter.rect_filled(rect, 3.0, Color32::from_black_alpha(150));
+            painter.galley(rect.min + pad, galley, Color32::from_gray(230));
+        };
+        if let Some(reason) = d.not_applied(&shown.path) {
+            pill(
+                tr(lang, reason).to_owned(),
+                body.right_bottom() + vec2(-6.0, -6.0),
+                egui::Align2::RIGHT_BOTTOM,
+            );
+            return;
+        }
+        let Some(ready) = d.ready_for(shown) else {
+            return;
+        };
+        match d.view {
+            View::Compare => {
+                let x = body.left() + body.width() * d.split;
+                let handle = Rect::from_x_y_ranges(x - 4.0..=x + 4.0, body.y_range());
+                let response = ui
+                    .interact(handle, ui.id().with(("split", self.id)), Sense::drag())
+                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                if response.dragged() {
+                    let moved = d.split + response.drag_delta().x / body.width().max(1.0);
+                    d.split = moved.clamp(0.0, 1.0);
+                }
+                let color = if response.hovered() || response.dragged() {
+                    ui.visuals().selection.stroke.color
+                } else {
+                    Color32::from_gray(230)
+                };
+                // 白い画像の上でも黒い画像の上でも見えるよう、暗い縁取りの上に明るい線を引く。
+                painter.vline(
+                    x,
+                    body.y_range(),
+                    egui::Stroke::new(3.0, Color32::from_black_alpha(160)),
+                );
+                painter.vline(x, body.y_range(), egui::Stroke::new(1.0, color));
+                let top = body.top() + 6.0;
+                pill(
+                    tr(lang, "Standard").to_owned(),
+                    pos2(x - 6.0, top),
+                    egui::Align2::RIGHT_TOP,
+                );
+                pill(
+                    derive_name(d, lang),
+                    pos2(x + 6.0, top),
+                    egui::Align2::LEFT_TOP,
+                );
+            }
+            View::Difference => {
+                let text = if ready.max == 0 {
+                    tr(lang, "No difference").to_owned()
+                } else {
+                    format!("{} {}", tr(lang, "Max"), ready.max)
+                };
+                pill(
+                    text,
+                    body.right_bottom() + vec2(-6.0, -6.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                );
+            }
+            View::Derived => {}
+        }
+    }
+
+    /// 下の帯: 保存したパイプラインのドロップダウン、編集、比較、差。
+    fn derive_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        bar: Rect,
+        lang: Language,
+        presets: &[crate::pipelines::Preset],
+        out: &mut SlotResponse,
+    ) {
+        let inner = bar.shrink2(vec2(4.0, 1.0));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.spacing_mut().button_padding = vec2(6.0, 1.0);
+        child.spacing_mut().interact_size.y = inner.height() - 2.0;
+        let ui = &mut child;
+        let selected = self
+            .derive
+            .as_ref()
+            .map_or_else(|| tr(lang, "Standard").to_owned(), |d| derive_name(d, lang));
+        let mut choice: Option<Option<&crate::pipelines::Preset>> = None;
+        egui::ComboBox::from_id_salt(("derive", self.id))
+            .selected_text(selected)
+            .width((inner.width() * 0.35).clamp(70.0, 180.0))
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.derive.is_none(), tr(lang, "Standard"))
+                    .clicked()
+                {
+                    choice = Some(None);
+                }
+                if presets.is_empty() {
+                    ui.weak(tr(lang, "Save a pipeline with Edit to choose it here."));
+                }
+                for p in presets {
+                    let current = self.derive.as_ref().is_some_and(|d| {
+                        d.preset.as_deref() == Some(p.name.as_str()) && !d.modified
+                    });
+                    if ui.selectable_label(current, &p.name).clicked() {
+                        choice = Some(Some(p));
+                    }
+                }
+            });
+        match choice {
+            Some(None) => self.derive = None,
+            Some(Some(p)) => {
+                let view = self.derive.as_ref().map_or(View::Derived, |d| d.view);
+                let split = self.derive.as_ref().map_or(0.5, |d| d.split);
+                let mut d = Derive::new(Some(p.name.clone()), p.params);
+                d.view = view;
+                d.split = split;
+                self.derive = Some(d);
+            }
+            None => {}
+        }
+        if ui
+            .button(tr(lang, "Edit"))
+            .on_hover_text(tr(lang, "Open the pixel pipeline for this slot"))
+            .clicked()
+        {
+            out.pipeline = true;
+        }
+        let on = self.derive.is_some();
+        let view = self.derive.as_ref().map(|d| d.view);
+        for (target, label, hover) in [
+            (
+                View::Compare,
+                "Compare",
+                "Left: standard, right: derived. Drag the line to move it.",
+            ),
+            (
+                View::Difference,
+                "Difference",
+                "Brightness difference from the standard display: black (none) to red, yellow and white (largest).",
+            ),
+        ] {
+            let response = ui
+                .add_enabled(on, egui::Button::selectable(view == Some(target), tr(lang, label)))
+                .on_hover_text(tr(lang, hover));
+            if response.clicked() {
+                if let Some(d) = &mut self.derive {
+                    d.view = if d.view == target { View::Derived } else { target };
+                }
+                out.clicked = true;
+            }
+        }
+        if self.derive.as_ref().is_some_and(Derive::busy) {
+            ui.spinner();
+        }
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -742,15 +940,39 @@ impl Slot {
             probe: probing,
             roi: roi_tool,
             destinations,
+            presets,
+            texture_options,
         } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
+        let derivable = self.shown.as_ref().is_some_and(is_derivable);
+        if !derivable {
+            self.derive = None;
+        }
+        if let (Some(d), Some(shown)) = (&mut self.derive, &self.shown) {
+            out.derive = d.update(ui.ctx(), shown, texture_options);
+        }
+        if let Some(derive::Event::Refused { left: true, .. }) = &out.derive {
+            self.derive = None;
+        }
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
-        let body = Rect::from_min_max(pos2(rect.min.x, rect.min.y + HEADER), rect.max);
+        let bar_height = if derivable && rect.height() > HEADER + 3.0 * DERIVE_BAR {
+            DERIVE_BAR
+        } else {
+            0.0
+        };
+        let body = Rect::from_min_max(
+            pos2(rect.min.x, rect.min.y + HEADER),
+            pos2(rect.max.x, rect.max.y - bar_height),
+        );
+        let bar = Rect::from_min_max(pos2(rect.min.x, body.max.y), rect.max);
         let painter = ui.painter_at(rect);
 
         painter.rect_filled(body, 0.0, background);
         painter.rect_filled(header, 0.0, visuals.faint_bg_color);
+        if bar_height > 0.0 {
+            painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
+        }
 
         let response = ui.interact(
             body,
@@ -814,12 +1036,44 @@ impl Slot {
                 tw.max(th),
                 shown.info.width.max(shown.info.height),
             );
-            ui.painter_at(body).image(
-                shown.texture().id(),
-                img_rect,
-                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            let ready = self
+                .derive
+                .as_ref()
+                .and_then(|d| Some((d, d.ready_for(shown)?)));
+            let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+            match ready {
+                Some((d, r)) if d.view == View::Compare => {
+                    let split_x = body.left() + body.width() * d.split;
+                    let left = body.with_max_x(split_x);
+                    let right = body.with_min_x(split_x);
+                    ui.painter_at(left).image(
+                        shown.texture().id(),
+                        img_rect,
+                        whole,
+                        Color32::WHITE,
+                    );
+                    ui.painter_at(right)
+                        .image(r.derived.id(), img_rect, whole, Color32::WHITE);
+                }
+                Some((d, r)) => {
+                    let texture = match d.view {
+                        View::Difference => &r.difference,
+                        _ => &r.derived,
+                    };
+                    ui.painter_at(body)
+                        .image(texture.id(), img_rect, whole, Color32::WHITE);
+                }
+                None => {
+                    ui.painter_at(body).image(
+                        shown.texture().id(),
+                        img_rect,
+                        whole,
+                        Color32::WHITE,
+                    );
+                }
+            }
+            // 色導出は元の画像から描くので、縮小画像で足りる大きさでも元の画像を持たせる。
+            out.wants_full |= self.derive.is_some();
 
             let pixel_at = |p: Pos2| {
                 let v = (p - img_rect.min) / scale;
@@ -985,6 +1239,10 @@ impl Slot {
             );
         }
 
+        if bar_height > 0.0 {
+            self.derive_overlay(ui, body, lang);
+            self.derive_bar(ui, bar, lang, presets, &mut out);
+        }
         if self.shown.is_some() {
             let mark_text = self.selected_mark_text();
             let roi_text = self.selected_roi_text();
@@ -1181,6 +1439,24 @@ impl Slot {
             );
             film.on_hover_text(tr(lang, "Developing RAW..."));
             labels_right = film_rect.left();
+        }
+
+        if let Some(d) = &self.derive {
+            let mark_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
+            let mark = ui.interact(
+                mark_rect,
+                ui.id().with(("derived", self.id)),
+                Sense::hover(),
+            );
+            painter.text(
+                mark_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::SWATCHES,
+                egui::FontId::proportional(14.0),
+                visuals.selection.stroke.color,
+            );
+            mark.on_hover_text(format!("{}: {}", tr(lang, "Derived"), derive_name(d, lang)));
+            labels_right = mark_rect.left();
         }
 
         // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと

@@ -159,6 +159,11 @@ impl Synth {
         self
     }
 
+    /// VOI LUT Function（LINEAR / LINEAR_EXACT / SIGMOID）。
+    pub fn voi_function(self, value: &str) -> Self {
+        self.text(tags::VOILUT_FUNCTION, VR::CS, value)
+    }
+
     /// 任意の文字の属性。
     pub fn text(mut self, tag: Tag, vr: VR, value: &str) -> Self {
         self.put_str(tag, vr, value);

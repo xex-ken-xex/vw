@@ -1,5 +1,6 @@
 //! 画素の変換の図。格納値が表示の明るさになるまでの段をノードと線で並べた別ウインドウで、
-//! 値を変えるとアクティブなスロットの表示に当てる（ファイルには書き戻さない）。
+//! 値を変えるとアクティブなスロットの色導出にする（ファイルには書き戻さない）。
+//! 描き直しはスロットの側（[`crate::derive`]）が受け持つ。
 //!
 //! 組み立てと操作はノードエディタ（ComfyUI）に、見た目は vw のパネルに合わせる。
 //! ノードエディタのクレート（egui-snarl など）を使わないのは、初版はつなぎ替えがなく
@@ -11,8 +12,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, emath::TSTransform, epaint::CubicBezierShape, pos2, vec2, Color32, ColorImage, Pos2,
-    Rect, Sense, Stroke, UiBuilder, Vec2,
+    self, emath::TSTransform, epaint::CubicBezierShape, pos2, vec2, Color32, Pos2, Rect, Sense,
+    Stroke, UiBuilder, Vec2,
 };
 use vw_core::VwImage;
 use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
@@ -36,14 +37,27 @@ pub struct Target<'a> {
         Option<&'a crate::quality::Report>,
         &'a crate::settings::Quality,
     )>,
+    /// スロットの色導出の値。`None` は標準（ファイルの値）。
+    pub params: Option<Params>,
+    /// スロットで選んでいる保存したパイプラインの名前と、そのあと値を変えたか。
+    pub preset: Option<(&'a str, bool)>,
+    /// 保存したパイプラインの名前（同じ名前で保存しないように確かめる）。
+    pub saved: Vec<&'a str>,
 }
 
-/// スロットの表示に当てる変更。
-pub enum Change {
-    /// 手で変えた値で描いた画像に差し替える。
-    Show(PathBuf, ColorImage),
-    /// ファイルの値での表示に戻す。
-    Restore(PathBuf),
+/// ウインドウでの操作。スロットと保存したパイプラインの一覧に当てる。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    /// アクティブなスロットの色導出の値を変えた。`at_file` はファイルの値と同じ。
+    Edit {
+        params: Params,
+        at_file: bool,
+    },
+    SaveAs(String, Params),
+    Overwrite(String, Params),
+    Delete(String),
+    /// ウインドウを閉じた。保存していない値は捨てる。
+    Closed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,11 +168,11 @@ pub struct PipelineView {
     pub open_zoom_map: bool,
     path: Option<PathBuf>,
     loaded: Option<Loaded>,
-    /// 手で変えた値で描いた画像を当てているスロットの画像。
-    applied: Option<PathBuf>,
-    rendering: Option<(PathBuf, Receiver<ColorImage>)>,
-    /// 描き直しを頼んだあとに、また値が変わった。
-    stale: bool,
+    /// 「名前を付けて保存」で入力中の名前。
+    save_name: String,
+    /// 「名前を付けて保存」を開いた。次のフレームで名前の欄に入力できるようにする
+    /// （欄は開いた次のフレームに作られるので、押したフレームでは選べない）。
+    focus_name: bool,
     positions: HashMap<(Kind, Node), Pos2>,
     collapsed: HashSet<Node>,
     rects: HashMap<Node, Rect>,
@@ -187,53 +201,31 @@ impl PipelineView {
         }
     }
 
-    /// `path` の画像に手で変えた値を当てていれば、その値。
-    pub fn edited_for(&self, path: &Path) -> Option<Params> {
-        self.edit_for(path).map(|(p, _)| p)
-    }
-
-    /// `path` の画像に手で変えた値を当てていれば、その値と、画像のデコードの仕方。
-    pub fn edit_for(&self, path: &Path) -> Option<(Params, Decoded)> {
-        match &self.loaded {
-            Some(Loaded::Gray(g)) if self.path.as_deref() == Some(path) && g.params != g.file => {
-                Some((g.params, g.decoded))
-            }
-            _ => None,
-        }
-    }
-
-    /// 手で変えた値で描いた画像を当てているスロットの画像。
-    pub fn applied(&self) -> Option<&Path> {
-        self.applied.as_deref()
-    }
-
-    /// 閉じる。手で変えた値は捨て、表示をファイルの値に戻す。
-    pub fn close(&mut self) -> Vec<Change> {
+    /// 閉じる。保存していない値はスロットの側で捨てる。
+    pub fn close(&mut self) -> Vec<Command> {
         self.open = false;
         self.path = None;
         self.loaded = None;
-        self.rendering = None;
-        self.applied
-            .take()
-            .map(Change::Restore)
-            .into_iter()
-            .collect()
+        vec![Command::Closed]
     }
 
-    /// 1 フレーム分。ウインドウを描き、スロットに当てる変更を返す。
+    /// 1 フレーム分。ウインドウを描き、スロットと保存したパイプラインに当てる操作を返す。
     pub fn ui(
         &mut self,
         ctx: &egui::Context,
         lang: Language,
         target: Option<Target<'_>>,
-    ) -> Vec<Change> {
+    ) -> Vec<Command> {
         if !self.open {
             return Vec::new();
         }
-        let mut out = self.follow(ctx, target.as_ref());
+        self.follow(ctx, target.as_ref());
+        let mut out = Vec::new();
         let title = crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref());
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
+        let preset = target.as_ref().and_then(|t| t.preset);
+        let saved = target.as_ref().map(|t| t.saved.clone()).unwrap_or_default();
         let mut close = false;
         let mut edited = false;
         ctx.show_viewport_immediate(
@@ -252,13 +244,20 @@ impl PipelineView {
                 }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(ctx.style().visuals.extreme_bg_color))
-                    .show(ctx, |ui| edited = self.contents(ui, lang, &marks));
+                    .show(ctx, |ui| {
+                        edited = self.contents(ui, lang, &marks, preset, &saved, &mut out);
+                    });
             },
         );
-        if edited {
-            self.request_render(ctx);
+        if let (true, Some(Loaded::Gray(g))) = (edited, &self.loaded) {
+            out.insert(
+                0,
+                Command::Edit {
+                    params: g.params,
+                    at_file: g.params == g.file,
+                },
+            );
         }
-        out.extend(self.poll_render(ctx));
         if close {
             out.extend(self.close());
         }
@@ -266,12 +265,10 @@ impl PipelineView {
     }
 
     /// アクティブなスロットの画像が変わったら、その画像の段を読み直す。
-    fn follow(&mut self, ctx: &egui::Context, target: Option<&Target<'_>>) -> Vec<Change> {
-        let mut out = Vec::new();
+    /// 値はスロットの色導出に合わせる。
+    fn follow(&mut self, ctx: &egui::Context, target: Option<&Target<'_>>) {
         let path = target.map(|t| t.path.to_path_buf());
         if path != self.path {
-            out.extend(self.applied.take().map(Change::Restore));
-            self.rendering = None;
             self.path = path.clone();
             self.loaded =
                 path.map(|p| Loaded::Reading(pixel_pipeline::read_in_background(ctx, &p)));
@@ -292,81 +289,120 @@ impl PipelineView {
                 });
             }
         }
-        // フル解像度の画像が届いた、または捨てられて読み直されたら、ヒストグラムを作り直し、
-        // 手で変えた値があれば当て直す。
+        // フル解像度の画像が届いた、または捨てられて読み直されたら、ヒストグラムを作り直す。
         if let (Some(Loaded::Gray(g)), Some(image)) =
             (&mut self.loaded, target.and_then(|t| t.image))
         {
             let same = g.image.as_ref().is_some_and(|i| Arc::ptr_eq(i, image));
             if !same {
-                let first = g.image.is_none();
                 g.image = Some(image.clone());
                 g.file = pixel_pipeline::file_params(&g.info, image, &g.decoded);
-                if first {
-                    g.params = g.file;
-                }
                 g.histogram = Some(pixel_pipeline::histogram(
                     image,
                     &g.decoded,
                     g.file.slope,
                     g.file.intercept,
                 ));
-                if g.params != g.file {
-                    self.request_render(ctx);
-                }
             }
         }
-        out
+        if let (Some(Loaded::Gray(g)), Some(t)) = (&mut self.loaded, target) {
+            if g.image.is_some() {
+                g.params = t.params.unwrap_or(g.file);
+            }
+        }
     }
 
-    fn request_render(&mut self, ctx: &egui::Context) {
-        let (Some(path), Some(Loaded::Gray(g))) = (&self.path, &self.loaded) else {
-            return;
-        };
-        let Some(image) = g.image.clone() else {
-            return;
-        };
-        if self.rendering.is_some() {
-            self.stale = true;
-            return;
+    /// 名前を付けて保存・上書き保存・削除。
+    fn save_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        params: Params,
+        preset: Option<(&str, bool)>,
+        saved: &[&str],
+        out: &mut Vec<Command>,
+    ) {
+        let response = ui.button(tr(lang, "Save as..."));
+        if response.clicked() {
+            self.focus_name = true;
         }
-        self.stale = false;
-        let (decoded, params) = (g.decoded, g.params);
-        let rx = crate::background::compute(ctx, move || {
-            pixel_pipeline::render(&image, &decoded, &params)
+        egui::Popup::from_toggle_button_response(&response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.label(tr(lang, "Name"));
+                let field = ui.text_edit_singleline(&mut self.save_name);
+                if std::mem::take(&mut self.focus_name) {
+                    field.request_focus();
+                }
+                let name = self.save_name.trim();
+                let problem = if name.is_empty() {
+                    Some(tr(lang, "Enter a name."))
+                } else if saved.contains(&name) {
+                    Some(tr(
+                        lang,
+                        "That name is already saved. Use Overwrite to change it.",
+                    ))
+                } else {
+                    None
+                };
+                if let Some(p) = problem {
+                    ui.weak(p);
+                }
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let save = ui.add_enabled(problem.is_none(), egui::Button::new(tr(lang, "Save")));
+                if problem.is_none() && (save.clicked() || enter) {
+                    out.push(Command::SaveAs(name.to_owned(), params));
+                    self.save_name.clear();
+                    ui.close();
+                }
+            });
+        let name = preset.map(|(n, _)| n);
+        let modified = preset.is_some_and(|(_, m)| m);
+        let overwrite = ui
+            .add_enabled(modified, egui::Button::new(tr(lang, "Overwrite")))
+            .on_hover_text(match name {
+                Some(n) => crate::i18n::tr1(lang, "Save the changed values as \"{}\"", n),
+                None => tr(lang, "Choose a saved pipeline in the slot first.").to_owned(),
+            });
+        if let (true, Some(n)) = (overwrite.clicked(), name) {
+            out.push(Command::Overwrite(n.to_owned(), params));
+        }
+        ui.add_enabled_ui(name.is_some(), |ui| {
+            ui.menu_button(tr(lang, "Delete"), |ui| {
+                if let Some(n) = name {
+                    if ui
+                        .button(crate::i18n::tr1(
+                            lang,
+                            "Delete the saved pipeline \"{}\"",
+                            n,
+                        ))
+                        .clicked()
+                    {
+                        out.push(Command::Delete(n.to_owned()));
+                        ui.close();
+                    }
+                }
+            });
         });
-        self.rendering = Some((path.clone(), rx));
     }
 
-    fn poll_render(&mut self, ctx: &egui::Context) -> Vec<Change> {
-        let Some((path, rx)) = &self.rendering else {
-            return Vec::new();
-        };
-        let Ok(image) = rx.try_recv() else {
-            return Vec::new();
-        };
-        let path = path.clone();
-        self.rendering = None;
-        let at_file = matches!(&self.loaded, Some(Loaded::Gray(g)) if g.params == g.file);
-        let change = if at_file {
-            self.applied = None;
-            Change::Restore(path)
-        } else {
-            self.applied = Some(path.clone());
-            Change::Show(path, image)
-        };
-        if self.stale {
-            // 描いている間に変わった値で、もう一度描く。
-            self.request_render(ctx);
-        }
-        vec![change]
-    }
-
-    /// 図の中身。値を変えたら `true`。
-    fn contents(&mut self, ui: &mut egui::Ui, lang: Language, marks: &[(u32, u32)]) -> bool {
+    /// 図の中身。値を変えたら `true`。保存や削除は `out` に足す。
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        marks: &[(u32, u32)],
+        preset: Option<(&str, bool)>,
+        saved: &[&str],
+        out: &mut Vec<Command>,
+    ) -> bool {
         let mut edited = false;
         egui::Panel::top("pipeline_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
+                if let Some(Loaded::Gray(g)) = &self.loaded {
+                    self.save_buttons(ui, lang, g.params, preset, saved, out);
+                    ui.separator();
+                }
                 let can_reset = matches!(&self.loaded, Some(Loaded::Gray(g)) if g.params != g.file);
                 if ui
                     .add_enabled(can_reset, egui::Button::new(tr(lang, "Reset to file values")))
@@ -388,7 +424,7 @@ impl PipelineView {
                 }
                 ui.weak(tr(
                     lang,
-                    "Changed values are only shown, never written to the file. Closing the window goes back to the file values.",
+                    "Changed values are only shown, never written to the file. Closing the window drops values that are not saved.",
                 ));
             });
         });
@@ -1049,14 +1085,12 @@ mod tests {
     }
 
     #[test]
-    fn closing_restores_the_image_that_had_changed_values() {
+    fn closing_tells_the_slots_to_drop_unsaved_values() {
         let mut view = PipelineView {
             open: true,
-            applied: Some(PathBuf::from("a.dcm")),
             ..Default::default()
         };
-        let changes = view.close();
+        assert_eq!(view.close(), [Command::Closed]);
         assert!(!view.open);
-        assert!(matches!(changes.as_slice(), [Change::Restore(p)] if p == Path::new("a.dcm")));
     }
 }

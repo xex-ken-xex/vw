@@ -62,6 +62,11 @@ impl VwApp {
             return;
         }
         self.texture_options = options;
+        for d in self.slots.iter_mut().filter_map(|s| s.derive.as_mut()) {
+            for texture in d.textures_mut() {
+                crate::viewer::set_texture_options(texture, options);
+            }
+        }
         for shown in self.slots.iter_mut().filter_map(|s| s.shown.as_mut()) {
             crate::viewer::set_texture_options(&mut shown.thumb, options);
             if let Some(full) = &mut shown.full {
