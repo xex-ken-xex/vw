@@ -14,8 +14,6 @@ use eframe::egui;
 use vw_core::{display, DisplayParams, VwImage};
 use vw_quality::{Image, Metric, Region};
 
-use crate::pixel_pipeline::{self, Decoded, Params};
-
 /// 表示の明るさの最大。
 const PEAK: f32 = 255.0;
 
@@ -25,8 +23,8 @@ pub struct Input<'a> {
     pub path: &'a Path,
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
-    /// 色導出で手で変えている値と、その画像のデコードの仕方（変えているときだけ）。
-    pub edited: Option<(Params, Decoded)>,
+    /// 色導出で描いた画像（当てているときだけ）。
+    pub edited: Option<&'a Arc<egui::ColorImage>>,
     pub target_roi: Option<Region>,
     pub background_roi: Option<Region>,
     /// 「評価の基準にする」で選んだ別のスロットの画像。
@@ -120,7 +118,7 @@ impl Report {
 struct Key {
     path: PathBuf,
     image: usize,
-    edited: Option<Params>,
+    edited: Option<usize>,
     target: Option<Region>,
     background: Option<Region>,
     reference: Option<(PathBuf, Option<usize>)>,
@@ -131,7 +129,7 @@ impl Key {
         Self {
             path: input.path.to_path_buf(),
             image: Arc::as_ptr(image) as usize,
-            edited: input.edited.map(|(p, _)| p),
+            edited: input.edited.map(|e| Arc::as_ptr(e) as usize),
             target: input.target_roi,
             background: input.background_roi,
             reference: input.reference.as_ref().map(|r| {
@@ -153,7 +151,7 @@ pub struct Evaluation {
 /// 裏のスレッドに渡す、`Input` の写し。
 struct Pending {
     image: Arc<VwImage>,
-    edited: Option<(Params, Decoded)>,
+    edited: Option<Arc<egui::ColorImage>>,
     target: Option<Region>,
     background: Option<Region>,
     reference: Option<(PathBuf, Option<Arc<VwImage>>)>,
@@ -182,7 +180,7 @@ impl Evaluation {
         }
         let pending = Pending {
             image: image.clone(),
-            edited: input.edited,
+            edited: input.edited.cloned(),
             target: input.target_roi,
             background: input.background_roi,
             reference: input
@@ -233,9 +231,7 @@ fn evaluate(p: &Pending) -> Report {
     let (w, h) = (p.image.width, p.image.height);
     let before_px = shown(&p.image);
     let before = Image::new(w, h, &before_px);
-    let after_px = p.edited.map(|(params, decoded)| {
-        luma_of_color_image(&pixel_pipeline::render(&p.image, &decoded, &params))
-    });
+    let after_px = p.edited.as_deref().map(luma_of_color_image);
     let after = after_px.as_deref().map(|px| Image::new(w, h, px));
     let reference_px = p
         .reference

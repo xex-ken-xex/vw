@@ -5,16 +5,41 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::nodes::{Chain, Node};
 use crate::pixel_pipeline::{Params, VoiFunction};
 
 pub const FILE_NAME: &str = "pipelines.toml";
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// 1 つのパイプラインの中身: ファイルの段の値（DICOM のグレースケールだけに効く。`None` は
+/// ファイルの値のまま）と、その後ろに当てるノードの列。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Values {
+    pub params: Option<Params>,
+    pub chain: Chain,
+}
+
+impl Values {
+    /// 標準の表示と同じ（何も変えていない）。
+    pub fn is_standard(&self) -> bool {
+        self.params.is_none() && self.chain.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
     pub name: String,
-    pub params: Params,
+    pub values: Values,
 }
+
+const PARAM_KEYS: [&str; 6] = [
+    "rescale_slope",
+    "rescale_intercept",
+    "window_center",
+    "window_width",
+    "voi_lut_function",
+    "invert",
+];
 
 /// 名前の順に並ぶ。表の名前がそのまま保存した名前になる。
 pub fn from_toml(text: &str) -> Result<(Vec<Preset>, Vec<String>), String> {
@@ -27,17 +52,33 @@ pub fn from_toml(text: &str) -> Result<(Vec<Preset>, Vec<String>), String> {
         match value
             .as_table()
             .ok_or("not a table".to_owned())
-            .and_then(params_of)
+            .and_then(values_of)
         {
-            Ok(params) if !name.trim().is_empty() => presets.push(Preset {
+            Ok(values) if !name.trim().is_empty() => presets.push(Preset {
                 name: name.clone(),
-                params,
+                values,
             }),
             Ok(_) => problems.push("a pipeline with an empty name was skipped".to_owned()),
             Err(e) => problems.push(format!("[{name}]: {e} (skipped)")),
         }
     }
     Ok((presets, problems))
+}
+
+fn values_of(t: &toml::Table) -> Result<Values, String> {
+    let params = if PARAM_KEYS.iter().any(|k| t.contains_key(*k)) {
+        Some(params_of(t)?)
+    } else {
+        None
+    };
+    let chain = match t.get("nodes") {
+        None => Vec::new(),
+        Some(v) => v
+            .clone()
+            .try_into::<Chain>()
+            .map_err(|e| format!("nodes: {}", e.message()))?,
+    };
+    Ok(Values { params, chain })
 }
 
 fn params_of(t: &toml::Table) -> Result<Params, String> {
@@ -74,26 +115,35 @@ fn params_of(t: &toml::Table) -> Result<Params, String> {
 /// 書き出す 1 表。手で読み書きしやすいよう、項目は画素の変換の順に並べる。
 #[derive(serde::Serialize)]
 struct Entry {
-    rescale_slope: f64,
-    rescale_intercept: f64,
-    window_center: f64,
-    window_width: f64,
-    voi_lut_function: &'static str,
-    invert: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rescale_slope: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rescale_intercept: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_center: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voi_lut_function: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invert: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    nodes: Vec<Node>,
 }
 
 pub fn to_toml(presets: &[Preset]) -> String {
     let table: std::collections::BTreeMap<&str, Entry> = presets
         .iter()
         .map(|p| {
-            let v = p.params;
+            let v = p.values.params;
             let entry = Entry {
-                rescale_slope: v.slope,
-                rescale_intercept: v.intercept,
-                window_center: v.center,
-                window_width: v.width,
-                voi_lut_function: v.function.dicom_name(),
-                invert: v.invert,
+                rescale_slope: v.map(|v| v.slope),
+                rescale_intercept: v.map(|v| v.intercept),
+                window_center: v.map(|v| v.center),
+                window_width: v.map(|v| v.width),
+                voi_lut_function: v.map(|v| v.function.dicom_name()),
+                invert: v.map(|v| v.invert),
+                nodes: p.values.chain.clone(),
             };
             (p.name.as_str(), entry)
         })
@@ -127,13 +177,13 @@ impl PresetStore {
     }
 
     /// 同じ名前があれば値を置き換える。
-    pub fn put(&mut self, name: &str, params: Params) -> Result<(), String> {
+    pub fn put(&mut self, name: &str, values: Values) -> Result<(), String> {
         match self.presets.iter_mut().find(|p| p.name == name) {
-            Some(p) => p.params = params,
+            Some(p) => p.values = values,
             None => {
                 self.presets.push(Preset {
                     name: name.to_owned(),
-                    params,
+                    values,
                 });
                 self.presets.sort_by(|a, b| a.name.cmp(&b.name));
             }
@@ -213,26 +263,52 @@ mod tests {
     use super::*;
     use crate::test_util::TempDir;
 
-    fn lung() -> Params {
-        Params {
-            slope: 1.0,
-            intercept: -1024.0,
-            center: -600.0,
-            width: 1500.0,
-            function: VoiFunction::LinearExact,
-            invert: true,
+    fn lung() -> Values {
+        Values {
+            params: Some(Params {
+                slope: 1.0,
+                intercept: -1024.0,
+                center: -600.0,
+                width: 1500.0,
+                function: VoiFunction::LinearExact,
+                invert: true,
+            }),
+            chain: vec![
+                Node::Levels {
+                    black: 0.1,
+                    white: 0.9,
+                    gamma: 1.0,
+                },
+                Node::Expression {
+                    text: "r: pow(r, 0.9)".into(),
+                },
+            ],
+        }
+    }
+
+    fn nodes_only() -> Values {
+        Values {
+            params: None,
+            chain: vec![Node::Invert],
         }
     }
 
     #[test]
     fn saved_pipelines_round_trip_through_toml_by_name() {
-        let presets = vec![Preset {
-            name: "肺野".into(),
-            params: lung(),
-        }];
+        let presets = vec![
+            Preset {
+                name: "反転".into(),
+                values: nodes_only(),
+            },
+            Preset {
+                name: "肺野".into(),
+                values: lung(),
+            },
+        ];
         let text = to_toml(&presets);
+        assert!(text.contains("[[\"肺野\".nodes]]"), "{text}");
         assert!(
-            text.contains("[\"肺野\"]") || text.contains("[肺野]"),
+            !text.contains("\"反転\".window_center") && !text.contains("[\"反転\"]\nwindow"),
             "{text}"
         );
         assert_eq!(from_toml(&text).unwrap(), (presets, vec![]));
@@ -244,21 +320,40 @@ mod tests {
                     window_center = 40\nwindow_width = 400\n";
         let (presets, problems) = from_toml(text).unwrap();
         assert!(problems.is_empty());
-        let p = presets[0].params;
+        let p = presets[0].values.params.unwrap();
         assert_eq!(
             (p.center, p.width, p.function, p.invert),
             (40.0, 400.0, VoiFunction::Linear, false)
+        );
+        assert!(presets[0].values.chain.is_empty());
+    }
+
+    #[test]
+    fn an_entry_without_file_values_keeps_them_at_the_file() {
+        let text = "[gamma]\n[[gamma.nodes]]\nkind = \"levels\"\ngamma = 2.2\n";
+        let (presets, problems) = from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(presets[0].values.params, None);
+        assert_eq!(
+            presets[0].values.chain,
+            vec![Node::Levels {
+                black: 0.0,
+                white: 1.0,
+                gamma: 2.2
+            }]
         );
     }
 
     #[test]
     fn broken_entries_are_skipped_and_reported_while_the_rest_load() {
         let text = "[good]\nrescale_slope = 1\nrescale_intercept = 0\nwindow_center = 40\nwindow_width = 400\n\
-                    [bad]\nrescale_slope = \"one\"\n";
+                    [bad]\nrescale_slope = \"one\"\n\
+                    [worse]\n[[worse.nodes]]\nkind = \"teleport\"\n";
         let (presets, problems) = from_toml(text).unwrap();
         assert_eq!(presets.len(), 1);
         assert_eq!(presets[0].name, "good");
         assert!(problems[0].contains("[bad]"), "{problems:?}");
+        assert!(problems[1].contains("[worse]: nodes"), "{problems:?}");
     }
 
     #[test]
@@ -268,9 +363,9 @@ mod tests {
         let (mut store, notes) = PresetStore::open(Some(path.clone()));
         assert!(notes.is_empty() && store.presets().is_empty());
         store.put("b", lung()).unwrap();
-        store.put("a", lung()).unwrap();
+        store.put("a", nodes_only()).unwrap();
         let mut wider = lung();
-        wider.width = 2000.0;
+        wider.params.as_mut().unwrap().width = 2000.0;
         store.put("b", wider).unwrap();
         assert_eq!(
             store
@@ -281,7 +376,8 @@ mod tests {
             ["a", "b"]
         );
         let (reopened, _) = PresetStore::open(Some(path.clone()));
-        assert_eq!(reopened.presets()[1].params.width, 2000.0);
+        assert_eq!(reopened.presets()[1].values.params.unwrap().width, 2000.0);
+        assert_eq!(reopened.presets()[0].values, nodes_only());
         store.remove("a").unwrap();
         assert!(store.presets().iter().all(|p| p.name != "a"));
 

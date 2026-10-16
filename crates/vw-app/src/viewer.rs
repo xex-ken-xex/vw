@@ -10,6 +10,7 @@ use eframe::egui::{
     self, pos2, vec2, Color32, ColorImage, MouseWheelUnit, PointerButton, Pos2, Rect, Sense,
     TextureFilter, TextureHandle, TextureOptions, Vec2,
 };
+use egui_phosphor::regular as icon;
 use serde::{Deserialize, Serialize};
 use vw_core::VwImage;
 
@@ -351,9 +352,9 @@ fn header_button(
     response
 }
 
-/// 色導出の対象（DICOM のグレースケール）。
-fn is_derivable(shown: &Shown) -> bool {
-    shown.info.plugin == "DICOM" && shown.info.color == vw_core::ColorModel::Gray
+/// 色導出の対象。画像ならどの形式でも（ノードは標準の表示の後ろに当てる）。
+fn is_derivable(_shown: &Shown) -> bool {
+    true
 }
 
 /// 色導出の名前。保存したあとに変えた値は「*」を付ける。
@@ -882,7 +883,7 @@ impl Slot {
             Some(Some(p)) => {
                 let view = self.derive.as_ref().map_or(View::Derived, |d| d.view);
                 let split = self.derive.as_ref().map_or(0.5, |d| d.split);
-                let mut d = Derive::new(Some(p.name.clone()), p.params);
+                let mut d = Derive::new(Some(p.name.clone()), p.values.clone());
                 d.view = view;
                 d.split = split;
                 self.derive = Some(d);
@@ -922,6 +923,10 @@ impl Slot {
         }
         if self.derive.as_ref().is_some_and(Derive::busy) {
             ui.spinner();
+        }
+        if let Some((index, message)) = self.derive.as_ref().and_then(Derive::error) {
+            ui.colored_label(ui.visuals().error_fg_color, icon::WARNING)
+                .on_hover_text(format!("{} {}: {message}", tr(lang, "Node"), index + 1));
         }
     }
 
@@ -1306,12 +1311,14 @@ impl Slot {
                     .shown
                     .as_ref()
                     .is_some_and(|s| s.info.plugin == "DICOM");
-                if dicom {
+                if self.shown.is_some() {
                     ui.separator();
                     if ui.button(tr(lang, "Pixel pipeline...")).clicked() {
                         out.pipeline = true;
                         ui.close();
                     }
+                }
+                if dicom {
                     out.send = crate::dicom_send::menu(ui, lang, destinations);
                 }
             });

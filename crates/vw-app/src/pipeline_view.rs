@@ -2,8 +2,11 @@
 //! 値を変えるとアクティブなスロットの色導出にする（ファイルには書き戻さない）。
 //! 描き直しはスロットの側（[`crate::derive`]）が受け持つ。
 //!
+//! ファイルの段（形式で決まる）の後ろに、自由なノード（式・レベル・反転・混合）を 1 本の
+//! 鎖でつなぐ。鎖は標準の表示の 0〜1 の値に当てるので、どの形式の画像にも使える。
+//!
 //! 組み立てと操作はノードエディタ（ComfyUI）に、見た目は vw のパネルに合わせる。
-//! ノードエディタのクレート（egui-snarl など）を使わないのは、初版はつなぎ替えがなく
+//! ノードエディタのクレート（egui-snarl など）を使わないのは、線のつなぎ替えがなく
 //! 決まった 1 本の流れを描くだけで、見た目を vw のテーマに揃える手間の方が大きいため。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -21,6 +24,9 @@ use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
 use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr_text};
+use crate::loader::ImageInfo;
+use crate::nodes::{self, Chain};
+use crate::pipelines::Values;
 use crate::pixel_pipeline::{self, Decoded, Histogram, Params, Trace, VoiFunction};
 use crate::settings::Language;
 
@@ -30,6 +36,7 @@ pub struct Target<'a> {
     pub path: &'a Path,
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
+    pub info: &'a ImageInfo,
     /// その画像に置いた十字の位置。
     pub marks: Vec<(u32, u32)>,
     /// 定量評価の結果と判定の閾値。
@@ -37,8 +44,8 @@ pub struct Target<'a> {
         Option<&'a crate::quality::Report>,
         &'a crate::settings::Quality,
     )>,
-    /// スロットの色導出の値。`None` は標準（ファイルの値）。
-    pub params: Option<Params>,
+    /// スロットの色導出の値。`None` は標準（ファイルの値、ノードなし）。
+    pub values: Option<&'a Values>,
     /// スロットで選んでいる保存したパイプラインの名前と、そのあと値を変えたか。
     pub preset: Option<(&'a str, bool)>,
     /// 保存したパイプラインの名前（同じ名前で保存しないように確かめる）。
@@ -48,13 +55,10 @@ pub struct Target<'a> {
 /// ウインドウでの操作。スロットと保存したパイプラインの一覧に当てる。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    /// アクティブなスロットの色導出の値を変えた。`at_file` はファイルの値と同じ。
-    Edit {
-        params: Params,
-        at_file: bool,
-    },
-    SaveAs(String, Params),
-    Overwrite(String, Params),
+    /// アクティブなスロットの色導出の値を変えた。
+    Edit(Values),
+    SaveAs(String, Values),
+    Overwrite(String, Values),
     Delete(String),
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
@@ -68,44 +72,34 @@ enum Node {
     Voi,
     Presentation,
     ColorSpace,
+    /// 自由なノードの鎖の `i` 番目。
+    Chain(usize),
     Display,
 }
 
 /// 関係するノードをまとめる枠。
 struct Group {
     title: &'static str,
-    nodes: &'static [Node],
+    nodes: Vec<Node>,
 }
 
-const GRAY_FLOW: [Node; 6] = [
+const GRAY_FILE: [Node; 5] = [
     Node::Stored,
     Node::Modality,
     Node::Unit,
     Node::Voi,
     Node::Presentation,
-    Node::Display,
 ];
-const GRAY_GROUPS: [Group; 3] = [
-    Group {
-        title: "Modality",
-        nodes: &[Node::Modality, Node::Unit],
-    },
-    Group {
-        title: "VOI",
-        nodes: &[Node::Voi],
-    },
-    Group {
-        title: "Display",
-        nodes: &[Node::Presentation, Node::Display],
-    },
-];
-const COLOR_FLOW: [Node; 3] = [Node::Stored, Node::ColorSpace, Node::Display];
+const COLOR_FILE: [Node; 2] = [Node::Stored, Node::ColorSpace];
+const PLAIN_FILE: [Node; 1] = [Node::Stored];
 
 /// ノードの配置を形式ごとに分けて覚えるための鍵。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {
     Gray,
     Color,
+    /// DICOM 以外。ファイルの段は 1 つにまとめて出す。
+    Plain,
 }
 
 impl Kind {
@@ -113,7 +107,43 @@ impl Kind {
         match self {
             Kind::Gray => "gray",
             Kind::Color => "color",
+            Kind::Plain => "plain",
         }
+    }
+
+    fn file_nodes(self) -> &'static [Node] {
+        match self {
+            Kind::Gray => &GRAY_FILE,
+            Kind::Color => &COLOR_FILE,
+            Kind::Plain => &PLAIN_FILE,
+        }
+    }
+
+    fn groups(self, chain_len: usize) -> Vec<Group> {
+        let mut groups = match self {
+            Kind::Gray => vec![
+                Group {
+                    title: "Modality",
+                    nodes: vec![Node::Modality, Node::Unit],
+                },
+                Group {
+                    title: "VOI",
+                    nodes: vec![Node::Voi],
+                },
+                Group {
+                    title: "Presentation",
+                    nodes: vec![Node::Presentation],
+                },
+            ],
+            Kind::Color | Kind::Plain => Vec::new(),
+        };
+        if chain_len > 0 {
+            groups.push(Group {
+                title: "Nodes",
+                nodes: (0..chain_len).map(Node::Chain).collect(),
+            });
+        }
+        groups
     }
 }
 
@@ -136,6 +166,7 @@ impl Node {
             Node::Voi => "voi",
             Node::Presentation => "presentation",
             Node::ColorSpace => "color_space",
+            Node::Chain(_) => "chain",
             Node::Display => "display",
         }
     }
@@ -157,7 +188,20 @@ enum Loaded {
     Reading(Receiver<Result<Pipeline, String>>),
     Gray(Box<GrayState>),
     Color(Color),
+    /// DICOM 以外。ファイルの段は変えられず、ノードの鎖だけを当てる。
+    Plain,
     Failed(String),
+}
+
+impl Loaded {
+    fn kind(&self) -> Option<Kind> {
+        match self {
+            Loaded::Gray(_) => Some(Kind::Gray),
+            Loaded::Color(_) => Some(Kind::Color),
+            Loaded::Plain => Some(Kind::Plain),
+            Loaded::Reading(_) | Loaded::Failed(_) => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -168,6 +212,11 @@ pub struct PipelineView {
     pub open_zoom_map: bool,
     path: Option<PathBuf>,
     loaded: Option<Loaded>,
+    /// 自由なノードの鎖。毎フレーム、スロットの色導出の値から写す。
+    chain: Chain,
+    /// ダブルクリックで開いた、ノードを探して足す小窓の位置（キャンバスの座標）と、絞り込みの文字。
+    add_at: Option<Pos2>,
+    add_filter: String,
     /// 「名前を付けて保存」で入力中の名前。
     save_name: String,
     /// 「名前を付けて保存」を開いた。次のフレームで名前の欄に入力できるようにする
@@ -186,13 +235,14 @@ impl PipelineView {
     pub fn node_positions(&self) -> BTreeMap<String, [f32; 2]> {
         self.positions
             .iter()
+            .filter(|((_, node), _)| !matches!(node, Node::Chain(_)))
             .map(|((kind, node), p)| (format!("{}.{}", kind.key(), node.key()), [p.x, p.y]))
             .collect()
     }
 
     /// 前回動かしたノードの位置に戻す。知らない鍵は捨てる。
     pub fn restore_node_positions(&mut self, saved: &BTreeMap<String, [f32; 2]>) {
-        for kind in [Kind::Gray, Kind::Color] {
+        for kind in [Kind::Gray, Kind::Color, Kind::Plain] {
             for node in Node::ALL {
                 if let Some([x, y]) = saved.get(&format!("{}.{}", kind.key(), node.key())) {
                     self.positions.insert((kind, node), pos2(*x, *y));
@@ -206,6 +256,8 @@ impl PipelineView {
         self.open = false;
         self.path = None;
         self.loaded = None;
+        self.chain.clear();
+        self.add_at = None;
         vec![Command::Closed]
     }
 
@@ -226,6 +278,7 @@ impl PipelineView {
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
         let preset = target.as_ref().and_then(|t| t.preset);
         let saved = target.as_ref().map(|t| t.saved.clone()).unwrap_or_default();
+        let info = target.as_ref().map(|t| t.info);
         let mut close = false;
         let mut edited = false;
         ctx.show_viewport_immediate(
@@ -245,23 +298,32 @@ impl PipelineView {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(ctx.style().visuals.extreme_bg_color))
                     .show(ctx, |ui| {
-                        edited = self.contents(ui, lang, &marks, preset, &saved, &mut out);
+                        edited = self.contents(ui, lang, &marks, preset, &saved, info, &mut out);
                     });
             },
         );
-        if let (true, Some(Loaded::Gray(g))) = (edited, &self.loaded) {
-            out.insert(
-                0,
-                Command::Edit {
-                    params: g.params,
-                    at_file: g.params == g.file,
-                },
-            );
+        if edited {
+            if let Some(values) = self.values() {
+                out.insert(0, Command::Edit(values));
+            }
         }
         if close {
             out.extend(self.close());
         }
         out
+    }
+
+    /// 今の値（スロットの色導出に渡す形）。ファイルの段の値は、ファイルと違うときだけ持つ。
+    fn values(&self) -> Option<Values> {
+        let params = match self.loaded.as_ref()? {
+            Loaded::Gray(g) => (g.params != g.file).then_some(g.params),
+            Loaded::Color(_) | Loaded::Plain => None,
+            Loaded::Reading(_) | Loaded::Failed(_) => return None,
+        };
+        Some(Values {
+            params,
+            chain: self.chain.clone(),
+        })
     }
 
     /// アクティブなスロットの画像が変わったら、その画像の段を読み直す。
@@ -270,9 +332,15 @@ impl PipelineView {
         let path = target.map(|t| t.path.to_path_buf());
         if path != self.path {
             self.path = path.clone();
-            self.loaded =
-                path.map(|p| Loaded::Reading(pixel_pipeline::read_in_background(ctx, &p)));
+            self.loaded = path.map(|p| match target.map(|t| t.info.plugin.as_str()) {
+                Some("DICOM") => Loaded::Reading(pixel_pipeline::read_in_background(ctx, &p)),
+                _ => Loaded::Plain,
+            });
         }
+        self.chain = target
+            .and_then(|t| t.values)
+            .map(|v| v.chain.clone())
+            .unwrap_or_default();
         if let Some(Loaded::Reading(rx)) = &self.loaded {
             if let Ok(result) = rx.try_recv() {
                 self.loaded = Some(match result {
@@ -307,7 +375,7 @@ impl PipelineView {
         }
         if let (Some(Loaded::Gray(g)), Some(t)) = (&mut self.loaded, target) {
             if g.image.is_some() {
-                g.params = t.params.unwrap_or(g.file);
+                g.params = t.values.and_then(|v| v.params).unwrap_or(g.file);
             }
         }
     }
@@ -317,7 +385,7 @@ impl PipelineView {
         &mut self,
         ui: &mut egui::Ui,
         lang: Language,
-        params: Params,
+        values: &Values,
         preset: Option<(&str, bool)>,
         saved: &[&str],
         out: &mut Vec<Command>,
@@ -351,7 +419,7 @@ impl PipelineView {
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let save = ui.add_enabled(problem.is_none(), egui::Button::new(tr(lang, "Save")));
                 if problem.is_none() && (save.clicked() || enter) {
-                    out.push(Command::SaveAs(name.to_owned(), params));
+                    out.push(Command::SaveAs(name.to_owned(), values.clone()));
                     self.save_name.clear();
                     ui.close();
                 }
@@ -365,7 +433,7 @@ impl PipelineView {
                 None => tr(lang, "Choose a saved pipeline in the slot first.").to_owned(),
             });
         if let (true, Some(n)) = (overwrite.clicked(), name) {
-            out.push(Command::Overwrite(n.to_owned(), params));
+            out.push(Command::Overwrite(n.to_owned(), values.clone()));
         }
         ui.add_enabled_ui(name.is_some(), |ui| {
             ui.menu_button(tr(lang, "Delete"), |ui| {
@@ -387,6 +455,7 @@ impl PipelineView {
     }
 
     /// 図の中身。値を変えたら `true`。保存や削除は `out` に足す。
+    #[allow(clippy::too_many_arguments)]
     fn contents(
         &mut self,
         ui: &mut egui::Ui,
@@ -394,24 +463,27 @@ impl PipelineView {
         marks: &[(u32, u32)],
         preset: Option<(&str, bool)>,
         saved: &[&str],
+        info: Option<&ImageInfo>,
         out: &mut Vec<Command>,
     ) -> bool {
         let mut edited = false;
+        let values = self.values();
         egui::Panel::top("pipeline_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if let Some(Loaded::Gray(g)) = &self.loaded {
-                    self.save_buttons(ui, lang, g.params, preset, saved, out);
+                if let Some(values) = &values {
+                    self.save_buttons(ui, lang, values, preset, saved, out);
                     ui.separator();
                 }
-                let can_reset = matches!(&self.loaded, Some(Loaded::Gray(g)) if g.params != g.file);
+                let can_reset = values.as_ref().is_some_and(|v| !v.is_standard());
                 if ui
                     .add_enabled(can_reset, egui::Button::new(tr(lang, "Reset to file values")))
                     .clicked()
                 {
                     if let Some(Loaded::Gray(g)) = &mut self.loaded {
                         g.params = g.file;
-                        edited = true;
                     }
+                    self.chain.clear();
+                    edited = true;
                 }
                 if ui.button(tr(lang, "Fit to window")).clicked() {
                     self.transform = None;
@@ -429,8 +501,6 @@ impl PipelineView {
             });
         });
         let kind = match &self.loaded {
-            Some(Loaded::Gray(_)) => Kind::Gray,
-            Some(Loaded::Color(_)) => Kind::Color,
             Some(Loaded::Reading(_)) => {
                 ui.centered_and_justified(|ui| ui.spinner());
                 return edited;
@@ -444,17 +514,94 @@ impl PipelineView {
                 ui.centered_and_justified(|ui| ui.weak(tr(lang, "No image")));
                 return edited;
             }
+            Some(loaded) => loaded.kind().expect("loaded kinds are matched above"),
         };
-        let flow: &[Node] = match kind {
-            Kind::Gray => &GRAY_FLOW,
-            Kind::Color => &COLOR_FLOW,
+        let flow: Vec<Node> = kind
+            .file_nodes()
+            .iter()
+            .copied()
+            .chain((0..self.chain.len()).map(Node::Chain))
+            .chain([Node::Display])
+            .collect();
+        let groups = kind.groups(self.chain.len());
+        let Some(info) = info else {
+            return edited;
         };
-        let groups: &[Group] = match kind {
-            Kind::Gray => &GRAY_GROUPS,
-            Kind::Color => &[],
-        };
-        edited |= self.canvas(ui, lang, kind, flow, groups, marks);
+        edited |= self.canvas(ui, lang, kind, &flow, &groups, marks, info);
         edited
+    }
+
+    /// 鎖の末尾（表示の前）にノードを足す。
+    fn add_node(&mut self, kind: &str) {
+        if let Some(node) = nodes::Node::new(kind) {
+            self.chain.push(node);
+        }
+    }
+
+    /// キャンバスの背景の右クリックメニューと、ダブルクリックで開く検索の小窓。足したら `true`。
+    fn add_menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        background: &egui::Response,
+    ) -> bool {
+        let mut added = false;
+        background.context_menu(|ui| {
+            ui.menu_button(tr(lang, "Add node"), |ui| {
+                for kind in nodes::Node::KINDS {
+                    if ui.button(tr(lang, nodes::Node::title(kind))).clicked() {
+                        self.add_node(kind);
+                        added = true;
+                        ui.close();
+                    }
+                }
+            });
+        });
+        if background.double_clicked() {
+            self.add_at = background.interact_pointer_pos();
+            self.add_filter.clear();
+        }
+        let Some(at) = self.add_at else {
+            return added;
+        };
+        let mut open = true;
+        egui::Window::new(tr(lang, "Search nodes"))
+            .id(ui.id().with("add_node_search"))
+            .fixed_pos(at)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                let field = ui.text_edit_singleline(&mut self.add_filter);
+                if self.add_filter.is_empty() && !field.has_focus() {
+                    field.request_focus();
+                }
+                let filter = self.add_filter.trim().to_lowercase();
+                let matching: Vec<&str> = nodes::Node::KINDS
+                    .into_iter()
+                    .filter(|k| {
+                        let title = tr(lang, nodes::Node::title(k));
+                        filter.is_empty()
+                            || title.to_lowercase().contains(&filter)
+                            || k.contains(&filter)
+                    })
+                    .collect();
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                for (i, kind) in matching.iter().enumerate() {
+                    if ui.button(tr(lang, nodes::Node::title(kind))).clicked() || (enter && i == 0)
+                    {
+                        self.add_node(kind);
+                        added = true;
+                    }
+                }
+                if matching.is_empty() {
+                    ui.weak(tr(lang, "No node matches."));
+                }
+            });
+        if added || !open || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.add_at = None;
+        }
+        added
     }
 
     /// 無限キャンバス。背景のドラッグでパン、ホイールでカーソル位置を中心にズームする。
@@ -472,9 +619,11 @@ impl PipelineView {
         flow: &[Node],
         groups: &[Group],
         marks: &[(u32, u32)],
+        info: &ImageInfo,
     ) -> bool {
         let (outer, background) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let mut edited = self.add_menus(ui, lang, &background);
         let content = flow
             .iter()
             .filter_map(|n| self.rects.get(n))
@@ -554,16 +703,44 @@ impl PipelineView {
             ports.extend([from, to]);
         }
 
-        let mut edited = false;
+        // 鎖のノードは並び順で置く（足す・外す・入れ替えるたびに番号が変わるので、覚えない）。
+        // 表示のノードは覚えた位置を鎖の長さの分だけ右にずらす。
+        let chain_shift = vec2(self.chain.len() as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
+        let mut chain_edit: Option<(usize, ChainEdit)> = None;
         for (i, &node) in flow.iter().enumerate() {
             let default = pos2(i as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
-            let pos = *self.positions.get(&(kind, node)).unwrap_or(&default);
-            let (rect, moved, body_edited) =
-                self.node(&mut canvas, lang, node, transform * pos, marks);
+            let shift = match node {
+                Node::Display => chain_shift,
+                _ => Vec2::ZERO,
+            };
+            let pos = match node {
+                Node::Chain(_) => default,
+                _ => self
+                    .positions
+                    .get(&(kind, node))
+                    .map_or(default, |p| *p + shift),
+            };
+            let (rect, moved, body_edited, chain) =
+                self.node(&mut canvas, lang, node, transform * pos, marks, info);
             edited |= body_edited;
+            chain_edit = chain_edit.or(chain.map(|c| (i, c)));
             self.rects.insert(node, transform.inverse().mul_rect(rect));
-            if moved != Vec2::ZERO {
-                self.positions.insert((kind, node), pos + moved / scale);
+            if moved != Vec2::ZERO && !matches!(node, Node::Chain(_)) {
+                self.positions
+                    .insert((kind, node), pos + moved / scale - shift);
+            }
+        }
+        if let Some((_, c)) = chain_edit {
+            if let Some(Node::Chain(i)) = chain_edit.map(|(i, _)| flow[i]) {
+                match c {
+                    ChainEdit::Remove => {
+                        self.chain.remove(i);
+                    }
+                    ChainEdit::Earlier if i > 0 => self.chain.swap(i, i - 1),
+                    ChainEdit::Later if i + 1 < self.chain.len() => self.chain.swap(i, i + 1),
+                    _ => {}
+                }
+                edited = true;
             }
         }
         // 丸はノードの枠の上に重ねる。
@@ -574,7 +751,7 @@ impl PipelineView {
     }
 
     /// ノード 1 つ。`pos` は画面上の左上。返すのは描いた範囲（画面上）、見出しのドラッグで
-    /// 動かした量（画面上）、値を変えたか。
+    /// 動かした量（画面上）、値を変えたか、鎖のノードの見出しのボタンで頼まれたこと。
     fn node(
         &mut self,
         ui: &mut egui::Ui,
@@ -582,10 +759,12 @@ impl PipelineView {
         node: Node,
         pos: Pos2,
         marks: &[(u32, u32)],
-    ) -> (Rect, Vec2, bool) {
+        info: &ImageInfo,
+    ) -> (Rect, Vec2, bool, Option<ChainEdit>) {
         let visuals = ui.visuals().clone();
         let scale = self.scale;
         let mut edited = false;
+        let mut chain_edit = None;
         let mut moved = Vec2::ZERO;
         let collapsed = self.collapsed.contains(&node);
         let mut toggle = false;
@@ -609,7 +788,41 @@ impl PipelineView {
                         if ui.small_button(arrow).clicked() {
                             toggle = true;
                         }
-                        ui.label(tr(lang, node_title(node)));
+                        ui.label(self.node_title(lang, node));
+                        if let Node::Chain(i) = node {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button(icon::X)
+                                        .on_hover_text(tr(lang, "Remove node"))
+                                        .clicked()
+                                    {
+                                        chain_edit = Some(ChainEdit::Remove);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            i + 1 < self.chain.len(),
+                                            egui::Button::new(icon::ARROW_RIGHT).small(),
+                                        )
+                                        .on_hover_text(tr(lang, "Move later"))
+                                        .clicked()
+                                    {
+                                        chain_edit = Some(ChainEdit::Later);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            i > 0,
+                                            egui::Button::new(icon::ARROW_LEFT).small(),
+                                        )
+                                        .on_hover_text(tr(lang, "Move earlier"))
+                                        .clicked()
+                                    {
+                                        chain_edit = Some(ChainEdit::Earlier);
+                                    }
+                                },
+                            );
+                        }
                     });
                     let drag = ui.interact(
                         header.response.rect,
@@ -619,7 +832,7 @@ impl PipelineView {
                     moved = drag.drag_delta();
                     if !collapsed {
                         ui.separator();
-                        edited = self.body(ui, lang, node, marks);
+                        edited = self.body(ui, lang, node, marks, info);
                     }
                 })
         });
@@ -630,7 +843,21 @@ impl PipelineView {
                 self.collapsed.insert(node);
             }
         }
-        (inner.response.rect, moved, edited)
+        (inner.response.rect, moved, edited, chain_edit)
+    }
+
+    fn node_title(&self, lang: Language, node: Node) -> String {
+        match node {
+            Node::Chain(i) => {
+                let kind = self.chain.get(i).map_or("", nodes::Node::kind);
+                format!("{}  {}", i + 1, tr(lang, nodes::Node::title(kind)))
+            }
+            Node::Display => match &self.loaded {
+                Some(Loaded::Plain) | Some(Loaded::Color(_)) => tr(lang, "Display").to_owned(),
+                _ => tr(lang, node_title(node)).to_owned(),
+            },
+            _ => tr(lang, node_title(node)).to_owned(),
+        }
     }
 
     fn body(
@@ -639,12 +866,23 @@ impl PipelineView {
         lang: Language,
         node: Node,
         marks: &[(u32, u32)],
+        info: &ImageInfo,
     ) -> bool {
+        if let Node::Chain(i) = node {
+            return match self.chain.get_mut(i) {
+                Some(n) => chain_body(ui, lang, n),
+                None => false,
+            };
+        }
         let traces = self.traces(marks);
         match &mut self.loaded {
             Some(Loaded::Gray(g)) => gray_body(ui, lang, node, g, &traces, self.scale),
             Some(Loaded::Color(c)) => {
                 color_body(ui, lang, node, c);
+                false
+            }
+            Some(Loaded::Plain) => {
+                plain_body(ui, lang, node, info);
                 false
             }
             _ => false,
@@ -716,6 +954,14 @@ fn placeholder() -> Params {
     }
 }
 
+/// 鎖のノードの見出しのボタンで頼まれたこと。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChainEdit {
+    Remove,
+    Earlier,
+    Later,
+}
+
 fn node_title(node: Node) -> &'static str {
     match node {
         Node::Stored => "Stored values",
@@ -724,6 +970,7 @@ fn node_title(node: Node) -> &'static str {
         Node::Voi => "VOI LUT",
         Node::Presentation => "Presentation LUT",
         Node::ColorSpace => "Color space",
+        Node::Chain(_) => "Node",
         Node::Display => "Display",
     }
 }
@@ -965,9 +1212,136 @@ fn gray_body(
                 ));
             }
         }
-        Node::ColorSpace => {}
+        Node::ColorSpace | Node::Chain(_) => {}
     }
     edited
+}
+
+/// DICOM 以外の形式。ファイルの段は変えられないので、画像の情報だけを出す。
+fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo) {
+    match node {
+        Node::Stored => {
+            ui.label(&info.plugin);
+            ui.label(format!(
+                "{} × {}  {} bit  {}",
+                info.width,
+                info.height,
+                info.significant_bits,
+                color_name(lang, info.color)
+            ));
+            ui.weak(tr(lang, "This format has no editable file stages."));
+        }
+        Node::Display => {
+            ui.label(if info.color.channels() >= 3 {
+                tr(lang, "8-bit RGB")
+            } else {
+                tr(lang, "8-bit gray")
+            });
+            ui.weak(tr(
+                lang,
+                "Nodes work on the standard display values scaled to 0..1.",
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn color_name(lang: Language, color: vw_core::ColorModel) -> &'static str {
+    use vw_core::ColorModel;
+    match color {
+        ColorModel::Gray => tr(lang, "gray"),
+        ColorModel::GrayAlpha => tr(lang, "gray + alpha"),
+        ColorModel::Rgb => "RGB",
+        ColorModel::Rgba => "RGBA",
+    }
+}
+
+/// 自由なノードの中身。値を変えたら `true`。
+fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool {
+    let mut edited = false;
+    let unit = |ui: &mut egui::Ui, v: &mut f32, lo: f32, hi: f32, speed: f64| -> bool {
+        ui.add(
+            egui::DragValue::new(v)
+                .range(lo..=hi)
+                .speed(speed)
+                .max_decimals(3),
+        )
+        .changed()
+    };
+    match node {
+        nodes::Node::Expression { text } => {
+            edited |= ui
+                .add(
+                    egui::TextEdit::multiline(text)
+                        .code_editor()
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY),
+                )
+                .changed();
+            match nodes::check(node) {
+                Some(e) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                }
+                None => {
+                    ui.weak(tr(lang, "v = this channel, r g b a, x y w h (0..1)"));
+                }
+            }
+            ui.weak(tr(
+                lang,
+                "One line for every channel, or lines like \"r: expr\".",
+            ))
+            .on_hover_text(expression_help(lang));
+        }
+        nodes::Node::Levels {
+            black,
+            white,
+            gamma,
+        } => {
+            egui::Grid::new("levels").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Black point"));
+                edited |= unit(ui, black, 0.0, 1.0, 0.002);
+                ui.end_row();
+                ui.label(tr(lang, "White point"));
+                edited |= unit(ui, white, 0.0, 1.0, 0.002);
+                ui.end_row();
+                ui.label(tr(lang, "Gamma"));
+                edited |= unit(ui, gamma, 0.05, 20.0, 0.01);
+                ui.end_row();
+            });
+        }
+        nodes::Node::Invert => {
+            ui.weak("1 − v");
+        }
+        nodes::Node::Mix { matrix } => {
+            ui.weak(tr(lang, "Output = matrix × (r, g, b)"));
+            egui::Grid::new("mix").num_columns(4).show(ui, |ui| {
+                ui.label("");
+                for c in ["r", "g", "b"] {
+                    ui.weak(c);
+                }
+                ui.end_row();
+                for (row, name) in matrix.iter_mut().zip(["r'", "g'", "b'"]) {
+                    ui.weak(name);
+                    for v in row {
+                        edited |= unit(ui, v, -4.0, 4.0, 0.01);
+                    }
+                    ui.end_row();
+                }
+            });
+        }
+    }
+    edited
+}
+
+fn expression_help(lang: Language) -> String {
+    let functions: Vec<&str> = crate::expr::function_names().collect();
+    format!(
+        "{}\n{}\n{}: {}",
+        tr(lang, "Variables: v (this channel), r, g, b, a, x, y (0..1), w, h (pixels). Constants: pi, e."),
+        tr(lang, "Operators: + - * / % ^, comparisons, && || !, cond ? a : b. Lines starting with # are comments."),
+        tr(lang, "Functions"),
+        functions.join(" ")
+    )
 }
 
 fn color_body(ui: &mut egui::Ui, lang: Language, node: Node, c: &Color) {
@@ -1076,12 +1450,37 @@ mod tests {
             .insert((Kind::Gray, Node::Voi), pos2(560.0, -20.0));
         view.positions
             .insert((Kind::Color, Node::Display), pos2(10.0, 5.0));
+        view.positions
+            .insert((Kind::Plain, Node::Stored), pos2(1.0, 2.0));
         let saved = view.node_positions();
         assert_eq!(saved["gray.voi"], [560.0, -20.0]);
+        assert_eq!(saved["plain.stored"], [1.0, 2.0]);
 
         let mut next = PipelineView::default();
         next.restore_node_positions(&saved);
         assert_eq!(next.positions, view.positions);
+    }
+
+    #[test]
+    fn chain_node_positions_are_not_remembered() {
+        let mut view = PipelineView::default();
+        view.positions
+            .insert((Kind::Plain, Node::Chain(0)), pos2(1.0, 2.0));
+        assert!(view.node_positions().is_empty());
+    }
+
+    #[test]
+    fn values_keep_file_stage_values_only_when_they_differ_from_the_file() {
+        let mut view = PipelineView {
+            loaded: Some(Loaded::Plain),
+            ..Default::default()
+        };
+        assert_eq!(view.values(), Some(Values::default()));
+        view.add_node("invert");
+        let values = view.values().unwrap();
+        assert_eq!((values.params, values.chain.len()), (None, 1));
+        view.loaded = Some(Loaded::Reading(std::sync::mpsc::channel().1));
+        assert_eq!(view.values(), None);
     }
 
     #[test]

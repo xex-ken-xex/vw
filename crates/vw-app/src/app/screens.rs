@@ -17,17 +17,18 @@ impl VwApp {
         }
     }
 
-    /// 画素の変換の図。アクティブなスロットの DICOM 画像を見せ、手で変えた値を表示に当てる。
+    /// 画素の変換の図。アクティブなスロットの画像を見せ、手で変えた値とノードを表示に当てる。
     pub(super) fn pipeline_ui(&mut self, ctx: &egui::Context) {
         if !self.pipeline.open {
             return;
         }
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown.as_ref().filter(|s| s.info.plugin == "DICOM")?;
+            let shown = slot.shown.as_ref()?;
             Some(crate::pipeline_view::Target {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
+                info: &shown.info,
                 marks: slot
                     .marks
                     .iter()
@@ -35,7 +36,7 @@ impl VwApp {
                     .map(|m| (m.x, m.y))
                     .collect(),
                 evaluation: Some((self.evaluation.report(), &self.settings.settings.quality)),
-                params: slot.derive.as_ref().map(|d| d.params),
+                values: slot.derive.as_ref().map(|d| &d.values),
                 preset: slot
                     .derive
                     .as_ref()
@@ -57,14 +58,9 @@ impl VwApp {
         use crate::pipeline_view::Command;
         for command in commands {
             let stored = match command {
-                Command::Edit { params, at_file } => {
+                Command::Edit(values) => {
                     if let Some(slot) = self.slots.get_mut(self.active) {
-                        crate::derive::edit(
-                            &mut slot.derive,
-                            params,
-                            at_file,
-                            self.presets.presets(),
-                        );
+                        crate::derive::edit(&mut slot.derive, values, self.presets.presets());
                     }
                     continue;
                 }
@@ -74,27 +70,27 @@ impl VwApp {
                     }
                     continue;
                 }
-                Command::SaveAs(name, params) => {
-                    let result = self.presets.put(&name, params);
+                Command::SaveAs(name, values) => {
+                    let result = self.presets.put(&name, values.clone());
                     if let (Ok(()), Some(slot)) = (&result, self.slots.get_mut(self.active)) {
-                        let d = slot
-                            .derive
-                            .get_or_insert_with(|| crate::derive::Derive::new(None, params));
+                        let d = slot.derive.get_or_insert_with(|| {
+                            crate::derive::Derive::new(None, values.clone())
+                        });
                         d.preset = Some(name.clone());
-                        d.params = params;
+                        d.values = values;
                         d.modified = false;
                     }
                     result.map(|()| format!("Pipeline saved as \"{name}\""))
                 }
-                Command::Overwrite(name, params) => {
-                    let result = self.presets.put(&name, params);
+                Command::Overwrite(name, values) => {
+                    let result = self.presets.put(&name, values.clone());
                     if let (Ok(()), Some(d)) = (
                         &result,
                         self.slots
                             .get_mut(self.active)
                             .and_then(|s| s.derive.as_mut()),
                     ) {
-                        d.params = params;
+                        d.values = values;
                         d.modified = false;
                     }
                     result.map(|()| format!("Pipeline \"{name}\" overwritten"))
@@ -181,7 +177,11 @@ impl VwApp {
             Some(crate::quality::Input {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
-                edited: slot.derive.as_ref().and_then(|d| d.edit_for(&shown.path)),
+                edited: slot
+                    .derive
+                    .as_ref()
+                    .and_then(|d| d.ready_for(shown))
+                    .map(|r| &r.full),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
                 // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
@@ -232,6 +232,11 @@ impl VwApp {
                     .as_ref()
                     .and_then(|d| d.edit_for(&shown.path))
                     .map(|(p, _)| p),
+                derived: slot
+                    .derive
+                    .as_ref()
+                    .and_then(|d| d.ready_for(shown))
+                    .map(|r| &r.full),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
             })
