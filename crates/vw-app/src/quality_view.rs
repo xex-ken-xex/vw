@@ -90,6 +90,8 @@ pub fn table(
             ui.spinner();
         }
     });
+    // 表の後ろに置くと、理由の列で広がった幅で折り返してウインドウからはみ出すので、表の前に置く。
+    ui.add(egui::Label::new(egui::RichText::new(tr(lang, MEASURED_ON)).weak()).wrap());
     egui::Grid::new("quality_table")
         .num_columns(5)
         .spacing([18.0, 4.0])
@@ -149,12 +151,11 @@ pub fn table(
             out = Some(Command::Copy(report.csv()));
         }
     });
-    ui.weak(tr(
-        lang,
-        "All values are measured on the display brightness (0 to 255).",
-    ));
     out
 }
+
+/// 測り方の断り。ROI の横の値（物理量）と食い違って見えるので、評価を出す所には必ず添える。
+const MEASURED_ON: &str = "All values are measured on the display brightness (0 to 255), because the after image exists only as display colors. They do not match the mean / SD shown on the ROI, which are file values such as HU.";
 
 /// 判定の帯。
 fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
@@ -168,7 +169,8 @@ fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
 /// 色導出のウインドウに出す 1 行。変更後（なければ変更前）の値と判定を並べる。
 pub fn summary(ui: &mut egui::Ui, lang: Language, report: Option<&Report>, thresholds: &Quality) {
     ui.horizontal(|ui| {
-        ui.weak(tr(lang, "Evaluation"));
+        ui.weak(tr(lang, "Evaluation"))
+            .on_hover_text(tr(lang, MEASURED_ON));
         let Some(report) = report else {
             ui.spinner();
             return;
@@ -187,6 +189,8 @@ pub fn summary(ui: &mut egui::Ui, lang: Language, report: Option<&Report>, thres
                 }
             }
         }
+        ui.weak(tr(lang, "(display brightness 0 to 255)"))
+            .on_hover_text(tr(lang, MEASURED_ON));
     });
 }
 
