@@ -54,6 +54,8 @@ struct View<'a> {
     peeks: &'a HashMap<PathBuf, Peek>,
     /// 右クリックの「送信 ▸」に並べる送信先の名前。
     destinations: &'a [String],
+    /// AI のモデルが全部揃っているか。
+    ai_ready: bool,
 }
 
 impl View<'_> {
@@ -473,13 +475,25 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
             *out = Some(TreeAction::OpenInFileManager(path.to_owned()));
             ui.close();
         }
-        if ui.button(tr(lang, "Add AI tags to this folder")).clicked() {
-            *out = Some(TreeAction::AiTagFolder(path.to_owned()));
-            ui.close();
-        }
-        if ui.button(tr(lang, "Find faces in this folder")).clicked() {
-            *out = Some(TreeAction::FindFaces(path.to_owned()));
-            ui.close();
+        let ai = [
+            (
+                "Add AI tags to this folder",
+                TreeAction::AiTagFolder(path.to_owned()),
+            ),
+            (
+                "Find faces in this folder",
+                TreeAction::FindFaces(path.to_owned()),
+            ),
+        ];
+        for (title, action) in ai {
+            if ui
+                .add_enabled(view.ai_ready, egui::Button::new(tr(lang, title)))
+                .on_disabled_hover_text(tr(lang, crate::ai_models::NOT_READY))
+                .clicked()
+            {
+                *out = Some(action);
+                ui.close();
+            }
         }
         ui.separator();
         // メニューを開いている間だけ確かめる。ツリーを描くたびに全フォルダで調べると、
@@ -644,6 +658,8 @@ pub struct Context<'a> {
     pub active_image: Option<&'a Path>,
     pub lang: Language,
     pub destinations: &'a [String],
+    /// AI のモデルが全部揃っているか。揃うまで AI の項目は押せない。
+    pub ai_ready: bool,
 }
 
 /// ツリーを描いた結果。
@@ -783,6 +799,7 @@ impl FolderTree {
             dicom_extensions: dicom_extensions(cx.registry),
             peeks: &peeker.known,
             destinations: cx.destinations,
+            ai_ready: cx.ai_ready,
         };
         let mut out = Out::default();
         for root in &mut self.roots {

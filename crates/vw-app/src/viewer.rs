@@ -260,6 +260,8 @@ pub struct SlotLook<'a> {
     pub faces: &'a [FaceMark],
     /// 顔の枠の右クリックの「この人物として登録 ▸」に並べる人物。
     pub people: &'a [String],
+    /// AI のモデルが全部揃っているか。揃うまで「AI タグを付ける」「顔を探す」は押せない。
+    pub ai_ready: bool,
 }
 
 /// 顔の枠の右クリックで選ばれた操作。番号は表示中の画像の枠の番号。
@@ -971,6 +973,7 @@ impl Slot {
             texture_options,
             faces,
             people,
+            ai_ready,
         } = look;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
@@ -1373,11 +1376,20 @@ impl Slot {
                     out.reference = true;
                     ui.close();
                 }
-                if ui.button(tr(lang, "Add AI tags")).clicked() {
+                let not_ready = tr(lang, crate::ai_models::NOT_READY);
+                if ui
+                    .add_enabled(ai_ready, egui::Button::new(tr(lang, "Add AI tags")))
+                    .on_disabled_hover_text(not_ready)
+                    .clicked()
+                {
                     out.ai_tag = true;
                     ui.close();
                 }
-                if ui.button(tr(lang, "Find faces")).clicked() {
+                if ui
+                    .add_enabled(ai_ready, egui::Button::new(tr(lang, "Find faces")))
+                    .on_disabled_hover_text(not_ready)
+                    .clicked()
+                {
                     out.find_faces = true;
                     ui.close();
                 }

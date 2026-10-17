@@ -88,6 +88,11 @@ impl VwApp {
                     chosen = Some(action);
                 }
             });
+            ui.menu_button(tr(lang, "AI tags"), |ui| {
+                if let Some(action) = self.ai_menu(ui) {
+                    chosen = Some(action);
+                }
+            });
             ui.menu_button(tr(lang, "Image"), |ui| {
                 let groups: [&[Action]; 5] = [
                     &[Action::PreviousImage, Action::NextImage],
@@ -113,10 +118,6 @@ impl VwApp {
                 }
             });
             ui.menu_button(tr(lang, "Help"), |ui| {
-                if self.menu_item(ui, Action::ShowAiModels, None) {
-                    chosen = Some(Action::ShowAiModels);
-                }
-                ui.separator();
                 if self.menu_item(ui, Action::ShowAbout, None) {
                     chosen = Some(Action::ShowAbout);
                 }
@@ -174,18 +175,28 @@ impl VwApp {
         if self.menu_item(ui, Action::TrashBadImages, None) {
             chosen = Some(Action::TrashBadImages);
         }
-        ui.separator();
-        for action in [
-            Action::AiTagFolder,
-            Action::FindFacesFolder,
-            Action::ShowPeople,
-        ] {
-            if self.menu_item(ui, action, None) {
+        chosen
+    }
+
+    /// AI tags メニュー。モデルが揃うまでは、タグ付けと顔探しを押せなくする。
+    fn ai_menu(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        let ready = self.ai_ready();
+        let mut chosen = None;
+        for action in [Action::AiTagFolder, Action::FindFacesFolder] {
+            if self.menu_item_if(ui, action, ready, crate::ai_models::NOT_READY) {
                 chosen = Some(action);
             }
         }
+        ui.separator();
+        if self.menu_item(ui, Action::ShowPeople, None) {
+            chosen = Some(Action::ShowPeople);
+        }
         if self.menu_item(ui, Action::ToggleFaceFrames, Some(self.show_faces)) {
             chosen = Some(Action::ToggleFaceFrames);
+        }
+        ui.separator();
+        if self.menu_item(ui, Action::ShowAiModels, None) {
+            chosen = Some(Action::ShowAiModels);
         }
         chosen
     }
@@ -250,6 +261,22 @@ impl VwApp {
         let button =
             egui::Button::new(text).shortcut_text(self.shortcut(action).unwrap_or_default());
         ui.add(button).clicked()
+    }
+
+    /// 押せないときは灰色にし、マウスを乗せると `why`（英語の原文）を出す項目。
+    pub(super) fn menu_item_if(
+        &self,
+        ui: &mut egui::Ui,
+        action: Action,
+        enabled: bool,
+        why: &'static str,
+    ) -> bool {
+        let title = tr(self.lang(), menu_title(action));
+        let button =
+            egui::Button::new(title).shortcut_text(self.shortcut(action).unwrap_or_default());
+        ui.add_enabled(enabled, button)
+            .on_disabled_hover_text(tr(self.lang(), why))
+            .clicked()
     }
 
     /// 左端の、アイコンが縦に並ぶ固定幅の列。

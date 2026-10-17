@@ -29,15 +29,6 @@ pub(super) enum Work {
     Faces,
 }
 
-impl Work {
-    fn needs(self) -> [Item; 2] {
-        match self {
-            Work::Tag => [Item::Runtime, Item::Tagger],
-            Work::Faces => [Item::Runtime, Item::Faces],
-        }
-    }
-}
-
 pub(super) enum Event {
     Tagged(PathBuf, Tags),
     Faces {
@@ -46,6 +37,8 @@ pub(super) enum Event {
         size: [usize; 2],
     },
     Failed(PathBuf, String),
+    /// モデルを読み込めなかった。どの画像も処理していない。
+    Unusable(String),
     Done,
 }
 
@@ -54,7 +47,15 @@ pub(super) struct Job {
     total: usize,
     done: Arc<AtomicUsize>,
     rx: Receiver<Event>,
+    /// 終わってからまとめてログに出すもの。
+    saved: usize,
+    faces: usize,
+    failed: Vec<(PathBuf, String)>,
 }
+
+/// 失敗した画像を 1 枚ずつログに出す上限。フォルダ全部が同じ理由で失敗したとき、
+/// ログがその行で埋まらないように。
+const FAILURES_SHOWN: usize = 5;
 
 impl Job {
     pub(super) fn progress(&self) -> (usize, usize) {
@@ -78,10 +79,8 @@ fn run(ctx: egui::Context, work: Work, r: Run) -> Receiver<Event> {
             let _ = tx.send(e);
             ctx.request_repaint();
         };
-        let fail_all = |e: String| {
-            for f in &r.files {
-                send(Event::Failed(f.clone(), e.clone()));
-            }
+        let unusable = |e: String| {
+            send(Event::Unusable(e));
             send(Event::Done);
         };
         let side = match work {
@@ -107,7 +106,7 @@ fn run(ctx: egui::Context, work: Work, r: Run) -> Receiver<Event> {
                         r.threads,
                     ) {
                         Ok(t) => *guard = Some(t),
-                        Err(e) => return fail_all(e),
+                        Err(e) => return unusable(e),
                     }
                 }
                 let tagger = guard.as_mut().expect("loaded above");
@@ -131,7 +130,7 @@ fn run(ctx: egui::Context, work: Work, r: Run) -> Receiver<Event> {
                         r.threads,
                     ) {
                         Ok(m) => *guard = Some(m),
-                        Err(e) => return fail_all(e),
+                        Err(e) => return unusable(e),
                     }
                 }
                 let models = guard.as_mut().expect("loaded above");
@@ -193,17 +192,10 @@ impl VwApp {
             ));
             return;
         };
-        let missing: Vec<_> = work
-            .needs()
-            .into_iter()
-            .filter(|&i| !store.has(i))
-            .collect();
-        if !missing.is_empty() {
-            let names: Vec<_> = missing.iter().map(|i| i.title()).collect();
-            self.log.error(format!(
-                "This needs {} (Help > AI models...)",
-                names.join(" and ")
-            ));
+        // 仕事に要るものだけでなく全部を求めるのは、ダウンロードを 1 回で済ませ、
+        // 後で別の機能を使うときに改めて待たせないため。
+        if !Item::ALL.iter().all(|&i| store.has(i)) {
+            self.log.error(tr(lang, ai_models::NOT_READY));
             self.ai_models.open = true;
             return;
         }
@@ -232,10 +224,10 @@ impl VwApp {
         match work {
             Work::Tag => self
                 .log
-                .info(format!("AI tagging {} image(s)", files.len())),
+                .info(format!("AI tagging {} image(s)…", files.len())),
             Work::Faces => self
                 .log
-                .info(format!("Finding faces in {} image(s)", files.len())),
+                .info(format!("Finding faces in {} image(s)…", files.len())),
         }
         let total = files.len();
         let rx = run(
@@ -255,7 +247,38 @@ impl VwApp {
             total,
             done,
             rx,
+            saved: 0,
+            faces: 0,
+            failed: Vec::new(),
         });
+    }
+
+    /// モデルが全部揃っているか。揃うまで、タグ付けと顔探しは押せない。
+    pub(super) fn ai_ready(&self) -> bool {
+        self.ai_store
+            .as_ref()
+            .is_some_and(|s| Item::ALL.iter().all(|&i| s.has(i)))
+    }
+
+    /// 終わった仕事を、ZIP の展開と同じく 1 行にまとめてログに出す。
+    fn log_ai_job(&mut self, job: &Job) {
+        let what = match job.work {
+            Work::Tag => format!("AI tags added to {} image(s)", job.saved),
+            Work::Faces => format!("Found {} face(s) in {} image(s)", job.faces, job.saved),
+        };
+        if job.failed.is_empty() {
+            self.log.info(what);
+            return;
+        }
+        self.log
+            .warn(format!("{what}, {} failed", job.failed.len()));
+        for (path, e) in job.failed.iter().take(FAILURES_SHOWN) {
+            self.log.error(format!("{}: {e}", path.display()));
+        }
+        if job.failed.len() > FAILURES_SHOWN {
+            self.log
+                .error(format!("… and {} more", job.failed.len() - FAILURES_SHOWN));
+        }
     }
 
     pub(super) fn ai_job_name(&self) -> &'static str {
@@ -292,7 +315,8 @@ impl VwApp {
         }
     }
 
-    fn save_faces(&mut self, path: PathBuf, found: Vec<Found>, size: [usize; 2]) {
+    /// 見つけた顔を書く。書けたら顔の数。
+    fn save_faces(&mut self, path: PathBuf, found: Vec<Found>, size: [usize; 2]) -> Option<usize> {
         let threshold = self.settings().ai.face_threshold;
         let marks: Vec<FaceMark> = found
             .iter()
@@ -315,53 +339,57 @@ impl VwApp {
             .collect();
         if let Err(e) = self.face_store.set(&path, samples) {
             self.log.error(format!("Cannot save faces: {e}"));
-            return;
+            return None;
         }
-        let names: Vec<String> = marks.iter().filter_map(|m| m.person.clone()).collect();
         let n = marks.len();
         match self.ai_tags.update(&path, |e| e.faces = marks) {
-            Err(e) => self.log.error(format!("Cannot save AI tags: {e}")),
-            Ok(()) if names.is_empty() => {
-                self.log.info(format!("{n} face(s): {}", path.display()));
+            Err(e) => {
+                self.log.error(format!("Cannot save AI tags: {e}"));
+                None
             }
-            Ok(()) => self.log.info(format!(
-                "{n} face(s) ({}): {}",
-                names.join(", "),
-                path.display()
-            )),
+            Ok(()) => Some(n),
         }
     }
 
     /// 毎フレーム：裏の仕事の結果を受け取り、ダウンロードの結果をログに出し、ウインドウを描く。
     pub(super) fn ai_ui(&mut self, ctx: &egui::Context) {
         let lang = self.lang();
-        if let Some(job) = &self.ai_job {
+        if let Some(mut job) = self.ai_job.take() {
             let mut finished = false;
+            let mut unusable = None;
             let events: Vec<Event> = job.rx.try_iter().collect();
             for event in events {
                 match event {
                     Event::Tagged(path, tags) => {
-                        let n = tags.general.len() + tags.characters.len();
                         let saved = self.ai_tags.update(&path, |e| {
                             e.model = ai_models::TAGGER_NAME.to_owned();
                             e.tags = tags;
                         });
                         match saved {
                             Err(e) => self.log.error(format!("Cannot save AI tags: {e}")),
-                            Ok(()) => self.log.info(format!("{} tag(s): {}", n, path.display())),
+                            Ok(()) => job.saved += 1,
                         }
                     }
-                    Event::Faces { path, found, size } => self.save_faces(path, found, size),
-                    Event::Failed(path, e) => {
-                        self.log
-                            .error(format!("AI failed for {}: {e}", path.display()));
+                    Event::Faces { path, found, size } => {
+                        if let Some(n) = self.save_faces(path, found, size) {
+                            job.saved += 1;
+                            job.faces += n;
+                        }
                     }
+                    Event::Failed(path, e) => job.failed.push((path, e)),
+                    Event::Unusable(e) => unusable = Some(e),
                     Event::Done => finished = true,
                 }
             }
+            if let Some(e) = unusable {
+                self.log.error(format!("Cannot load the AI models: {e}"));
+            } else if finished {
+                self.log_ai_job(&job);
+            }
             if finished {
-                self.ai_job = None;
                 self.start_next_ai_job(ctx);
+            } else {
+                self.ai_job = Some(job);
             }
         }
         for (item, result) in self.ai_models.finished() {

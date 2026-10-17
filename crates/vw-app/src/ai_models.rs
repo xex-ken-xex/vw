@@ -18,6 +18,8 @@ use crate::settings::Language;
 
 pub const RUNTIME_VERSION: &str = "1.29.0";
 pub const TAGGER_NAME: &str = "wd-vit-tagger-v3";
+/// モデルが揃う前に、タグ付けや顔探しの項目に出す説明（英語の原文）。
+pub const NOT_READY: &str = "Download all AI models first (AI tags > AI models...)";
 
 /// ダウンロードするもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

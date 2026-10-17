@@ -45,6 +45,10 @@ const JA: &[(&str, &str)] = &[
     ("AI models...", "AI のモデル..."),
     ("AI models", "AI のモデル"),
     ("AI tags", "AI タグ"),
+    (
+        "Download all AI models first (AI tags > AI models...)",
+        "先に「AI タグ」→「AI のモデル...」で、すべてのモデルをダウンロードしてください",
+    ),
     ("Add AI tags", "AI タグを付ける"),
     ("Add AI tags to this folder", "このフォルダに AI タグを付ける"),
     ("Models are stored in {}", "モデルの置き場: {}"),

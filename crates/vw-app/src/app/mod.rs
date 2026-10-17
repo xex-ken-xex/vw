@@ -1082,6 +1082,7 @@ impl eframe::App for VwApp {
                     // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
                     let active_image = self.active_image().map(|p| frames::file_of(&p));
                     let destinations = self.destination_names();
+                    let ai_ready = self.ai_ready();
                     let drawn = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
@@ -1094,6 +1095,7 @@ impl eframe::App for VwApp {
                                     active_image: active_image.as_deref(),
                                     lang,
                                     destinations: &destinations,
+                                    ai_ready,
                                 },
                             )
                         })

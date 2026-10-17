@@ -536,6 +536,7 @@ impl VwApp {
         let lang = self.lang();
         let hint = empty_slot_hint(self.current.is_some());
         let destinations = self.destination_names();
+        let ai_ready = self.ai_ready();
         let people = self.people.names();
         let mut send = None;
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
@@ -579,6 +580,7 @@ impl VwApp {
                     texture_options: self.texture_options,
                     faces: &faces,
                     people: &people,
+                    ai_ready,
                 },
             );
             if let Some(event) = resp.derive {
@@ -687,6 +689,7 @@ impl VwApp {
                         texture_options: self.texture_options,
                         faces: &[],
                         people: &[],
+                        ai_ready: false,
                     },
                 );
                 if resp.clicked {
