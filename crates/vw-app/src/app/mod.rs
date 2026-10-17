@@ -284,6 +284,8 @@ pub struct VwApp {
     password_prompt: Option<PasswordPrompt>,
     dataset_dialog: Option<crate::dataset_ui::DatasetDialog>,
     trash_job: Option<TrashJob>,
+    /// 裏で進めているドラッグでの移動・コピー。
+    transfer_jobs: Vec<crate::transfer::Job>,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
@@ -667,6 +669,7 @@ impl VwApp {
             password_prompt: None,
             dataset_dialog: None,
             trash_job: None,
+            transfer_jobs: Vec::new(),
         };
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
         // ファイルを開くのが目的なので、前回のフォルダには移らない。
@@ -1224,6 +1227,7 @@ impl eframe::App for VwApp {
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
         self.finish_trash_job();
+        self.finish_transfer_jobs();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);
         self.select_dropped_image();

@@ -78,7 +78,10 @@ struct Pending {
     progress: Arc<Count>,
 }
 
-/// 展開の進み具合（項目の数）。
+/// 展開の進み具合（展開後のバイト数）。`total` は目次を読み終えるまで 0。
+///
+/// 項目の数で数えないのは、数 GB のファイルが数個だけの ZIP だと、1 つ書き終えるまで
+/// 進み具合が 0 のまま動かず、止まって見えるため。
 #[derive(Default)]
 struct Count {
     done: AtomicUsize,
@@ -150,7 +153,8 @@ impl Archives {
         true
     }
 
-    /// 展開中のものの進み具合（済んだ項目, 全部の項目）。展開中のものがなければ `None`。
+    /// 展開中のものの進み具合（書いたバイト数, 全部のバイト数）。目次を読んでいる間は全部が 0。
+    /// 展開中のものがなければ `None`。
     pub fn progress(&self) -> Option<(usize, usize)> {
         if self.pending.is_empty() {
             return None;
@@ -249,11 +253,10 @@ fn extract(
     count: &Count,
 ) -> Result<usize, ArchiveError> {
     std::fs::create_dir_all(dir)?;
-    if let Some(n) = entry_count(archive, password) {
+    if let Some(n) = total_size(archive, password) {
         count.total.store(n, Ordering::Relaxed);
     }
     for_each_entry(archive, password, |relative, data| {
-        count.done.fetch_add(1, Ordering::Relaxed);
         let out = dir.join(relative);
         let Some(data) = data else {
             return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
@@ -263,21 +266,43 @@ fn extract(
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::File::create(&out));
         match target {
-            Ok(mut file) => copy_entry(data, &mut file),
+            Ok(mut file) => copy_entry(
+                &mut Counted {
+                    inner: data,
+                    count: &count.done,
+                },
+                &mut file,
+            ),
             Err(e) => Err(EntryError::Other(e.to_string())),
         }
     })
 }
 
-/// `archive` の項目（フォルダも含む）の数。進み具合を出すためだけに使うので、読めなければ `None`。
-fn entry_count(archive: &Path, password: Option<&str>) -> Option<usize> {
+/// 読んだバイト数を数えながら読む。
+struct Counted<'a> {
+    inner: &'a mut dyn std::io::Read,
+    count: &'a AtomicUsize,
+}
+
+impl std::io::Read for Counted<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count.fetch_add(n, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
+/// `archive` の中身を展開したときのバイト数の合計。進み具合を出すためだけに使うので、
+/// 読めなければ `None`。
+fn total_size(archive: &Path, password: Option<&str>) -> Option<usize> {
     let file = std::fs::File::open(archive).ok()?;
-    if let Ok(zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
-        return Some(zip.len());
+    if let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
+        let sizes = (0..zip.len()).filter_map(|i| zip.by_index_raw(i).ok().map(|e| e.size()));
+        return Some(sizes.sum::<u64>() as usize);
     }
     let key = password.map_or_else(sevenz_rust2::Password::empty, sevenz_rust2::Password::from);
     let reader = sevenz_rust2::ArchiveReader::open(archive, key).ok()?;
-    Some(reader.archive().files.len())
+    Some(reader.archive().files.iter().map(|f| f.size).sum::<u64>() as usize)
 }
 
 /// `archive`（ZIP か 7z）の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
@@ -598,15 +623,35 @@ mod tests {
     }
 
     #[test]
-    fn extracting_counts_every_entry_for_the_progress_line() {
+    fn extracting_counts_the_bytes_written_for_the_progress_line() {
         let tmp = TempDir::new();
-        let archive = tmp.path().join("photos.7z");
-        write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
-        let count = Count::default();
-        extract(&archive, &tmp.path().join("out"), None, &count).unwrap();
-        let total = count.total.load(Ordering::Relaxed);
-        assert!(total >= 2, "{total}");
-        assert_eq!(count.done.load(Ordering::Relaxed), total);
+        for (name, write) in [
+            (
+                "photos.7z",
+                write_7z as fn(&Path, &[(&str, &[u8])], Option<&str>),
+            ),
+            (
+                "photos.zip",
+                |p: &Path, e: &[(&str, &[u8])], _: Option<&str>| write_zip(p, e),
+            ),
+        ] {
+            let archive = tmp.path().join(name);
+            write(
+                &archive,
+                &[("a.png", b"AAAA"), ("sub/b.png", b"BBBBBB")],
+                None,
+            );
+            let count = Count::default();
+            extract(
+                &archive,
+                &tmp.path().join(name).with_extension("out"),
+                None,
+                &count,
+            )
+            .unwrap();
+            assert_eq!(count.total.load(Ordering::Relaxed), 10, "{name}");
+            assert_eq!(count.done.load(Ordering::Relaxed), 10, "{name}");
+        }
     }
 
     #[test]

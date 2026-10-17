@@ -10,7 +10,7 @@ use crate::discard::{self, TrashJob};
 use crate::export::{self, Filter, Matcher};
 use crate::i18n::{tr, tr1};
 use crate::labels::{Flag, Label};
-use crate::transfer::{Op, Transfer};
+use crate::transfer::{Job as TransferJob, Op, Transfer};
 use crate::viewer::DraggedFile;
 
 use super::*;
@@ -44,28 +44,41 @@ impl VwApp {
             return;
         }
         match op {
-            Op::Copy => self.run_transfer(&t),
+            Op::Copy => self.run_transfer(ctx, t),
             Op::Move => self.pending_move = Some(t),
         }
     }
 
-    pub(super) fn run_transfer(&mut self, t: &Transfer) {
-        let verb = match t.op {
-            Op::Move => "Moved",
-            Op::Copy => "Copied",
-        };
-        match t.run(&mut self.labels) {
-            Ok(done) => {
-                self.log.info(format!(
-                    "{verb} {} to {}",
-                    t.file.display(),
-                    done.dest.display()
-                ));
-                if let Some(e) = done.label_error {
-                    self.log.error(format!("Labels were not carried over: {e}"));
+    /// 移動・コピーを裏で始める。数 GB のファイルを写す間も画面を止めないため。
+    pub(super) fn run_transfer(&mut self, ctx: &egui::Context, t: Transfer) {
+        let ctx = ctx.clone();
+        self.transfer_jobs
+            .push(TransferJob::start(t, move || ctx.request_repaint()));
+    }
+
+    /// 移し終えたもののラベルを移し、結果をログに出す。
+    pub(super) fn finish_transfer_jobs(&mut self) {
+        let mut i = 0;
+        while i < self.transfer_jobs.len() {
+            let Some(result) = self.transfer_jobs[i].poll() else {
+                i += 1;
+                continue;
+            };
+            let t = self.transfer_jobs.remove(i).transfer;
+            let verb = match t.op {
+                Op::Move => "Moved",
+                Op::Copy => "Copied",
+            };
+            match result {
+                Ok(dest) => {
+                    self.log
+                        .info(format!("{verb} {} to {}", t.file.display(), dest.display()));
+                    if let Some(e) = t.carry_labels(&mut self.labels, &dest) {
+                        self.log.error(format!("Labels were not carried over: {e}"));
+                    }
                 }
+                Err(e) => self.log.error(format!("Cannot move or copy: {e}")),
             }
-            Err(e) => self.log.error(format!("Cannot move or copy: {e}")),
         }
     }
 
@@ -198,7 +211,7 @@ impl VwApp {
             return;
         };
         if let Some(t) = self.pending_move.take().filter(|_| yes) {
-            self.run_transfer(&t);
+            self.run_transfer(ctx, t);
         }
     }
 

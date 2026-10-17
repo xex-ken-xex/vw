@@ -13,7 +13,8 @@ use crate::settings::LogStyle;
 use super::*;
 
 impl VwApp {
-    /// ログ欄の見出しの右に、折り返し・見た目の切り替えとログファイルを開くボタンを出す。
+    /// ログ欄の見出しの右に、折り返し・見た目の切り替えとログファイル・フォルダを開くボタンと、
+    /// 裏で進めている処理（くるくると名前・割合）を出す。
     pub(super) fn log_header(&self, ui: &mut egui::Ui) -> Option<LogAction> {
         let lang = self.lang();
         let mut action = None;
@@ -70,6 +71,14 @@ impl VwApp {
                     action = Some(LogAction::Style(choice));
                 }
             }
+            // ターミナル風では状態の行に出ているので、普通の見た目のときだけ。
+            if style == LogStyle::Normal {
+                if let Some(summary) = self.activity_summary() {
+                    ui.add_space(8.0);
+                    ui.weak(summary);
+                    ui.spinner();
+                }
+            }
         });
         action
     }
@@ -84,10 +93,9 @@ impl VwApp {
         let jobs: Vec<status::Job> = self
             .jobs()
             .into_iter()
-            .map(|(name, done, total)| status::Job {
-                name: tr(lang, name),
-                done,
-                total,
+            .map(|job| status::Job {
+                name: tr(lang, job.name),
+                ..job
             })
             .collect();
         let busy = counts.waiting + counts.running > 0 || !jobs.is_empty();

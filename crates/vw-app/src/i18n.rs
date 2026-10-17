@@ -958,6 +958,7 @@ const JA: &[(&str, &str)] = &[
     ("Full-res", "フル解像度"),
     ("Idle", "待機中"),
     ("Extracting ZIP", "ZIP の展開"),
+    ("Moving or copying", "移動・コピー"),
     ("Dataset job", "データセット"),
     ("Exporting", "書き出し"),
     ("Open the log file", "ログファイルを開く"),
