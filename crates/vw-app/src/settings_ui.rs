@@ -35,11 +35,12 @@ enum Section {
     Log,
     Quality,
     Ai,
+    Map,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 14] = [
+    const ALL: [Section; 15] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -53,6 +54,7 @@ impl Section {
         Section::Log,
         Section::Quality,
         Section::Ai,
+        Section::Map,
         Section::Keys,
     ];
 
@@ -71,6 +73,7 @@ impl Section {
             Section::Log => "Log",
             Section::Quality => "Quality evaluation",
             Section::Ai => "AI tags",
+            Section::Map => "Map",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -86,7 +89,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 64] = [
+const ITEMS: [Item; 68] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -535,6 +538,34 @@ const ITEMS: [Item; 64] = [
         description: "Seconds to wait for a destination to connect and answer.",
         widget: send_timeout_widget,
     },
+    Item {
+        section: Section::Map,
+        key: "map.enabled",
+        title: "Use the map",
+        description: "Show the map window (View > Map) with the places where photos were taken. The map pictures are downloaded from the server below while the window is open, so this is off until you turn it on.",
+        widget: map_enabled_widget,
+    },
+    Item {
+        section: Section::Map,
+        key: "map.tile_url",
+        title: "Map picture URL",
+        description: "Where the map pictures (tiles) come from. {z}, {x} and {y} are replaced with the tile number. The default is the standard map of OpenStreetMap; follow the terms of the provider you use.",
+        widget: map_tile_url_widget,
+    },
+    Item {
+        section: Section::Map,
+        key: "map.attribution",
+        title: "Map credit",
+        description: "Credit shown at the bottom right of the map. Map providers require it to be visible.",
+        widget: map_attribution_widget,
+    },
+    Item {
+        section: Section::Map,
+        key: "map.attribution_url",
+        title: "Map credit link",
+        description: "Page opened by clicking the credit.",
+        widget: map_attribution_url_widget,
+    },
 ];
 
 /// AE タイトルの入力欄。正しくない間は赤枠にして設定に入れない（保存もしない）。
@@ -566,6 +597,72 @@ fn ae_title_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool
     }
     if !r.has_focus() && vw_dicom::net::valid_ae_title(&draft) {
         draft = s.dicom_send.ae_title.clone();
+    }
+    ui.data_mut(|d| d.insert_temp(id, draft));
+    changed
+}
+
+fn map_enabled_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.map.enabled, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn map_tile_url_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    checked_text(ui, "map.tile_url", &mut s.map.tile_url, 420.0, |t| {
+        crate::map_tiles::valid_template(t)
+    })
+}
+
+fn map_attribution_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    checked_text(ui, "map.attribution", &mut s.map.attribution, 320.0, |t| {
+        !t.trim().is_empty()
+    })
+}
+
+fn map_attribution_url_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    checked_text(
+        ui,
+        "map.attribution_url",
+        &mut s.map.attribution_url,
+        320.0,
+        |t| t.starts_with("https://") || t.starts_with("http://"),
+    )
+}
+
+/// 正しい値のときだけ設定に入れる入力欄（[`ae_title_widget`] と同じ考え方）。
+fn checked_text(
+    ui: &mut egui::Ui,
+    key: &str,
+    value: &mut String,
+    width: f32,
+    valid: impl Fn(&str) -> bool,
+) -> bool {
+    let id = ui.id().with((key, "draft"));
+    let mut draft = ui
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| value.clone());
+    let ok = valid(&draft);
+    let red = Color32::from_rgb(230, 80, 80);
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut draft)
+            .desired_width(width)
+            .text_color_opt((!ok).then_some(red)),
+    );
+    if !ok {
+        ui.painter().rect_stroke(
+            r.rect,
+            2.0,
+            egui::Stroke::new(1.0, red),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let mut changed = false;
+    if ok && draft != *value {
+        *value = draft.clone();
+        changed = true;
+    }
+    if !r.has_focus() && ok {
+        draft = value.clone();
     }
     ui.data_mut(|d| d.insert_temp(id, draft));
     changed

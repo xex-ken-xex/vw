@@ -62,6 +62,12 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleZoomMap, Some(zoom_map)) {
                     chosen = Some(Action::ToggleZoomMap);
                 }
+                if self.settings().map.enabled {
+                    let map = self.map.open;
+                    if self.menu_item(ui, Action::ToggleMap, Some(map)) {
+                        chosen = Some(Action::ToggleMap);
+                    }
+                }
                 ui.separator();
                 let maximized = self.maximized.is_some();
                 if self.menu_item(ui, Action::ToggleMaximize, Some(maximized)) {

@@ -79,6 +79,7 @@ pub enum Action {
     TogglePixelPipeline,
     ToggleHistogram,
     ToggleZoomMap,
+    ToggleMap,
     ShowAbout,
     ShowAiModels,
     AiTagFolder,
@@ -102,7 +103,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 75] = [
+    pub const ALL: [Action; 76] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -132,6 +133,7 @@ impl Action {
         Action::TogglePixelPipeline,
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
+        Action::ToggleMap,
         Action::ToggleTagging,
         Action::FlagGood,
         Action::FlagBad,
@@ -237,6 +239,7 @@ impl Action {
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
+            Action::ToggleMap => "toggle_map",
             Action::ShowAbout => "show_about",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
@@ -321,6 +324,7 @@ impl Action {
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
+            Action::ToggleMap => "Show/hide map",
             Action::ShowAbout => "About vw",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
@@ -496,6 +500,7 @@ impl Action {
             Action::TogglePixelPipeline => vec![],
             Action::ToggleHistogram => vec![],
             Action::ToggleZoomMap => vec![],
+            Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ShowAbout => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],

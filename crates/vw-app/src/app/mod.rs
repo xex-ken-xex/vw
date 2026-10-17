@@ -166,6 +166,7 @@ pub struct VwApp {
     pipeline: crate::pipeline_view::PipelineView,
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
+    map: crate::map_window::MapWindow,
     evaluation: crate::quality::Evaluation,
     /// 「評価の基準にする」で選んだスロットの画像。PSNR・SSIM をこれと比べる。
     quality_reference: Option<PathBuf>,
@@ -634,6 +635,12 @@ impl VwApp {
                 );
                 view
             },
+            map: {
+                let mut map = crate::map_window::MapWindow::default();
+                map.window =
+                    SubWindow::restored(saved.sub_windows.get("map").copied().unwrap_or_default());
+                map
+            },
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -773,6 +780,7 @@ impl VwApp {
             Action::TogglePixelPipeline => self.toggle_pipeline(),
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
+            Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
             Action::ShowAbout => self.about.open = true,
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
@@ -980,6 +988,7 @@ impl eframe::App for VwApp {
         self.pipeline_ui(&ctx);
         self.histogram_ui(&ctx);
         self.zoom_map_ui(&ctx);
+        self.map_ui(&ctx);
         self.ai_ui(&ctx);
         if let Some(e) = self.about.ui(&ctx, self.lang()) {
             self.log
@@ -1309,6 +1318,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::TogglePixelPipeline => "Pixel pipeline",
         Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
+        Action::ToggleMap => "Map",
         other => other.title(),
     }
 }

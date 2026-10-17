@@ -198,6 +198,7 @@ impl VwApp {
             sub_windows: [
                 ("histogram", self.histogram.window.saved()),
                 ("zoom_map", self.zoom_map.window.saved()),
+                ("map", self.map.window.saved()),
             ]
             .into_iter()
             .filter(|(_, saved)| saved.rect.is_some() || saved.on_top)
