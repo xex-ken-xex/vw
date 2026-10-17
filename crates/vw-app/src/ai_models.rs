@@ -293,6 +293,14 @@ fn fetch(agent: &ureq::Agent, url: &str, to: &Path, progress: &Progress) -> Resu
     file.flush().map_err(|e| format!("{}: {e}", to.display()))
 }
 
+fn is_zip(archive: &Path) -> Result<bool, String> {
+    let mut magic = [0u8; 2];
+    std::fs::File::open(archive)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .map_err(|e| format!("{}: {e}", archive.display()))?;
+    Ok(magic == *b"PK")
+}
+
 /// 書庫から `entry` で終わる 1 つのファイルを `target` に出す。
 fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
@@ -303,7 +311,8 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
     };
     let mut out =
         std::fs::File::create(target).map_err(|e| format!("{}: {e}", target.display()))?;
-    let found = if archive.extension().is_some_and(|e| e == "zip") {
+    // 拡張子では見分けない。落としている途中のファイルは .part なので、zip でも tgz に見えてしまう。
+    let found = if is_zip(archive)? {
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
         let index = (0..zip.len()).find(|&i| {
             zip.by_index(i)
@@ -543,5 +552,26 @@ mod tests {
         extract(&archive, "lib/libonnxruntime.so", &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"abc");
         assert!(extract(&archive, "lib/other.so", &dir.join("x")).is_err());
+    }
+
+    #[test]
+    fn extracts_the_dll_from_a_zip_whatever_the_file_is_named() {
+        let dir = std::env::temp_dir().join(format!("vw-extract-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("onnxruntime.part");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+            zip.start_file(
+                "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"dll").unwrap();
+            zip.finish().unwrap();
+        }
+        let target = dir.join("onnxruntime.dll");
+        extract(&archive, "lib/onnxruntime.dll", &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"dll");
     }
 }
