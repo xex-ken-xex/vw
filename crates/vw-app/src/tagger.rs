@@ -96,6 +96,25 @@ pub struct Tags {
     pub rating: Option<Scored>,
 }
 
+impl Tags {
+    /// 一般とキャラクターのタグから `names` を除く。除いたものがあれば true。
+    /// レーティングは 1 つしかなく、消すと「付けていない」と区別できなくなるので残す。
+    pub fn remove(&mut self, names: &[String]) -> bool {
+        let before = self.general.len() + self.characters.len();
+        self.general.retain(|t| !names.contains(&t.name));
+        self.characters.retain(|t| !names.contains(&t.name));
+        self.general.len() + self.characters.len() != before
+    }
+
+    /// 一般とキャラクターのタグの名前。
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.general
+            .iter()
+            .chain(&self.characters)
+            .map(|t| t.name.as_str())
+    }
+}
+
 /// 確信度の列からタグを選ぶ。一般とキャラクターは別のしきい値、レーティングは一番高いもの。
 pub fn pick(defs: &[TagDef], scores: &[f32], t: Thresholds) -> Tags {
     let mut tags = Tags::default();

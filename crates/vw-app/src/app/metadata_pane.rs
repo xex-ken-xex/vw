@@ -72,8 +72,14 @@ impl VwApp {
             file_rows.insert(1, row("Frame", format!("{} / {total}", i + 1)));
         }
         let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
-        if let Some(rows) = self.ai_tag_rows(&shown.path) {
-            groups.push((tr(lang, "AI tags").to_owned(), rows));
+        let ai_rows = self.ai_tag_rows(&shown.path);
+        self.meta_ai_tags = None;
+        if let Some(rows) = ai_rows {
+            let name = tr(lang, "AI tags").to_owned();
+            let (rows, tags): (Vec<_>, Vec<_>) =
+                rows.into_iter().map(|(k, v, t)| ((k, v), t)).unzip();
+            self.meta_ai_tags = Some((name.clone(), tags));
+            groups.push((name, rows));
         }
         groups.extend(
             group_metadata(&info.metadata.entries)
@@ -101,6 +107,8 @@ impl VwApp {
         let mut picked: Option<MetaSelection> = None;
         let mut copy: Option<MetaSelection> = None;
         let mut text_drag = false;
+        let mut tag_action = None;
+        let ai_tags = self.meta_ai_tags.clone();
         let selected = self.meta_selected.clone();
         let highlight = ui.visuals().selection.bg_fill;
         let widest_key = groups
@@ -178,11 +186,22 @@ impl VwApp {
                                 if value.drag_started() {
                                     text_drag = true;
                                 }
+                                let tag = ai_tags
+                                    .as_ref()
+                                    .filter(|(g, _)| g == group)
+                                    .and_then(|(_, tags)| tags.get(i).cloned().flatten());
                                 for r in [&key, &value] {
                                     r.context_menu(|ui| {
                                         if ui.button(tr(lang, "Copy")).clicked() {
                                             copy = Some(row_of(i));
                                             ui.close();
+                                        }
+                                        if let Some(tag) = &tag {
+                                            ui.separator();
+                                            if let Some(a) = tag_menu(ui, lang, tag) {
+                                                tag_action = Some(a);
+                                                ui.close();
+                                            }
                                         }
                                     });
                                 }
@@ -215,6 +234,15 @@ impl VwApp {
             self.meta_selected = Some(p);
             self.set_focus(&ctx, Focus::Metadata);
         }
+        if let Some(action) = tag_action {
+            let image = self
+                .metadata_slot()
+                .and_then(|i| self.slots[i].shown.as_ref())
+                .map(|s| s.path.clone());
+            if let Some(image) = image {
+                self.tag_action(&ctx, &image, action);
+            }
+        }
         if let Some(c) = copy {
             if let Some(text) = copy::metadata_text(&groups, &c) {
                 let what = selection_name(&c);
@@ -222,4 +250,27 @@ impl VwApp {
             }
         }
     }
+}
+
+/// AI タグの行の右クリックに足す項目。
+fn tag_menu(
+    ui: &mut egui::Ui,
+    lang: crate::settings::Language,
+    tag: &str,
+) -> Option<super::ai_tidy::TagAction> {
+    use super::ai_tidy::TagAction;
+    let items = [
+        (
+            "Remove this tag from this image",
+            TagAction::RemoveHere(tag.to_owned()),
+        ),
+        (
+            "Remove this tag from every image in this folder",
+            TagAction::RemoveInFolder(tag.to_owned()),
+        ),
+        ("Never add this tag...", TagAction::Exclude(tag.to_owned())),
+    ];
+    items
+        .into_iter()
+        .find_map(|(title, action)| ui.button(tr(lang, title)).clicked().then_some(action))
 }

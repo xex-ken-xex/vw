@@ -67,6 +67,7 @@ enum Command {
     Delete(String),
     Cover(String, usize),
     Reveal(PathBuf),
+    OpenSettingsFolder,
 }
 
 fn texture(ctx: &egui::Context, name: String, thumb: &[u8]) -> egui::TextureHandle {
@@ -288,7 +289,12 @@ impl VwApp {
                         ui.selectable_value(&mut w.size, size, tr(lang, size.title()));
                     }
                 });
-                ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
+                ui.horizontal(|ui| {
+                    ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
+                    if ui.small_button(tr(lang, "Open folder")).clicked() {
+                        command = Some(Command::OpenSettingsFolder);
+                    }
+                });
                 let shown = arrange(&people, &w.query, &counts, w.order);
                 let side = w.size.side();
                 egui::ScrollArea::vertical()
@@ -427,6 +433,15 @@ impl VwApp {
                 if let Some(dir) = path.parent() {
                     self.open_in_file_manager(dir);
                 }
+            }
+            Some(Command::OpenSettingsFolder) => {
+                let dir = self
+                    .settings
+                    .path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf);
+                self.open_settings_subfolder(dir);
             }
             None => {}
         }

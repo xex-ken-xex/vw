@@ -79,9 +79,6 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleDatasets, Some(self.show_datasets)) {
                     chosen = Some(Action::ToggleDatasets);
                 }
-                if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
-                    chosen = Some(Action::ToggleSettings);
-                }
             });
             ui.menu_button(tr(lang, "Labels"), |ui| {
                 if let Some(action) = self.labels_menu(ui) {
@@ -114,6 +111,17 @@ impl VwApp {
                         if self.menu_item(ui, action, None) {
                             chosen = Some(action);
                         }
+                    }
+                }
+            });
+            ui.menu_button(tr(lang, "Settings"), |ui| {
+                if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
+                    chosen = Some(Action::ToggleSettings);
+                }
+                ui.separator();
+                for action in [Action::OpenSettingsFolder, Action::OpenModelsFolder] {
+                    if self.menu_item(ui, action, None) {
+                        chosen = Some(action);
                     }
                 }
             });
@@ -187,8 +195,10 @@ impl VwApp {
                 chosen = Some(action);
             }
         }
-        if self.menu_item(ui, Action::RemoveAiTagsFolder, None) {
-            chosen = Some(Action::RemoveAiTagsFolder);
+        for action in [Action::TidyAiTags, Action::RemoveAiTagsFolder] {
+            if self.menu_item(ui, action, None) {
+                chosen = Some(action);
+            }
         }
         ui.separator();
         if self.menu_item(ui, Action::ShowPeople, None) {

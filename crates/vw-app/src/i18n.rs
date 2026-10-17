@@ -110,6 +110,32 @@ const JA: &[(&str, &str)] = &[
     ("Rename", "名前を変える"),
     ("Really delete", "本当に削除"),
     ("CPU threads used by the tagger. 0 lets ONNX Runtime decide.", "タグ付けに使う CPU スレッド数。0 なら ONNX Runtime に任せます。"),
+    ("Excluded tags", "付けないタグ"),
+    (
+        "Tags never added even when the tagger finds them, one per line. Right-click a tag in the metadata pane to add it here.",
+        "見つかっても付けないタグ。1 行に 1 つ。メタデータ欄のタグを右クリックしても足せます。",
+    ),
+    ("Tidy AI tags", "AI タグの整理"),
+    ("Tidy AI tags in this folder...", "このフォルダの AI タグを整理..."),
+    ("Search tags", "タグを探す"),
+    ("Clear selection", "選択を外す"),
+    ("{} tag(s) selected", "{} 個のタグを選択中"),
+    ("Remove from this folder", "このフォルダから消す"),
+    ("Remove and never add again", "消して今後も付けない"),
+    (
+        "Also adds them to Settings > AI tags > Excluded tags.",
+        "設定 → AI タグ → 付けないタグ にも入れます。",
+    ),
+    (
+        "\"{}\" will not be added from now on. Also remove it from the images in this folder?",
+        "「{}」は今後付けません。このフォルダの画像からも消すなら、選んだまま「このフォルダから消す」を押してください。",
+    ),
+    ("Remove this tag from this image", "このタグをこの画像から消す"),
+    (
+        "Remove this tag from every image in this folder",
+        "このタグをフォルダの全画像から消す",
+    ),
+    ("Never add this tag...", "このタグを今後付けない..."),
     (
         "THIRD-PARTY-LICENSES.txt is not next to vw (it comes with the release zip).",
         "vw と同じフォルダに THIRD-PARTY-LICENSES.txt がありません（配布の zip に入っています）。",
@@ -351,6 +377,9 @@ const JA: &[(&str, &str)] = &[
     ("Images", "画像"),
     ("Log", "ログ"),
     ("Settings", "設定"),
+    ("Settings screen", "設定画面"),
+    ("Open the settings folder", "設定フォルダを開く"),
+    ("Open the AI models folder", "AI モデルのフォルダを開く"),
     // パネル
     ("Folders", "フォルダ"),
     ("No image", "画像なし"),

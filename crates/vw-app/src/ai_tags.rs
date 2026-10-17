@@ -138,6 +138,41 @@ impl AiTagStore {
         Ok(removed)
     }
 
+    /// 画像の記録を書き換え、変わったものをフォルダごとに 1 回だけ書く。
+    /// `change` は変えたら true を返す。返すのは変わった画像の数。
+    pub fn edit_all(
+        &mut self,
+        paths: &[PathBuf],
+        mut change: impl FnMut(&mut Entry) -> bool,
+    ) -> Result<usize, String> {
+        let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
+        for p in paths {
+            if let Some((dir, name)) = split(p) {
+                by_dir.entry(dir).or_default().push(name);
+            }
+        }
+        let mut changed = 0;
+        for (dir, names) in by_dir {
+            self.with_dir(dir, |_| ());
+            let n = {
+                let mut dirs = self.dirs.borrow_mut();
+                let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
+                let mut n = 0;
+                for name in &names {
+                    if let Some(e) = files.get_mut(name) {
+                        n += usize::from(change(e));
+                    }
+                }
+                n
+            };
+            if n > 0 {
+                self.save(dir)?;
+                changed += n;
+            }
+        }
+        Ok(changed)
+    }
+
     pub fn forget(&self, dir: &Path) {
         self.dirs.borrow_mut().remove(dir);
     }
@@ -310,6 +345,23 @@ mod tests {
         assert!(AiTagStore::new(None).get(&b).is_some());
         assert_eq!(store.remove(&[a, b.clone()]).unwrap(), 1);
         assert!(!dir.join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn removing_a_tag_from_many_images_writes_each_folder_once() {
+        let dir = tempfile_dir();
+        let (a, b, c) = (dir.join("a.png"), dir.join("b.png"), dir.join("c.png"));
+        let mut store = AiTagStore::new(None);
+        store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
+        store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
+        let names = ["cat".to_owned()];
+        let n = store
+            .edit_all(&[a.clone(), b.clone(), c], |e| e.tags.remove(&names))
+            .unwrap();
+        assert_eq!(n, 1);
+        let again = AiTagStore::new(None);
+        assert!(again.get(&a).unwrap().tags.general.is_empty());
+        assert_eq!(again.get(&b).unwrap().tags.general[0].name, "dog");
     }
 
     fn tempfile_dir() -> PathBuf {

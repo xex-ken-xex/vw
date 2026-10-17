@@ -84,7 +84,10 @@ pub enum Action {
     AiTagFolder,
     FindFacesFolder,
     RemoveAiTagsFolder,
+    TidyAiTags,
     ShowPeople,
+    OpenSettingsFolder,
+    OpenModelsFolder,
     ToggleFaceFrames,
 }
 
@@ -98,7 +101,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 71] = [
+    pub const ALL: [Action; 74] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -162,7 +165,10 @@ impl Action {
         Action::AiTagFolder,
         Action::FindFacesFolder,
         Action::RemoveAiTagsFolder,
+        Action::TidyAiTags,
         Action::ShowPeople,
+        Action::OpenSettingsFolder,
+        Action::OpenModelsFolder,
         Action::ToggleFaceFrames,
         Action::FullscreenNext,
         Action::FullscreenPrevious,
@@ -234,6 +240,9 @@ impl Action {
             Action::AiTagFolder => "ai_tag_folder",
             Action::FindFacesFolder => "find_faces_folder",
             Action::RemoveAiTagsFolder => "remove_ai_tags_folder",
+            Action::TidyAiTags => "tidy_ai_tags",
+            Action::OpenSettingsFolder => "open_settings_folder",
+            Action::OpenModelsFolder => "open_models_folder",
             Action::ShowPeople => "show_people",
             Action::ToggleFaceFrames => "toggle_face_frames",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
@@ -314,6 +323,9 @@ impl Action {
             Action::AiTagFolder => "Add AI tags to this folder",
             Action::FindFacesFolder => "Find faces in this folder",
             Action::RemoveAiTagsFolder => "Remove AI tags from this folder...",
+            Action::TidyAiTags => "Tidy AI tags in this folder...",
+            Action::OpenSettingsFolder => "Open the settings folder",
+            Action::OpenModelsFolder => "Open the AI models folder",
             Action::ShowPeople => "People...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
@@ -480,6 +492,9 @@ impl Action {
             Action::AiTagFolder => vec![],
             Action::FindFacesFolder => vec![],
             Action::RemoveAiTagsFolder => vec![],
+            Action::TidyAiTags => vec![],
+            Action::OpenSettingsFolder => vec![],
+            Action::OpenModelsFolder => vec![],
             Action::ShowPeople => vec![],
             Action::ToggleFaceFrames => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],

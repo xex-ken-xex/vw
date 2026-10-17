@@ -37,6 +37,7 @@ use crate::watch::FolderWatcher;
 
 mod activity;
 mod ai_tagging;
+mod ai_tidy;
 mod clipboard;
 mod dataset_dialogs;
 mod export_dialog;
@@ -186,6 +187,10 @@ pub struct VwApp {
     people_window: people_ui::PeopleWindow,
     /// 消してよいか確かめている、フォルダと AI タグの記録がある画像。
     ai_remove: Option<(PathBuf, Vec<PathBuf>)>,
+    /// 「AI タグの整理」。
+    ai_tidy: Option<ai_tidy::TidyWindow>,
+    /// メタデータ欄の AI タグのグループ名と、その行ごとのタグ名（タグでない行は `None`）。
+    meta_ai_tags: Option<(String, Vec<Option<String>>)>,
     /// 顔の枠をスロットに描く。
     show_faces: bool,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
@@ -576,6 +581,8 @@ impl VwApp {
             face_store,
             people_window: Default::default(),
             ai_remove: None,
+            ai_tidy: None,
+            meta_ai_tags: None,
             show_faces: true,
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
@@ -748,6 +755,20 @@ impl VwApp {
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
             Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
+            Action::OpenSettingsFolder => {
+                let dir = self
+                    .settings
+                    .path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf);
+                self.open_settings_subfolder(dir);
+            }
+            Action::OpenModelsFolder => {
+                let dir = self.ai_store.as_ref().map(|s| s.dir.clone());
+                self.open_settings_subfolder(dir);
+            }
+            Action::TidyAiTags => self.tidy_current_folder(),
             Action::RemoveAiTagsFolder => match self.current.clone() {
                 Some(dir) => self.ask_remove_ai_tags(&dir),
                 None => self.log.warn("No folder is open"),
@@ -1242,7 +1263,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleMetadata => "Metadata",
         Action::ToggleImages => "Images",
         Action::ToggleLog => "Log",
-        Action::ToggleSettings => "Settings",
+        Action::ToggleSettings => "Settings screen",
         Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
         Action::TogglePixelPipeline => "Pixel pipeline",

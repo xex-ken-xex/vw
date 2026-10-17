@@ -82,7 +82,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 54] = [
+const ITEMS: [Item; 55] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -362,6 +362,13 @@ const ITEMS: [Item; 54] = [
         title: "Face match threshold",
         description: "Similarity (0 to 1) a face needs to be named as a registered person. Higher means fewer but surer matches.",
         widget: ai_face_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.excluded_tags",
+        title: "Excluded tags",
+        description: "Tags never added even when the tagger finds them, one per line. Right-click a tag in the metadata pane to add it here.",
+        widget: ai_excluded_widget,
     },
     Item {
         section: Section::Ai,
@@ -886,6 +893,36 @@ fn unit_widget(v: &mut f32, ui: &mut egui::Ui) -> bool {
             .fixed_decimals(2),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+/// 1 行に 1 つ。タグ名にはカンマを含むものがあるので、カンマ区切りにはしない。
+fn ai_excluded_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let id = ui.make_persistent_id("ai.excluded_tags.edit");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.ai.excluded_tags.join("\n"));
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .hint_text("watermark")
+            .desired_rows(3)
+            .desired_width(320.0),
+    );
+    let parsed: Vec<String> = text
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && parsed != s.ai.excluded_tags {
+            s.ai.excluded_tags = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
 }
 
 fn ai_threads_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {

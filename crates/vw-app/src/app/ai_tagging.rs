@@ -288,7 +288,7 @@ impl VwApp {
         }
     }
 
-    fn folder_images(&mut self, dir: &Path) -> Vec<PathBuf> {
+    pub(super) fn folder_images(&mut self, dir: &Path) -> Vec<PathBuf> {
         let registry = self.loader.registry().clone();
         let images = crate::tree::list_folder(dir, &registry, self.settings().tree.order()).images;
         if images.is_empty() {
@@ -360,7 +360,8 @@ impl VwApp {
             let events: Vec<Event> = job.rx.try_iter().collect();
             for event in events {
                 match event {
-                    Event::Tagged(path, tags) => {
+                    Event::Tagged(path, mut tags) => {
+                        tags.remove(&self.settings().ai.excluded_tags);
                         let saved = self.ai_tags.update(&path, |e| {
                             e.model = ai_models::TAGGER_NAME.to_owned();
                             e.tags = tags;
@@ -407,6 +408,7 @@ impl VwApp {
         self.ai_models.ui(ctx, lang, self.ai_store.as_ref());
         self.people_ui(ctx);
         self.remove_dialog(ctx);
+        self.ai_tidy_ui(ctx);
     }
 
     /// フォルダの AI タグを消してよいか聞く。記録がなければ、そう知らせるだけ。
@@ -472,40 +474,46 @@ impl VwApp {
         }
     }
 
-    /// メタデータ欄の「AI tags」の行。タグも顔もなければ `None`。
-    pub(super) fn ai_tag_rows(&self, path: &Path) -> Option<Vec<(String, String)>> {
+    /// メタデータ欄の「AI tags」の行と、行ごとのタグ名（消せるタグの行だけ）。タグも顔もなければ `None`。
+    pub(super) fn ai_tag_rows(&self, path: &Path) -> Option<Vec<(String, String, Option<String>)>> {
         let lang = self.lang();
         let file = crate::frames::file_of(path);
         let entry = self.ai_tags.get(&file)?;
         let mut rows = Vec::new();
         let people = entry.people();
         if !people.is_empty() {
-            rows.push((tr(lang, "People").to_owned(), people.join(", ")));
+            rows.push((tr(lang, "People").to_owned(), people.join(", "), None));
         }
         for (i, f) in entry.faces.iter().enumerate() {
             let who = match &f.person {
                 Some(name) => format!("{name} ({:.2})", f.similarity),
                 None => tr(lang, "Unknown").to_owned(),
             };
-            rows.push((format!("{} {}", tr(lang, "Face"), i + 1), who));
+            rows.push((format!("{} {}", tr(lang, "Face"), i + 1), who, None));
         }
         if let Some(r) = &entry.tags.rating {
             rows.push((
                 tr(lang, "Rating").to_owned(),
                 format!("{} ({:.2})", r.name, r.score),
+                None,
             ));
         }
         for c in &entry.tags.characters {
             rows.push((
                 tr(lang, "Character").to_owned(),
                 format!("{} ({:.2})", c.name, c.score),
+                Some(c.name.clone()),
             ));
         }
         for g in &entry.tags.general {
-            rows.push((g.name.clone(), format!("{:.2}", g.score)));
+            rows.push((
+                g.name.clone(),
+                format!("{:.2}", g.score),
+                Some(g.name.clone()),
+            ));
         }
         if !entry.model.is_empty() {
-            rows.push((tr(lang, "AI model").to_owned(), entry.model.clone()));
+            rows.push((tr(lang, "AI model").to_owned(), entry.model.clone(), None));
         }
         (!rows.is_empty()).then_some(rows)
     }

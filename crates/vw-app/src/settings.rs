@@ -892,6 +892,8 @@ pub struct Ai {
     pub threads: usize,
     /// 顔を登録済みの人物とみなすコサイン類似度の下限。
     pub face_threshold: f32,
+    /// 検出されても付けないタグ。
+    pub excluded_tags: Vec<String>,
 }
 
 impl Default for Ai {
@@ -903,6 +905,7 @@ impl Default for Ai {
             threads: 0,
             // SFace の作者が示す、同じ人とみなすコサイン類似度の目安。
             face_threshold: 0.363,
+            excluded_tags: Vec::new(),
         }
     }
 }
@@ -931,6 +934,7 @@ impl Ai {
             face_threshold: r
                 .get_valid("face_threshold", unit, "must be between 0 and 1")
                 .unwrap_or(d.face_threshold),
+            excluded_tags: r.get("excluded_tags").unwrap_or(d.excluded_tags),
         }
     }
 

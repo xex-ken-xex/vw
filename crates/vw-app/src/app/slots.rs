@@ -801,6 +801,19 @@ impl VwApp {
     ///
     /// 展開先そのものを開かないのは、そこが vw の一時フォルダで、消したり足したりしても
     /// ZIP には戻らず、vw を閉じれば消えてしまうため。
+    /// 設定フォルダやその下のフォルダを開く。まだなければ作ってから開く（初回は空のこともあるため）。
+    pub(super) fn open_settings_subfolder(&mut self, dir: Option<PathBuf>) {
+        let Some(dir) = dir else {
+            self.log.error("The settings folder is unknown");
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = crate::launch::open_folder(&dir) {
+            self.log
+                .error(format!("Cannot open {}: {e}", dir.display()));
+        }
+    }
+
     pub(super) fn open_in_file_manager(&mut self, dir: &Path) {
         let target = match self.archives.mount_of(dir) {
             Some(m) => m.zip.parent().unwrap_or(dir).to_path_buf(),
