@@ -1,0 +1,61 @@
+name: Geodata
+
+# 地図の地名の検索が使う、GeoNames の地名の表を作って Release に置く。
+# vw は決めておいたハッシュと合う表だけを使うので、作り直したら vw の側のハッシュも変える。
+# GeoNames は毎日更新されるが町の名前はほとんど変わらないので、必要なときに手で実行する。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release のタグ（例: geodata-1）'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the tag
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::main から実行してください（今は $GITHUB_REF）"; exit 1
+          fi
+          if ! [[ "$TAG" =~ ^geodata-[0-9]+$ ]]; then
+            echo "::error::タグは geodata-1 の形で入れてください（入力: $TAG）"; exit 1
+          fi
+      - name: Download GeoNames
+        run: |
+          mkdir geonames
+          cd geonames
+          for f in cities500.zip admin1CodesASCII.txt countryInfo.txt alternateNamesV2.zip; do
+            curl -fsSLO "https://download.geonames.org/export/dump/$f"
+          done
+          unzip -q cities500.zip
+          unzip -q alternateNamesV2.zip alternateNamesV2.txt
+      - name: Build the table
+        run: |
+          python3 tools/geodata/make_geodata.py geonames dist/vw-geonames.tsv.gz
+          cd dist
+          sha256sum vw-geonames.tsv.gz | tee SHA256SUMS.txt
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/vw-geonames.tsv.gz
+      # 「最新」の印は vw の正式版に残す（--latest=false）。
+      - name: Publish
+        run: |
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --latest=false \
+            --title "地名データ $TAG" \
+            --notes "vw の地図で地名を探すための表です。地名データ: GeoNames（https://www.geonames.org/）、CC BY 4.0。vw 用に必要な列だけを抜き出しています。"
