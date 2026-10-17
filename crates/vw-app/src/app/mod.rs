@@ -46,6 +46,7 @@ mod labeling;
 mod log_pane;
 mod menu;
 mod metadata_pane;
+mod people_graph_ui;
 mod people_ui;
 mod persist;
 mod playback;
@@ -185,6 +186,7 @@ pub struct VwApp {
     /// 見つけた顔の特徴（設定フォルダの faces）。
     face_store: crate::face_store::FaceStore,
     people_window: people_ui::PeopleWindow,
+    graph_window: people_graph_ui::GraphWindow,
     /// 消してよいか確かめている、フォルダと AI タグの記録がある画像。
     ai_remove: Option<(PathBuf, Vec<PathBuf>)>,
     /// 「AI タグの整理」。
@@ -581,6 +583,7 @@ impl VwApp {
             people,
             face_store,
             people_window: Default::default(),
+            graph_window: Default::default(),
             ai_remove: None,
             ai_tidy: None,
             meta_ai_tags: None,
@@ -776,6 +779,7 @@ impl VwApp {
                 None => self.log.warn("No folder is open"),
             },
             Action::ShowPeople => self.people_window.open = true,
+            Action::ShowPeopleGraph => self.graph_window.open = true,
             Action::ToggleFaceFrames => self.show_faces = !self.show_faces,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),

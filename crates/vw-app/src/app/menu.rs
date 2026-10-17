@@ -201,8 +201,10 @@ impl VwApp {
             }
         }
         ui.separator();
-        if self.menu_item(ui, Action::ShowPeople, None) {
-            chosen = Some(Action::ShowPeople);
+        for action in [Action::ShowPeople, Action::ShowPeopleGraph] {
+            if self.menu_item(ui, action, None) {
+                chosen = Some(action);
+            }
         }
         if self.menu_item(ui, Action::ToggleFaceFrames, Some(self.show_faces)) {
             chosen = Some(Action::ToggleFaceFrames);

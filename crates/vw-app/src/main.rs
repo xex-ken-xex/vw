@@ -43,6 +43,7 @@ mod log;
 mod memory;
 mod nodes;
 mod people;
+mod people_graph;
 mod pipeline_view;
 mod pipelines;
 mod pixel_pipeline;

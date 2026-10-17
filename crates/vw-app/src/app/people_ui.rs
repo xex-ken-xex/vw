@@ -41,6 +41,10 @@ pub(super) struct PeopleWindow {
     /// 人物ごとの写っている画像の枚数。顔や人物が変わったら `None` にして数え直す。
     /// 未登録の顔のまとまりも、これが `None` になったときに作り直す。
     pub counts: Option<HashMap<String, usize>>,
+    /// 2 人が同じ画像に写った枚数（相関図の線の太さ）。`counts` と一緒に作り直す。
+    pub together: Option<HashMap<(String, String), usize>>,
+    /// 一覧を絞り込む相関図の名前。
+    chart: Option<String>,
     tab: Tab,
     /// 名前のない顔の、似たものどうしのまとまり。
     unknown: Vec<Vec<(FaceRef, Sample)>>,
@@ -96,6 +100,7 @@ enum Command {
     NameFaces(Vec<FaceRef>, String),
     HideFaces(Vec<FaceRef>),
     Split(FaceRef),
+    OpenCharts,
 }
 
 fn texture(ctx: &egui::Context, name: String, thumb: &[u8]) -> egui::TextureHandle {
@@ -352,14 +357,21 @@ impl VwApp {
             return;
         }
         let lang = self.lang();
-        if self.people_window.counts.is_none() {
-            self.people_window.counts = Some(self.people_image_counts());
-            self.people_window.unknown = self.unknown_groups();
-            self.people_window.unknown_thumbs.clear();
-        }
+        self.refresh_face_counts();
         let mut open = true;
         let mut command = None;
         let people = self.people.list.clone();
+        let graphs: Vec<(String, Vec<String>)> = self
+            .people
+            .graphs
+            .iter()
+            .map(|g| {
+                (
+                    g.name.clone(),
+                    g.members.iter().map(|m| m.name.clone()).collect(),
+                )
+            })
+            .collect();
         let w = &mut self.people_window;
         let counts = w.counts.clone().unwrap_or_default();
         egui::Window::new(tr(lang, "People"))
@@ -406,12 +418,41 @@ impl VwApp {
                     }
                 });
                 ui.horizontal(|ui| {
+                    if w.chart.as_ref().is_some_and(|c| !graphs.iter().any(|(n, _)| n == c)) {
+                        w.chart = None;
+                    }
+                    let all = tr(lang, "All people");
+                    egui::ComboBox::from_id_salt("people_chart")
+                        .selected_text(w.chart.clone().unwrap_or_else(|| all.to_owned()))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut w.chart, None, all);
+                            for (name, _) in &graphs {
+                                ui.selectable_value(&mut w.chart, Some(name.clone()), name);
+                            }
+                        })
+                        .response
+                        .on_hover_text(tr(lang, "Show only the people in a relationship chart"));
+                    if ui.button(tr(lang, "Relationship charts...")).clicked() {
+                        command = Some(Command::OpenCharts);
+                    }
+                });
+                ui.horizontal(|ui| {
                     ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
                     if ui.small_button(tr(lang, "Open folder")).clicked() {
                         command = Some(Command::OpenSettingsFolder);
                     }
                 });
-                let shown = arrange(&people, &w.query, &counts, w.order);
+                let members = w
+                    .chart
+                    .as_ref()
+                    .and_then(|c| graphs.iter().find(|(n, _)| n == c))
+                    .map(|(_, m)| m);
+                let in_chart: Vec<Person> = people
+                    .iter()
+                    .filter(|p| members.is_none_or(|m| m.contains(&p.name)))
+                    .cloned()
+                    .collect();
+                let shown = arrange(&in_chart, &w.query, &counts, w.order);
                 let side = w.size.side();
                 egui::ScrollArea::vertical()
                     .id_salt("people_cards")
@@ -557,6 +598,7 @@ impl VwApp {
                 self.assign_faces(&faces, &name);
             }
             Some(Command::HideFaces(faces)) => self.hide_faces(&faces),
+            Some(Command::OpenCharts) => self.graph_window.open = true,
             Some(Command::Split(face)) => {
                 self.people_window.split.insert(face);
                 self.people_window.counts = None;
@@ -574,18 +616,28 @@ impl VwApp {
         }
     }
 
-    /// 人物ごとの写っている画像の枚数。顔の記録があるすべての画像の枠から数える。
-    fn people_image_counts(&self) -> HashMap<String, usize> {
+    /// 顔や人物が変わった後（`counts` が `None`）なら、人物ごとの画像の枚数、
+    /// 2 人が一緒に写った枚数、未登録の顔のまとまりを、記録してあるすべての顔の枠から作り直す。
+    pub(super) fn refresh_face_counts(&mut self) {
+        if self.people_window.counts.is_some() {
+            return;
+        }
         let marks: Vec<Vec<crate::faces::FaceMark>> = self
             .face_store
             .all()
             .into_iter()
             .map(|(image, _)| self.ai_tags.faces(&image))
             .collect();
-        image_counts(marks.iter().map(Vec::as_slice))
+        let w = &mut self.people_window;
+        w.counts = Some(image_counts(marks.iter().map(Vec::as_slice)));
+        w.together = Some(crate::people_graph::together(
+            marks.iter().map(Vec::as_slice),
+        ));
+        self.people_window.unknown = self.unknown_groups();
+        self.people_window.unknown_thumbs.clear();
     }
 
-    fn save_people(&mut self) {
+    pub(super) fn save_people(&mut self) {
         if let Err(e) = self.people.save() {
             self.log.error(format!("Cannot save people: {e}"));
         }
