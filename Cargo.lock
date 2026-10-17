@@ -4030,6 +4030,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "sha1",
+ "sha2",
  "tar",
  "toml 1.1.8+spec-1.1.0",
  "trash",
