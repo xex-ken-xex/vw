@@ -11,6 +11,7 @@ use std::time::Duration;
 use eframe::egui;
 use vw_core::Registry;
 
+use crate::ai_tags::AiTagStore;
 use crate::catalog::{self, Catalog, Info, Progress, Report};
 use crate::dataset_extract;
 use crate::dataset_search::Index;
@@ -64,6 +65,8 @@ pub struct DatasetDialog {
     hits: Option<Vec<String>>,
     /// 当たったファイルだけを取り出すか。
     only_hits: bool,
+    /// AI タグをフォルダに書けなかったときの置き場所。
+    ai_tag_fallback: Option<PathBuf>,
 }
 
 /// 別スレッドでの処理の結果。
@@ -99,6 +102,7 @@ impl DatasetDialog {
         fields: &[String],
         known: Option<&Index>,
         extract_base: &Path,
+        ai_tag_fallback: Option<&Path>,
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
@@ -125,6 +129,7 @@ impl DatasetDialog {
             outer: None,
             only_hits: hits.is_some(),
             hits,
+            ai_tag_fallback: ai_tag_fallback.map(Path::to_path_buf),
             dir,
             kind,
         };
@@ -230,6 +235,7 @@ impl DatasetDialog {
             _ => self.previous.clone(),
         };
         let registry = registry.clone();
+        let ai_tag_fallback = self.ai_tag_fallback.clone();
         let worker_progress = progress.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -245,12 +251,14 @@ impl DatasetDialog {
                 repaint.request_repaint();
                 answer.recv().ok().flatten()
             };
+            // 画面のスレッドの AiTagStore は RefCell を持ち別のスレッドへ渡せないので、同じファイルを読むものをここで作る。
+            let ai_tags = AiTagStore::new(ai_tag_fallback);
             let outcome = match (kind, &previous) {
                 (Kind::Extract, Some(source)) => dataset_extract::extract(
                     &dir,
                     source,
                     &dest,
-                    register.then_some((info, &registry)),
+                    register.then_some((info, &registry, &ai_tags)),
                     &worker_progress,
                     &mut ask_password,
                 )
@@ -260,6 +268,7 @@ impl DatasetDialog {
                     info,
                     previous.as_ref(),
                     &registry,
+                    &ai_tags,
                     &worker_progress,
                     &mut ask_password,
                 )

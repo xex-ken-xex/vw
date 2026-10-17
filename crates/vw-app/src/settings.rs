@@ -684,6 +684,10 @@ impl Default for Dataset {
                 group("Patient", &["PatientID", "PatientName", "PatientBirthDate"]),
                 group("Study", &["StudyDate", "Modality", "StudyDescription"]),
                 group("Series", &["Modality", "SeriesNumber", "SeriesDescription"]),
+                group(
+                    "AI tags",
+                    &["ai tags:person", "ai tags:character", "ai tags:tag"],
+                ),
             ],
         }
     }
