@@ -226,6 +226,10 @@ impl VwApp {
             return;
         };
         let lang = self.lang();
+        // 地図の上では地図が印と説明を出す。ここで出すと、メインのウインドウの端に押し込まれる。
+        if self.map.drop_hover.is_some() {
+            return;
+        }
         let (icon, verb) = if self.drag_copy {
             (icon::COPY, tr(lang, "Copy"))
         } else {

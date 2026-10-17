@@ -4,6 +4,7 @@
 //! フォルダ自身にはラベルを付けない。フォルダのフラグと中の画像のフラグが食い違うと、
 //! どの画像が絞り込みに残るのか分かりにくくなるため。
 //! 画像ファイルには書き込まない。DICOM や RAW を書き換えたくないため。
+//! 地図で置いた撮影地点も、EXIF を書き換えずにここに持つ（同じ理由）。
 //! 設定フォルダの 1 つのデータベースにしないのは、フォルダを移動・コピーしたときにラベルを
 //! 一緒に持っていけるようにするため。書き込めないフォルダ（読み取り専用のメディアなど）の
 //! ラベルだけは設定フォルダの下に置く。
@@ -27,17 +28,26 @@ pub enum Flag {
     Bad,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 地図で置いた撮影地点。EXIF の位置より優先する。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Position {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Label {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag: Option<Flag>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub tags: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Position>,
 }
 
 impl Label {
     pub fn is_empty(&self) -> bool {
-        self.flag.is_none() && self.tags.is_empty()
+        self.flag.is_none() && self.tags.is_empty() && self.position.is_none()
     }
 }
 
@@ -82,6 +92,11 @@ impl LabelStore {
         }
     }
 
+    /// フォルダに書けないときの置き場所。別のスレッドで同じラベルを読むときに使う。
+    pub fn fallback_dir(&self) -> Option<&Path> {
+        self.fallback_dir.as_deref()
+    }
+
     /// 画像のラベル。
     pub fn get(&self, path: &Path) -> Label {
         let (Some(dir), Some(name)) = (path.parent(), file_key(path)) else {
@@ -109,6 +124,17 @@ impl LabelStore {
                 label.tags.insert(tag.to_owned());
             }
             added
+        })
+    }
+
+    /// 地図で置いた撮影地点を `position` にする（`None` なら消す）。前の位置を返す。
+    pub fn set_position(
+        &mut self,
+        path: &Path,
+        position: Option<Position>,
+    ) -> Result<Option<Position>, String> {
+        self.edit_file(path, |label| {
+            std::mem::replace(&mut label.position, position)
         })
     }
 
@@ -219,6 +245,20 @@ impl LabelStore {
     }
 }
 
+/// 地図で置いた位置が、どこから来たかを示すメタデータの名前と値。
+pub const POSITION_FROM: &str = "Position from";
+pub const FROM_MAP: &str = "Map";
+
+/// メタデータの撮影地点を、地図で置いた位置に置き換える。高度は EXIF の位置のものなので消す。
+pub fn apply_position(m: &mut vw_core::Metadata, p: Position) {
+    let location = vw_core::exif::LOCATION;
+    m.entries.retain(|(group, _, _)| group != location);
+    if let Some(gps) = vw_core::exif::Gps::new(p.latitude, p.longitude, None) {
+        gps.push_to(m);
+        m.push(location, POSITION_FROM, FROM_MAP.to_owned());
+    }
+}
+
 /// フラグのアイコン。
 pub fn flag_icon(flag: Flag) -> &'static str {
     match flag {
@@ -316,6 +356,55 @@ mod tests {
         assert_eq!(store.toggle_tag(&img, "cat"), Ok(false));
         let tags: Vec<_> = store.get(&img).tags.into_iter().collect();
         assert_eq!(tags, ["dog"]);
+    }
+
+    #[test]
+    fn placed_position_is_saved_and_returns_the_previous_one() {
+        let dir = TempDir::new();
+        let img = dir.touch("a.png");
+        let mut store = LabelStore::new(None);
+        let sapporo = Position {
+            latitude: 43.0621,
+            longitude: 141.3544,
+        };
+        assert_eq!(store.set_position(&img, Some(sapporo)), Ok(None));
+        assert_eq!(LabelStore::new(None).get(&img).position, Some(sapporo));
+        assert_eq!(store.set_position(&img, None), Ok(Some(sapporo)));
+        assert!(!dir.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn position_alone_keeps_the_label() {
+        let label = Label {
+            position: Some(Position {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            ..Default::default()
+        };
+        assert!(!label.is_empty());
+    }
+
+    #[test]
+    fn placed_position_replaces_the_exif_one_in_the_metadata() {
+        let mut m = vw_core::Metadata::default();
+        vw_core::exif::Gps::new(35.0, 139.0, Some(10.0))
+            .unwrap()
+            .push_to(&mut m);
+        apply_position(
+            &mut m,
+            Position {
+                latitude: 43.0621,
+                longitude: 141.3544,
+            },
+        );
+        let gps = vw_core::exif::Gps::from_metadata(&m).unwrap();
+        assert!((gps.latitude - 43.0621).abs() < 1e-6);
+        assert_eq!(m.get(vw_core::exif::LOCATION, "Altitude"), None);
+        assert_eq!(
+            m.get(vw_core::exif::LOCATION, POSITION_FROM),
+            Some(FROM_MAP)
+        );
     }
 
     #[test]

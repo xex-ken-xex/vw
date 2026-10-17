@@ -26,6 +26,7 @@ impl VwApp {
             self.datasets.index(),
             &self.extract_base(),
             self.ai_tags.fallback_dir(),
+            self.labels.fallback_dir(),
             self.loader.registry(),
             ctx,
         ));

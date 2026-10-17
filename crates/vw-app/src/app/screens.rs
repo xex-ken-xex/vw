@@ -304,6 +304,7 @@ impl VwApp {
     /// 地図のウインドウ。点から開いた画像は、そのフォルダへ移って選ぶ。
     pub(super) fn map_ui(&mut self, ctx: &egui::Context) {
         self.keep_place_names(ctx);
+        self.drop_on_map(ctx);
         let settings = &self.settings.settings;
         if !settings.map.enabled {
             self.map.open = false;
@@ -324,6 +325,7 @@ impl VwApp {
             order: settings.tree.order(),
             cache: cache.as_deref(),
             places: self.place_names.as_deref(),
+            labels: &self.labels,
         };
         let commands = self.map.ui(ctx, &inputs);
         for problem in self.map.take_problems() {
@@ -342,6 +344,10 @@ impl VwApp {
                     self.select_when_loaded = Some(path);
                 }
                 crate::map_window::Command::ShowDownloads => self.ai_models.open = true,
+                crate::map_window::Command::ClearPosition(path) => {
+                    self.set_position(&path, None, true)
+                }
+                crate::map_window::Command::Undo => self.undo_position(),
             }
         }
     }

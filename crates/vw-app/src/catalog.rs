@@ -15,6 +15,7 @@ use vw_core::{Metadata, Registry};
 
 use crate::ai_tags::{self, AiTagStore};
 use crate::archive::{self, ArchiveError, EntryError};
+use crate::labels::{self, LabelStore, Position};
 
 pub const FILE_NAME: &str = "vw-search-catalog.json";
 const FORMAT: u32 = 1;
@@ -180,16 +181,19 @@ pub struct Report {
 /// 作った日時を引き継ぎ、ファイルの増減を数える。暗号化されたアーカイブは `ask_password` で
 /// パスワードを聞き（`true` なら前に聞いたものが違った）、`None` ならそのアーカイブを飛ばす。
 /// `ai_tags` に記録のある画像は、AI タグと写っている人物も組にする。
+/// `labels` で地図に置いた位置がある画像は、EXIF の位置の代わりにそれを入れる。
 ///
 /// 前のカタログのうち変わっていないファイルの組を使い回さず、全ファイルを読み直す。
 /// 組はデータセット全体で 1 つずつしか持たないので、消えたファイルの組だけを除くことが
 /// できないため。
+#[allow(clippy::too_many_arguments)]
 pub fn scan(
     dir: &Path,
     info: Info,
     previous: Option<&Catalog>,
     registry: &Registry,
     ai_tags: &AiTagStore,
+    labels: &LabelStore,
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<Report, String> {
@@ -220,7 +224,7 @@ pub fn scan(
             match std::fs::read(path) {
                 Ok(data) => {
                     let size = data.len() as u64;
-                    match triples(registry, path, &data) {
+                    match triples(registry, path, &data, labels.get(path).position) {
                         Ok(mut t) => {
                             if let Some(entry) = ai_tags.get(path) {
                                 t.extend(ai_triples(&entry));
@@ -317,7 +321,7 @@ fn scan_archive(
             let mut bytes = Vec::new();
             data.read_to_end(&mut bytes).map_err(EntryError::Read)?;
             let name = format!("{relative}{IN_ARCHIVE}{}", slash_path(inner));
-            if let Ok(t) = triples(registry, inner, &bytes) {
+            if let Ok(t) = triples(registry, inner, &bytes, None) {
                 found.push((name, bytes.len() as u64, t));
             } else if registry.supports_path(inner) {
                 // 中身で判定するだけのファイル（拡張子のないものなど）は、画像でなくても問題にしない。
@@ -360,10 +364,18 @@ fn scan_archive(
 }
 
 /// 1 ファイルのメタデータを組にする。
-fn triples(registry: &Registry, path: &Path, data: &[u8]) -> Result<Vec<Triple>, String> {
-    let (metadata, plugin) = registry
+fn triples(
+    registry: &Registry,
+    path: &Path,
+    data: &[u8],
+    placed: Option<Position>,
+) -> Result<Vec<Triple>, String> {
+    let (mut metadata, plugin) = registry
         .read_all_metadata_bytes(path, data)
         .map_err(|e| e.to_string())?;
+    if let Some(p) = placed {
+        labels::apply_position(&mut metadata, p);
+    }
     let mut out: Vec<Triple> = basics(plugin, &metadata)
         .into_iter()
         .map(|(k, v)| ("image".to_owned(), k.to_owned(), v))
@@ -555,6 +567,7 @@ mod tests {
             previous,
             &png_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &Progress::default(),
             &mut no_password,
         )
@@ -630,6 +643,7 @@ mod tests {
             None,
             &all_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &Progress::default(),
             &mut no_password,
         )
@@ -637,6 +651,40 @@ mod tests {
         let c = &report.catalog;
         assert_eq!(values_of(c, "IM0001", "dicom", "0010,0010"), ["Doe^Jane"]);
         assert_eq!(values_of(c, "IM0001", "image", "width"), ["2"]);
+    }
+
+    #[test]
+    fn position_placed_on_the_map_is_stored_for_searching() {
+        let tmp = TempDir::new();
+        let image = tmp.path().join("a.png");
+        write_png(&image, 1, 1, &[0; 3]);
+        let mut labels = LabelStore::new(None);
+        labels
+            .set_position(
+                &image,
+                Some(Position {
+                    latitude: 43.0621,
+                    longitude: 141.3544,
+                }),
+            )
+            .unwrap();
+        let report = scan(
+            tmp.path(),
+            Info::default(),
+            None,
+            &png_registry(),
+            &AiTagStore::new(None),
+            &labels,
+            &Progress::default(),
+            &mut no_password,
+        )
+        .unwrap();
+        let c = &report.catalog;
+        assert_eq!(values_of(c, "a.png", "location", "Latitude"), ["43.062100"]);
+        assert_eq!(
+            values_of(c, "a.png", "location", labels::POSITION_FROM),
+            [labels::FROM_MAP]
+        );
     }
 
     #[test]
@@ -676,6 +724,7 @@ mod tests {
             None,
             &png_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &Progress::default(),
             &mut no_password,
         )
@@ -729,6 +778,7 @@ mod tests {
             None,
             &png_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &Progress::default(),
             &mut answer,
         )
@@ -819,6 +869,7 @@ mod tests {
             None,
             &png_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &progress,
             &mut no_password,
         );

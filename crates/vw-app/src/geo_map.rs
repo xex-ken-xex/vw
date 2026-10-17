@@ -22,7 +22,6 @@ pub fn project(latitude: f64, longitude: f64) -> [f64; 2] {
 }
 
 /// 地図の座標を緯度・経度（度）にする。x は何周していてもよい。
-#[cfg(test)]
 pub fn unproject(world: [f64; 2]) -> (f64, f64) {
     let lon = world[0].rem_euclid(1.0) * 360.0 - 180.0;
     let n = std::f64::consts::PI * (1.0 - 2.0 * world[1]);

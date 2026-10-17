@@ -2,6 +2,8 @@
 //!
 //! 出す画像は「今開いているフォルダ」か「登録したデータセット全体」から選ぶ。近い点は
 //! 数字入りの丸にまとめ、点をクリックすると縮小画像と名前を出し、そこから画像を開ける。
+//! メインのウインドウから画像を地図へドラッグすると、その場所を撮影地点として置ける
+//! （ラベルに持ち、EXIF より優先する）。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +18,7 @@ use vw_core::Registry;
 use crate::geo_map::{self, Cluster, View};
 use crate::geonames::{Found as FoundName, Gazetteer};
 use crate::i18n::{tr, tr1};
+use crate::labels::{LabelStore, Position};
 use crate::map_tiles::Tiles;
 use crate::settings::{Language, MapSettings};
 use crate::sort::SortOrder;
@@ -40,6 +43,8 @@ pub struct Place {
     pub gps: Gps,
     /// 撮影日時（EXIF の書き方のまま）。
     pub taken: Option<String>,
+    /// 地図で置いた位置か（EXIF の位置でなく）。
+    pub placed: bool,
     world: [f64; 2],
 }
 
@@ -50,9 +55,21 @@ impl Place {
             path,
             gps,
             taken,
+            placed: false,
             world,
         }
     }
+}
+
+/// 読んだ画像 1 枚。地図で置いた位置は、出すときにラベルから重ねる（置いたり消したりする
+/// たびに読み直さなくて済むように）。
+#[derive(Debug, Clone, PartialEq)]
+struct Scanned {
+    path: PathBuf,
+    gps: Option<Gps>,
+    taken: Option<String>,
+    /// 読んだときの位置が、地図で置いたものだったか（データセットのカタログ）。
+    placed: bool,
 }
 
 /// どの範囲の画像を読んだか。フォルダを移ったら読み直す。
@@ -64,7 +81,7 @@ enum Source {
 
 enum Found {
     Total(usize),
-    Place(Place),
+    Image(Scanned),
     Step,
     Problem(String),
 }
@@ -110,6 +127,10 @@ pub enum Command {
     Open(PathBuf),
     /// 地名の表のダウンロードの画面を開く。
     ShowDownloads,
+    /// 地図で置いた位置を消す。
+    ClearPosition(PathBuf),
+    /// 位置の変更を 1 つ戻す。
+    Undo,
 }
 
 /// 地図を描くのに要るもの。
@@ -125,6 +146,8 @@ pub struct Inputs<'a> {
     pub cache: Option<&'a Path>,
     /// 地名の表。まだダウンロードしていなければ `None`。
     pub places: Option<&'a Gazetteer>,
+    /// 地図で置いた位置。
+    pub labels: &'a LabelStore,
 }
 
 pub struct MapWindow {
@@ -133,7 +156,13 @@ pub struct MapWindow {
     scope: Scope,
     view: Option<View>,
     tiles: Option<Tiles>,
+    /// 地図に出すもの。`scanned` にラベルの位置を重ねて作る。
     places: Vec<Place>,
+    scanned: Vec<Scanned>,
+    /// 読んだ範囲の外の画像で、この地図に置いたもの。
+    dropped: Vec<PathBuf>,
+    /// `places` を作り直す。
+    stale: bool,
     source: Option<Source>,
     scan: Option<Scan>,
     /// 読み終えたら、点が全部入るように合わせる。
@@ -144,6 +173,12 @@ pub struct MapWindow {
     /// 地名の検索欄と、その候補。
     query: String,
     names: Vec<FoundName>,
+    /// 前に描いた地図の範囲（このウインドウの中の座標）。ドロップの場所を地図の座標にするのに使う。
+    last_rect: Option<Rect>,
+    /// ドラッグ中の画像を放す所（このウインドウの中の座標）と、そこの緯度・経度。
+    pub drop_hover: Option<(Pos2, Position)>,
+    /// 右クリックした点の画像。
+    context: Option<PathBuf>,
 }
 
 impl Default for MapWindow {
@@ -155,6 +190,9 @@ impl Default for MapWindow {
             view: None,
             tiles: None,
             places: Vec::new(),
+            scanned: Vec::new(),
+            dropped: Vec::new(),
+            stale: false,
             source: None,
             scan: None,
             fit_when_done: true,
@@ -163,8 +201,15 @@ impl Default for MapWindow {
             problems: Vec::new(),
             query: String::new(),
             names: Vec::new(),
+            last_rect: None,
+            drop_hover: None,
+            context: None,
         }
     }
+}
+
+fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("map")
 }
 
 impl MapWindow {
@@ -182,11 +227,14 @@ impl MapWindow {
         }
         self.follow_source(ctx, inputs);
         self.receive_scan();
+        if self.stale {
+            self.rebuild(inputs.labels);
+        }
         let lang = inputs.lang;
         let mut out = Vec::new();
         let mut close = false;
         ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("map"),
+            viewport_id(),
             self.window
                 .builder(tr(lang, "Map").to_owned(), [900.0, 640.0]),
             |ctx, _class| {
@@ -194,6 +242,12 @@ impl MapWindow {
                     close = true;
                 }
                 self.window.track(ctx);
+                // 検索欄に打っている間は、文字の取り消しに使う。
+                if !ctx.egui_wants_keyboard_input()
+                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
+                {
+                    out.push(Command::Undo);
+                }
                 egui::Panel::top("map_bar").show(ctx, |ui| out.extend(self.bar(ui, inputs)));
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
@@ -207,6 +261,92 @@ impl MapWindow {
         out
     }
 
+    /// 地図で置いた位置が変わった。読んだ範囲の外の画像なら、それも出すようにする。
+    pub fn position_changed(&mut self, path: &Path) {
+        if !self.scanned.iter().any(|s| s.path == path) && !self.dropped.iter().any(|p| p == path) {
+            self.dropped.push(path.to_path_buf());
+        }
+        self.stale = true;
+    }
+
+    /// メインのウインドウの中の座標 `global`（画面全体の座標）が地図の上なら、
+    /// このウインドウの中の座標と、そこの緯度・経度を返す。
+    ///
+    /// ドラッグはメインのウインドウが始めたもので、放したときのマウスの出来事もメインの
+    /// ウインドウにしか届かないので、地図の側では受けられない。画面の座標どうしで比べる。
+    /// 倍率の違う画面にまたがると少しずれるが、ポイントを画素に直す倍率がウインドウごとに
+    /// 違い、両方を合わせて直す手段が egui にないため、そのままにしている。
+    pub fn drop_point(&self, ctx: &egui::Context, global: Pos2) -> Option<(Pos2, Position)> {
+        if !self.open {
+            return None;
+        }
+        let inner = ctx.input_for(viewport_id(), |i| i.viewport().inner_rect)?;
+        let rect = self.last_rect?;
+        let view = self.view?;
+        let local = global - inner.min.to_vec2();
+        if !rect.contains(local) {
+            return None;
+        }
+        let (latitude, longitude) = geo_map::unproject(view.to_world(rect, local));
+        Some((
+            local,
+            Position {
+                latitude,
+                longitude,
+            },
+        ))
+    }
+
+    /// 読んだ画像に、地図で置いた位置を重ねて、出す点を作り直す。選んでいた点は選んだままにする。
+    fn rebuild(&mut self, labels: &LabelStore) {
+        self.stale = false;
+        let chosen: Vec<PathBuf> = match &self.selected {
+            Some(Selected::One(i)) => self
+                .places
+                .get(*i)
+                .map(|p| p.path.clone())
+                .into_iter()
+                .collect(),
+            Some(Selected::Many(v)) => v
+                .iter()
+                .filter_map(|&i| self.places.get(i))
+                .map(|p| p.path.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+        let extra = self.dropped.iter().map(|path| Scanned {
+            path: path.clone(),
+            gps: None,
+            taken: None,
+            placed: false,
+        });
+        self.places = self
+            .scanned
+            .iter()
+            .cloned()
+            .chain(extra)
+            .filter_map(|s| {
+                let placed = labels.get(&s.path).position;
+                let gps = match placed {
+                    Some(p) => Gps::new(p.latitude, p.longitude, None),
+                    // 前に置いた位置をもう消していれば、カタログの古い位置は使わない。
+                    None if s.placed => None,
+                    None => s.gps,
+                }?;
+                let mut place = Place::new(s.path, gps, s.taken);
+                place.placed = placed.is_some();
+                Some(place)
+            })
+            .collect();
+        let index = |path: &PathBuf| self.places.iter().position(|p| &p.path == path);
+        let found: Vec<usize> = chosen.iter().filter_map(index).collect();
+        self.selected = match (&self.selected, found.as_slice()) {
+            (_, []) => None,
+            (Some(Selected::One(_)), [one, ..]) => Some(Selected::One(*one)),
+            _ => Some(Selected::Many(found)),
+        };
+    }
+
     /// 範囲や開いているフォルダが変わったら読み直す。
     fn follow_source(&mut self, ctx: &egui::Context, inputs: &Inputs<'_>) {
         let source = match self.scope {
@@ -218,6 +358,8 @@ impl MapWindow {
         }
         self.source = source.clone();
         self.places.clear();
+        self.scanned.clear();
+        self.dropped.clear();
         self.selected = None;
         self.fit_when_done = true;
         self.scan = source.map(|s| start_scan(s, inputs.registry.clone(), inputs.order, ctx));
@@ -231,7 +373,10 @@ impl MapWindow {
         loop {
             match scan.rx.try_recv() {
                 Ok(Found::Total(n)) => scan.total = n,
-                Ok(Found::Place(p)) => self.places.push(p),
+                Ok(Found::Image(i)) => {
+                    self.scanned.push(i);
+                    self.stale = true;
+                }
                 Ok(Found::Step) => scan.done += 1,
                 Ok(Found::Problem(e)) => self.problems.push(e),
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -350,6 +495,7 @@ impl MapWindow {
 
     fn map(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let rect = ui.max_rect();
+        self.last_rect = Some(rect);
         let response = ui.interact(rect, ui.id().with("map"), Sense::click_and_drag());
         let view = self.view.get_or_insert_with(View::default);
         if self.fit_when_done && self.scan.is_none() {
@@ -402,8 +548,28 @@ impl MapWindow {
         if response.double_clicked() && hit.is_none() {
             self.selected = None;
         }
-        self.attribution(ui, inputs, rect);
+        if let Some((at, _)) = self.drop_hover {
+            draw_drop_marker(&painter, at, tr(inputs.lang, "Place here"));
+        }
         let mut out = Vec::new();
+        if response.secondary_clicked() {
+            self.context = hit
+                .and_then(|i| match clusters[i].members.as_slice() {
+                    [one] => self.places.get(*one),
+                    _ => None,
+                })
+                .filter(|p| p.placed)
+                .map(|p| p.path.clone());
+        }
+        if let Some(path) = self.context.clone() {
+            response.context_menu(|ui| {
+                if ui.button(tr(inputs.lang, "Remove the position")).clicked() {
+                    out.push(Command::ClearPosition(path));
+                    ui.close();
+                }
+            });
+        }
+        self.attribution(ui, inputs, rect);
         if let Some(c) = self.popup(ui, inputs, rect) {
             out.push(c);
         }
@@ -462,9 +628,7 @@ impl MapWindow {
                 egui::Frame::popup(ui.style()).show(ui, |ui| match &selected {
                     Selected::One(i) => {
                         let place = self.places[*i].clone();
-                        if self.place_card(ui, inputs, &place) {
-                            command = Some(Command::Open(place.path.clone()));
-                        }
+                        command = self.place_card(ui, inputs, &place);
                     }
                     Selected::Many(members) => {
                         ui.label(tr1(lang, "{} photos", &members.len().to_string()));
@@ -489,8 +653,13 @@ impl MapWindow {
         command
     }
 
-    /// 1 枚の情報。「開く」を押したら true。
-    fn place_card(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>, place: &Place) -> bool {
+    /// 1 枚の情報と、「開く」（地図で置いた位置なら「位置を消す」も）。
+    fn place_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        inputs: &Inputs<'_>,
+        place: &Place,
+    ) -> Option<Command> {
         let lang = inputs.lang;
         self.load_thumb(ui.ctx(), inputs.registry, &place.path);
         let side = 180.0;
@@ -521,7 +690,21 @@ impl MapWindow {
             "{:.5}, {:.5}",
             place.gps.latitude, place.gps.longitude
         ));
-        ui.button(tr(lang, "Open")).clicked()
+        if place.placed {
+            ui.weak(tr(lang, "Placed on the map"));
+        }
+        ui.horizontal(|ui| {
+            let open = ui.button(tr(lang, "Open")).clicked();
+            let clear = place.placed && ui.button(tr(lang, "Remove the position")).clicked();
+            if open {
+                Some(Command::Open(place.path.clone()))
+            } else if clear {
+                Some(Command::ClearPosition(place.path.clone()))
+            } else {
+                None
+            }
+        })
+        .inner
     }
 
     fn load_thumb(&mut self, ctx: &egui::Context, registry: &Registry, path: &Path) {
@@ -659,6 +842,24 @@ fn draw_tiles(
     }
 }
 
+/// ドラッグ中の画像を放す所。置かれる点と同じ赤の、中の空いた丸と十字。
+fn draw_drop_marker(painter: &egui::Painter, at: Pos2, label: &str) {
+    let stroke = Stroke::new(2.0, PIN_RED);
+    painter.circle_stroke(at, PIN + 4.0, stroke);
+    let arm = PIN + 10.0;
+    painter.line_segment([at - vec2(arm, 0.0), at + vec2(arm, 0.0)], stroke);
+    painter.line_segment([at - vec2(0.0, arm), at + vec2(0.0, arm)], stroke);
+    let text = painter.layout_no_wrap(
+        format!("{} {label}", icon::MAP_PIN),
+        egui::FontId::proportional(13.0),
+        Color32::WHITE,
+    );
+    let corner = at + vec2(arm + 4.0, -text.size().y / 2.0);
+    let back = Rect::from_min_size(corner, text.size()).expand(4.0);
+    painter.rect_filled(back, 4.0, PIN_RED);
+    painter.galley(corner, text, Color32::WHITE);
+}
+
 /// 赤い点と、まとめた丸を描く。カーソルの下にあるものの番号を返す。
 fn draw_pins(
     painter: &egui::Painter,
@@ -728,9 +929,16 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    if let Some((gps, taken)) = vw_core::exif::gps_of_file(&path) {
-                        send(Found::Place(Place::new(path, gps, taken)));
-                    }
+                    let (gps, taken) = match vw_core::exif::gps_of_file(&path) {
+                        Some((gps, taken)) => (Some(gps), taken),
+                        None => (None, None),
+                    };
+                    send(Found::Image(Scanned {
+                        path,
+                        gps,
+                        taken,
+                        placed: false,
+                    }));
                     send(Found::Step);
                 }
             }
@@ -746,7 +954,12 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
                         return;
                     }
                     for place in catalog_places(&entry.dir, &entry.catalog) {
-                        send(Found::Place(place));
+                        send(Found::Image(Scanned {
+                            path: place.path,
+                            gps: Some(place.gps),
+                            taken: place.taken,
+                            placed: place.placed,
+                        }));
                     }
                     send(Found::Step);
                 }
@@ -778,7 +991,10 @@ pub fn catalog_places(dir: &Path, catalog: &crate::catalog::Catalog) -> Vec<Plac
             let number = |key| value(&location, key)?.parse::<f64>().ok();
             let gps = Gps::new(number("Latitude")?, number("Longitude")?, None)?;
             let taken = value("exif", "DateTimeOriginal");
-            Some(Place::new(dir.join(&f.path), gps, taken))
+            let mut place = Place::new(dir.join(&f.path), gps, taken);
+            place.placed = value(&location, crate::labels::POSITION_FROM).as_deref()
+                == Some(crate::labels::FROM_MAP);
+            Some(place)
         })
         .collect()
 }
@@ -795,6 +1011,105 @@ mod tests {
             modified: String::new(),
             meta,
         }
+    }
+
+    fn scanned(path: &Path, gps: Option<Gps>, placed: bool) -> Scanned {
+        Scanned {
+            path: path.to_path_buf(),
+            gps,
+            taken: None,
+            placed,
+        }
+    }
+
+    const SAPPORO: Position = Position {
+        latitude: 43.0621,
+        longitude: 141.3544,
+    };
+
+    #[test]
+    fn position_placed_on_the_map_wins_over_exif() {
+        let dir = crate::test_util::TempDir::new();
+        let img = dir.touch("a.jpg");
+        let mut labels = LabelStore::new(None);
+        labels.set_position(&img, Some(SAPPORO)).unwrap();
+        let mut map = MapWindow {
+            scanned: vec![scanned(&img, Gps::new(35.0, 139.0, None), false)],
+            ..Default::default()
+        };
+        map.rebuild(&labels);
+        assert_eq!(map.places.len(), 1);
+        assert!(map.places[0].placed);
+        assert!((map.places[0].gps.latitude - SAPPORO.latitude).abs() < 1e-9);
+    }
+
+    #[test]
+    fn image_without_exif_appears_once_placed() {
+        let dir = crate::test_util::TempDir::new();
+        let img = dir.touch("a.png");
+        let mut labels = LabelStore::new(None);
+        let mut map = MapWindow {
+            scanned: vec![scanned(&img, None, false)],
+            ..Default::default()
+        };
+        map.rebuild(&labels);
+        assert!(map.places.is_empty());
+        labels.set_position(&img, Some(SAPPORO)).unwrap();
+        map.position_changed(&img);
+        map.rebuild(&labels);
+        assert_eq!(map.places.len(), 1);
+    }
+
+    #[test]
+    fn image_outside_the_scanned_folder_is_shown_after_dropping() {
+        let dir = crate::test_util::TempDir::new();
+        let img = dir.touch("elsewhere.png");
+        let mut labels = LabelStore::new(None);
+        labels.set_position(&img, Some(SAPPORO)).unwrap();
+        let mut map = MapWindow::default();
+        map.position_changed(&img);
+        map.rebuild(&labels);
+        assert_eq!(map.places.len(), 1);
+    }
+
+    #[test]
+    fn removed_position_falls_back_to_exif_but_not_to_an_old_catalog_one() {
+        let dir = crate::test_util::TempDir::new();
+        let exif = dir.touch("exif.jpg");
+        let cataloged = dir.touch("cataloged.png");
+        let labels = LabelStore::new(None);
+        let mut map = MapWindow {
+            scanned: vec![
+                scanned(&exif, Gps::new(35.0, 139.0, None), false),
+                scanned(&cataloged, Gps::new(43.0, 141.0, None), true),
+            ],
+            ..Default::default()
+        };
+        map.rebuild(&labels);
+        assert_eq!(map.places.len(), 1);
+        assert_eq!(map.places[0].path, exif);
+        assert!(!map.places[0].placed);
+    }
+
+    #[test]
+    fn selection_follows_the_image_when_places_are_rebuilt() {
+        let dir = crate::test_util::TempDir::new();
+        let a = dir.touch("a.jpg");
+        let b = dir.touch("b.jpg");
+        let mut labels = LabelStore::new(None);
+        let mut map = MapWindow {
+            scanned: vec![
+                scanned(&a, None, false),
+                scanned(&b, Gps::new(35.0, 139.0, None), false),
+            ],
+            ..Default::default()
+        };
+        map.rebuild(&labels);
+        map.selected = Some(Selected::One(0));
+        labels.set_position(&a, Some(SAPPORO)).unwrap();
+        map.rebuild(&labels);
+        assert_eq!(map.selected, Some(Selected::One(1)));
+        assert_eq!(map.places[1].path, b);
     }
 
     #[test]
