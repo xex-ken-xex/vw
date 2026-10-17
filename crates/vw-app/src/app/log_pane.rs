@@ -211,7 +211,7 @@ impl VwApp {
         let Some(menu_target) = menu_target else {
             return;
         };
-        menu_target.context_menu(|ui| {
+        vw_ui::menu::context(&menu_target, |ui| {
             if ui.button(tr(lang, "Copy all")).clicked() {
                 action = Some(LogAction::CopyAll);
                 ui.close();

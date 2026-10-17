@@ -191,7 +191,7 @@ impl VwApp {
                                     .filter(|(g, _)| g == group)
                                     .and_then(|(_, tags)| tags.get(i).cloned().flatten());
                                 for r in [&key, &value] {
-                                    r.context_menu(|ui| {
+                                    vw_ui::menu::context(r, |ui| {
                                         if ui.button(tr(lang, "Copy")).clicked() {
                                             copy = Some(row_of(i));
                                             ui.close();
@@ -218,7 +218,7 @@ impl VwApp {
                             state.store(ui.ctx());
                         }
                     }
-                    label.context_menu(|ui| {
+                    vw_ui::menu::context(&label, |ui| {
                         if ui.button(tr(lang, "Copy")).clicked() {
                             copy = Some(group_sel.clone());
                             ui.close();

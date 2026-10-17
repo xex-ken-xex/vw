@@ -4045,6 +4045,7 @@ dependencies = [
  "vw-quality",
  "vw-raw",
  "vw-tiff",
+ "vw-ui",
  "vw-webp",
  "windows-sys 0.61.2",
  "winresource",
@@ -4133,6 +4134,13 @@ version = "0.5.0"
 dependencies = [
  "tiff",
  "vw-core",
+]
+
+[[package]]
+name = "vw-ui"
+version = "0.5.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]

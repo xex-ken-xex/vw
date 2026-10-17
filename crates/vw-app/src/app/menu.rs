@@ -16,7 +16,7 @@ impl VwApp {
         let lang = self.lang();
         let ctx = ui.ctx().clone();
         let mut chosen = None;
-        egui::MenuBar::new().ui(ui, |ui| {
+        vw_ui::menu::bar(ui, |ui| {
             ui.menu_button(tr(lang, "File"), |ui| {
                 for action in [Action::NewSlot, Action::CloseSlot, Action::CloseAllSlots] {
                     if self.menu_item(ui, action, None) {
@@ -67,11 +67,11 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleMaximize, Some(maximized)) {
                     chosen = Some(Action::ToggleMaximize);
                 }
-                ui.menu_button(tr(lang, "Layout"), |ui| {
-                    if let Some(action) = self.layout_menu(ui) {
-                        chosen = Some(action);
-                    }
-                });
+                if let Some(Some(action)) =
+                    vw_ui::menu::submenu(ui, tr(lang, "Layout"), |ui| self.layout_menu(ui))
+                {
+                    chosen = Some(action);
+                }
                 ui.separator();
                 if self.menu_item(ui, Action::FullscreenSlideshow, None) {
                     chosen = Some(Action::FullscreenSlideshow);
@@ -163,11 +163,11 @@ impl VwApp {
         }
         let tags = self.settings().labels.tags.clone();
         if !tags.is_empty() {
-            ui.menu_button(tr(lang, "Show only tag"), |ui| {
+            vw_ui::menu::submenu(ui, tr(lang, "Show only tag"), |ui| {
                 for tag in tags {
                     let filter = Filter::Tag(tag.clone());
                     if ui
-                        .add(egui::Button::selectable(self.filter == filter, &tag))
+                        .add(vw_ui::menu::item(self.filter == filter, tag, ""))
                         .clicked()
                     {
                         self.set_filter(ui.ctx(), filter);
@@ -247,9 +247,8 @@ impl VwApp {
             // カスタムが既定の項目と同じマス目のときに、2 つに印が付かないようにする。
             let current = !marked && viewer.layout == layout;
             marked |= current;
-            let mark = if current { icon::CHECK } else { "  " };
-            let button = egui::Button::new(format!("{mark} {title}"))
-                .shortcut_text(self.shortcut(action).unwrap_or_default());
+            let button =
+                vw_ui::menu::item(current, title, self.shortcut(action).unwrap_or_default());
             if ui.add(button).clicked() {
                 chosen = Some(action);
             }
@@ -257,7 +256,7 @@ impl VwApp {
         chosen
     }
 
-    /// メニューの 1 項目。右側に操作の最初のキーを出す。`checked` があれば左にチェック欄を付ける。
+    /// メニューの 1 項目。右側に操作の最初のキーを出し、`checked` が `Some(true)` なら左に印を付ける。
     ///
     /// 表示切り替えに egui のチェックボックスを使わないのは、チェックボックスには
     /// ショートカットの表示欄がなく、他の項目とキーの列がそろわないため。
@@ -268,14 +267,9 @@ impl VwApp {
         checked: Option<bool>,
     ) -> bool {
         let title = tr(self.lang(), menu_title(action));
-        let text = match checked {
-            Some(true) => format!("{} {title}", icon::CHECK_SQUARE),
-            Some(false) => format!("{} {title}", icon::SQUARE),
-            None => title.to_owned(),
-        };
-        let button =
-            egui::Button::new(text).shortcut_text(self.shortcut(action).unwrap_or_default());
-        ui.add(button).clicked()
+        let shortcut = self.shortcut(action).unwrap_or_default();
+        ui.add(vw_ui::menu::item(checked == Some(true), title, shortcut))
+            .clicked()
     }
 
     /// 押せないときは灰色にし、マウスを乗せると `why`（英語の原文）を出す項目。
@@ -287,8 +281,7 @@ impl VwApp {
         why: &'static str,
     ) -> bool {
         let title = tr(self.lang(), menu_title(action));
-        let button =
-            egui::Button::new(title).shortcut_text(self.shortcut(action).unwrap_or_default());
+        let button = vw_ui::menu::item(false, title, self.shortcut(action).unwrap_or_default());
         ui.add_enabled(enabled, button)
             .on_disabled_hover_text(tr(self.lang(), why))
             .clicked()

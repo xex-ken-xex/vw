@@ -541,7 +541,7 @@ impl VwApp {
                                         command = Some(Command::Reveal(src.clone()));
                                     }
                                 }
-                                r.context_menu(|ui| {
+                                vw_ui::menu::context(&r, |ui| {
                                     if ui.button(tr(lang, "Use as cover")).clicked() {
                                         command = Some(Command::Cover(person.name.clone(), i));
                                         ui.close();
@@ -726,7 +726,7 @@ fn unregistered_tab(
                         if resp.clicked() {
                             *command = Some(Command::Reveal(face.0.clone()));
                         }
-                        resp.context_menu(|ui| {
+                        vw_ui::menu::context(&resp, |ui| {
                             if group.len() > 1 && ui.button(tr(lang, "Not in this group")).clicked()
                             {
                                 *command = Some(Command::Split(face.clone()));

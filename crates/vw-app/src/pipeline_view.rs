@@ -452,7 +452,7 @@ impl PipelineView {
             out.push(Command::Overwrite(n.to_owned(), values.clone()));
         }
         ui.add_enabled_ui(name.is_some(), |ui| {
-            ui.menu_button(tr(lang, "Delete"), |ui| {
+            vw_ui::menu::button(ui, tr(lang, "Delete"), |ui| {
                 if let Some(n) = name {
                     if ui
                         .button(crate::i18n::tr1(
@@ -565,7 +565,7 @@ impl PipelineView {
         background: &egui::Response,
     ) -> bool {
         let mut added = false;
-        background.context_menu(|ui| {
+        vw_ui::menu::context(background, |ui| {
             ui.menu_button(tr(lang, "Add node"), |ui| {
                 for kind in nodes::Node::KINDS {
                     if ui.button(tr(lang, nodes::Node::title(kind))).clicked() {
