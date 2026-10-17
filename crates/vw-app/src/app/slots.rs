@@ -512,9 +512,13 @@ impl VwApp {
         let view = self.view();
         let maximized = self.maximized.is_some() && view.range.len() == 1;
         let mut area = whole;
+        // 画像の欄は枠なしのパネルなので、下の帯は自分で塗らないとウインドウの地（黒）が透けて、
+        // ライトのテーマでは灰色の字が黒の上に乗って読めなくなる。
+        let bar_fill = ui.visuals().panel_fill;
         if maximized {
             let (rest, bar) = area.split_top_bottom_at_y(area.max.y - PLAY_BAR);
             area = rest;
+            ui.painter().rect_filled(bar, 0.0, bar_fill);
             let action = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.play_bar(ui))
                 .inner;
@@ -525,6 +529,7 @@ impl VwApp {
         if self.tagging {
             let (rest, bar) = area.split_top_bottom_at_y(area.max.y - PLAY_BAR);
             area = rest;
+            ui.painter().rect_filled(bar, 0.0, bar_fill);
             let click = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| self.tag_bar(ui))
                 .inner;
