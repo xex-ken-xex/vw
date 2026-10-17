@@ -86,7 +86,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 57] = [
+const ITEMS: [Item; 58] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -240,6 +240,13 @@ const ITEMS: [Item; 57] = [
         title: "Key for the other way",
         description: "Hold this key while loading a folder to load it the other way.",
         widget: other_load_modifier_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "tree.click_expands",
+        title: "Expand on click",
+        description: "Clicking a folder name also expands it, like Explorer. When off, only the arrow expands or collapses.",
+        widget: click_expands_widget,
     },
     Item {
         section: Section::Behavior,
@@ -833,6 +840,11 @@ fn confirm_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
         .changed()
 }
 
+fn click_expands_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.tree.click_expands, tr(lang, "Enabled"))
+        .changed()
+}
+
 fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let r = ui.add_enabled(
         s.tree.confirm_every,
@@ -1279,6 +1291,7 @@ pub struct Response {
     /// 設定が変わった。反映と保存が要る。
     pub changed: bool,
     pub open_file: bool,
+    pub open_log_folder: bool,
     pub close: bool,
     /// ログに出すこと（接続確認の結果）。`true` なら成功。
     pub logs: Vec<(bool, String)>,
@@ -1481,7 +1494,12 @@ impl SettingsUi {
                     tr(lang, "Destinations"),
                 ],
             );
-        if items.is_empty() && actions.is_empty() && !destinations {
+        let log_folder = section == Section::Log
+            && matches(
+                &self.query,
+                &["log.folder", "Log folder", tr(lang, "Log folder")],
+            );
+        if items.is_empty() && actions.is_empty() && !destinations && !log_folder {
             return false;
         }
 
@@ -1524,6 +1542,25 @@ impl SettingsUi {
                     "Where Send to in the right-click menu sends files. Test sends a C-ECHO to check the settings.",
                 ));
                 self.destinations.ui(ui, settings, out);
+            });
+        }
+        if log_folder {
+            item_frame(ui, |ui| {
+                title_line(ui, tr(lang, "Log folder"), "log.folder");
+                ui.weak(tr(
+                    lang,
+                    "The logs folder next to the settings file, where the log files are written.",
+                ));
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        icon::FOLDER_OPEN,
+                        tr(lang, "Open the log folder")
+                    ))
+                    .clicked()
+                {
+                    out.open_log_folder = true;
+                }
             });
         }
         true
@@ -1588,8 +1625,11 @@ impl SettingsUi {
                 }
                 if self.capturing == Some(action) {
                     let waiting = ui.add(
-                        egui::Button::new(tr(lang, "Press a key... (Esc to cancel)"))
-                            .selected(true),
+                        egui::Button::new(tr(
+                            lang,
+                            "Press a key or a mouse side button... (Esc to cancel)",
+                        ))
+                        .selected(true),
                     );
                     if waiting.clicked() {
                         self.capturing = None;
@@ -1729,6 +1769,20 @@ fn capture(
                         Capture::Done,
                         os_reserved(os, combo).map(Notice::OsReserved),
                     ),
+                    Err(r) => (Capture::Rejected, Some(Notice::Refused(r))),
+                };
+            }
+            Event::PointerButton {
+                button,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                let Some(combo) = KeyCombo::from_pointer(*button, *modifiers) else {
+                    continue;
+                };
+                return match keymap.assign(action, combo) {
+                    Ok(()) => (Capture::Done, None),
                     Err(r) => (Capture::Rejected, Some(Notice::Refused(r))),
                 };
             }

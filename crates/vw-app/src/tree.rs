@@ -56,6 +56,8 @@ struct View<'a> {
     destinations: &'a [String],
     /// AI のモデルが全部揃っているか。
     ai_ready: bool,
+    /// フォルダ名のクリックでフォルダも開く。
+    click_expands: bool,
 }
 
 impl View<'_> {
@@ -199,6 +201,10 @@ impl Node {
             });
         if toggle.clicked() {
             self.open = !self.open;
+        } else if view.click_expands && header.inner.clicked() {
+            // 開いているフォルダをもう一度押しても閉じない。エクスプローラも閉じず、
+            // cd し直すたびに開閉が切り替わると見ていた中身が消えてしまうため。
+            self.open = true;
         }
         self.label_actions(&header.inner, view, out);
     }
@@ -669,6 +675,7 @@ pub struct Context<'a> {
     pub destinations: &'a [String],
     /// AI のモデルが全部揃っているか。揃うまで AI の項目は押せない。
     pub ai_ready: bool,
+    pub click_expands: bool,
 }
 
 /// ツリーを描いた結果。
@@ -809,6 +816,7 @@ impl FolderTree {
             peeks: &peeker.known,
             destinations: cx.destinations,
             ai_ready: cx.ai_ready,
+            click_expands: cx.click_expands,
         };
         let mut out = Out::default();
         for root in &mut self.roots {

@@ -461,6 +461,8 @@ pub struct Tree {
     pub confirm_chunk: u32,
     pub load_into: LoadInto,
     pub other_load_modifier: LoadModifier,
+    /// フォルダ名のクリックで cd するとともに、そのフォルダを開く（エクスプローラと同じ）。
+    pub click_expands: bool,
 }
 
 impl Default for Tree {
@@ -472,6 +474,7 @@ impl Default for Tree {
             confirm_chunk: 500,
             load_into: LoadInto::default(),
             other_load_modifier: LoadModifier::default(),
+            click_expands: true,
         }
     }
 }
@@ -495,6 +498,7 @@ impl Tree {
             other_load_modifier: r
                 .get("other_load_modifier")
                 .unwrap_or(d.other_load_modifier),
+            click_expands: r.get("click_expands").unwrap_or(d.click_expands),
         }
     }
 }
@@ -1646,6 +1650,14 @@ ae_title = "PACS"
         let (s, problems) = Settings::from_toml("[viewer]\nfull_image_limit_mb = 10\n").unwrap();
         assert_eq!(s.viewer.full_image_limit_mb, 256);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn tree_click_expands_the_folder_unless_turned_off() {
+        assert!(Settings::default().tree.click_expands);
+        let (s, problems) = Settings::from_toml("[tree]\nclick_expands = false\n").unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!s.tree.click_expands);
     }
 
     #[test]

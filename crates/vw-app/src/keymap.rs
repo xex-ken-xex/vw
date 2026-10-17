@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use eframe::egui::{Event, Key, Modifiers};
+use eframe::egui::{Event, Key, Modifiers, PointerButton};
 use serde::Serialize;
 
 use crate::layout::SlotLayout;
@@ -429,6 +429,8 @@ impl Action {
                 KeyCombo::plain(PageDown),
                 KeyCombo::plain(Space),
             ]),
+            // マウスの戻るボタンを足した。
+            Action::ParentFolder => Some(vec![KeyCombo::plain(Backspace)]),
             _ => None,
         }
     }
@@ -453,7 +455,10 @@ impl Action {
             Action::PreviousPage => vec![KeyCombo::plain(PageUp)],
             Action::NextPage => vec![KeyCombo::plain(PageDown)],
             Action::ToggleMaximize => vec![KeyCombo::plain(Enter)],
-            Action::ParentFolder => vec![KeyCombo::plain(Backspace)],
+            Action::ParentFolder => vec![
+                KeyCombo::plain(Backspace),
+                KeyCombo::mouse(MouseButton::Back),
+            ],
             Action::FitImage => vec![KeyCombo::plain(Num0)],
             Action::ActualSize => vec![KeyCombo::ctrl(Num0)],
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
@@ -516,7 +521,48 @@ impl Action {
     }
 }
 
-/// 修飾キーとキー 1 つの組み合わせ。
+/// マウスの横にある戻る・進むのボタン。
+///
+/// 左・右・中のボタンは割り当てない。画像のパン・拡大縮小や選択にもう使っていて、
+/// 割り当てるとそちらの操作と同時に動いてしまうため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseButton {
+    Back,
+    Forward,
+}
+
+impl MouseButton {
+    fn name(self) -> &'static str {
+        match self {
+            MouseButton::Back => "MouseBack",
+            MouseButton::Forward => "MouseForward",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        [MouseButton::Back, MouseButton::Forward]
+            .into_iter()
+            .find(|b| b.name().eq_ignore_ascii_case(name))
+    }
+
+    /// egui の追加ボタン 1・2 は、winit がマウスの戻る・進むとして届けるもの。
+    pub fn from_pointer(button: PointerButton) -> Option<Self> {
+        match button {
+            PointerButton::Extra1 => Some(MouseButton::Back),
+            PointerButton::Extra2 => Some(MouseButton::Forward),
+            _ => None,
+        }
+    }
+}
+
+/// 割り当てられる入力。キーボードのキーか、マウスの戻る・進むのボタン。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Input {
+    Key(Key),
+    Mouse(MouseButton),
+}
+
+/// 修飾キーとキー（またはマウスのボタン）1 つの組み合わせ。
 ///
 /// Windows キー（Super）は持たない。egui がこの修飾キーを伝えてこないうえ、
 /// Windows キーの組み合わせはほぼすべて OS が先に使ってしまうため。
@@ -525,7 +571,7 @@ pub struct KeyCombo {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
-    pub key: Key,
+    pub key: Input,
 }
 
 impl KeyCombo {
@@ -534,8 +580,28 @@ impl KeyCombo {
             ctrl: false,
             shift: false,
             alt: false,
-            key,
+            key: Input::Key(key),
         }
+    }
+
+    pub const fn mouse(button: MouseButton) -> Self {
+        Self {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key: Input::Mouse(button),
+        }
+    }
+
+    /// マウスのボタンを押したときの組み合わせ。割り当てられないボタンなら `None`。
+    pub fn from_pointer(button: PointerButton, modifiers: Modifiers) -> Option<Self> {
+        let button = MouseButton::from_pointer(button)?;
+        Some(Self {
+            ctrl: modifiers.ctrl,
+            shift: modifiers.shift,
+            alt: modifiers.alt,
+            key: Input::Mouse(button),
+        })
     }
 
     pub const fn ctrl(key: Key) -> Self {
@@ -557,7 +623,7 @@ impl KeyCombo {
             ctrl: modifiers.ctrl,
             shift: modifiers.shift,
             alt: modifiers.alt,
-            key,
+            key: Input::Key(key),
         }
     }
 
@@ -582,7 +648,10 @@ impl fmt::Display for KeyCombo {
         if self.alt {
             f.write_str("Alt+")?;
         }
-        f.write_str(self.key.name())
+        match self.key {
+            Input::Key(key) => f.write_str(key.name()),
+            Input::Mouse(button) => f.write_str(button.name()),
+        }
     }
 }
 
@@ -603,10 +672,20 @@ impl FromStr for KeyCombo {
         let (key_name, mods) = parts
             .split_last()
             .ok_or_else(|| format!("empty key: {s:?}"))?;
-        let key = Key::from_name(key_name)
-            .filter(|k| !is_modifier(*k))
+        let key = MouseButton::from_name(key_name)
+            .map(Input::Mouse)
+            .or_else(|| {
+                Key::from_name(key_name)
+                    .filter(|k| !is_modifier(*k))
+                    .map(Input::Key)
+            })
             .ok_or_else(|| format!("unknown key {key_name:?} in {s:?}"))?;
-        let mut combo = KeyCombo::plain(key);
+        let mut combo = KeyCombo {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key,
+        };
         for m in mods {
             match m.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => combo.ctrl = true,
@@ -819,6 +898,13 @@ impl Keymap {
                 } => self
                     .action_for(scope, KeyCombo::from_event(*key, *modifiers))
                     .filter(|a| !repeat || a.repeats()),
+                Event::PointerButton {
+                    button,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => KeyCombo::from_pointer(*button, *modifiers)
+                    .and_then(|combo| self.action_for(scope, combo)),
                 _ => None,
             })
             .collect()
@@ -895,7 +981,7 @@ pub fn os_reserved(os: Os, combo: KeyCombo) -> Option<&'static str> {
         && !combo.shift
         && matches!(
             combo.key,
-            F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12
+            Input::Key(F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12)
         );
     if vt_switch {
         return Some("Switch virtual console");
@@ -1096,6 +1182,16 @@ mod tests {
     }
 
     #[test]
+    fn saved_backspace_only_parent_folder_gains_the_mouse_back_button() {
+        let (map, problems) = load("parent_folder = [\"Backspace\"]");
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            map.action_for(Scope::Main, combo("MouseBack")),
+            Some(Action::ParentFolder)
+        );
+    }
+
+    #[test]
     fn old_default_image_keys_become_the_new_defaults_without_warning() {
         let (map, problems) = load(
             "next_image = [\"Right\", \"PageDown\", \"Space\"]\n\
@@ -1221,6 +1317,37 @@ mod tests {
             map.actions_in(Scope::Main, &events),
             [Action::NextImage, Action::NewSlot]
         );
+    }
+
+    #[test]
+    fn mouse_back_button_goes_to_the_parent_folder() {
+        let map = Keymap::default();
+        let events = [Event::PointerButton {
+            pos: Default::default(),
+            button: PointerButton::Extra1,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }];
+        assert_eq!(map.actions_in(Scope::Main, &events), [Action::ParentFolder]);
+    }
+
+    #[test]
+    fn primary_mouse_button_is_never_an_action() {
+        let map = Keymap::default();
+        let events = [Event::PointerButton {
+            pos: Default::default(),
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }];
+        assert!(map.actions_in(Scope::Main, &events).is_empty());
+    }
+
+    #[test]
+    fn mouse_buttons_round_trip_through_text() {
+        for s in ["MouseBack", "Ctrl+MouseForward"] {
+            assert_eq!(s.parse::<KeyCombo>().unwrap().to_string(), s);
+        }
     }
 
     #[test]
