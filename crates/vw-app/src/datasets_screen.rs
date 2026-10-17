@@ -342,7 +342,7 @@ impl DatasetsScreen {
                         };
                         if !choices.is_empty() {
                             ui.push_id(("dataset-values", i), |ui| {
-                                ui.menu_button(icon::CARET_DOWN, |ui| {
+                                vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
                                     value_list(ui, lang, choices, &mut c.value)
                                 });
                             });
@@ -352,7 +352,7 @@ impl DatasetsScreen {
                             if !key.trim().is_empty() {
                                 ui.push_id(("dataset-values", i), |ui| {
                                     // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
-                                    ui.menu_button(icon::CARET_DOWN, |ui| {
+                                    vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
                                         let values = index.meta_values(kind, key);
                                         value_list(ui, lang, &values, &mut c.value);
                                     });
@@ -385,7 +385,7 @@ impl DatasetsScreen {
                     max: String::new(),
                 });
             }
-            ui.menu_button(
+            vw_ui::menu::button(ui,
                 format!("{} {} {}", icon::STACK, tr(lang, "Group"), icon::CARET_DOWN),
                 |ui| {
                     if groups.is_empty() {
@@ -698,7 +698,7 @@ impl DatasetsScreen {
                         if row.double_clicked() {
                             show = Some(e.dir.clone());
                         }
-                        row.context_menu(|ui| {
+                        vw_ui::menu::context(&row, |ui| {
                             if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
                                 send = Some(Action::Send(
                                     e.dir.clone(),
@@ -901,7 +901,7 @@ fn key_menu(
     const MAX: usize = 200;
     let (k, q) = (kind.trim().to_lowercase(), key.trim().to_lowercase());
     ui.push_id(("dataset-keys", row), |ui| {
-        ui.menu_button(icon::CARET_DOWN, |ui| {
+        vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
             egui::ScrollArea::vertical()
                 .max_height(360.0)
                 .show(ui, |ui| {

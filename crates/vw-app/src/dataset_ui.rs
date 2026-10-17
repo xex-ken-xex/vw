@@ -686,7 +686,7 @@ fn pick(
     }
     let mut chosen = None;
     ui.push_id(id, |ui| {
-        ui.menu_button(egui_phosphor::regular::CARET_DOWN, |ui| {
+        vw_ui::menu::button(ui, egui_phosphor::regular::CARET_DOWN, |ui| {
             egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {

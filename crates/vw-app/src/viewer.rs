@@ -1314,7 +1314,7 @@ impl Slot {
                     Some(p) == self.shown.as_ref().map(|s| &s.path) && *i < faces.len()
                 })
                 .map(|(p, i)| (p.clone(), *i, faces[*i].person.clone()));
-            response.context_menu(|ui| {
+            vw_ui::menu::context(&response, |ui| {
                 if let Some((path, i, person)) = &face_menu {
                     let title = match person {
                         Some(name) => tr1(lang, "Face {}", &format!("{}: {name}", i + 1)),
@@ -1325,7 +1325,8 @@ impl Slot {
                         ui.menu_button(tr(lang, "Register as"), |ui| {
                             for name in people {
                                 if ui.button(name).clicked() {
-                                    out.face = Some((path.clone(), FaceAction::Assign(*i, name.clone())));
+                                    out.face =
+                                        Some((path.clone(), FaceAction::Assign(*i, name.clone())));
                                     ui.close();
                                 }
                             }
@@ -1371,6 +1372,7 @@ impl Slot {
                     out.copy = true;
                     ui.close();
                 }
+                ui.separator();
                 if ui
                     .button(tr(lang, "Use as evaluation reference"))
                     .on_hover_text(tr(
@@ -1382,6 +1384,7 @@ impl Slot {
                     out.reference = true;
                     ui.close();
                 }
+                ui.separator();
                 let not_ready = tr(lang, crate::ai_models::NOT_READY);
                 if ui
                     .add_enabled(ai_ready, egui::Button::new(tr(lang, "Add AI tags")))
@@ -1403,6 +1406,9 @@ impl Slot {
                     out.remove_ai_tags = true;
                     ui.close();
                 }
+                if self.shown.is_some() {
+                    ui.separator();
+                }
                 let developable = self
                     .shown
                     .as_ref()
@@ -1419,12 +1425,9 @@ impl Slot {
                     .shown
                     .as_ref()
                     .is_some_and(|s| s.info.plugin == "DICOM");
-                if self.shown.is_some() {
-                    ui.separator();
-                    if ui.button(tr(lang, "Pixel pipeline...")).clicked() {
-                        out.pipeline = true;
-                        ui.close();
-                    }
+                if self.shown.is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
+                    out.pipeline = true;
+                    ui.close();
                 }
                 if dicom {
                     out.send = crate::dicom_send::menu(ui, lang, destinations);

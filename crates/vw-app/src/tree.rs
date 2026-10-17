@@ -155,7 +155,7 @@ impl Node {
             if r.clicked() {
                 out.action = Some(TreeAction::Mount(self.path.clone()));
             }
-            r.context_menu(|ui| {
+            vw_ui::menu::context(&r, |ui| {
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.action = Some(TreeAction::Copy(self.path.clone()));
                     ui.close();
@@ -252,7 +252,7 @@ impl Node {
             label.scroll_to_me(Some(egui::Align::Center));
         }
         if self.mounted {
-            label.context_menu(|ui| {
+            vw_ui::menu::context(label, |ui| {
                 if ui.button(tr(lang, "Copy")).clicked() {
                     out.action = Some(TreeAction::Copy(self.path.clone()));
                     ui.close();
@@ -468,7 +468,7 @@ fn without_toggle(
 fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<TreeAction>) {
     use crate::dataset_ui::Request;
     let lang = view.lang;
-    r.context_menu(|ui| {
+    vw_ui::menu::context(r, |ui| {
         if ui.button(tr(lang, "Copy")).clicked() {
             *out = Some(TreeAction::Copy(path.to_owned()));
             ui.close();
@@ -538,7 +538,7 @@ fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Option<TreeA
 
 /// 検査・シリーズの右クリックメニュー。その全ファイルを送る。
 fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Option<TreeAction>) {
-    r.context_menu(|ui| {
+    vw_ui::menu::context(r, |ui| {
         if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
             *out = Some(TreeAction::Send {
                 choice,

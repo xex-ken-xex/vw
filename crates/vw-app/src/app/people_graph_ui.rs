@@ -195,7 +195,8 @@ fn toolbar(
         else {
             return;
         };
-        ui.menu_button(
+        vw_ui::menu::button(
+            ui,
             format!("{} {}", icon::USER_PLUS, tr(lang, "Add person")),
             |ui| {
                 ui.add(
@@ -333,7 +334,7 @@ fn edge_row(
                 outcome.save = true;
             }
             if !labels.is_empty() {
-                ui.menu_button(icon::CARET_DOWN, |ui| {
+                vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
                     for l in labels {
                         if ui.button(l).clicked() {
                             g.set_label(&a, &b, l);
@@ -517,7 +518,7 @@ fn canvas(
         }
         if let Some(p) = person {
             let r = r.on_hover_text(tr1(lang, "{} face(s)", &p.faces.len().to_string()));
-            r.context_menu(|ui| {
+            vw_ui::menu::context(&r, |ui| {
                 if ui.button(tr(lang, "Draw a line from here")).clicked() {
                     w.connecting = Some(name.clone());
                     ui.close();
@@ -552,7 +553,7 @@ fn canvas(
             w.selected.clear();
         }
         let (a, b) = (a.clone(), b.clone());
-        background.context_menu(|ui| {
+        vw_ui::menu::context(&background, |ui| {
             if ui.button(tr(lang, "Remove line")).clicked() {
                 g.remove_edge(&a, &b);
                 w.edge = None;
