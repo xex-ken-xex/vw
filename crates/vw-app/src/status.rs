@@ -25,7 +25,10 @@ pub type Segment = (String, Tone);
 pub struct Job {
     pub name: &'static str,
     pub done: usize,
+    /// 全部の量。まだ分からない（ZIP の目次を読んでいるなど）ときは 0。
     pub total: usize,
+    /// 量がバイト数か（そうでなければ件数）。
+    pub bytes: bool,
 }
 
 /// 状態の行を作るための、その時点の値。
@@ -280,15 +283,27 @@ pub fn lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
         out.push(vec![seg(format!("  {}", w.idle), Tone::Dim)]);
     }
     for job in &s.jobs {
-        let fraction = job.done as f32 / job.total.max(1) as f32;
-        out.push(vec![
-            seg(format!("  {} ", job.name), Tone::Label),
-            seg(bar(fraction, 16), Tone::Accent),
-            seg(
-                format!(" {:3.0}% {}/{}", fraction * 100.0, job.done, job.total),
-                Tone::Value,
-            ),
-        ]);
+        let mut line = vec![
+            seg(format!("{} ", s.spinner), Tone::Accent),
+            seg(format!("{} ", job.name), Tone::Label),
+        ];
+        if job.total == 0 {
+            line.push(seg("…".into(), Tone::Value));
+            out.push(line);
+            continue;
+        }
+        let fraction = job.done as f32 / job.total as f32;
+        let amount = if job.bytes {
+            format!("{}/{}", bytes(job.done), bytes(job.total))
+        } else {
+            format!("{}/{}", job.done, job.total)
+        };
+        line.push(seg(bar(fraction, 16), Tone::Accent));
+        line.push(seg(
+            format!(" {:3.0}% {amount}", fraction * 100.0),
+            Tone::Value,
+        ));
+        out.push(line);
     }
     out
 }
@@ -411,22 +426,31 @@ mod tests {
         let s = Snapshot {
             jobs: vec![
                 Job {
-                    name: "ZIP",
+                    name: "Send",
                     done: 35,
                     total: 70,
+                    bytes: false,
                 },
                 Job {
-                    name: "Send",
+                    name: "ZIP",
+                    done: 1 << 30,
+                    total: 4 << 30,
+                    bytes: true,
+                },
+                Job {
+                    name: "Copy",
                     done: 0,
                     total: 0,
+                    bytes: true,
                 },
             ],
             ..snapshot()
         };
         let all = lines(&s, &WORDS);
-        assert_eq!(all.len(), 5);
-        assert_eq!(text(&all[3]), "  ZIP ████████────────  50% 35/70");
-        assert_eq!(text(&all[4]), "  Send ────────────────   0% 0/0");
+        assert_eq!(all.len(), 6);
+        assert_eq!(text(&all[3]), "/ Send ████████────────  50% 35/70");
+        assert_eq!(text(&all[4]), "/ ZIP ████────────────  25% 1.0 GB/4.0 GB");
+        assert_eq!(text(&all[5]), "/ Copy …");
     }
 
     #[test]
