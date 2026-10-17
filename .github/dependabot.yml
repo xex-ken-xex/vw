@@ -1,0 +1,10 @@
+# GitHub Actions はコミット SHA で固定しているので、新しい版は Dependabot の PR で取り込む。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

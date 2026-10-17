@@ -1,0 +1,20 @@
+# cargo-deny の設定。CI では advisories と sources だけを確かめる（`cargo deny check advisories sources`）。
+# ライセンスは cargo-about（packaging/about.toml）で確かめているので、ここでは二重に持たない。
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec に載った脆弱性と、取り下げられた（yanked）版を止める。
+yanked = "deny"
+# 保守されていないという知らせだけでは止めない。直接使っているクレートでないと差し替えられず、
+# 脆弱性ではないのに CI が赤くなり続けるため。
+unmaintained = "none"
+ignore = []
+
+[sources]
+# crates.io 以外（ほかのレジストリ・git）から取ってくる依存を止める。vendor/winit はパスなので対象外。
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
