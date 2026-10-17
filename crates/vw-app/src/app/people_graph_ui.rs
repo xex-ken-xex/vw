@@ -469,6 +469,9 @@ fn canvas(
     let mut clicked_person = false;
     let mut drag_by = None;
     let mut drag_done = false;
+    // 外す人は描き終えてから外す。カードを並べている途中で外すと、残りの添字がずれて
+    // 最後の人を読もうとしたときに範囲外になる。
+    let mut removed = None;
     for i in 0..g.members.len() {
         let name = g.members[i].name.clone();
         let pos = pos2(g.members[i].pos[0], g.members[i].pos[1]);
@@ -524,13 +527,16 @@ fn canvas(
                     ui.close();
                 }
                 if ui.button(tr(lang, "Remove from chart")).clicked() {
-                    g.remove(std::slice::from_ref(&name));
-                    w.selected.remove(&name);
-                    outcome.save = true;
+                    removed = Some(name.clone());
                     ui.close();
                 }
             });
         }
+    }
+    if let Some(name) = removed {
+        g.remove(std::slice::from_ref(&name));
+        w.selected.remove(&name);
+        outcome.save = true;
     }
     if let Some(d) = drag_by {
         for m in g
