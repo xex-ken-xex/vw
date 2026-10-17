@@ -8,3 +8,24 @@ updates:
     groups:
       actions:
         patterns: ['*']
+
+  # 依存クレートの多くは cargo-deny の検査に任せ、更新は手で行う。ここに挙げるものは C のライブラリ
+  # （CharLS・OpenJPEG）を中に持つか、それを使う画像の読み込みのクレートで、C の側の脆弱性は RustSec に
+  # 載らないことがあるため、新しい版が出たら PR で知らせてもらう。全部を対象にしないのは、PR が多すぎて
+  # 読まれなくなるため。
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: 'dicom-*'
+        dependency-type: all
+      - dependency-name: charls
+        dependency-type: all
+      - dependency-name: charls-sys
+        dependency-type: all
+      - dependency-name: openjpeg-sys
+        dependency-type: all
+    groups:
+      image-decoders:
+        patterns: ['*']

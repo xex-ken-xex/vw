@@ -7,3 +7,5 @@ Cargo.toml       @xex-ken-xex
 Cargo.lock       @xex-ken-xex
 /vendor/         @xex-ken-xex
 /packaging/      @xex-ken-xex
+# 他人の作ったファイルを読む部分のうち、規制の厳しい用途に使われうるもの。
+/crates/vw-dicom/ @xex-ken-xex
