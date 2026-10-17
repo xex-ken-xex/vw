@@ -1004,7 +1004,12 @@ cargo build --release                                       # 実行ファイル
 cargo fmt --all --check                      # 書式
 cargo clippy --all-targets -- -D warnings    # 静的解析（警告もエラー扱い）
 cargo test                                   # 自動テスト
+cargo deny check advisories sources          # 依存の既知の脆弱性・取り下げられた版・取得元（cargo install cargo-deny）
 ```
+
+CI は Cargo.lock のままビルドする（`--locked`）ので、依存を変えたら Cargo.lock もコミットしてください。
+依存の検査は週 1 回も自動で走り、コードを変えていなくても新しく見つかった脆弱性に気づけます。
+GitHub Actions はコミット SHA で固定してあり、新しい版は Dependabot の PR で取り込みます。
 
 ### リポジトリの構成
 

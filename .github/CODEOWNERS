@@ -1,0 +1,11 @@
+# 配布する vw に入るもの、または CI の権限で動くものの変更は、持ち主のレビューを必須にする。
+# ここの変更はバグ修正に見せかけた小さな差分でも、ビルド・依存・リリースを丸ごと差し替えられるため。
+# 効かせるには、main のルールセットで「Require review from Code Owners」を有効にする。
+/.github/        @xex-ken-xex
+**/build.rs      @xex-ken-xex
+Cargo.toml       @xex-ken-xex
+Cargo.lock       @xex-ken-xex
+/vendor/         @xex-ken-xex
+/packaging/      @xex-ken-xex
+# 他人の作ったファイルを読む部分のうち、規制の厳しい用途に使われうるもの。
+/crates/vw-dicom/ @xex-ken-xex
