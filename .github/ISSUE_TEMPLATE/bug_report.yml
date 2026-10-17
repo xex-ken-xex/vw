@@ -1,0 +1,53 @@
+name: 不具合の報告 / Bug report
+description: 動かない・落ちる・表示がおかしいなど
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。脆弱性は、ここではなく [SECURITY.md](https://github.com/xex-ken-xex/vw/blob/main/SECURITY.md) の方法で非公開で知らせてください。
+        個人情報や人に見せられない画像は貼らないでください。
+  - type: input
+    id: version
+    attributes:
+      label: vw の版 / Version
+      description: 「ヘルプ」→「vw について」に出ています（例: 0.5.0、最新ビルド (main)）
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows 11
+        - Windows 10
+        - Ubuntu
+        - そのほかの Linux / Other Linux
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 手順 / Steps to reproduce
+      placeholder: |
+        1. ○○ のフォルダを開く
+        2. ○○ を押す
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した結果と実際の結果 / Expected and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: ログ / Log
+      description: ログ欄のエラー（赤字）や、ログのファイルの該当部分（ログ欄の見出しのフォルダのボタンで開けます）
+      render: text
+  - type: textarea
+    id: file
+    attributes:
+      label: ファイル / File
+      description: 特定のファイルでだけ起きるなら、その形式・大きさ・作ったカメラやソフト。見せてよいファイルなら添付してください

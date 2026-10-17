@@ -1,5 +1,5 @@
-//! 「vw について」のウインドウ。名前・版・著作権・ライセンスと、同梱の
-//! サードパーティのライセンス一覧を開くボタンを出す。
+//! 「vw について」のウインドウ。名前・版・著作権・ライセンス・Issue の画面へのリンクと、
+//! 同梱のサードパーティのライセンス一覧を開くボタンを出す。
 
 use std::path::PathBuf;
 
@@ -11,6 +11,8 @@ use crate::settings::Language;
 pub const COPYRIGHT: &str = "Copyright (c) 2026 vw contributors";
 pub const AUTHOR: &str = "xex (xex-ken-xex)";
 pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+/// 不具合の報告と要望のテンプレートを選ぶ画面。
+pub const ISSUES: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new/choose");
 pub const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -45,6 +47,7 @@ impl About {
                     ui.label(AUTHOR);
                 });
                 ui.hyperlink(REPOSITORY);
+                ui.hyperlink_to(tr(lang, "Report a bug or request a feature..."), ISSUES);
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "License"));
                     ui.label(LICENSE);
@@ -86,5 +89,13 @@ mod tests {
     fn about_shows_the_dual_license_and_the_repository() {
         assert_eq!(LICENSE, "MIT OR Apache-2.0");
         assert_eq!(REPOSITORY, "https://github.com/xex-ken-xex/vw");
+    }
+
+    #[test]
+    fn issue_link_opens_the_template_chooser() {
+        assert_eq!(
+            ISSUES,
+            "https://github.com/xex-ken-xex/vw/issues/new/choose"
+        );
     }
 }
