@@ -91,9 +91,9 @@ impl VwApp {
         groups.extend(group_metadata(&entries).into_iter().map(|(g, rows)| {
             let rows = rows
                 .into_iter()
-                .map(|(k, v)| meta_view::Row::new(g, k, k.to_owned(), v.to_owned()))
+                .map(|(k, v)| meta_view::Row::new(g, k, shown_name(lang, g, k), v.to_owned()))
                 .collect();
-            meta_view::Group::new(g, g.to_owned(), rows)
+            meta_view::Group::new(g, shown_name(lang, g, g), rows)
         }));
         Some(groups)
     }
@@ -426,6 +426,21 @@ impl VwApp {
 const FILE: &str = "File";
 const PATH: &str = "Path";
 const PATH_ID: &str = "File/Path";
+
+/// 形式のメタデータの名前は、ファイルに書かれたとおり英語で出す。訳すのは vw が作る
+/// 撮影地点のグループだけ（EXIF の Color などを、ほかの訳語で置き換えてしまわないため）。
+fn shown_name(lang: crate::settings::Language, group: &str, name: &str) -> String {
+    if group == vw_core::exif::LOCATION {
+        // 英語の "Location" はデータセットの一覧で「場所（フォルダ）」に訳しているので、
+        // 訳の表を引かずにここで決める。
+        match (lang, name == group) {
+            (crate::settings::Language::Japanese, true) => "撮影地点".to_owned(),
+            _ => crate::i18n::tr_text(lang, name),
+        }
+    } else {
+        name.to_owned()
+    }
+}
 
 fn copy_groups(groups: &[meta_view::Group]) -> Vec<MetaGroup> {
     groups

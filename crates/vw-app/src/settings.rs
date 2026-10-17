@@ -1063,6 +1063,48 @@ impl Ai {
     }
 }
 
+/// 地図のウインドウ（撮影地点を点で出す）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MapSettings {
+    /// 地図を使う。外のサーバーから地図の絵を取るので、既定は切っておき、使う人が選ぶ。
+    pub enabled: bool,
+    /// 地図の絵（タイル）の URL。`{z}`・`{x}`・`{y}` をタイルの番号に置き換える。
+    pub tile_url: String,
+    /// 地図の右下に出す、地図の絵の出典。提供元の条件で、見える所に出す決まりがある。
+    pub attribution: String,
+    pub attribution_url: String,
+}
+
+impl Default for MapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".into(),
+            attribution: "© OpenStreetMap contributors".into(),
+            attribution_url: "https://www.openstreetmap.org/copyright".into(),
+        }
+    }
+}
+
+impl MapSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("map");
+        Self {
+            enabled: r.get("enabled").unwrap_or(d.enabled),
+            tile_url: r
+                .get_valid(
+                    "tile_url",
+                    |v: &String| crate::map_tiles::valid_template(v),
+                    "must be an http(s) URL with {z}, {x} and {y}",
+                )
+                .unwrap_or(d.tile_url),
+            attribution: r.get("attribution").unwrap_or(d.attribution),
+            attribution_url: r.get("attribution_url").unwrap_or(d.attribution_url),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -1079,6 +1121,7 @@ pub struct Settings {
     pub log: LogSettings,
     pub quality: Quality,
     pub ai: Ai,
+    pub map: MapSettings,
     pub keys: Keymap,
 }
 
@@ -1104,6 +1147,7 @@ impl Settings {
         let log = LogSettings::read(&mut r);
         let quality = Quality::read(&mut r);
         let ai = Ai::read(&mut r);
+        let map = MapSettings::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -1130,6 +1174,7 @@ impl Settings {
                 log,
                 quality,
                 ai,
+                map,
                 keys,
             },
             problems,

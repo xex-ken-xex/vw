@@ -301,6 +301,48 @@ impl VwApp {
         }
     }
 
+    /// 地図のウインドウ。点から開いた画像は、そのフォルダへ移って選ぶ。
+    pub(super) fn map_ui(&mut self, ctx: &egui::Context) {
+        let settings = &self.settings.settings;
+        if !settings.map.enabled {
+            self.map.open = false;
+        }
+        let cache = self
+            .settings
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join("map-tiles"));
+        let registry = self.loader.registry().clone();
+        let inputs = crate::map_window::Inputs {
+            lang: self.lang(),
+            settings: &settings.map,
+            folder: self.current.as_deref(),
+            roots: &settings.dataset.roots,
+            registry: &registry,
+            order: settings.tree.order(),
+            cache: cache.as_deref(),
+        };
+        let commands = self.map.ui(ctx, &inputs);
+        for problem in self.map.take_problems() {
+            self.log.error(format!("Map: {problem}"));
+        }
+        for command in commands {
+            match command {
+                crate::map_window::Command::Open(path) => {
+                    let Some(dir) = path.parent().map(Path::to_path_buf) else {
+                        continue;
+                    };
+                    // 今のフォルダなら読み直さずに選ぶ（スロットの表示や拡大を崩さないため）。
+                    if self.current.as_deref() != Some(dir.as_path()) {
+                        self.open_folder(ctx, dir);
+                    }
+                    self.select_when_loaded = Some(path);
+                }
+            }
+        }
+    }
+
     pub(super) fn toggle_datasets(&mut self, ctx: &egui::Context) {
         self.show_datasets = !self.show_datasets;
         if self.show_datasets {
