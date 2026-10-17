@@ -288,6 +288,8 @@ pub struct LogSettings {
     pub file: bool,
     /// 残すログファイルの数（起動 1 回で 1 ファイル）。
     pub keep_files: u32,
+    /// 長い行を欄の幅で折り返す。
+    pub wrap: bool,
 }
 
 impl LogSettings {
@@ -300,6 +302,7 @@ impl Default for LogSettings {
             style: LogStyle::Normal,
             file: true,
             keep_files: 20,
+            wrap: true,
         }
     }
 }
@@ -318,6 +321,7 @@ impl LogSettings {
                     "must be 1 to 1000",
                 )
                 .unwrap_or(d.keep_files),
+            wrap: r.get("wrap").unwrap_or(d.wrap),
         }
     }
 }
@@ -890,6 +894,10 @@ pub struct Ai {
     pub character_threshold: f32,
     /// 推論に使うスレッド数。0 なら ONNX Runtime に任せる。
     pub threads: usize,
+    /// 顔を登録済みの人物とみなすコサイン類似度の下限。
+    pub face_threshold: f32,
+    /// 検出されても付けないタグ。
+    pub excluded_tags: Vec<String>,
 }
 
 impl Default for Ai {
@@ -899,6 +907,9 @@ impl Default for Ai {
             general_threshold: t.general,
             character_threshold: t.character,
             threads: 0,
+            // SFace の作者が示す、同じ人とみなすコサイン類似度の目安。
+            face_threshold: 0.363,
+            excluded_tags: Vec::new(),
         }
     }
 }
@@ -924,6 +935,10 @@ impl Ai {
                     "must be between 0 and 64",
                 )
                 .unwrap_or(d.threads),
+            face_threshold: r
+                .get_valid("face_threshold", unit, "must be between 0 and 1")
+                .unwrap_or(d.face_threshold),
+            excluded_tags: r.get("excluded_tags").unwrap_or(d.excluded_tags),
         }
     }
 

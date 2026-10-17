@@ -1,10 +1,13 @@
-//! ターミナル風のログ欄の上に出す、常に書き換わる状態の行。
+//! ログ欄の上に出す、常に書き換わる状態の行。今動いている処理と、読み込みの集計を出す。
+//!
+//! 1 枚ごとの読み込みの記録はログファイルにだけ書き、ここには平均と数だけを出す。
+//! ログ欄を 1 枚ごとの行で埋めると、何が起きたかの話題（フォルダを開いた、失敗した）が流れてしまうため。
 //!
 //! 文字だけで棒や波形を描くのは、ログと同じ等幅の文字の並びの中に収め、
 //! そのまま選んでコピーしても読める形にするため。
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// 行の中の 1 区切りの役目。色は描く側が決める。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,6 +16,7 @@ pub enum Tone {
     Value,
     Accent,
     Dim,
+    Bad,
 }
 
 pub type Segment = (String, Tone);
@@ -40,6 +44,59 @@ pub struct Snapshot {
     pub jobs: Vec<Job>,
     /// 回るしるし。何か動いているときだけ回す。
     pub spinner: char,
+    pub files: usize,
+    pub failed: usize,
+    /// 直近の読み込みの、読む・デコード・変換・テクスチャの平均（ミリ秒）。
+    pub averages: Option<[f32; 4]>,
+    /// 最後に読み込んだファイルの名前。
+    pub last: Option<String>,
+    pub last_failed: Option<String>,
+}
+
+/// 平均をとる、直近の読み込みの数。起動からの全部で平均すると、
+/// 重い RAW を読んだ後でも小さな PNG の速さがいつまでも見えないため。
+const AVERAGE_FILES: usize = 100;
+
+/// 読み込みの集計。
+#[derive(Default)]
+pub struct LoadStats {
+    pub files: usize,
+    pub failed: usize,
+    recent: VecDeque<[Duration; 4]>,
+    pub last: Option<String>,
+    pub last_failed: Option<String>,
+}
+
+impl LoadStats {
+    /// 読み込めた 1 枚。`times` は読む・デコード・変換・テクスチャ。
+    pub fn record(&mut self, name: String, times: [Duration; 4]) {
+        self.files += 1;
+        self.recent.push_back(times);
+        if self.recent.len() > AVERAGE_FILES {
+            self.recent.pop_front();
+        }
+        self.last = Some(name);
+    }
+
+    pub fn fail(&mut self, name: String) {
+        self.failed += 1;
+        self.last_failed = Some(name.clone());
+        self.last = Some(name);
+    }
+
+    /// 直近の平均（ミリ秒）。
+    pub fn averages(&self) -> Option<[f32; 4]> {
+        if self.recent.is_empty() {
+            return None;
+        }
+        let mut sum = [0.0f32; 4];
+        for t in &self.recent {
+            for (s, d) in sum.iter_mut().zip(t) {
+                *s += d.as_secs_f32() * 1000.0;
+            }
+        }
+        Some(sum.map(|s| s / self.recent.len() as f32))
+    }
 }
 
 /// 状態の行の文言。言語で変わるもの。
@@ -163,11 +220,12 @@ pub fn bytes(n: usize) -> String {
     }
 }
 
-/// 2 行。1 行目は読み込みとフル解像度のメモリ、2 行目は進めている処理。
-pub fn lines(s: &Snapshot, w: &Words) -> [Vec<Segment>; 2] {
+/// 状態の行。読み込みの集計、最後に読んだファイル、フル解像度のメモリ、
+/// そのあとに進めている処理を 1 つ 1 行で（なければ「待機中」の 1 行）。
+pub fn lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
     let seg = |text: String, tone| (text, tone);
     let busy = s.waiting + s.running > 0;
-    let first = vec![
+    let mut load = vec![
         seg(
             format!("{} ", if busy { s.spinner } else { ' ' }),
             Tone::Accent,
@@ -179,7 +237,33 @@ pub fn lines(s: &Snapshot, w: &Words) -> [Vec<Segment>; 2] {
         seg(format!(" {} ", s.sparkline), Tone::Accent),
         seg(format!("{:5.1}", s.rate), Tone::Value),
         seg(format!(" {}", w.per_second), Tone::Label),
-        seg(format!("   {} ", w.full), Tone::Label),
+        seg("   files ".into(), Tone::Label),
+        seg(s.files.to_string(), Tone::Value),
+    ];
+    if let Some([read, decode, convert, texture]) = s.averages {
+        load.push(seg("   avg ms  read ".into(), Tone::Label));
+        load.push(seg(format!("{read:.1}"), Tone::Value));
+        load.push(seg(" / decode ".into(), Tone::Label));
+        load.push(seg(format!("{decode:.1}"), Tone::Value));
+        load.push(seg(" / convert ".into(), Tone::Label));
+        load.push(seg(format!("{convert:.1}"), Tone::Value));
+        load.push(seg(" / texture ".into(), Tone::Label));
+        load.push(seg(format!("{texture:.1}"), Tone::Value));
+    }
+    if s.failed > 0 {
+        load.push(seg(format!("   {} failed", s.failed), Tone::Bad));
+    }
+    let mut last = vec![seg("  > ".into(), Tone::Dim)];
+    match &s.last {
+        Some(name) => last.push(seg(name.clone(), Tone::Value)),
+        None => last.push(seg("-".into(), Tone::Dim)),
+    }
+    if let Some(name) = &s.last_failed {
+        last.push(seg("   last failed ".into(), Tone::Label));
+        last.push(seg(name.clone(), Tone::Bad));
+    }
+    let memory = vec![
+        seg(format!("  {} ", w.full), Tone::Label),
         seg(
             bar(s.resident as f32 / s.limit.max(1) as f32, 12),
             Tone::Accent,
@@ -189,23 +273,22 @@ pub fn lines(s: &Snapshot, w: &Words) -> [Vec<Segment>; 2] {
             Tone::Value,
         ),
     ];
-    let mut second = Vec::new();
+    let mut out = vec![load, last, memory];
     if s.jobs.is_empty() {
-        second.push(seg(format!("  {}", w.idle), Tone::Dim));
+        out.push(vec![seg(format!("  {}", w.idle), Tone::Dim)]);
     }
-    for (i, job) in s.jobs.iter().enumerate() {
+    for job in &s.jobs {
         let fraction = job.done as f32 / job.total.max(1) as f32;
-        second.push(seg(
-            format!("{}{} ", if i == 0 { "  " } else { "   " }, job.name),
-            Tone::Label,
-        ));
-        second.push(seg(bar(fraction, 16), Tone::Accent));
-        second.push(seg(
-            format!(" {:3.0}% {}/{}", fraction * 100.0, job.done, job.total),
-            Tone::Value,
-        ));
+        out.push(vec![
+            seg(format!("  {} ", job.name), Tone::Label),
+            seg(bar(fraction, 16), Tone::Accent),
+            seg(
+                format!(" {:3.0}% {}/{}", fraction * 100.0, job.done, job.total),
+                Tone::Value,
+            ),
+        ]);
     }
-    [first, second]
+    out
 }
 
 #[cfg(test)]
@@ -236,6 +319,11 @@ mod tests {
             limit: 4 << 30,
             jobs: Vec::new(),
             spinner: '/',
+            files: 0,
+            failed: 0,
+            averages: None,
+            last: None,
+            last_failed: None,
         }
     }
 
@@ -311,13 +399,13 @@ mod tests {
             resident: 1 << 30,
             ..snapshot()
         };
-        let line = text(&lines(&s, &WORDS)[0]);
+        let line = text(&lines(&s, &WORDS)[2]);
         assert!(line.ends_with("███░░░░░░░░░ 1.0 GB / 4.0 GB"), "{line}");
     }
 
     #[test]
-    fn second_line_lists_each_running_job_with_its_progress() {
-        assert_eq!(text(&lines(&snapshot(), &WORDS)[1]), "  idle");
+    fn each_running_job_gets_its_own_line() {
+        assert_eq!(text(&lines(&snapshot(), &WORDS)[3]), "  idle");
         let s = Snapshot {
             jobs: vec![
                 Job {
@@ -333,10 +421,46 @@ mod tests {
             ],
             ..snapshot()
         };
-        let line = text(&lines(&s, &WORDS)[1]);
-        assert_eq!(
-            line,
-            "  ZIP ████████░░░░░░░░  50% 35/70   Send ░░░░░░░░░░░░░░░░   0% 0/0"
+        let all = lines(&s, &WORDS);
+        assert_eq!(all.len(), 5);
+        assert_eq!(text(&all[3]), "  ZIP ████████░░░░░░░░  50% 35/70");
+        assert_eq!(text(&all[4]), "  Send ░░░░░░░░░░░░░░░░   0% 0/0");
+    }
+
+    #[test]
+    fn loading_shows_averages_failures_and_the_last_file() {
+        let mut stats = LoadStats::default();
+        let ms = Duration::from_millis;
+        stats.record("a.png".into(), [ms(1), ms(10), ms(4), ms(0)]);
+        stats.record("b.png".into(), [ms(3), ms(20), ms(6), ms(2)]);
+        stats.fail("c.jpg".into());
+        let s = Snapshot {
+            files: stats.files,
+            failed: stats.failed,
+            averages: stats.averages(),
+            last: stats.last.clone(),
+            last_failed: stats.last_failed.clone(),
+            ..snapshot()
+        };
+        let all = lines(&s, &WORDS);
+        let load = text(&all[0]);
+        assert!(
+            load.ends_with(
+                "files 2   avg ms  read 2.0 / decode 15.0 / convert 5.0 / texture 1.0   1 failed"
+            ),
+            "{load}"
         );
+        assert_eq!(text(&all[1]), "  > c.jpg   last failed c.jpg");
+    }
+
+    #[test]
+    fn averages_cover_only_the_recent_files() {
+        let mut stats = LoadStats::default();
+        stats.record("slow".into(), [Duration::from_secs(1); 4]);
+        for _ in 0..AVERAGE_FILES {
+            stats.record("fast".into(), [Duration::ZERO; 4]);
+        }
+        assert_eq!(stats.averages(), Some([0.0; 4]));
+        assert_eq!(stats.files, AVERAGE_FILES + 1);
     }
 }

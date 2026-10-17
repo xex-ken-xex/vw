@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::faces::FaceMark;
 use crate::tagger::Tags;
 
 pub const FILE_NAME: &str = ".vw-ai-tags.json";
@@ -20,9 +21,27 @@ const VERSION: u32 = 1;
 /// 1 枚の画像の AI タグと、付けたモデルの名前。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
+    /// タグを付けたモデル。顔だけを探した画像では空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
     #[serde(flatten)]
     pub tags: Tags,
+    /// 見つけた顔の枠と人物。特徴ベクトルは個人情報なのでここには書かない（[`crate::face_store`]）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FaceMark>,
+}
+
+impl Entry {
+    /// 写っている人物の名前（重なりなし、見つけた順）。
+    pub fn people(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = Vec::new();
+        for n in self.faces.iter().filter_map(|f| f.person.as_deref()) {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        names
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -58,16 +77,100 @@ impl AiTagStore {
         self.with_dir(dir, |d| d.file.files.get(&name).cloned())
     }
 
-    pub fn set(&mut self, path: &Path, entry: Entry) -> Result<(), String> {
+    /// 画像の記録の一部を書き換えて保存する。タグ付けと顔探しは別々に走るので、
+    /// 片方の結果でもう片方を消さないよう、丸ごと置き換えずにここを通す。
+    pub fn update(&mut self, path: &Path, change: impl FnOnce(&mut Entry)) -> Result<(), String> {
         let (dir, name) =
             split(path).ok_or_else(|| format!("{}: not a file in a folder", path.display()))?;
         self.with_dir(dir, |_| ());
         {
             let mut dirs = self.dirs.borrow_mut();
             let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
-            files.insert(name, entry);
+            change(files.entry(name).or_default());
         }
         self.save(dir)
+    }
+
+    /// 画像の顔の枠。
+    pub fn faces(&self, path: &Path) -> Vec<FaceMark> {
+        split(path)
+            .and_then(|(dir, name)| {
+                self.with_dir(dir, |d| d.file.files.get(&name).map(|e| e.faces.clone()))
+            })
+            .unwrap_or_default()
+    }
+
+    /// 画像の記録（タグと顔の枠）を消す。フォルダごとに 1 回だけ書く。
+    /// 消して空になったフォルダのファイルは、ファイルごと消す。返すのは消した画像の数。
+    pub fn remove(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
+        let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
+        for p in paths {
+            if let Some((dir, name)) = split(p) {
+                by_dir.entry(dir).or_default().push(name);
+            }
+        }
+        let mut removed = 0;
+        for (dir, names) in by_dir {
+            let before = removed;
+            let empty = {
+                self.with_dir(dir, |_| ());
+                let mut dirs = self.dirs.borrow_mut();
+                let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
+                for n in &names {
+                    removed += usize::from(files.remove(n).is_some());
+                }
+                files.is_empty()
+            };
+            if removed == before {
+                continue;
+            }
+            if empty {
+                for path in [Some(dir.join(FILE_NAME)), self.fallback_path(dir)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let _ = std::fs::remove_file(path);
+                }
+            } else {
+                self.save(dir)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// 画像の記録を書き換え、変わったものをフォルダごとに 1 回だけ書く。
+    /// `change` は変えたら true を返す。返すのは変わった画像の数。
+    pub fn edit_all(
+        &mut self,
+        paths: &[PathBuf],
+        mut change: impl FnMut(&mut Entry) -> bool,
+    ) -> Result<usize, String> {
+        let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
+        for p in paths {
+            if let Some((dir, name)) = split(p) {
+                by_dir.entry(dir).or_default().push(name);
+            }
+        }
+        let mut changed = 0;
+        for (dir, names) in by_dir {
+            self.with_dir(dir, |_| ());
+            let n = {
+                let mut dirs = self.dirs.borrow_mut();
+                let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
+                let mut n = 0;
+                for name in &names {
+                    if let Some(e) = files.get_mut(name) {
+                        n += usize::from(change(e));
+                    }
+                }
+                n
+            };
+            if n > 0 {
+                self.save(dir)?;
+                changed += n;
+            }
+        }
+        Ok(changed)
     }
 
     pub fn forget(&self, dir: &Path) {
@@ -139,18 +242,23 @@ impl AiTagStore {
     }
 
     fn fallback_path(&self, dir: &Path) -> Option<PathBuf> {
-        let base = self.fallback_dir.as_ref()?;
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        dir.hash(&mut h);
-        let name: String = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect();
-        Some(base.join(format!("{name}-{:016x}.json", h.finish())))
+        Some(self.fallback_dir.as_ref()?.join(folder_file_name(dir)))
     }
+}
+
+/// フォルダの外（設定フォルダの下）にフォルダごとの記録を置くときのファイル名。
+/// 同じ名前のフォルダが別の場所にあっても重ならないよう、パスのハッシュを添える。
+pub fn folder_file_name(dir: &Path) -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut h);
+    let name: String = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{name}-{:016x}.json", h.finish())
 }
 
 fn split(path: &Path) -> Option<(&Path, String)> {
@@ -174,6 +282,7 @@ mod tests {
                 }],
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 
@@ -182,11 +291,33 @@ mod tests {
         let dir = tempfile_dir();
         let img = dir.join("a.png");
         let mut store = AiTagStore::new(None);
-        store.set(&img, entry("1girl", 0.9)).unwrap();
+        store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
         assert!(dir.join(FILE_NAME).exists());
         let fresh = AiTagStore::new(None);
         assert_eq!(fresh.get(&img), Some(entry("1girl", 0.9)));
         assert_eq!(fresh.get(&dir.join("b.png")), None);
+    }
+
+    #[test]
+    fn updating_faces_keeps_the_tags() {
+        let dir = tempfile_dir();
+        let img = dir.join("a.png");
+        let mut store = AiTagStore::new(None);
+        store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
+        store
+            .update(&img, |e| {
+                e.faces = vec![FaceMark {
+                    rect: [0.1, 0.1, 0.2, 0.2],
+                    score: 0.95,
+                    person: Some("A".into()),
+                    similarity: 0.5,
+                    unlinked: false,
+                }]
+            })
+            .unwrap();
+        let got = AiTagStore::new(None).get(&img).unwrap();
+        assert_eq!(got.tags.general[0].name, "1girl");
+        assert_eq!(got.people(), ["A"]);
     }
 
     #[test]
@@ -196,8 +327,41 @@ mod tests {
         let mut store = AiTagStore::new(None);
         assert_eq!(store.get(&dir.join("a.png")), None);
         assert_eq!(store.take_problems().len(), 1);
-        store.set(&dir.join("a.png"), entry("x", 0.5)).unwrap();
+        store
+            .update(&dir.join("a.png"), |e| *e = entry("x", 0.5))
+            .unwrap();
         assert!(dir.join(".vw-ai-tags.json.bak").exists());
+    }
+
+    #[test]
+    fn removing_every_entry_deletes_the_file() {
+        let dir = tempfile_dir();
+        let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+        let mut store = AiTagStore::new(None);
+        store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
+        store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
+        assert_eq!(store.remove(std::slice::from_ref(&a)).unwrap(), 1);
+        assert_eq!(AiTagStore::new(None).get(&a), None);
+        assert!(AiTagStore::new(None).get(&b).is_some());
+        assert_eq!(store.remove(&[a, b.clone()]).unwrap(), 1);
+        assert!(!dir.join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn removing_a_tag_from_many_images_writes_each_folder_once() {
+        let dir = tempfile_dir();
+        let (a, b, c) = (dir.join("a.png"), dir.join("b.png"), dir.join("c.png"));
+        let mut store = AiTagStore::new(None);
+        store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
+        store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
+        let names = ["cat".to_owned()];
+        let n = store
+            .edit_all(&[a.clone(), b.clone(), c], |e| e.tags.remove(&names))
+            .unwrap();
+        assert_eq!(n, 1);
+        let again = AiTagStore::new(None);
+        assert!(again.get(&a).unwrap().tags.general.is_empty());
+        assert_eq!(again.get(&b).unwrap().tags.general[0].name, "dog");
     }
 
     fn tempfile_dir() -> PathBuf {

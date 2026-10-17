@@ -18,21 +18,25 @@ use crate::settings::Language;
 
 pub const RUNTIME_VERSION: &str = "1.29.0";
 pub const TAGGER_NAME: &str = "wd-vit-tagger-v3";
+/// モデルが揃う前に、タグ付けや顔探しの項目に出す説明（英語の原文）。
+pub const NOT_READY: &str = "Download all AI models first (AI tags > AI models...)";
 
 /// ダウンロードするもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Item {
     Runtime,
     Tagger,
+    Faces,
 }
 
 impl Item {
-    pub const ALL: [Item; 2] = [Item::Runtime, Item::Tagger];
+    pub const ALL: [Item; 3] = [Item::Runtime, Item::Tagger, Item::Faces];
 
     pub fn title(self) -> &'static str {
         match self {
             Item::Runtime => "ONNX Runtime",
             Item::Tagger => "WD tagger v3 (ViT)",
+            Item::Faces => "YuNet + SFace (faces)",
         }
     }
 
@@ -40,6 +44,7 @@ impl Item {
         match self {
             Item::Runtime => "MIT",
             Item::Tagger => "Apache-2.0",
+            Item::Faces => "MIT / Apache-2.0",
         }
     }
 
@@ -48,6 +53,7 @@ impl Item {
         match self {
             Item::Runtime => "~60 MB",
             Item::Tagger => "~380 MB",
+            Item::Faces => "~39 MB",
         }
     }
 
@@ -55,6 +61,7 @@ impl Item {
         match self {
             Item::Runtime => "https://github.com/microsoft/onnxruntime/releases",
             Item::Tagger => "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3",
+            Item::Faces => "https://github.com/opencv/opencv_zoo",
         }
     }
 
@@ -76,9 +83,28 @@ impl Item {
                     extract: None,
                 })
                 .collect(),
+            // github.com の raw は Git LFS の中身へ転送されるが、転送先を直接指す。
+            // 転送を挟むと、プロキシのある環境で弾かれることがあるため。
+            Item::Faces => [FACE_DETECTOR, FACE_RECOGNIZER]
+                .into_iter()
+                .map(|(dir, f)| Source {
+                    url: format!(
+                        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/{dir}/{f}"
+                    ),
+                    target: PathBuf::from(FACES_DIR).join(f),
+                    extract: None,
+                })
+                .collect(),
         }
     }
 }
+
+const FACES_DIR: &str = "faces";
+const FACE_DETECTOR: (&str, &str) = ("face_detection_yunet", "face_detection_yunet_2023mar.onnx");
+const FACE_RECOGNIZER: (&str, &str) = (
+    "face_recognition_sface",
+    "face_recognition_sface_2021dec.onnx",
+);
 
 struct Source {
     url: String,
@@ -147,15 +173,22 @@ impl Store {
         self.dir.join(TAGGER_NAME).join("selected_tags.csv")
     }
 
+    pub fn face_detector(&self) -> PathBuf {
+        self.dir.join(FACES_DIR).join(FACE_DETECTOR.1)
+    }
+
+    pub fn face_recognizer(&self) -> PathBuf {
+        self.dir.join(FACES_DIR).join(FACE_RECOGNIZER.1)
+    }
+
     pub fn has(&self, item: Item) -> bool {
         item.sources()
             .iter()
-            .all(|s| self.dir.join(&s.target).is_file())
-    }
-
-    /// 足りないもの。
-    pub fn missing(&self) -> Vec<Item> {
-        Item::ALL.into_iter().filter(|&i| !self.has(i)).collect()
+            // 空のファイルは数えない。以前の版は展開に失敗すると空の dll を残していた。
+            .all(|s| {
+                std::fs::metadata(self.dir.join(&s.target))
+                    .is_ok_and(|m| m.is_file() && m.len() > 0)
+            })
     }
 }
 
@@ -266,17 +299,39 @@ fn fetch(agent: &ureq::Agent, url: &str, to: &Path, progress: &Progress) -> Resu
     file.flush().map_err(|e| format!("{}: {e}", to.display()))
 }
 
+fn is_zip(archive: &Path) -> Result<bool, String> {
+    let mut magic = [0u8; 2];
+    std::fs::File::open(archive)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .map_err(|e| format!("{}: {e}", archive.display()))?;
+    Ok(magic == *b"PK")
+}
+
 /// 書庫から `entry` で終わる 1 つのファイルを `target` に出す。
 fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
+    // 別名に書いてから置き換える。途中で失敗したとき、壊れた target を残さないため。
+    let partial = target.with_extension("extracting");
+    let result = std::fs::File::create(&partial)
+        .map_err(|e| format!("{}: {e}", partial.display()))
+        .and_then(|mut out| extract_into(archive, entry, &mut out))
+        .and_then(|()| {
+            std::fs::rename(&partial, target).map_err(|e| format!("{}: {e}", target.display()))
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    result
+}
+
+fn extract_into(archive: &Path, entry: &str, out: &mut std::fs::File) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
     let matches = |name: &str| {
         let name = name.replace('\\', "/");
         // Linux の .so は版の番号つき（libonnxruntime.so.1.29.0）で入っている。
         name.ends_with(entry) || name.contains(&format!("{entry}."))
     };
-    let mut out =
-        std::fs::File::create(target).map_err(|e| format!("{}: {e}", target.display()))?;
-    let found = if archive.extension().is_some_and(|e| e == "zip") {
+    // 拡張子では見分けない。落としている途中のファイルは .part なので、zip でも tgz に見えてしまう。
+    let found = if is_zip(archive)? {
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
         let index = (0..zip.len()).find(|&i| {
             zip.by_index(i)
@@ -285,7 +340,7 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
         match index {
             Some(i) => {
                 let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-                std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
+                std::io::copy(&mut f, out).map_err(|e| e.to_string())?;
                 true
             }
             None => false,
@@ -301,7 +356,7 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
                 .to_string_lossy()
                 .into_owned();
             if e.header().entry_type().is_file() && matches(&path) {
-                std::io::copy(&mut e, &mut out).map_err(|e| e.to_string())?;
+                std::io::copy(&mut e, out).map_err(|e| e.to_string())?;
                 found = true;
                 break;
             }
@@ -309,8 +364,6 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
         found
     };
     if !found {
-        drop(out);
-        let _ = std::fs::remove_file(target);
         return Err(format!(
             "{}: {entry} not found in the archive",
             archive.display()
@@ -440,7 +493,7 @@ impl Dialog {
                     }
                     ui.label(tr(
                         lang,
-                        "Both are needed for AI tags. Models run on the CPU.",
+                        "AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU.",
                     ));
                 });
             });
@@ -464,10 +517,16 @@ mod tests {
         let settings = dir.join("settings.toml");
         let store = Store::new(Some(&settings)).unwrap();
         assert_eq!(store.dir, dir.join("models"));
-        assert_eq!(store.missing(), vec![Item::Runtime, Item::Tagger]);
+        assert!(Item::ALL.iter().all(|&i| !store.has(i)));
         std::fs::create_dir_all(store.runtime().parent().unwrap()).unwrap();
         std::fs::write(store.runtime(), b"").unwrap();
-        assert_eq!(store.missing(), vec![Item::Tagger]);
+        assert!(
+            !store.has(Item::Runtime),
+            "an empty file is a failed download"
+        );
+        std::fs::write(store.runtime(), b"dll").unwrap();
+        assert!(store.has(Item::Runtime));
+        assert!(!store.has(Item::Tagger) && !store.has(Item::Faces));
     }
 
     /// 本物の ONNX Runtime を GitHub から取る。ネットワークが要るので普段は走らせない。
@@ -515,5 +574,38 @@ mod tests {
         extract(&archive, "lib/libonnxruntime.so", &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"abc");
         assert!(extract(&archive, "lib/other.so", &dir.join("x")).is_err());
+    }
+
+    #[test]
+    fn extracts_the_dll_from_a_zip_whatever_the_file_is_named() {
+        let dir = std::env::temp_dir().join(format!("vw-extract-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("onnxruntime.part");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+            zip.start_file(
+                "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"dll").unwrap();
+            zip.finish().unwrap();
+        }
+        let target = dir.join("onnxruntime.dll");
+        extract(&archive, "lib/onnxruntime.dll", &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"dll");
+    }
+
+    #[test]
+    fn a_failed_extraction_leaves_no_file_behind() {
+        let dir = std::env::temp_dir().join(format!("vw-extract-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("broken.part");
+        std::fs::write(&archive, b"not an archive").unwrap();
+        let target = dir.join("onnxruntime.dll");
+        assert!(extract(&archive, "lib/onnxruntime.dll", &target).is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     }
 }

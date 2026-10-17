@@ -82,7 +82,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 53] = [
+const ITEMS: [Item; 56] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -290,7 +290,7 @@ const ITEMS: [Item; 53] = [
         section: Section::Log,
         key: "log.style",
         title: "Look",
-        description: "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black, without wrapping. Also switchable at the top right of the log.",
+        description: "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black. Also switchable at the top right of the log.",
         widget: log_style_widget,
     },
     Item {
@@ -306,6 +306,13 @@ const ITEMS: [Item; 53] = [
         title: "Log files kept",
         description: "How many log files to keep. Older ones are deleted at start.",
         widget: log_keep_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: "log.wrap",
+        title: "Wrap long lines",
+        description: "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",
+        widget: log_wrap_widget,
     },
     Item {
         section: Section::Quality,
@@ -355,6 +362,20 @@ const ITEMS: [Item; 53] = [
         title: "Character tag threshold",
         description: "Confidence (0 to 1) a character tag needs to be added.",
         widget: ai_character_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.face_threshold",
+        title: "Face match threshold",
+        description: "Similarity (0 to 1) a face needs to be named as a registered person. Higher means fewer but surer matches.",
+        widget: ai_face_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.excluded_tags",
+        title: "Excluded tags",
+        description: "Tags never added even when the tagger finds them, one per line. Right-click a tag in the metadata pane to add it here.",
+        widget: ai_excluded_widget,
     },
     Item {
         section: Section::Ai,
@@ -859,8 +880,16 @@ fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
+fn log_wrap_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.log.wrap, tr(lang, "Enabled")).changed()
+}
+
 fn ai_general_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     unit_widget(&mut s.ai.general_threshold, ui)
+}
+
+fn ai_face_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    unit_widget(&mut s.ai.face_threshold, ui)
 }
 
 fn ai_character_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
@@ -875,6 +904,36 @@ fn unit_widget(v: &mut f32, ui: &mut egui::Ui) -> bool {
             .fixed_decimals(2),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+/// 1 行に 1 つ。タグ名にはカンマを含むものがあるので、カンマ区切りにはしない。
+fn ai_excluded_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let id = ui.make_persistent_id("ai.excluded_tags.edit");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.ai.excluded_tags.join("\n"));
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .hint_text("watermark")
+            .desired_rows(3)
+            .desired_width(320.0),
+    );
+    let parsed: Vec<String> = text
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && parsed != s.ai.excluded_tags {
+            s.ai.excluded_tags = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
 }
 
 fn ai_threads_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {

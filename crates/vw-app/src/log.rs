@@ -87,17 +87,28 @@ impl Log {
         self.file.as_ref().map(|f| f.path.as_path())
     }
 
-    pub fn push(&mut self, level: Level, msg: impl Into<String>) {
-        let line = Line {
+    fn line(&self, level: Level, msg: impl Into<String>) -> Line {
+        Line {
             elapsed: self.origin.elapsed().as_secs_f64(),
             at: Local::now(),
             level,
             text: msg.into(),
-        };
+        }
+    }
+
+    pub fn push(&mut self, level: Level, msg: impl Into<String>) {
+        let line = self.line(level, msg);
         if let Some(f) = &self.file {
             f.write_line(&line.raw());
         }
         self.lines.push(line);
+    }
+
+    /// ログファイルにだけ書く、1 枚ごとの記録のような細かい行。ログ欄には集計だけを出す。
+    pub fn detail(&mut self, level: Level, msg: impl Into<String>) {
+        if let Some(f) = &self.file {
+            f.write_line(&self.line(level, msg).raw());
+        }
     }
 
     pub fn info(&mut self, msg: impl Into<String>) {

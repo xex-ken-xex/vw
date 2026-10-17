@@ -54,6 +54,8 @@ struct View<'a> {
     peeks: &'a HashMap<PathBuf, Peek>,
     /// 右クリックの「送信 ▸」に並べる送信先の名前。
     destinations: &'a [String],
+    /// AI のモデルが全部揃っているか。
+    ai_ready: bool,
 }
 
 impl View<'_> {
@@ -102,6 +104,10 @@ pub enum TreeAction {
     OpenInFileManager(PathBuf),
     /// フォルダの画像に AI タグを付ける（右クリックメニュー）。
     AiTagFolder(PathBuf),
+    /// フォルダの画像の顔を探す（右クリックメニュー）。
+    FindFaces(PathBuf),
+    /// フォルダの画像の AI タグと顔の記録を消す（確かめてから）。
+    RemoveAiTags(PathBuf),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
@@ -471,8 +477,31 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
             *out = Some(TreeAction::OpenInFileManager(path.to_owned()));
             ui.close();
         }
-        if ui.button(tr(lang, "Add AI tags to this folder")).clicked() {
-            *out = Some(TreeAction::AiTagFolder(path.to_owned()));
+        let ai = [
+            (
+                "Add AI tags to this folder",
+                TreeAction::AiTagFolder(path.to_owned()),
+            ),
+            (
+                "Find faces in this folder",
+                TreeAction::FindFaces(path.to_owned()),
+            ),
+        ];
+        for (title, action) in ai {
+            if ui
+                .add_enabled(view.ai_ready, egui::Button::new(tr(lang, title)))
+                .on_disabled_hover_text(tr(lang, crate::ai_models::NOT_READY))
+                .clicked()
+            {
+                *out = Some(action);
+                ui.close();
+            }
+        }
+        if ui
+            .button(tr(lang, "Remove AI tags from this folder..."))
+            .clicked()
+        {
+            *out = Some(TreeAction::RemoveAiTags(path.to_owned()));
             ui.close();
         }
         ui.separator();
@@ -638,6 +667,8 @@ pub struct Context<'a> {
     pub active_image: Option<&'a Path>,
     pub lang: Language,
     pub destinations: &'a [String],
+    /// AI のモデルが全部揃っているか。揃うまで AI の項目は押せない。
+    pub ai_ready: bool,
 }
 
 /// ツリーを描いた結果。
@@ -777,6 +808,7 @@ impl FolderTree {
             dicom_extensions: dicom_extensions(cx.registry),
             peeks: &peeker.known,
             destinations: cx.destinations,
+            ai_ready: cx.ai_ready,
         };
         let mut out = Out::default();
         for root in &mut self.roots {
