@@ -1010,6 +1010,10 @@ const JA: &[(&str, &str)] = &[
     ("Read all files of the datasets shown again and rebuild their search catalogs.", "表示中のデータセットの全ファイルを読み直し、検索カタログを作り直します。"),
     ("Add dataset folders in Settings > Datasets.", "設定 > データセット でデータセットのフォルダを追加してください。"),
     ("Looking for datasets…", "データセットを探しています…"),
+    (
+        "No datasets in the dataset folders yet. Right-click a folder in the folder tree and choose Register as dataset... to make one.",
+        "データセットのフォルダにまだデータセットがありません。フォルダツリーでフォルダを右クリックし、「データセットとして登録...」で作れます。",
+    ),
     ("{} datasets", "{} 件のデータセット"),
     ("{} search catalogs could not be read", "{} 個の検索カタログを読めませんでした"),
     ("kind", "種類"),

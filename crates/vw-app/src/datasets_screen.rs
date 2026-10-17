@@ -260,6 +260,13 @@ impl DatasetsScreen {
             let Some(index) = &self.index else {
                 return;
             };
+            if index.entries.is_empty() && index.problems.is_empty() {
+                ui.weak(tr(
+                    lang,
+                    "No datasets in the dataset folders yet. Right-click a folder in the folder tree and choose Register as dataset... to make one.",
+                ));
+                return;
+            }
             ui.weak(format!(
                 "{} / {}",
                 tr1(lang, "{} datasets", &self.hits.len().to_string()),
@@ -622,6 +629,10 @@ impl DatasetsScreen {
         let selected_row = row_of(self.selected.as_ref());
         let hovered_row = row_of(self.hovered.as_ref());
         let spacing = egui::vec2(16.0, 4.0);
+        // 場所は深いフォルダほど長く、そのまま出すと表が窓より広がって右に大きな空きができる。
+        // 違いの出る末尾を残して頭を省き、列の幅を窓の幅の一部に収める。
+        let location_width = (ui.available_width() * LOCATION_SHARE).max(LOCATION_MIN);
+        let location_font = egui::TextStyle::Body.resolve(ui.style());
         egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
             egui::Grid::new("datasets-table")
                 .num_columns(4 + field_names.len())
@@ -678,9 +689,24 @@ impl DatasetsScreen {
                             ui.label(e.catalog.fields.get(f).map_or("", String::as_str));
                         }
                         ui.label(format!("{} / {}", h.files.len(), e.catalog.files.len()));
-                        let last = ui
-                            .label(egui::RichText::new(e.dir.display().to_string()).weak())
-                            .rect;
+                        let full = e.dir.display().to_string();
+                        let shown = vw_ui::text::tail_that_fits(&full, |t| {
+                            ui.painter()
+                                .layout_no_wrap(
+                                    t.to_owned(),
+                                    location_font.clone(),
+                                    egui::Color32::PLACEHOLDER,
+                                )
+                                .size()
+                                .x
+                                <= location_width
+                        });
+                        let cut = shown != full;
+                        let location = ui.label(egui::RichText::new(shown).weak());
+                        let last = location.rect;
+                        if cut {
+                            location.on_hover_text(full);
+                        }
                         ui.end_row();
                         // セルの間のすき間も含めて、行のどこを押しても選べるようにする。
                         let rect = first.union(last).expand2(spacing / 2.0);
@@ -728,6 +754,10 @@ impl DatasetsScreen {
         send.or(show.map(Action::Show))
     }
 }
+
+/// 結果の表で場所の列に使う、窓の幅の割合と最小の幅。
+const LOCATION_SHARE: f32 = 0.4;
+const LOCATION_MIN: f32 = 180.0;
 
 /// 検索で絞り込んだときだけ、当たったファイルのパス。すべてのファイルが当たったときは、
 /// データセットそのものを渡すのと同じため `None`。

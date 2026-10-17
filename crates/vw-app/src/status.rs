@@ -188,7 +188,9 @@ impl Throughput {
     }
 }
 
-/// `width` 文字の棒。埋まった分を █、残りを ░ で。端数は 1/8 刻みの棒で表す。
+/// `width` 文字の棒。埋まった分を █、残りを細い線 ─ で。端数は 1/8 刻みの棒で表す。
+///
+/// 残りを ░ にしないのは、字体によって網点が粗い点線に見え、棒の地として目にうるさいため。
 pub fn bar(fraction: f32, width: usize) -> String {
     const PARTS: [char; 7] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
     let eighths = (fraction.clamp(0.0, 1.0) * (width * 8) as f32).round() as usize;
@@ -199,7 +201,7 @@ pub fn bar(fraction: f32, width: usize) -> String {
         s.push(PARTS[part - 1]);
     }
     let used = full + usize::from(part > 0);
-    s.push_str(&"░".repeat(width - used));
+    s.push_str(&"─".repeat(width - used));
     s
 }
 
@@ -329,10 +331,10 @@ mod tests {
 
     #[test]
     fn bar_fills_from_the_left_in_eighths() {
-        assert_eq!(bar(0.0, 4), "░░░░");
-        assert_eq!(bar(0.5, 4), "██░░");
+        assert_eq!(bar(0.0, 4), "────");
+        assert_eq!(bar(0.5, 4), "██──");
         assert_eq!(bar(1.0, 4), "████");
-        assert_eq!(bar(1.0 / 32.0, 4), "▏░░░");
+        assert_eq!(bar(1.0 / 32.0, 4), "▏───");
         assert_eq!(bar(2.0, 4), "████");
         assert_eq!(bar(0.3, 10).chars().count(), 10);
     }
@@ -400,7 +402,7 @@ mod tests {
             ..snapshot()
         };
         let line = text(&lines(&s, &WORDS)[2]);
-        assert!(line.ends_with("███░░░░░░░░░ 1.0 GB / 4.0 GB"), "{line}");
+        assert!(line.ends_with("███───────── 1.0 GB / 4.0 GB"), "{line}");
     }
 
     #[test]
@@ -423,8 +425,8 @@ mod tests {
         };
         let all = lines(&s, &WORDS);
         assert_eq!(all.len(), 5);
-        assert_eq!(text(&all[3]), "  ZIP ████████░░░░░░░░  50% 35/70");
-        assert_eq!(text(&all[4]), "  Send ░░░░░░░░░░░░░░░░   0% 0/0");
+        assert_eq!(text(&all[3]), "  ZIP ████████────────  50% 35/70");
+        assert_eq!(text(&all[4]), "  Send ────────────────   0% 0/0");
     }
 
     #[test]
