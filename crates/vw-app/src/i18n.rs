@@ -741,8 +741,8 @@ const JA: &[(&str, &str)] = &[
     ("Select and expand/collapse", "選択して開閉"),
     ("Add key", "キーを追加"),
     (
-        "Press a key... (Esc to cancel)",
-        "キーを押してください（Esc で取り消し）",
+        "Press a key or a mouse side button... (Esc to cancel)",
+        "キーかマウスの戻る・進むボタンを押してください（Esc で取り消し）",
     ),
     ("Click to remove", "クリックで削除"),
     ("Reset to default", "既定に戻す"),
@@ -852,6 +852,16 @@ const JA: &[(&str, &str)] = &[
     ("One slot per image", "画像ごとに 1 スロット"),
     ("One slot per folder", "フォルダごとに 1 スロット"),
     ("Key for the other way", "逆の入れ方にするキー"),
+    ("Expand on click", "クリックで開く"),
+    ("Log folder", "ログのフォルダ"),
+    (
+        "The logs folder next to the settings file, where the log files are written.",
+        "設定ファイルの隣にある logs フォルダです。ログのファイルはここに書きます。",
+    ),
+    (
+        "Clicking a folder name also expands it, like Explorer. When off, only the arrow expands or collapses.",
+        "フォルダ名をクリックすると、エクスプローラのようにそのフォルダも開きます。オフのときは ▶ だけで開閉します。",
+    ),
     (
         "Hold this key while loading a folder to load it the other way.",
         "このキーを押しながらフォルダを読み込むと、逆の入れ方で読み込みます。",
@@ -1216,7 +1226,7 @@ mod tests {
                         ctrl,
                         shift,
                         alt,
-                        key: *key,
+                        key: crate::keymap::Input::Key(*key),
                     };
                     if let Some(reason) = os_reserved(os, combo) {
                         assert_ne!(tr(Language::Japanese, reason), reason, "{reason}");

@@ -30,6 +30,17 @@ impl VwApp {
             {
                 action = Some(LogAction::OpenFile);
             }
+            if ui
+                .add_enabled(has_file, egui::Button::new(icon::FOLDER_OPEN).small())
+                .on_hover_text(tr(lang, "Open the log folder"))
+                .on_disabled_hover_text(tr(
+                    lang,
+                    "The log is not written to a file (Settings > Log).",
+                ))
+                .clicked()
+            {
+                action = Some(LogAction::OpenFolder);
+            }
             let wrap = self.settings().log.wrap;
             if ui
                 .add(
@@ -124,22 +135,28 @@ impl VwApp {
                     }
                 }
             }
-            LogAction::OpenFolder => {
-                if let Some(dir) = self
-                    .log
-                    .file_path()
-                    .and_then(Path::parent)
-                    .map(Path::to_path_buf)
-                {
-                    if let Err(e) = crate::launch::open_folder(&dir) {
-                        self.log.error(format!("{}: {e}", dir.display()));
-                    }
-                }
-            }
+            LogAction::OpenFolder => self.open_log_folder(),
             LogAction::CopyAll => {
                 let text = self.log.all_text();
                 self.copy_text(ctx, text, "log");
             }
+        }
+    }
+
+    /// 今書いているログのファイルのフォルダを開く。ファイルに書いていないときは、
+    /// 設定ファイルの隣の logs フォルダ（以前の起動のログがあるところ）を開く。
+    pub(super) fn open_log_folder(&mut self) {
+        let dir = self
+            .log
+            .file_path()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .or_else(|| self.settings.path.as_deref().map(crate::log::log_dir));
+        let Some(dir) = dir else {
+            return;
+        };
+        if let Err(e) = crate::launch::open_folder(&dir) {
+            self.log.error(format!("{}: {e}", dir.display()));
         }
     }
 

@@ -869,7 +869,11 @@ impl VwApp {
         let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() {
             events
                 .into_iter()
-                .filter(|e| matches!(e, egui::Event::Key { modifiers, .. } if modifiers.ctrl || modifiers.alt))
+                .filter(|e| match e {
+                    egui::Event::Key { modifiers, .. } => modifiers.ctrl || modifiers.alt,
+                    egui::Event::PointerButton { .. } => true,
+                    _ => false,
+                })
                 .collect()
         } else {
             events
@@ -997,6 +1001,9 @@ impl eframe::App for VwApp {
                     self.log.error(format!("Settings: cannot open file: {e}"));
                 }
             }
+            if r.open_log_folder {
+                self.open_log_folder();
+            }
             if r.close {
                 self.toggle_settings();
             }
@@ -1123,6 +1130,7 @@ impl eframe::App for VwApp {
                     let active_image = self.active_image().map(|p| frames::file_of(&p));
                     let destinations = self.destination_names();
                     let ai_ready = self.ai_ready();
+                    let click_expands = self.settings.settings.tree.click_expands;
                     let drawn = egui::ScrollArea::both()
                         .auto_shrink(false)
                         .show(ui, |ui| {
@@ -1136,6 +1144,7 @@ impl eframe::App for VwApp {
                                     lang,
                                     destinations: &destinations,
                                     ai_ready,
+                                    click_expands,
                                 },
                             )
                         })
