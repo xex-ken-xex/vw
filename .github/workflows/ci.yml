@@ -106,6 +106,9 @@ jobs:
     concurrency: release
     permissions:
       contents: write
+      # artifact attestation（どのワークフローのどのコミットで作ったかの証明）に署名して記録するため。
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -114,6 +117,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # 利用者がダウンロードしたファイルを確かめられるよう、SHA-256 の一覧を一緒に置く。
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum vw-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      # 一覧だけでは、Release ごと差し替えられたときに一覧も一緒に差し替えられてしまう。
+      # attestation は GitHub が CI の実行に結び付けて記録するので、ここで作ったものかを別に確かめられる。
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/vw-*
       - name: Publish main build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # main の最新ビルドは 1 つのプレリリースを作り直して置き換える。

@@ -38,6 +38,20 @@ Things worth reporting include, for example:
 4. We announce it in a GitHub Security Advisory (with a CVE if needed) and point to it from the README.
 5. We let you know, and with your permission credit you in the advisory.
 
+## Verifying a download
+
+Each release has a `SHA256SUMS.txt` with the SHA-256 of its files, and the files carry a
+GitHub artifact attestation that records which workflow run and commit built them.
+
+```sh
+# Linux
+sha256sum -c SHA256SUMS.txt --ignore-missing
+# Windows (PowerShell): compare with the line in SHA256SUMS.txt
+Get-FileHash vw-windows-x64.zip -Algorithm SHA256
+# Either, with the GitHub CLI: proves the file was built by this repository's CI
+gh attestation verify vw-windows-x64.zip --repo xex-ken-xex/vw
+```
+
 ---
 
 ## 日本語
@@ -53,3 +67,5 @@ Things worth reporting include, for example:
 - 直すのは **最新の版だけ** です。古い版を使っている場合は、最新の版に上げてください
 - 受け付けたら確認して、数日以内を目安に返事をします。そのあと、影響する版の取り下げまたは注意書き、修正版の公開、
   GitHub Security Advisory での告知（必要なら CVE）を行い、了承があれば報告者の名前を謝辞に載せます
+- ダウンロードしたファイルは、Release の `SHA256SUMS.txt`（SHA-256 の一覧）と、GitHub の artifact attestation
+  （どの CI のどのコミットで作ったかの証明。`gh attestation verify ファイル --repo xex-ken-xex/vw`）で確かめられます

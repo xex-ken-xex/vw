@@ -73,6 +73,10 @@ Releases には 2 種類あります。
 - **vX.Y.Z**（例: v0.3.0）: 正式版です。通常はこちらを使ってください
 - **最新ビルド (main)**: 開発中の最新版です。変更が入るたびに自動で置き換わります。新しい機能を早く試したいときに使います
 
+どちらにも `SHA256SUMS.txt`（各ファイルの SHA-256）が付いています。ダウンロードしたファイルが壊れたり差し替えられたりしていないかは、
+これと見比べるか、GitHub CLI で `gh attestation verify vw-windows-x64.zip --repo xex-ken-xex/vw` を実行すると確かめられます
+（手順は [SECURITY.md](SECURITY.md#verifying-a-download)）。
+
 ### Windows
 
 #### インストール
