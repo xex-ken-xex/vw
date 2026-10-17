@@ -1205,7 +1205,7 @@ fn gray_body(
             }
             ui.horizontal(|ui| {
                 ui.label("VOI LUT Function");
-                egui::ComboBox::from_id_salt("voi_function")
+                vw_ui::menu::combo("voi_function")
                     .selected_text(p.function.dicom_name())
                     .show_ui(ui, |ui| {
                         for f in VoiFunction::ALL {

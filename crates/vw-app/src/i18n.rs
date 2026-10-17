@@ -662,6 +662,13 @@ const JA: &[(&str, &str)] = &[
     ("Load more", "続けて読み込む"),
     ("Stop", "やめる"),
     ("Behavior", "動作"),
+    ("Metadata panel", "メタデータ欄"),
+    ("Full path", "フルパス"),
+    ("File name only", "ファイル名だけ"),
+    (
+        "What the Path row of the metadata panel shows: the full path (its head is left out when it does not fit) or only the file name. Hover the row to see the full path.",
+        "メタデータ欄の「パス」の行に出すもの。フルパス（収まらないときは頭を省略）か、ファイル名だけ。行にマウスを乗せるとフルパスが出ます。",
+    ),
     ("Group heading click", "グループ見出しのクリック"),
     (
         "What clicking a group heading (such as File in the metadata panel) does. The arrow always expands or collapses.",

@@ -4,4 +4,7 @@
 //! すべての画面にそろって効くようにするため。
 
 pub mod menu;
+pub mod panel;
+pub mod text;
 pub mod theme;
+pub mod tool;

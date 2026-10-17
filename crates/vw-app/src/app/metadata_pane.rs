@@ -5,7 +5,7 @@ use eframe::egui::{self, collapsing_header::CollapsingState, vec2};
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::frames;
 use crate::i18n::tr;
-use crate::settings::HeaderClick;
+use crate::settings::{HeaderClick, PathDisplay};
 
 use super::*;
 
@@ -104,6 +104,7 @@ impl VwApp {
             return;
         };
         let header_click = self.settings().behavior.header_click;
+        let path_display = self.settings().metadata.path;
         let mut picked: Option<MetaSelection> = None;
         let mut copy: Option<MetaSelection> = None;
         let mut text_drag = false;
@@ -129,7 +130,7 @@ impl VwApp {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (group, rows) in &groups {
+                for (group_index, (group, rows)) in groups.iter().enumerate() {
                     let id = ui.make_persistent_id(("metadata", group));
                     let state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
                     let group_sel = MetaSelection::Group(group.clone());
@@ -162,8 +163,14 @@ impl VwApp {
                                                 .sense(egui::Sense::click()),
                                         )
                                     });
+                                    // 折り返すと深いフォルダのパスが何行にもなり、表の頭が押し下げられる。
+                                    let is_path = group_index == 0 && i == PATH_ROW;
                                     let value = fixed_width(ui, value_width, |ui| {
-                                        ui.add(egui::Label::new(v).wrap())
+                                        if is_path {
+                                            path_label(ui, v, path_display)
+                                        } else {
+                                            ui.add(egui::Label::new(v).wrap())
+                                        }
                                     });
                                     (key, value)
                                 });
@@ -248,6 +255,21 @@ impl VwApp {
                 let what = selection_name(&c);
                 self.copy_text(&ctx, text, &format!("metadata {what}"));
             }
+        }
+    }
+}
+
+/// ファイル情報のグループでパスを出す行。コピーにはどの表示でもフルパスを使う。
+const PATH_ROW: usize = 0;
+
+fn path_label(ui: &mut egui::Ui, path: &str, display: PathDisplay) -> egui::Response {
+    match display {
+        PathDisplay::Full => vw_ui::text::tail_label(ui, path, None),
+        PathDisplay::Name => {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map_or(path.into(), |n| n.to_string_lossy());
+            vw_ui::text::tail_label(ui, &name, Some(path))
         }
     }
 }
