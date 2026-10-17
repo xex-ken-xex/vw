@@ -52,6 +52,11 @@ impl About {
                     ui.label(tr(lang, "License"));
                     ui.label(LICENSE);
                 });
+                ui.hyperlink_to(
+                    tr(lang, "Place names: GeoNames, CC BY 4.0"),
+                    crate::geonames::CREDIT_URL,
+                )
+                .on_hover_text(crate::geonames::CREDIT);
                 ui.add_space(6.0);
                 let path = third_party_path();
                 let exists = path.as_ref().is_some_and(|p| p.exists());

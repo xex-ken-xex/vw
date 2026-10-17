@@ -167,6 +167,9 @@ pub struct VwApp {
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
     map: crate::map_window::MapWindow,
+    /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
+    place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
+    place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
     evaluation: crate::quality::Evaluation,
     /// 「評価の基準にする」で選んだスロットの画像。PSNR・SSIM をこれと比べる。
     quality_reference: Option<PathBuf>,
@@ -635,6 +638,8 @@ impl VwApp {
                 );
                 view
             },
+            place_names: None,
+            place_names_load: None,
             map: {
                 let mut map = crate::map_window::MapWindow::default();
                 map.window =

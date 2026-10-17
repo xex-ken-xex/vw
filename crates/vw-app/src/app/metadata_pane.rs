@@ -95,7 +95,29 @@ impl VwApp {
                 .collect();
             meta_view::Group::new(g, shown_name(lang, g, g), rows)
         }));
+        if let Some(row) = self.place_row(&entries) {
+            if let Some(group) = groups.iter_mut().find(|g| g.id == vw_core::exif::LOCATION) {
+                group.rows.push(row);
+            }
+        }
         Some(groups)
+    }
+
+    /// 撮影地点に一番近い町の名前（地名の表があるときだけ）。
+    fn place_row(&self, entries: &[(String, String, String)]) -> Option<meta_view::Row> {
+        let places = self.place_names.as_ref()?;
+        let m = vw_core::Metadata {
+            entries: entries.to_vec(),
+        };
+        let gps = vw_core::exif::Gps::from_metadata(&m)?;
+        let address = places.address(gps.latitude, gps.longitude)?;
+        let lang = self.lang();
+        Some(meta_view::Row::new(
+            vw_core::exif::LOCATION,
+            "Place",
+            tr(lang, "Place").to_owned(),
+            address.text(lang),
+        ))
     }
 
     /// メタデータ欄に出すグループ。隠した項目と自分で作ったグループの設定を当てたもの。

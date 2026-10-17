@@ -303,6 +303,7 @@ impl VwApp {
 
     /// 地図のウインドウ。点から開いた画像は、そのフォルダへ移って選ぶ。
     pub(super) fn map_ui(&mut self, ctx: &egui::Context) {
+        self.keep_place_names(ctx);
         let settings = &self.settings.settings;
         if !settings.map.enabled {
             self.map.open = false;
@@ -322,6 +323,7 @@ impl VwApp {
             registry: &registry,
             order: settings.tree.order(),
             cache: cache.as_deref(),
+            places: self.place_names.as_deref(),
         };
         let commands = self.map.ui(ctx, &inputs);
         for problem in self.map.take_problems() {
@@ -339,8 +341,56 @@ impl VwApp {
                     }
                     self.select_when_loaded = Some(path);
                 }
+                crate::map_window::Command::ShowDownloads => self.ai_models.open = true,
             }
         }
+    }
+
+    /// 地図を使う設定で地名の表があれば読み込み、使わなくなったら手放す。
+    fn keep_place_names(&mut self, ctx: &egui::Context) {
+        use crate::ai_models::Item;
+        let file = self
+            .ai_store
+            .as_ref()
+            .filter(|s| self.settings.settings.map.enabled && s.has(Item::PlaceNames))
+            .map(|s| s.place_names());
+        if let Some(rx) = &self.place_names_load {
+            let Ok(result) = rx.try_recv() else {
+                return;
+            };
+            self.place_names_load = None;
+            match result {
+                Ok(g) => {
+                    self.log
+                        .info(format!("Place names: {} towns", g.town_count()));
+                    self.place_names = Some(std::sync::Arc::new(g));
+                }
+                Err(e) => self.log.error(format!("Place names: {e}")),
+            }
+            crate::geonames::set_current(self.place_names.clone());
+            return;
+        }
+        match (&file, &self.place_names) {
+            (Some(path), None) => {
+                let path = path.clone();
+                self.place_names_load = Some(crate::background::compute(ctx, move || {
+                    crate::geonames::Gazetteer::load(&path)
+                }));
+                // 読めないファイルを毎フレーム読み直さないよう、空の表を置いておく。
+                self.place_names = Some(Default::default());
+            }
+            (None, Some(_)) => {
+                self.place_names = None;
+                crate::geonames::set_current(None);
+            }
+            _ => {}
+        }
+    }
+
+    /// 地名の表をダウンロードし直したら、読み込み直す。
+    pub(super) fn reload_place_names(&mut self) {
+        self.place_names = None;
+        crate::geonames::set_current(None);
     }
 
     pub(super) fn toggle_datasets(&mut self, ctx: &egui::Context) {

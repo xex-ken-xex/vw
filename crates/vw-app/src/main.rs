@@ -33,6 +33,7 @@ mod format_stages;
 mod frames;
 mod fullscreen;
 mod geo_map;
+mod geonames;
 mod histogram;
 mod histogram_view;
 mod i18n;
