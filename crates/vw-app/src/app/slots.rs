@@ -10,6 +10,7 @@ use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Loaded};
+use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
@@ -247,7 +248,7 @@ impl VwApp {
                     }
                     Err(e) => {
                         pb.failed.insert(index);
-                        self.log.error(format!("{}: {e}", r.path.display()));
+                        self.load_failed(&r.path, &e);
                     }
                 }
                 continue;
@@ -271,10 +272,17 @@ impl VwApp {
                             self.attach_full(ctx, index, full);
                         }
                     }
-                    Err(e) => self.log.error(format!("{}: {e}", r.path.display())),
+                    Err(e) => self.load_failed(&r.path, &e),
                 }
             }
         }
+    }
+
+    /// 読み込めなかった 1 枚。数は状態の行に、理由はログファイルに。
+    fn load_failed(&mut self, path: &Path, error: &str) {
+        self.log
+            .detail(Level::Error, format!("{}: {error}", path.display()));
+        self.load_stats.fail(file_label(path));
     }
 
     /// 現像した画像が届いたら、表示中の画像の情報（大きさ・メタデータ）と縮小画像を差し替える。
@@ -299,15 +307,18 @@ impl VwApp {
         if let Some(thumb) = loaded.thumb.take() {
             shown.thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
         }
-        self.log.info(format!(
-            "{}: developed {}x{} | read {} / develop {} / convert {}",
-            path.display(),
-            info.width,
-            info.height,
-            ms(info.read),
-            ms(info.decode),
-            ms(info.convert),
-        ));
+        self.log.detail(
+            Level::Info,
+            format!(
+                "{}: developed {}x{} | read {} / develop {} / convert {}",
+                path.display(),
+                info.width,
+                info.height,
+                ms(info.read),
+                ms(info.decode),
+                ms(info.convert),
+            ),
+        );
     }
 
     /// スロットで開いた画像の読み込み結果を受け取る。
@@ -326,9 +337,9 @@ impl VwApp {
         let loaded = match result {
             Ok(loaded) => loaded,
             Err(e) => {
-                self.log.error(format!("{}: {e}", path.display()));
                 s.shown = None;
-                s.error = Some(e);
+                s.error = Some(e.clone());
+                self.load_failed(&path, &e);
                 return;
             }
         };
@@ -338,17 +349,23 @@ impl VwApp {
             .expect("the first load always asks for a thumbnail");
         let thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
         let i = &loaded.info;
-        self.log.info(format!(
-            "{}: {}x{} {} | read {} / decode {} / convert {} / texture {}",
-            path.display(),
-            i.width,
-            i.height,
-            i.plugin,
-            ms(i.read),
-            ms(i.decode),
-            ms(i.convert),
-            ms(t.elapsed()),
-        ));
+        let texture = t.elapsed();
+        self.load_stats
+            .record(file_label(&path), [i.read, i.decode, i.convert, texture]);
+        self.log.detail(
+            Level::Info,
+            format!(
+                "{}: {}x{} {} | read {} / decode {} / convert {} / texture {}",
+                path.display(),
+                i.width,
+                i.height,
+                i.plugin,
+                ms(i.read),
+                ms(i.decode),
+                ms(i.convert),
+                ms(texture),
+            ),
+        );
         // 1 枚のスロットで開いたマルチフレームのファイルは、フレームの並びのスロットにする。
         // フォルダスロットの中では並べ替えない。フォルダの中を送れなくなるため。
         let mut path = path;
@@ -824,4 +841,11 @@ impl VwApp {
                 .error(format!("Cannot open {}: {e}", target.display()));
         }
     }
+}
+
+/// 状態の行に出す名前。フォルダまで出すと長すぎて、切り替わる名前が読めないため名前だけ。
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }

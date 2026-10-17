@@ -82,7 +82,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 55] = [
+const ITEMS: [Item; 56] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -290,7 +290,7 @@ const ITEMS: [Item; 55] = [
         section: Section::Log,
         key: "log.style",
         title: "Look",
-        description: "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black, without wrapping. Also switchable at the top right of the log.",
+        description: "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black. Also switchable at the top right of the log.",
         widget: log_style_widget,
     },
     Item {
@@ -306,6 +306,13 @@ const ITEMS: [Item; 55] = [
         title: "Log files kept",
         description: "How many log files to keep. Older ones are deleted at start.",
         widget: log_keep_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: "log.wrap",
+        title: "Wrap long lines",
+        description: "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",
+        widget: log_wrap_widget,
     },
     Item {
         section: Section::Quality,
@@ -871,6 +878,10 @@ fn log_file_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
 fn log_keep_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     let r = ui.add(egui::DragValue::new(&mut s.log.keep_files).range(LogSettings::KEEP_RANGE));
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn log_wrap_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.log.wrap, tr(lang, "Enabled")).changed()
 }
 
 fn ai_general_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {

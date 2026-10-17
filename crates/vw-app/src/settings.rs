@@ -288,6 +288,8 @@ pub struct LogSettings {
     pub file: bool,
     /// 残すログファイルの数（起動 1 回で 1 ファイル）。
     pub keep_files: u32,
+    /// 長い行を欄の幅で折り返す。
+    pub wrap: bool,
 }
 
 impl LogSettings {
@@ -300,6 +302,7 @@ impl Default for LogSettings {
             style: LogStyle::Normal,
             file: true,
             keep_files: 20,
+            wrap: true,
         }
     }
 }
@@ -318,6 +321,7 @@ impl LogSettings {
                     "must be 1 to 1000",
                 )
                 .unwrap_or(d.keep_files),
+            wrap: r.get("wrap").unwrap_or(d.wrap),
         }
     }
 }

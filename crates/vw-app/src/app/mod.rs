@@ -216,6 +216,7 @@ pub struct VwApp {
     started: Instant,
     /// 読み込みの流れ。ターミナル風のログ欄の上の行に出す。
     throughput: crate::status::Throughput,
+    load_stats: crate::status::LoadStats,
     first_frame: bool,
     /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
     state_path: Option<PathBuf>,
@@ -627,6 +628,7 @@ impl VwApp {
             log,
             started,
             throughput: crate::status::Throughput::new(started),
+            load_stats: crate::status::LoadStats::default(),
             first_frame: true,
             state_path,
             restoring,
@@ -1334,6 +1336,7 @@ fn thousands(n: usize) -> String {
 #[derive(Clone, Copy)]
 enum LogAction {
     Style(LogStyle),
+    Wrap(bool),
     OpenFile,
     OpenFolder,
     CopyAll,
@@ -1342,7 +1345,7 @@ enum LogAction {
 /// ターミナル風のログ欄の地の色。テーマによらず黒地にする。
 const TERMINAL_BACKGROUND: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
 
-fn terminal_line(line: &log::Line) -> egui::Label {
+fn terminal_line(line: &log::Line, wrap: bool) -> egui::Label {
     let color = match line.level {
         Level::Info => Color32::from_rgb(0xcc, 0xcc, 0xcc),
         Level::Warn => Color32::from_rgb(0xe5, 0xc0, 0x7b),
@@ -1353,19 +1356,36 @@ fn terminal_line(line: &log::Line) -> egui::Label {
             .monospace()
             .color(color),
     )
-    .extend()
+    .wrap_mode(wrap_mode(wrap))
 }
 
-fn status_job(line: &[crate::status::Segment]) -> egui::text::LayoutJob {
+fn wrap_mode(wrap: bool) -> egui::TextWrapMode {
+    if wrap {
+        egui::TextWrapMode::Wrap
+    } else {
+        egui::TextWrapMode::Extend
+    }
+}
+
+/// 状態の 1 行。ターミナル風は黒地に決まった色、普通の見た目はテーマの色で。
+fn status_job(
+    line: &[crate::status::Segment],
+    terminal: bool,
+    visuals: &egui::Visuals,
+) -> egui::text::LayoutJob {
     use crate::status::Tone;
     let font = egui::FontId::monospace(12.0);
     let mut job = egui::text::LayoutJob::default();
     for (text, tone) in line {
-        let color = match tone {
-            Tone::Label => Color32::from_rgb(0x8a, 0x8a, 0x8a),
-            Tone::Value => Color32::from_rgb(0xe6, 0xe6, 0xe6),
-            Tone::Accent => Color32::from_rgb(0xe0, 0x8a, 0x5a),
-            Tone::Dim => Color32::from_rgb(0x5c, 0x5c, 0x5c),
+        let color = match (tone, terminal) {
+            (Tone::Label, true) => Color32::from_rgb(0x8a, 0x8a, 0x8a),
+            (Tone::Value, true) => Color32::from_rgb(0xe6, 0xe6, 0xe6),
+            (Tone::Dim, true) => Color32::from_rgb(0x5c, 0x5c, 0x5c),
+            (Tone::Bad, true) => Color32::from_rgb(0xf0, 0x71, 0x78),
+            (Tone::Label | Tone::Dim, false) => visuals.weak_text_color(),
+            (Tone::Value, false) => visuals.text_color(),
+            (Tone::Bad, false) => visuals.error_fg_color,
+            (Tone::Accent, _) => Color32::from_rgb(0xe0, 0x8a, 0x5a),
         };
         job.append(text, 0.0, egui::TextFormat::simple(font.clone(), color));
     }
@@ -1373,7 +1393,7 @@ fn status_job(line: &[crate::status::Segment]) -> egui::text::LayoutJob {
 }
 
 /// 時刻を薄く、本文を重さの色で。1 つのラベルにするのは、範囲選択でコピーしたときに時刻と本文が 1 行に並ぶようにするため。
-fn normal_line(ui: &egui::Ui, line: &log::Line) -> egui::Label {
+fn normal_line(ui: &egui::Ui, line: &log::Line, wrap: bool) -> egui::Label {
     let visuals = ui.visuals();
     let color = match line.level {
         Level::Info => visuals.text_color(),
@@ -1388,7 +1408,7 @@ fn normal_line(ui: &egui::Ui, line: &log::Line) -> egui::Label {
         egui::TextFormat::simple(font.clone(), visuals.weak_text_color()),
     );
     job.append(&line.text, 0.0, egui::TextFormat::simple(font, color));
-    egui::Label::new(job).wrap()
+    egui::Label::new(job).wrap_mode(wrap_mode(wrap))
 }
 
 fn panel_header(ui: &mut egui::Ui, text: &str) {

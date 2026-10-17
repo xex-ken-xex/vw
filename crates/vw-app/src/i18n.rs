@@ -393,10 +393,7 @@ const JA: &[(&str, &str)] = &[
     ("Texture", "テクスチャ"),
     // 画像スロット
     ("Loading...", "読み込み中..."),
-    (
-        "Failed to load (see log)",
-        "読み込めませんでした（ログを参照）",
-    ),
+    ("Failed to load", "読み込めませんでした"),
     ("(empty)", "（空）"),
     (
         "Click a folder in the tree to show its contents",
@@ -901,9 +898,16 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Look", "見た目"),
     (
-        "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black, without wrapping. Also switchable at the top right of the log.",
-        "普通は時刻と本文を普通の字体で出します。ターミナル風は起動からの経過秒と本文を黒地に等幅の字体で出し、折り返しません。ログ欄の右上でも切り替えられます。",
+        "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black. Also switchable at the top right of the log.",
+        "普通は時刻と本文を普通の字体で出します。ターミナル風は起動からの経過秒と本文を黒地に等幅の字体で出します。ログ欄の右上でも切り替えられます。",
     ),
+    ("Wrap long lines", "長い行を折り返す"),
+    (
+        "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",
+        "長いログの行を欄の幅で折り返します。オフのときは横に送って読みます。ログ欄の右上でも切り替えられます。",
+    ),
+    ("Wrap long lines: on", "長い行の折り返し: オン"),
+    ("Wrap long lines: off", "長い行の折り返し: オフ"),
     ("Write to a file", "ファイルに書く"),
     (
         "Also write every log line with its date, time and level to a file in the logs folder next to the settings file, one file per start. Takes effect at the next start.",

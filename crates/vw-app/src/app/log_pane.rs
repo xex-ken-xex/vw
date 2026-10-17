@@ -13,7 +13,7 @@ use crate::settings::LogStyle;
 use super::*;
 
 impl VwApp {
-    /// ログ欄の見出しの右に、見た目の切り替えとログファイルを開くボタンを出す。
+    /// ログ欄の見出しの右に、折り返し・見た目の切り替えとログファイルを開くボタンを出す。
     pub(super) fn log_header(&self, ui: &mut egui::Ui) -> Option<LogAction> {
         let lang = self.lang();
         let mut action = None;
@@ -30,6 +30,25 @@ impl VwApp {
             {
                 action = Some(LogAction::OpenFile);
             }
+            let wrap = self.settings().log.wrap;
+            if ui
+                .add(
+                    egui::Button::new(icon::TEXT_ALIGN_LEFT)
+                        .small()
+                        .selected(wrap),
+                )
+                .on_hover_text(tr(
+                    lang,
+                    if wrap {
+                        "Wrap long lines: on"
+                    } else {
+                        "Wrap long lines: off"
+                    },
+                ))
+                .clicked()
+            {
+                action = Some(LogAction::Wrap(!wrap));
+            }
             let style = self.settings().log.style;
             for choice in LogStyle::ALL.into_iter().rev() {
                 if ui
@@ -44,9 +63,9 @@ impl VwApp {
         action
     }
 
-    /// ターミナル風の上の 2 行。動いているものがあれば回るしるしのために細かく描き直し、
+    /// ログの上の状態の行。動いているものがあれば回るしるしのために細かく描き直し、
     /// 何もなくても波形が流れるよう 1 秒ごとに描き直す。
-    pub(super) fn status_lines(&self, ctx: &egui::Context) -> [Vec<crate::status::Segment>; 2] {
+    pub(super) fn status_lines(&self, ctx: &egui::Context) -> Vec<Vec<crate::status::Segment>> {
         use crate::status::{self, Snapshot, Words};
         let lang = self.lang();
         let now = Instant::now();
@@ -72,6 +91,11 @@ impl VwApp {
             limit: self.settings().viewer.full_image_limit_bytes(),
             jobs,
             spinner: status::spinner(now.duration_since(self.started).as_secs_f64()),
+            files: self.load_stats.files,
+            failed: self.load_stats.failed,
+            averages: self.load_stats.averages(),
+            last: self.load_stats.last.clone(),
+            last_failed: self.load_stats.last_failed.clone(),
         };
         let words = Words {
             load: tr(lang, "Loading"),
@@ -87,6 +111,10 @@ impl VwApp {
         match action {
             LogAction::Style(style) => {
                 self.settings.settings.log.style = style;
+                self.settings_changed(ctx);
+            }
+            LogAction::Wrap(wrap) => {
+                self.settings.settings.log.wrap = wrap;
                 self.settings_changed(ctx);
             }
             LogAction::OpenFile => {
@@ -123,6 +151,7 @@ impl VwApp {
     pub(super) fn log_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let terminal = self.settings().log.style == LogStyle::Terminal;
+        let wrap = self.settings().log.wrap;
         let mut action = None;
         let mut selecting = false;
         let frame = if terminal {
@@ -132,23 +161,26 @@ impl VwApp {
         } else {
             egui::Frame::new()
         };
-        let status = terminal.then(|| self.status_lines(ui.ctx()));
+        // 状態の行はどちらの見た目でも出す。1 枚ごとの読み込みはログ欄に出さないので、
+        // 読み込みの進み具合はここでしか見えないため。
+        let status = self.status_lines(ui.ctx());
         let mut menu_target: Option<egui::Response> = None;
         frame.show(ui, |ui| {
-            if let Some(status) = &status {
-                for line in status {
-                    ui.add(
-                        egui::Label::new(status_job(line))
-                            .extend()
-                            .selectable(false),
-                    );
-                }
-                ui.add_space(2.0);
+            let visuals = ui.visuals().clone();
+            for line in &status {
+                // 折り返さないときは状態の行を切り詰める。ログと違って横に送る場所がないため。
+                let label =
+                    egui::Label::new(status_job(line, terminal, &visuals)).selectable(false);
+                ui.add(if wrap { label.wrap() } else { label.truncate() });
             }
-            let scroll = if terminal {
-                egui::ScrollArea::both()
-            } else {
+            ui.add_space(2.0);
+            if !terminal {
+                ui.separator();
+            }
+            let scroll = if wrap {
                 egui::ScrollArea::vertical()
+            } else {
+                egui::ScrollArea::both()
             };
             scroll
                 .auto_shrink(false)
@@ -158,9 +190,9 @@ impl VwApp {
                     ui.set_min_width(ui.available_width());
                     for (i, line) in self.log.lines.iter().enumerate() {
                         let label = if terminal {
-                            terminal_line(line)
+                            terminal_line(line, wrap)
                         } else {
-                            normal_line(ui, line)
+                            normal_line(ui, line, wrap)
                         };
                         let r = ui.push_id(i, |ui| ui.add(label)).inner;
                         selecting |= r.drag_started();

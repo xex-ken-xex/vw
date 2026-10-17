@@ -1278,20 +1278,24 @@ impl Slot {
             }
         } else {
             let msg = if self.loading {
-                "Loading..."
-            } else if self.error.is_some() {
-                "Failed to load (see log)"
+                tr(lang, "Loading...").to_owned()
+            } else if let Some(e) = &self.error {
+                // 理由もスロットに出す。ログ欄には失敗の数だけを出し、理由はログファイルにしか書かないため。
+                format!("{}\n{e}", tr(lang, "Failed to load"))
             } else {
-                empty_hint
+                tr(lang, empty_hint).to_owned()
             };
-            let msg = tr(lang, msg);
-            painter.text(
-                body.center(),
-                egui::Align2::CENTER_CENTER,
+            let mut job = egui::text::LayoutJob::simple(
                 msg,
                 egui::FontId::proportional(14.0),
                 Color32::GRAY,
+                (body.width() - 16.0).max(1.0),
             );
+            job.halign = egui::Align::Center;
+            let galley = painter.fonts_mut(|f| f.layout_job(job));
+            // 中央揃えの文は、置く位置が横の中心になる。
+            let top = body.center().y - galley.size().y / 2.0;
+            painter.galley(pos2(body.center().x, top), galley, Color32::GRAY);
         }
 
         if bar_height > 0.0 {
