@@ -1292,6 +1292,10 @@ pub struct SettingsUi {
     capturing: Option<Action>,
     notice: Option<(Action, Notice)>,
     jump: Option<Section>,
+    /// 目次で強調する、いま見ている節。前のフレームで描いた位置から決める。
+    current: Option<Section>,
+    /// 描いている途中のフレームで、見ている節の候補。
+    seen: Option<Section>,
     focus_search: bool,
     destinations: Destinations,
 }
@@ -1402,7 +1406,10 @@ impl SettingsUi {
             .show(ui, |ui| {
                 ui.add_space(4.0);
                 for s in Section::ALL {
-                    if ui.selectable_label(false, tr(lang, s.title())).clicked() {
+                    if ui
+                        .selectable_label(self.current == Some(s), tr(lang, s.title()))
+                        .clicked()
+                    {
                         self.query.clear();
                         self.jump = Some(s);
                     }
@@ -1415,9 +1422,11 @@ impl SettingsUi {
                 .show(ui, |ui| {
                     ui.set_max_width(760.0);
                     let mut any = false;
+                    self.seen = None;
                     for section in Section::ALL {
                         any |= self.section_ui(ui, section, settings, &mut out);
                     }
+                    self.current = self.seen;
                     if !any {
                         ui.add_space(8.0);
                         ui.weak(tr(lang, "No settings match"));
@@ -1485,6 +1494,11 @@ impl SettingsUi {
         if self.jump == Some(section) {
             heading.scroll_to_me(Some(Align::TOP));
             self.jump = None;
+        }
+        // 見出しが表示の上端より上へ流れた節のうち、最後のものが見ている節。
+        // どれも流れていなければ一番上の節。
+        if self.seen.is_none() || heading.rect.top() <= ui.clip_rect().top() + VIEWING_MARGIN {
+            self.seen = Some(section);
         }
         ui.separator();
 
@@ -1664,10 +1678,17 @@ fn item_frame(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     }
 }
 
+/// 節の見出しが表示の上端からこれだけ下にあれば、もうその節を見ているとみなす。
+/// 目次で飛んだときに見出しがちょうど上端に来ても、その節が選ばれるように。
+const VIEWING_MARGIN: f32 = 24.0;
+
+/// 項目の名前と、設定ファイルでのキー。キーは設定ファイルを直接書く人向けの添え書きなので、
+/// 名前より目立たないよう小さく薄くする。
 fn title_line(ui: &mut egui::Ui, title: &str, key: &str) {
     ui.horizontal(|ui| {
         ui.strong(title);
-        ui.weak(RichText::new(key).small().monospace());
+        let color = ui.visuals().weak_text_color().gamma_multiply(0.75);
+        ui.label(RichText::new(key).size(10.5).monospace().color(color));
     });
 }
 

@@ -161,9 +161,13 @@ impl VwApp {
         } else {
             egui::Frame::new()
         };
-        // 状態の行はどちらの見た目でも出す。1 枚ごとの読み込みはログ欄に出さないので、
-        // 読み込みの進み具合はここでしか見えないため。
-        let status = self.status_lines(ui.ctx());
+        // 集計の行はターミナル風だけに出す。普通の見た目はログファイルの中身と同じ行だけにして、
+        // 欄の上の数行が絶えず書き換わって目に入らないようにする（読み込み中かはスロットで分かる）。
+        let status = if terminal {
+            self.status_lines(ui.ctx())
+        } else {
+            Vec::new()
+        };
         let mut menu_target: Option<egui::Response> = None;
         frame.show(ui, |ui| {
             let visuals = ui.visuals().clone();
@@ -173,9 +177,8 @@ impl VwApp {
                     egui::Label::new(status_job(line, terminal, &visuals)).selectable(false);
                 ui.add(if wrap { label.wrap() } else { label.truncate() });
             }
-            ui.add_space(2.0);
-            if !terminal {
-                ui.separator();
+            if !status.is_empty() {
+                ui.add_space(2.0);
             }
             let scroll = if wrap {
                 egui::ScrollArea::vertical()
