@@ -35,6 +35,8 @@ sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "platform-verifier"] }
 ort = { version = "2.0.0-rc.14", default-features = false, features = ["load-dynamic"] }
 tar = "0.4"
+sha2 = "0.11"
+sha1 = "0.11"
 base64 = "0.22"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 

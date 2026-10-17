@@ -4,6 +4,9 @@
 //! ダウンロードまで重くなるため。置き場は設定ファイルの隣の `models` フォルダに
 //! 固定し、設定にしないのは、モデルを他へ動かす理由がまずなく、「どこに入れたか」を
 //! 迷わせたくないため。
+//!
+//! 取ってくるファイルは版（コミット・リリース）で固定し、決めておいたハッシュと合うものだけを使う。
+//! 取得元が乗っ取られたり差し替えられたりしても、知らないモデルや dll を読み込まないため。
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +21,10 @@ use crate::settings::Language;
 
 pub const RUNTIME_VERSION: &str = "1.29.0";
 pub const TAGGER_NAME: &str = "wd-vit-tagger-v3";
+/// Hugging Face の SmilingWolf/wd-vit-tagger-v3 のコミット。
+const TAGGER_REVISION: &str = "7f6b584d0bd3f55c4531f14ba3d4761b2bccdc0f";
+/// opencv/opencv_zoo のコミット。
+const FACES_REVISION: &str = "47534e27c9851bb1128ccc0102f1145e27f23f98";
 /// モデルが揃う前に、タグ付けや顔探しの項目に出す説明（英語の原文）。
 pub const NOT_READY: &str = "Download all AI models first (AI tags > AI models...)";
 
@@ -72,29 +79,56 @@ impl Item {
                 url: runtime_url(),
                 target: runtime_relative(),
                 extract: Some(runtime_entry()),
+                hash: Hash::Sha256(runtime_sha256()),
             }],
-            Item::Tagger => ["model.onnx", "selected_tags.csv"]
-                .into_iter()
-                .map(|f| Source {
-                    url: format!(
-                        "https://huggingface.co/SmilingWolf/{TAGGER_NAME}/resolve/main/{f}"
+            Item::Tagger => [
+                (
+                    "model.onnx",
+                    Hash::Sha256(
+                        "35f23693620b668f4d53fd3c62bf65e40af739bc52c7eb0fbc49258b58d065b6",
                     ),
-                    target: PathBuf::from(TAGGER_NAME).join(f),
-                    extract: None,
-                })
-                .collect(),
+                ),
+                // Hugging Face が SHA-256 を公開しているのは Git LFS に置いた大きなファイルだけで、
+                // この CSV は普通の git のファイルなので、公開されている git の blob の値で確かめる。
+                // 自分で SHA-256 を計算して書く案は、ここからは Hugging Face に届かず元のファイルを
+                // 取れないため採らなかった。中身はタグの名前だけで、実行されるものではない。
+                (
+                    "selected_tags.csv",
+                    Hash::GitBlob("a2a653a5c89c8e387765eb1de9cfd2aedc92ee8d"),
+                ),
+            ]
+            .into_iter()
+            .map(|(f, hash)| Source {
+                url: format!(
+                    "https://huggingface.co/SmilingWolf/{TAGGER_NAME}/resolve/{TAGGER_REVISION}/{f}"
+                ),
+                target: PathBuf::from(TAGGER_NAME).join(f),
+                extract: None,
+                hash,
+            })
+            .collect(),
             // github.com の raw は Git LFS の中身へ転送されるが、転送先を直接指す。
             // 転送を挟むと、プロキシのある環境で弾かれることがあるため。
-            Item::Faces => [FACE_DETECTOR, FACE_RECOGNIZER]
-                .into_iter()
-                .map(|(dir, f)| Source {
-                    url: format!(
-                        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/{dir}/{f}"
-                    ),
-                    target: PathBuf::from(FACES_DIR).join(f),
-                    extract: None,
-                })
-                .collect(),
+            Item::Faces => [
+                (
+                    FACE_DETECTOR,
+                    "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+                ),
+                (
+                    FACE_RECOGNIZER,
+                    "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+                ),
+            ]
+            .into_iter()
+            .map(|((dir, f), sha256)| Source {
+                url: format!(
+                    "https://media.githubusercontent.com/media/opencv/opencv_zoo/{FACES_REVISION}/models/{dir}/{f}"
+                ),
+                target: PathBuf::from(FACES_DIR).join(f),
+                extract: None,
+                hash: Hash::Sha256(sha256),
+            })
+            .collect(),
         }
     }
 }
@@ -110,6 +144,80 @@ struct Source {
     url: String,
     target: PathBuf,
     extract: Option<&'static str>,
+    /// 取ってきたファイル（書庫なら書庫そのもの）のハッシュ。
+    hash: Hash,
+}
+
+/// 確かめるハッシュ。16 進の小文字。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hash {
+    Sha256(&'static str),
+    /// git の blob の id（`blob <長さ>\0` に続けて中身の SHA-1）。
+    GitBlob(&'static str),
+}
+
+impl Hash {
+    fn expected(self) -> &'static str {
+        match self {
+            Hash::Sha256(h) | Hash::GitBlob(h) => h,
+        }
+    }
+
+    fn of_file(self, path: &Path) -> Result<String, String> {
+        use sha2::Digest;
+        let read = |path: &Path, update: &mut dyn FnMut(&[u8])| -> Result<(), String> {
+            let mut file =
+                std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let mut buf = vec![0u8; 1 << 16];
+            loop {
+                let n = file
+                    .read(&mut buf)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                if n == 0 {
+                    return Ok(());
+                }
+                update(&buf[..n]);
+            }
+        };
+        let bytes = match self {
+            Hash::Sha256(_) => {
+                let mut h = sha2::Sha256::new();
+                read(path, &mut |b| h.update(b))?;
+                h.finalize().to_vec()
+            }
+            Hash::GitBlob(_) => {
+                let len = std::fs::metadata(path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?
+                    .len();
+                let mut h = sha1::Sha1::new();
+                h.update(format!("blob {len}\0").as_bytes());
+                read(path, &mut |b| h.update(b))?;
+                h.finalize().to_vec()
+            }
+        };
+        Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// `path` が決めたハッシュと合うか。合わなければ理由を返す。
+    fn check(self, path: &Path, url: &str) -> Result<(), String> {
+        let actual = self.of_file(path)?;
+        if actual == self.expected() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{url}: the file does not match the expected hash and was not used (expected {}, got {actual})",
+                self.expected()
+            ))
+        }
+    }
+}
+
+/// 確かめ済みの印。中身は確かめたハッシュ。ハッシュを変えた版に上げると印が合わなくなり、
+/// 取り直す（同じ中身なら確かめ直すだけ）ことになる。
+fn stamp_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_owned();
+    name.push(".verified");
+    PathBuf::from(name)
 }
 
 fn runtime_url() -> String {
@@ -129,6 +237,16 @@ fn runtime_url() -> String {
         "x64"
     };
     format!("{base}/v{RUNTIME_VERSION}/onnxruntime-{os}-{arch}-{RUNTIME_VERSION}.{ext}")
+}
+
+/// ONNX Runtime の書庫の SHA-256。GitHub の Releases の v1.29.0 から取って計算した値。
+fn runtime_sha256() -> &'static str {
+    match (cfg!(windows), cfg!(target_arch = "aarch64")) {
+        (true, false) => "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
+        (true, true) => "a094a49c3ced0f9fca554647cc7566ae99d93a63a8ce6bf47975561c2de7608e",
+        (false, false) => "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba",
+        (false, true) => "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f",
+    }
 }
 
 /// 書庫の中の共有ライブラリ。先頭フォルダ名は書庫によるので、末尾で探す。
@@ -181,14 +299,16 @@ impl Store {
         self.dir.join(FACES_DIR).join(FACE_RECOGNIZER.1)
     }
 
+    /// 揃っていて、確かめ済みか。起動のたびに数百 MB のハッシュを計算し直さないよう、
+    /// 確かめたときに残した印で見る。
     pub fn has(&self, item: Item) -> bool {
-        item.sources()
-            .iter()
+        item.sources().iter().all(|s| {
+            let target = self.dir.join(&s.target);
             // 空のファイルは数えない。以前の版は展開に失敗すると空の dll を残していた。
-            .all(|s| {
-                std::fs::metadata(self.dir.join(&s.target))
-                    .is_ok_and(|m| m.is_file() && m.len() > 0)
-            })
+            std::fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() > 0)
+                && std::fs::read_to_string(stamp_path(&target))
+                    .is_ok_and(|h| h.trim() == s.hash.expected())
+        })
     }
 }
 
@@ -226,7 +346,11 @@ impl Download {
 }
 
 fn fetch_all(dir: &Path, item: Item, progress: &Progress) -> Result<(), String> {
-    let sources = item.sources();
+    let sources: Vec<Source> = item
+        .sources()
+        .into_iter()
+        .filter(|s| !already_verified(dir, s))
+        .collect();
     let agent = agent();
     // 合計を先に知る。進み具合を 1 本の棒で出すため。
     let mut sizes = Vec::new();
@@ -242,20 +366,36 @@ fn fetch_all(dir: &Path, item: Item, progress: &Progress) -> Result<(), String> 
         }
         let part = target.with_extension("part");
         fetch(&agent, &s.url, &part, progress)?;
-        let result = match s.extract {
+        let result = s.hash.check(&part, &s.url).and_then(|()| match s.extract {
             Some(entry) => extract(&part, entry, &target).and_then(|()| {
                 std::fs::remove_file(&part).map_err(|e| format!("{}: {e}", part.display()))
             }),
             None => {
                 std::fs::rename(&part, &target).map_err(|e| format!("{}: {e}", target.display()))
             }
-        };
+        });
         if result.is_err() {
             let _ = std::fs::remove_file(&part);
         }
         result?;
+        stamp(&target, s.hash)?;
     }
     Ok(())
+}
+
+/// 前の版で取ったファイルが決めたハッシュと合えば、印を付けて取り直さない。
+/// 書庫から出した dll は書庫のハッシュで確かめられないので、取り直す。
+fn already_verified(dir: &Path, s: &Source) -> bool {
+    let target = dir.join(&s.target);
+    if s.extract.is_some() || !target.is_file() {
+        return false;
+    }
+    s.hash.check(&target, &s.url).is_ok() && stamp(&target, s.hash).is_ok()
+}
+
+fn stamp(target: &Path, hash: Hash) -> Result<(), String> {
+    let path = stamp_path(target);
+    std::fs::write(&path, hash.expected()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn agent() -> ureq::Agent {
@@ -525,8 +665,53 @@ mod tests {
             "an empty file is a failed download"
         );
         std::fs::write(store.runtime(), b"dll").unwrap();
+        assert!(!store.has(Item::Runtime), "a file nobody verified");
+        stamp(&store.runtime(), Hash::Sha256(runtime_sha256())).unwrap();
         assert!(store.has(Item::Runtime));
         assert!(!store.has(Item::Tagger) && !store.has(Item::Faces));
+        std::fs::write(stamp_path(&store.runtime()), "0123").unwrap();
+        assert!(
+            !store.has(Item::Runtime),
+            "verified against a hash this version does not expect"
+        );
+    }
+
+    #[test]
+    fn checks_sha256_and_git_blob_hashes() {
+        let dir = std::env::temp_dir().join(format!("vw-hash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("hello.txt");
+        std::fs::write(&file, b"hello\n").unwrap();
+        // `sha256sum` と `git hash-object` の値。
+        let sha256 =
+            Hash::Sha256("5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03");
+        let blob = Hash::GitBlob("ce013625030ba8dba906f756967f9e9ca394464a");
+        assert!(sha256.check(&file, "u").is_ok());
+        assert!(blob.check(&file, "u").is_ok());
+        std::fs::write(&file, b"hellO\n").unwrap();
+        let error = sha256.check(&file, "https://example.com/f").unwrap_err();
+        assert!(error.contains("https://example.com/f"), "{error}");
+        assert!(blob.check(&file, "u").is_err());
+    }
+
+    #[test]
+    fn a_file_from_an_earlier_version_is_kept_only_if_it_matches() {
+        let dir = std::env::temp_dir().join(format!("vw-earlier-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hello.txt"), b"hello\n").unwrap();
+        let source = |hash| Source {
+            url: "u".into(),
+            target: "hello.txt".into(),
+            extract: None,
+            hash,
+        };
+        let good = source(Hash::GitBlob("ce013625030ba8dba906f756967f9e9ca394464a"));
+        assert!(already_verified(&dir, &good));
+        assert!(stamp_path(&dir.join("hello.txt")).is_file());
+        let bad = source(Hash::GitBlob("0000000000000000000000000000000000000000"));
+        assert!(!already_verified(&dir, &bad));
     }
 
     /// 本物の ONNX Runtime を GitHub から取る。ネットワークが要るので普段は走らせない。
