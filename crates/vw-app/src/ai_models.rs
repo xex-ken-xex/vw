@@ -182,7 +182,11 @@ impl Store {
     pub fn has(&self, item: Item) -> bool {
         item.sources()
             .iter()
-            .all(|s| self.dir.join(&s.target).is_file())
+            // 空のファイルは数えない。以前の版は展開に失敗すると空の dll を残していた。
+            .all(|s| {
+                std::fs::metadata(self.dir.join(&s.target))
+                    .is_ok_and(|m| m.is_file() && m.len() > 0)
+            })
     }
 }
 
@@ -303,14 +307,27 @@ fn is_zip(archive: &Path) -> Result<bool, String> {
 
 /// 書庫から `entry` で終わる 1 つのファイルを `target` に出す。
 fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
+    // 別名に書いてから置き換える。途中で失敗したとき、壊れた target を残さないため。
+    let partial = target.with_extension("extracting");
+    let result = std::fs::File::create(&partial)
+        .map_err(|e| format!("{}: {e}", partial.display()))
+        .and_then(|mut out| extract_into(archive, entry, &mut out))
+        .and_then(|()| {
+            std::fs::rename(&partial, target).map_err(|e| format!("{}: {e}", target.display()))
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    result
+}
+
+fn extract_into(archive: &Path, entry: &str, out: &mut std::fs::File) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
     let matches = |name: &str| {
         let name = name.replace('\\', "/");
         // Linux の .so は版の番号つき（libonnxruntime.so.1.29.0）で入っている。
         name.ends_with(entry) || name.contains(&format!("{entry}."))
     };
-    let mut out =
-        std::fs::File::create(target).map_err(|e| format!("{}: {e}", target.display()))?;
     // 拡張子では見分けない。落としている途中のファイルは .part なので、zip でも tgz に見えてしまう。
     let found = if is_zip(archive)? {
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -321,7 +338,7 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
         match index {
             Some(i) => {
                 let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-                std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
+                std::io::copy(&mut f, out).map_err(|e| e.to_string())?;
                 true
             }
             None => false,
@@ -337,7 +354,7 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
                 .to_string_lossy()
                 .into_owned();
             if e.header().entry_type().is_file() && matches(&path) {
-                std::io::copy(&mut e, &mut out).map_err(|e| e.to_string())?;
+                std::io::copy(&mut e, out).map_err(|e| e.to_string())?;
                 found = true;
                 break;
             }
@@ -345,8 +362,6 @@ fn extract(archive: &Path, entry: &str, target: &Path) -> Result<(), String> {
         found
     };
     if !found {
-        drop(out);
-        let _ = std::fs::remove_file(target);
         return Err(format!(
             "{}: {entry} not found in the archive",
             archive.display()
@@ -503,6 +518,11 @@ mod tests {
         assert!(Item::ALL.iter().all(|&i| !store.has(i)));
         std::fs::create_dir_all(store.runtime().parent().unwrap()).unwrap();
         std::fs::write(store.runtime(), b"").unwrap();
+        assert!(
+            !store.has(Item::Runtime),
+            "an empty file is a failed download"
+        );
+        std::fs::write(store.runtime(), b"dll").unwrap();
         assert!(store.has(Item::Runtime));
         assert!(!store.has(Item::Tagger) && !store.has(Item::Faces));
     }
@@ -573,5 +593,17 @@ mod tests {
         let target = dir.join("onnxruntime.dll");
         extract(&archive, "lib/onnxruntime.dll", &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"dll");
+    }
+
+    #[test]
+    fn a_failed_extraction_leaves_no_file_behind() {
+        let dir = std::env::temp_dir().join(format!("vw-extract-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("broken.part");
+        std::fs::write(&archive, b"not an archive").unwrap();
+        let target = dir.join("onnxruntime.dll");
+        assert!(extract(&archive, "lib/onnxruntime.dll", &target).is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     }
 }
