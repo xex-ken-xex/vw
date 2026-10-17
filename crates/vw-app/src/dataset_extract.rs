@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 
 use vw_core::Registry;
 
+use crate::ai_tags::AiTagStore;
 use crate::archive::{self, ArchiveError, EntryError};
 use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped, Source, IN_ARCHIVE};
 
@@ -46,7 +47,7 @@ pub fn extract(
     source: &Path,
     c: &Catalog,
     dest: &Path,
-    register: Option<(Info, &Registry)>,
+    register: Option<(Info, &Registry, &AiTagStore)>,
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<Extracted, String> {
@@ -57,9 +58,10 @@ pub fn extract(
     std::fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let (copied, failed) = copy_files(source, c, dest, progress, ask_password)?;
     let registered = match register {
-        Some((info, registry)) => {
+        Some((info, registry, ai_tags)) => {
             progress.done.store(0, Ordering::Relaxed);
-            let mut report = catalog::scan(dest, info, None, registry, progress, ask_password)?;
+            let mut report =
+                catalog::scan(dest, info, None, registry, ai_tags, progress, ask_password)?;
             report.catalog.source = Some(Source {
                 name: c.name.clone(),
                 path: source.display().to_string(),
@@ -308,6 +310,7 @@ mod tests {
             info("orig"),
             None,
             &png_registry(),
+            &AiTagStore::new(None),
             &Progress::default(),
             ask,
         )
@@ -385,7 +388,7 @@ mod tests {
             &src,
             &c,
             &dest,
-            Some((info("copy"), &registry)),
+            Some((info("copy"), &registry, &AiTagStore::new(None))),
             &Progress::default(),
             &mut no_password,
         )
@@ -417,7 +420,7 @@ mod tests {
             &src,
             &c,
             &dest,
-            Some((info("copy"), &registry)),
+            Some((info("copy"), &registry, &AiTagStore::new(None))),
             &Progress::default(),
             &mut no_password,
         );

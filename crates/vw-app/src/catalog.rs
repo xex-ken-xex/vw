@@ -13,15 +13,18 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use vw_core::{Metadata, Registry};
 
+use crate::ai_tags::{self, AiTagStore};
 use crate::archive::{self, ArchiveError, EntryError};
 
 pub const FILE_NAME: &str = "vw-search-catalog.json";
 const FORMAT: u32 = 1;
+/// AI タグと人物の組の種類。メタデータ欄のグループ「AI tags」に合わせる。
+pub const AI_TAGS: &str = "ai tags";
 /// ZIP の場所と ZIP の中のパスの区切り（`data.zip!/series1/IM0001.dcm`）。
 pub const IN_ARCHIVE: &str = "!/";
 
 /// メタデータの 1 組（種類・キー・値）。種類はメタデータ欄のグループ名を小文字にしたもの
-/// （`exif`、`dicom` など）と、形式によらない基本情報の `image`。
+/// （`exif`、`dicom` など）と、形式によらない基本情報の `image`、AI タグの [`AI_TAGS`]。
 pub type Triple = (String, String, String);
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -176,6 +179,7 @@ pub struct Report {
 /// `dir` 以下の画像（ZIP / 7z の中も）のメタデータを集めてカタログを作る。`previous` があれば
 /// 作った日時を引き継ぎ、ファイルの増減を数える。暗号化されたアーカイブは `ask_password` で
 /// パスワードを聞き（`true` なら前に聞いたものが違った）、`None` ならそのアーカイブを飛ばす。
+/// `ai_tags` に記録のある画像は、AI タグと写っている人物も組にする。
 ///
 /// 前のカタログのうち変わっていないファイルの組を使い回さず、全ファイルを読み直す。
 /// 組はデータセット全体で 1 つずつしか持たないので、消えたファイルの組だけを除くことが
@@ -185,6 +189,7 @@ pub fn scan(
     info: Info,
     previous: Option<&Catalog>,
     registry: &Registry,
+    ai_tags: &AiTagStore,
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<Report, String> {
@@ -216,7 +221,12 @@ pub fn scan(
                 Ok(data) => {
                     let size = data.len() as u64;
                     match triples(registry, path, &data) {
-                        Ok(t) => builder.add(relative, size, modified, t),
+                        Ok(mut t) => {
+                            if let Some(entry) = ai_tags.get(path) {
+                                t.extend(ai_triples(&entry));
+                            }
+                            builder.add(relative, size, modified, t)
+                        }
                         Err(e) => problems.push(skip(&relative, e)),
                     }
                 }
@@ -367,6 +377,29 @@ fn triples(registry: &Registry, path: &Path, data: &[u8]) -> Result<Vec<Triple>,
     Ok(out)
 }
 
+/// AI タグ（一般・キャラクター・レーティング）と、名前の付いた顔の人物を組にする。
+///
+/// 確信度は入れない。タグを付けるときに閾値で選んだものだけが残っているうえ、確信度まで
+/// 入れると同じタグでも画像ごとに別の組になり、組を 1 つにまとめて小さくした意味がなくなるため。
+/// ZIP / 7z の中の画像には AI タグを付けられないので、ここでも見ない。
+fn ai_triples(entry: &ai_tags::Entry) -> Vec<Triple> {
+    let triple =
+        |key: &str, value: &str| (AI_TAGS.to_owned(), key.to_owned(), limit(value.to_owned()));
+    let tags = &entry.tags;
+    let mut out: Vec<Triple> = entry
+        .people()
+        .into_iter()
+        .map(|p| triple("person", p))
+        .collect();
+    out.extend(tags.general.iter().map(|t| triple("tag", &t.name)));
+    out.extend(tags.characters.iter().map(|t| triple("character", &t.name)));
+    out.extend(tags.rating.iter().map(|t| triple("rating", &t.name)));
+    if !entry.model.is_empty() {
+        out.push(triple("model", &entry.model));
+    }
+    out
+}
+
 /// これより長い値はカタログに入れない。画像のデータを文字列のタグに入れたファイルがあり、
 /// そのまま入れるとカタログが膨らむうえ検索の役にも立たないため。
 const LONGEST_VALUE: usize = 2048;
@@ -510,6 +543,7 @@ mod tests {
             info,
             previous,
             &png_registry(),
+            &AiTagStore::new(None),
             &Progress::default(),
             &mut no_password,
         )
@@ -584,6 +618,7 @@ mod tests {
             info,
             None,
             &all_registry(),
+            &AiTagStore::new(None),
             &Progress::default(),
             &mut no_password,
         )
@@ -591,6 +626,62 @@ mod tests {
         let c = &report.catalog;
         assert_eq!(values_of(c, "IM0001", "dicom", "0010,0010"), ["Doe^Jane"]);
         assert_eq!(values_of(c, "IM0001", "image", "width"), ["2"]);
+    }
+
+    #[test]
+    fn ai_tags_and_named_people_are_stored_for_searching() {
+        use crate::faces::FaceMark;
+        use crate::tagger::Scored;
+        let tmp = TempDir::new();
+        let image = tmp.path().join("a.png");
+        write_png(&image, 1, 1, &[0; 3]);
+        write_png(&tmp.path().join("b.png"), 1, 1, &[0; 3]);
+        let face = |person: Option<&str>| FaceMark {
+            rect: [0.1, 0.1, 0.2, 0.2],
+            score: 0.9,
+            person: person.map(str::to_owned),
+            similarity: 0.6,
+            unlinked: false,
+            hidden: false,
+        };
+        let scored = |name: &str| Scored {
+            name: name.into(),
+            score: 0.8,
+        };
+        let mut store = AiTagStore::new(None);
+        store
+            .update(&image, |e| {
+                e.model = "tagger".into();
+                e.tags.general = vec![scored("1girl"), scored("smile")];
+                e.tags.characters = vec![scored("hatsune miku")];
+                e.tags.rating = Some(scored("general"));
+                e.faces = vec![face(Some("Taro")), face(None), face(Some("Taro"))];
+            })
+            .unwrap();
+
+        let report = scan(
+            tmp.path(),
+            Info::default(),
+            None,
+            &png_registry(),
+            &AiTagStore::new(None),
+            &Progress::default(),
+            &mut no_password,
+        )
+        .unwrap();
+
+        let c = &report.catalog;
+        assert_eq!(values_of(c, "a.png", AI_TAGS, "person"), ["Taro"]);
+        let mut tags = values_of(c, "a.png", AI_TAGS, "tag");
+        tags.sort_unstable();
+        assert_eq!(tags, ["1girl", "smile"]);
+        assert_eq!(
+            values_of(c, "a.png", AI_TAGS, "character"),
+            ["hatsune miku"]
+        );
+        assert_eq!(values_of(c, "a.png", AI_TAGS, "rating"), ["general"]);
+        assert_eq!(values_of(c, "a.png", AI_TAGS, "model"), ["tagger"]);
+        assert!(values_of(c, "b.png", AI_TAGS, "tag").is_empty());
     }
 
     #[test]
@@ -626,6 +717,7 @@ mod tests {
             Info::default(),
             None,
             &png_registry(),
+            &AiTagStore::new(None),
             &Progress::default(),
             &mut answer,
         )
@@ -715,6 +807,7 @@ mod tests {
             Info::default(),
             None,
             &png_registry(),
+            &AiTagStore::new(None),
             &progress,
             &mut no_password,
         );

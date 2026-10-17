@@ -72,6 +72,11 @@ impl AiTagStore {
         }
     }
 
+    /// フォルダに書けないときの置き場所。別のスレッドで同じ記録を読むときに使う。
+    pub fn fallback_dir(&self) -> Option<&Path> {
+        self.fallback_dir.as_deref()
+    }
+
     pub fn get(&self, path: &Path) -> Option<Entry> {
         let (dir, name) = split(path)?;
         self.with_dir(dir, |d| d.file.files.get(&name).cloned())
