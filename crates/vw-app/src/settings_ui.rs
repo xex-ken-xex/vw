@@ -7,7 +7,7 @@ use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1, tr_text};
-use crate::keymap::{is_modifier, os_reserved, Action, KeyCombo, Keymap, Os, Refusal, Scope};
+use crate::keymap::{is_modifier, os_conflict, Action, KeyCombo, Keymap, Os, Refusal, Scope};
 use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
@@ -1833,7 +1833,7 @@ impl SettingsUi {
                     let duplicated = duplicates
                         .iter()
                         .any(|(c, actions)| *c == k && actions.contains(&action));
-                    let reserved = os_reserved(Os::CURRENT, k);
+                    let reserved = os_conflict(Os::CURRENT, action, k);
                     // 等幅にしない。アイコンフォントは本文（プロポーショナル）にしか組み込んでいないため。
                     let mut text = RichText::new(format!("{k}  {}", icon::X));
                     let mut tip = tr(lang, "Click to remove").to_owned();
@@ -1997,7 +1997,7 @@ fn capture(
                 return match keymap.assign(action, combo) {
                     Ok(()) => (
                         Capture::Done,
-                        os_reserved(os, combo).map(Notice::OsReserved),
+                        os_conflict(os, action, combo).map(Notice::OsReserved),
                     ),
                     Err(r) => (Capture::Rejected, Some(Notice::Refused(r))),
                 };

@@ -80,7 +80,11 @@ impl VwApp {
             file_rows,
         )];
         let path = shown.path.clone();
-        let entries = info.metadata.entries.clone();
+        let mut metadata = info.metadata.clone();
+        if let Some(p) = self.labels.get(&frames::file_of(&path)).position {
+            crate::labels::apply_position(&mut metadata, p);
+        }
+        let entries = metadata.entries;
         if let Some(rows) = self.ai_tag_rows(&path) {
             groups.push(meta_view::Group::new(
                 super::ai_tagging::AI_TAGS,
@@ -91,7 +95,9 @@ impl VwApp {
         groups.extend(group_metadata(&entries).into_iter().map(|(g, rows)| {
             let rows = rows
                 .into_iter()
-                .map(|(k, v)| meta_view::Row::new(g, k, shown_name(lang, g, k), v.to_owned()))
+                .map(|(k, v)| {
+                    meta_view::Row::new(g, k, shown_name(lang, g, k), shown_value(lang, g, k, v))
+                })
                 .collect();
             meta_view::Group::new(g, shown_name(lang, g, g), rows)
         }));
@@ -461,6 +467,15 @@ fn shown_name(lang: crate::settings::Language, group: &str, name: &str) -> Strin
         }
     } else {
         name.to_owned()
+    }
+}
+
+/// 値も、vw が書く「地図で置いた」だけを訳す。
+fn shown_value(lang: crate::settings::Language, group: &str, name: &str, value: &str) -> String {
+    if group == vw_core::exif::LOCATION && name == crate::labels::POSITION_FROM {
+        crate::i18n::tr_text(lang, value)
+    } else {
+        value.to_owned()
     }
 }
 

@@ -16,6 +16,7 @@ use crate::catalog::{self, Catalog, Info, Progress, Report};
 use crate::dataset_extract;
 use crate::dataset_search::Index;
 use crate::i18n::{tr, tr1, tr_text};
+use crate::labels::LabelStore;
 use crate::log::Log;
 use crate::settings::Language;
 
@@ -67,6 +68,8 @@ pub struct DatasetDialog {
     only_hits: bool,
     /// AI タグをフォルダに書けなかったときの置き場所。
     ai_tag_fallback: Option<PathBuf>,
+    /// ラベルをフォルダに書けなかったときの置き場所。
+    label_fallback: Option<PathBuf>,
 }
 
 /// 別スレッドでの処理の結果。
@@ -97,12 +100,14 @@ impl DatasetDialog {
     /// `fields` は設定で足した項目。カタログにしかない項目もその後ろに出す。`known` は
     /// Datasets 画面で集めたデータセットの一覧で、タグと項目の値の候補に使う。`extract_base` は
     /// 取り出しの出力先を置く場所の初期値。
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         request: Request,
         fields: &[String],
         known: Option<&Index>,
         extract_base: &Path,
         ai_tag_fallback: Option<&Path>,
+        label_fallback: Option<&Path>,
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
@@ -130,6 +135,7 @@ impl DatasetDialog {
             only_hits: hits.is_some(),
             hits,
             ai_tag_fallback: ai_tag_fallback.map(Path::to_path_buf),
+            label_fallback: label_fallback.map(Path::to_path_buf),
             dir,
             kind,
         };
@@ -236,6 +242,7 @@ impl DatasetDialog {
         };
         let registry = registry.clone();
         let ai_tag_fallback = self.ai_tag_fallback.clone();
+        let label_fallback = self.label_fallback.clone();
         let worker_progress = progress.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -251,8 +258,9 @@ impl DatasetDialog {
                 repaint.request_repaint();
                 answer.recv().ok().flatten()
             };
-            // 画面のスレッドの AiTagStore は RefCell を持ち別のスレッドへ渡せないので、同じファイルを読むものをここで作る。
+            // 画面のスレッドの AiTagStore・LabelStore は RefCell を持ち別のスレッドへ渡せないので、同じファイルを読むものをここで作る。
             let ai_tags = AiTagStore::new(ai_tag_fallback);
+            let labels = LabelStore::new(label_fallback);
             let outcome = match (kind, &previous) {
                 (Kind::Extract, Some(source)) => dataset_extract::extract(
                     &dir,
@@ -269,6 +277,7 @@ impl DatasetDialog {
                     previous.as_ref(),
                     &registry,
                     &ai_tags,
+                    &labels,
                     &worker_progress,
                     &mut ask_password,
                 )

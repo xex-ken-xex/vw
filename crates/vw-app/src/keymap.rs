@@ -80,6 +80,7 @@ pub enum Action {
     ToggleHistogram,
     ToggleZoomMap,
     ToggleMap,
+    UndoPosition,
     ShowAbout,
     ShowAiModels,
     AiTagFolder,
@@ -103,7 +104,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 76] = [
+    pub const ALL: [Action; 77] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -134,6 +135,7 @@ impl Action {
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
         Action::ToggleMap,
+        Action::UndoPosition,
         Action::ToggleTagging,
         Action::FlagGood,
         Action::FlagBad,
@@ -240,6 +242,7 @@ impl Action {
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleMap => "toggle_map",
+            Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
@@ -325,6 +328,7 @@ impl Action {
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleMap => "Show/hide map",
+            Action::UndoPosition => "Undo the last position change",
             Action::ShowAbout => "About vw",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
@@ -501,6 +505,7 @@ impl Action {
             Action::ToggleHistogram => vec![],
             Action::ToggleZoomMap => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
+            Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
@@ -929,6 +934,16 @@ impl Os {
     } else {
         Os::Linux
     };
+}
+
+/// `action` に `combo` を割り当てたとき、OS の使い方とぶつかるならその用途を返す。
+/// OS と同じ用途（Ctrl+Z の元に戻すなど）に使うなら、ぶつからない。
+pub fn os_conflict(os: Os, action: Action, combo: KeyCombo) -> Option<&'static str> {
+    let same_use = match action {
+        Action::UndoPosition => Some("Undo"),
+        _ => None,
+    };
+    os_reserved(os, combo).filter(|r| Some(*r) != same_use)
 }
 
 /// OS やデスクトップ環境が使っているキーなら、その用途を返す。
@@ -1406,7 +1421,7 @@ mod tests {
         for os in [Os::Windows, Os::Linux] {
             for a in Action::ALL {
                 for k in map.keys(a) {
-                    assert_eq!(os_reserved(os, *k), None, "{k}");
+                    assert_eq!(os_conflict(os, a, *k), None, "{k}");
                 }
             }
         }

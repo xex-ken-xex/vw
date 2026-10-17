@@ -64,6 +64,12 @@ const JA: &[(&str, &str)] = &[
     ("Place names...", "地名..."),
     ("Download the place names (GeoNames) to search the map by name.", "地名（GeoNames）をダウンロードすると、地図を地名で探せます。"),
     ("Search places", "地名で探す"),
+    ("Place here", "ここに置く"),
+    ("Remove the position", "位置を消す"),
+    ("Placed on the map", "地図で置いた位置"),
+    ("Nothing to undo", "元に戻すものがありません"),
+    ("Position from", "位置の出どころ"),
+    ("Undo the last position change", "位置の変更を元に戻す"),
     ("Page opened by clicking the credit.", "出典をクリックしたときに開くページです。"),
     // AI タグ
     ("AI models...", "AI のモデル..."),

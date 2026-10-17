@@ -356,6 +356,7 @@ mod tests {
         Label {
             flag,
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            ..Default::default()
         }
     }
 

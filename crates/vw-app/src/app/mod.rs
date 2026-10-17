@@ -50,6 +50,7 @@ mod people_graph_ui;
 mod people_ui;
 mod persist;
 mod playback;
+mod positions;
 mod screens;
 mod send;
 mod slots;
@@ -283,6 +284,8 @@ pub struct VwApp {
     /// ツリーで開いた ZIP。
     archives: Archives,
     labels: LabelStore,
+    /// 地図で置いた位置の変更。Ctrl+Z で戻す。
+    position_undo: positions::PositionUndo,
     /// タグ付けモード。↑ ↓ と数字キーでフラグとタグを付ける。
     tagging: bool,
     /// ツリー・画像送り・フォルダの読み込み・スライドショーで対象にする画像。
@@ -688,6 +691,7 @@ impl VwApp {
             loaded_folders: Vec::new(),
             archives: Archives::in_temp_dir(),
             labels: LabelStore::new(label_fallback),
+            position_undo: Vec::new(),
             tagging: false,
             filter: Filter::All,
             export: None,
@@ -786,6 +790,7 @@ impl VwApp {
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
+            Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),

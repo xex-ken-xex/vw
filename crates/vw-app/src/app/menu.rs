@@ -155,6 +155,16 @@ impl VwApp {
                 chosen = Some(action);
             }
         }
+        if self.settings().map.enabled
+            && self.menu_item_if(
+                ui,
+                Action::UndoPosition,
+                !self.position_undo.is_empty(),
+                "Nothing to undo",
+            )
+        {
+            chosen = Some(Action::UndoPosition);
+        }
         ui.separator();
         let filters = [
             (Action::FilterAll, Filter::All),

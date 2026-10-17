@@ -15,6 +15,7 @@ use vw_core::Registry;
 use crate::ai_tags::AiTagStore;
 use crate::archive::{self, ArchiveError, EntryError};
 use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped, Source, IN_ARCHIVE};
+use crate::labels::LabelStore;
 
 /// 取り出した結果。`failed` は写せなかったファイル（元から消えていたもの、出力先に同じ名前が
 /// あったものなど）。
@@ -60,8 +61,18 @@ pub fn extract(
     let registered = match register {
         Some((info, registry, ai_tags)) => {
             progress.done.store(0, Ordering::Relaxed);
-            let mut report =
-                catalog::scan(dest, info, None, registry, ai_tags, progress, ask_password)?;
+            // 取り出したばかりのフォルダにラベルはまだないので、設定フォルダの控えは見ない。
+            let labels = LabelStore::new(None);
+            let mut report = catalog::scan(
+                dest,
+                info,
+                None,
+                registry,
+                ai_tags,
+                &labels,
+                progress,
+                ask_password,
+            )?;
             report.catalog.source = Some(Source {
                 name: c.name.clone(),
                 path: source.display().to_string(),
@@ -311,6 +322,7 @@ mod tests {
             None,
             &png_registry(),
             &AiTagStore::new(None),
+            &LabelStore::new(None),
             &Progress::default(),
             ask,
         )
