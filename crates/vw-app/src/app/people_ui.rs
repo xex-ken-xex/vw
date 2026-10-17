@@ -1,6 +1,7 @@
-//! 人物：顔の枠から人物を登録する操作と、「人物」ウインドウ（一覧・名前の変更・削除）。
+//! 人物：顔の枠から人物を登録する操作と、「人物」ウインドウ（一覧・名前の変更・削除、
+//! 未登録の顔のまとめ）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -8,6 +9,14 @@ use eframe::egui;
 use super::VwApp;
 use crate::i18n::{tr, tr1};
 use crate::people::{arrange, image_counts, Order, Person, Sample};
+
+/// 画像と、その中の顔の番号。
+type FaceRef = (PathBuf, usize);
+
+/// 「未登録の顔」に一度に出すまとまりの数と、1 つのまとまりに出す顔の数。
+/// 何千もの顔を毎フレーム描くと重くなるので、多いものから順に区切る。
+const SHOWN_GROUPS: usize = 100;
+const SHOWN_FACES: usize = 40;
 
 /// 「人物」ウインドウと、名前を聞く小さなウインドウの状態。
 #[derive(Default)]
@@ -30,7 +39,23 @@ pub(super) struct PeopleWindow {
     /// 下に詳しく出している人物。
     selected: Option<String>,
     /// 人物ごとの写っている画像の枚数。顔や人物が変わったら `None` にして数え直す。
+    /// 未登録の顔のまとまりも、これが `None` になったときに作り直す。
     pub counts: Option<HashMap<String, usize>>,
+    tab: Tab,
+    /// 名前のない顔の、似たものどうしのまとまり。
+    unknown: Vec<Vec<(FaceRef, Sample)>>,
+    /// まとまりに入力中の名前。キーはまとまりの最初の顔。
+    group_names: HashMap<FaceRef, String>,
+    /// 「このまとまりから外す」を選んだ顔。まとめ直しても 1 つだけで出す。
+    split: HashSet<FaceRef>,
+    unknown_thumbs: HashMap<FaceRef, egui::TextureHandle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Registered,
+    Unregistered,
 }
 
 /// 人物の一覧の、代表の顔の大きさ。
@@ -68,6 +93,9 @@ enum Command {
     Cover(String, usize),
     Reveal(PathBuf),
     OpenSettingsFolder,
+    NameFaces(Vec<FaceRef>, String),
+    HideFaces(Vec<FaceRef>),
+    Split(FaceRef),
 }
 
 fn texture(ctx: &egui::Context, name: String, thumb: &[u8]) -> egui::TextureHandle {
@@ -116,33 +144,105 @@ impl PeopleWindow {
 impl VwApp {
     /// 画像の `index` 番目の顔を人物 `name` として登録する（いなければ作る）。
     pub(super) fn assign_face(&mut self, image: &Path, index: usize, name: &str) {
-        let Some(sample) = self.face_store.get(image, index) else {
-            self.log.error(format!(
-                "The face is no longer recorded; find faces in {} again",
-                image.display()
-            ));
-            return;
-        };
-        self.people.add(name, sample);
-        if let Err(e) = self.people.save() {
-            self.log.error(format!("Cannot save people: {e}"));
-            return;
+        self.assign_faces(&[(image.to_path_buf(), index)], name);
+    }
+
+    /// 顔をまとめて人物 `name` として登録する。保存と照合し直しは最後に 1 回だけ行う
+    /// （顔ごとにすると、照合し直すたびに記録してある全部の顔を読むため）。
+    fn assign_faces(&mut self, faces: &[FaceRef], name: &str) {
+        let mut problems = Vec::new();
+        let mut registered = Vec::new();
+        for (image, index) in faces {
+            let Some(sample) = self.face_store.get(image, *index) else {
+                problems.push(format!(
+                    "The face is no longer recorded; find faces in {} again",
+                    image.display()
+                ));
+                continue;
+            };
+            self.people.add(name, sample);
+            registered.push((image, *index));
         }
-        let saved = self.ai_tags.update(image, |e| {
-            if let Some(f) = e.faces.get_mut(index) {
-                f.person = Some(name.to_owned());
-                f.similarity = 1.0;
-                f.unlinked = false;
+        if !registered.is_empty() {
+            if let Err(e) = self.people.save() {
+                self.log.error(format!("Cannot save people: {e}"));
+                return;
             }
-        });
-        match saved {
-            Err(e) => self.log.error(format!("Cannot save AI tags: {e}")),
-            Ok(()) => self
+        }
+        for (image, index) in &registered {
+            let saved = self.ai_tags.update(image, |e| {
+                if let Some(f) = e.faces.get_mut(*index) {
+                    f.person = Some(name.to_owned());
+                    f.similarity = 1.0;
+                    f.unlinked = false;
+                    f.hidden = false;
+                }
+            });
+            if let Err(e) = saved {
+                problems.push(format!("Cannot save AI tags: {e}"));
+            }
+        }
+        match registered.as_slice() {
+            [] => {}
+            [(image, _)] => self
                 .log
                 .info(format!("Registered a face as {name}: {}", image.display())),
+            many => self
+                .log
+                .info(format!("Registered {} faces as {name}", many.len())),
+        }
+        for e in problems.into_iter().take(5) {
+            self.log.error(e);
         }
         self.people_window.thumbs.clear();
         self.rematch_faces(None);
+    }
+
+    /// 顔を「未登録の顔」から隠す。顔の枠から登録すれば、また名前を付けられる。
+    fn hide_faces(&mut self, faces: &[FaceRef]) {
+        for (image, index) in faces {
+            let saved = self.ai_tags.update(image, |e| {
+                if let Some(f) = e.faces.get_mut(*index) {
+                    f.hidden = true;
+                }
+            });
+            if let Err(e) = saved {
+                self.log.error(format!("Cannot save AI tags: {e}"));
+                break;
+            }
+        }
+        self.people_window.counts = None;
+    }
+
+    /// 名前のない顔を、似たものどうしにまとめる。
+    fn unknown_groups(&self) -> Vec<Vec<(FaceRef, Sample)>> {
+        let split = &self.people_window.split;
+        let mut faces = Vec::new();
+        let mut alone = Vec::new();
+        for (image, samples) in self.face_store.all() {
+            for (i, mark) in self.ai_tags.faces(&image).iter().enumerate() {
+                let Some(sample) = samples.get(i) else {
+                    continue;
+                };
+                if mark.person.is_some() || mark.hidden {
+                    continue;
+                }
+                let face = ((image.clone(), i), sample.clone());
+                if split.contains(&face.0) {
+                    alone.push(vec![face]);
+                } else {
+                    faces.push(face);
+                }
+            }
+        }
+        let features: Vec<&[f32]> = faces.iter().map(|(_, s)| s.feature.as_slice()).collect();
+        let mut groups: Vec<Vec<(FaceRef, Sample)>> =
+            crate::face_groups::group(&features, self.settings().ai.face_threshold)
+                .into_iter()
+                .map(|g| g.into_iter().map(|i| faces[i].clone()).collect())
+                .collect();
+        groups.extend(alone);
+        groups
     }
 
     /// 前に見つけた顔に付いた名前を、今の人物の登録に合わせ直す。
@@ -254,6 +354,8 @@ impl VwApp {
         let lang = self.lang();
         if self.people_window.counts.is_none() {
             self.people_window.counts = Some(self.people_image_counts());
+            self.people_window.unknown = self.unknown_groups();
+            self.people_window.unknown_thumbs.clear();
         }
         let mut open = true;
         let mut command = None;
@@ -265,6 +367,20 @@ impl VwApp {
             .collapsible(false)
             .default_width(520.0)
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut w.tab, Tab::Registered, tr(lang, "Registered people"));
+                    let faces: usize = w.unknown.iter().map(Vec::len).sum();
+                    ui.selectable_value(
+                        &mut w.tab,
+                        Tab::Unregistered,
+                        tr1(lang, "Unregistered faces ({})", &faces.to_string()),
+                    );
+                });
+                ui.separator();
+                if w.tab == Tab::Unregistered {
+                    unregistered_tab(ui, w, &people, lang, &mut command);
+                    return;
+                }
                 if people.is_empty() {
                     ui.weak(tr(
                         lang,
@@ -434,6 +550,17 @@ impl VwApp {
                     self.open_in_file_manager(dir);
                 }
             }
+            Some(Command::NameFaces(faces, name)) => {
+                if let Some(first) = faces.first() {
+                    self.people_window.group_names.remove(first);
+                }
+                self.assign_faces(&faces, &name);
+            }
+            Some(Command::HideFaces(faces)) => self.hide_faces(&faces),
+            Some(Command::Split(face)) => {
+                self.people_window.split.insert(face);
+                self.people_window.counts = None;
+            }
             Some(Command::OpenSettingsFolder) => {
                 let dir = self
                     .settings
@@ -463,4 +590,114 @@ impl VwApp {
             self.log.error(format!("Cannot save people: {e}"));
         }
     }
+}
+
+/// 「未登録の顔」：似た顔のまとまりごとに、名前を付けて登録するか、隠す。
+fn unregistered_tab(
+    ui: &mut egui::Ui,
+    w: &mut PeopleWindow,
+    people: &[Person],
+    lang: crate::settings::Language,
+    command: &mut Option<Command>,
+) {
+    if w.unknown.is_empty() {
+        ui.weak(tr(
+            lang,
+            "No unregistered faces. Right-click an image > Find faces to look for faces.",
+        ));
+        return;
+    }
+    ui.weak(tr(
+        lang,
+        "Similar faces are grouped. Name a group to register all its faces as that person.",
+    ));
+    let PeopleWindow {
+        unknown,
+        group_names,
+        unknown_thumbs,
+        ..
+    } = w;
+    egui::ScrollArea::vertical()
+        .id_salt("unknown_groups")
+        .max_height(480.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for group in unknown.iter().take(SHOWN_GROUPS) {
+                let refs: Vec<FaceRef> = group.iter().map(|(r, _)| r.clone()).collect();
+                let name = group_names.entry(refs[0].clone()).or_default();
+                ui.horizontal(|ui| {
+                    ui.label(tr1(lang, "{} face(s)", &group.len().to_string()));
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(name)
+                            .hint_text(tr(lang, "Name"))
+                            .desired_width(140.0),
+                    );
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let ok = ui.add_enabled(
+                        !name.trim().is_empty(),
+                        egui::Button::new(tr(lang, "Register")),
+                    );
+                    if ok.clicked() || (enter && !name.trim().is_empty()) {
+                        *command = Some(Command::NameFaces(refs.clone(), name.trim().to_owned()));
+                    }
+                    if ui
+                        .button(tr(lang, "Hide"))
+                        .on_hover_text(tr(
+                            lang,
+                            "Hide these faces from this list (for example passers-by).",
+                        ))
+                        .clicked()
+                    {
+                        *command = Some(Command::HideFaces(refs.clone()));
+                    }
+                    if people.iter().any(|p| p.name == name.trim()) {
+                        ui.weak(tr(lang, "Added to the registered person."));
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for (face, sample) in group.iter().take(SHOWN_FACES) {
+                        let tex = unknown_thumbs
+                            .entry(face.clone())
+                            .or_insert_with(|| {
+                                texture(
+                                    ui.ctx(),
+                                    format!("unknown-{}-{}", face.0.display(), face.1),
+                                    &sample.thumb,
+                                )
+                            })
+                            .clone();
+                        let image =
+                            egui::Image::new(&tex).fit_to_exact_size(egui::vec2(48.0, 48.0));
+                        let resp = ui
+                            .add(egui::Button::image(image).frame(false))
+                            .on_hover_text(face.0.display().to_string());
+                        if resp.clicked() {
+                            *command = Some(Command::Reveal(face.0.clone()));
+                        }
+                        resp.context_menu(|ui| {
+                            if group.len() > 1 && ui.button(tr(lang, "Not in this group")).clicked()
+                            {
+                                *command = Some(Command::Split(face.clone()));
+                                ui.close();
+                            }
+                            if ui.button(tr(lang, "Hide this face")).clicked() {
+                                *command = Some(Command::HideFaces(vec![face.clone()]));
+                                ui.close();
+                            }
+                        });
+                    }
+                    if group.len() > SHOWN_FACES {
+                        ui.weak(format!("+{}", group.len() - SHOWN_FACES));
+                    }
+                });
+                ui.separator();
+            }
+            if unknown.len() > SHOWN_GROUPS {
+                ui.weak(tr1(
+                    lang,
+                    "{} more group(s). Register or hide the ones above to see them.",
+                    &(unknown.len() - SHOWN_GROUPS).to_string(),
+                ));
+            }
+        });
 }

@@ -372,6 +372,7 @@ mod tests {
             person: person.map(str::to_owned),
             similarity: if person.is_some() { 1.0 } else { 0.0 },
             unlinked,
+            hidden: false,
         }
     }
 

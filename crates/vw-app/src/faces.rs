@@ -56,6 +56,9 @@ pub struct FaceMark {
     /// 人が「人物の紐付けを外す」を選んだ顔。照合し直しても名前を付けない。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlinked: bool,
+    /// 人が「未登録の顔」から隠した顔（通りがかりの人など）。一覧に出さない。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// 顔の特徴ベクトル（長さ 1 にそろえたもの）の、コサイン類似度。
@@ -415,6 +418,7 @@ pub fn mark(face: &Face, size: [usize; 2]) -> FaceMark {
         person: None,
         similarity: 0.0,
         unlinked: false,
+        hidden: false,
     }
 }
 
