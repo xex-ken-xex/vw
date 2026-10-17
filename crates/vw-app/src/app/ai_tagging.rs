@@ -197,7 +197,7 @@ impl VwApp {
         };
         // 仕事に要るものだけでなく全部を求めるのは、ダウンロードを 1 回で済ませ、
         // 後で別の機能を使うときに改めて待たせないため。
-        if !Item::ALL.iter().all(|&i| store.has(i)) {
+        if !Item::AI.iter().all(|&i| store.has(i)) {
             self.log.error(tr(lang, ai_models::NOT_READY));
             self.ai_models.open = true;
             return;
@@ -260,7 +260,7 @@ impl VwApp {
     pub(super) fn ai_ready(&self) -> bool {
         self.ai_store
             .as_ref()
-            .is_some_and(|s| Item::ALL.iter().all(|&i| s.has(i)))
+            .is_some_and(|s| Item::AI.iter().all(|&i| s.has(i)))
     }
 
     /// 終わった仕事を、ZIP の展開と同じく 1 行にまとめてログに出す。
@@ -399,7 +399,12 @@ impl VwApp {
         }
         for (item, result) in self.ai_models.finished() {
             match result {
-                Ok(()) => self.log.info(format!("Downloaded {}", item.title())),
+                Ok(()) => {
+                    self.log.info(format!("Downloaded {}", item.title()));
+                    if item == Item::PlaceNames {
+                        self.reload_place_names();
+                    }
+                }
                 Err(e) => self
                     .log
                     .error(format!("Download of {} failed: {e}", item.title())),

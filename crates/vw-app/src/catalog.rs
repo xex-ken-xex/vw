@@ -368,6 +368,17 @@ fn triples(registry: &Registry, path: &Path, data: &[u8]) -> Result<Vec<Triple>,
         .into_iter()
         .map(|(k, v)| ("image".to_owned(), k.to_owned(), v))
         .collect();
+    let location = vw_core::exif::LOCATION.to_lowercase();
+    if let (Some(g), Some(gps)) = (
+        crate::geonames::current(),
+        vw_core::exif::Gps::from_metadata(&metadata),
+    ) {
+        out.extend(
+            crate::geonames::catalog_triples(&g, gps.latitude, gps.longitude)
+                .into_iter()
+                .map(|(k, v)| (location.clone(), k, v)),
+        );
+    }
     out.extend(
         metadata
             .entries

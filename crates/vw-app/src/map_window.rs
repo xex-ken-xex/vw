@@ -14,6 +14,7 @@ use vw_core::exif::Gps;
 use vw_core::Registry;
 
 use crate::geo_map::{self, Cluster, View};
+use crate::geonames::{Found as FoundName, Gazetteer};
 use crate::i18n::{tr, tr1};
 use crate::map_tiles::Tiles;
 use crate::settings::{Language, MapSettings};
@@ -107,6 +108,8 @@ enum Selected {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Open(PathBuf),
+    /// 地名の表のダウンロードの画面を開く。
+    ShowDownloads,
 }
 
 /// 地図を描くのに要るもの。
@@ -120,6 +123,8 @@ pub struct Inputs<'a> {
     pub order: SortOrder,
     /// 取った地図の絵を残すフォルダ。
     pub cache: Option<&'a Path>,
+    /// 地名の表。まだダウンロードしていなければ `None`。
+    pub places: Option<&'a Gazetteer>,
 }
 
 pub struct MapWindow {
@@ -136,6 +141,9 @@ pub struct MapWindow {
     selected: Option<Selected>,
     thumb: Option<Thumb>,
     problems: Vec<String>,
+    /// 地名の検索欄と、その候補。
+    query: String,
+    names: Vec<FoundName>,
 }
 
 impl Default for MapWindow {
@@ -153,6 +161,8 @@ impl Default for MapWindow {
             selected: None,
             thumb: None,
             problems: Vec::new(),
+            query: String::new(),
+            names: Vec::new(),
         }
     }
 }
@@ -184,10 +194,10 @@ impl MapWindow {
                     close = true;
                 }
                 self.window.track(ctx);
-                egui::Panel::top("map_bar").show(ctx, |ui| self.bar(ui, inputs));
+                egui::Panel::top("map_bar").show(ctx, |ui| out.extend(self.bar(ui, inputs)));
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| out = self.map(ui, inputs));
+                    .show(ctx, |ui| out.extend(self.map(ui, inputs)));
                 self.window.pin_overlay(ctx, lang);
             },
         );
@@ -236,9 +246,12 @@ impl MapWindow {
         }
     }
 
-    fn bar(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) {
+    fn bar(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let lang = inputs.lang;
+        let mut out = Vec::new();
         ui.horizontal(|ui| {
+            out.extend(self.search(ui, inputs));
+            ui.separator();
             let before = self.scope;
             ui.selectable_value(&mut self.scope, Scope::Folder, tr(lang, "This folder"));
             ui.selectable_value(&mut self.scope, Scope::Datasets, tr(lang, "All datasets"));
@@ -277,6 +290,62 @@ impl MapWindow {
                 }
             }
         });
+        out
+    }
+
+    /// 地名の検索欄。打つたびに候補を出し、選んだ所へ地図を動かす。
+    fn search(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Option<Command> {
+        let lang = inputs.lang;
+        let Some(places) = inputs.places else {
+            let r = ui
+                .button(format!(
+                    "{} {}",
+                    icon::MAGNIFYING_GLASS,
+                    tr(lang, "Place names...")
+                ))
+                .on_hover_text(tr(
+                    lang,
+                    "Download the place names (GeoNames) to search the map by name.",
+                ));
+            return r.clicked().then_some(Command::ShowDownloads);
+        };
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .hint_text(format!(
+                    "{} {}",
+                    icon::MAGNIFYING_GLASS,
+                    tr(lang, "Search places")
+                ))
+                .desired_width(200.0),
+        );
+        if edit.changed() {
+            self.names = places.search(&self.query, lang, 12);
+        }
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let mut chosen = enter.then(|| self.names.first().cloned()).flatten();
+        if !self.names.is_empty() && !self.query.is_empty() {
+            egui::Area::new(ui.id().with("map_names"))
+                .fixed_pos(edit.rect.left_bottom() + vec2(0.0, 2.0))
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(edit.rect.width());
+                        for f in &self.names {
+                            if ui.selectable_label(false, &f.label).clicked() {
+                                chosen = Some(f.clone());
+                            }
+                        }
+                    });
+                });
+        }
+        if let Some(f) = chosen {
+            let view = self.view.get_or_insert_with(View::default);
+            view.center = geo_map::project(f.latitude, f.longitude);
+            view.zoom = f.zoom;
+            self.names.clear();
+            self.fit_when_done = false;
+        }
+        None
     }
 
     fn map(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
@@ -442,6 +511,12 @@ impl MapWindow {
         if let Some(t) = &place.taken {
             ui.weak(t);
         }
+        if let Some(a) = inputs
+            .places
+            .and_then(|g| g.address(place.gps.latitude, place.gps.longitude))
+        {
+            ui.label(a.text(lang));
+        }
         ui.weak(format!(
             "{:.5}, {:.5}",
             place.gps.latitude, place.gps.longitude
@@ -502,6 +577,13 @@ impl MapWindow {
                                 egui::RichText::new(&s.attribution).small(),
                                 &s.attribution_url,
                             );
+                            if inputs.places.is_some() {
+                                ui.hyperlink_to(
+                                    egui::RichText::new("GeoNames (CC BY 4.0)").small(),
+                                    crate::geonames::CREDIT_URL,
+                                )
+                                .on_hover_text(crate::geonames::CREDIT);
+                            }
                         });
                     });
             });

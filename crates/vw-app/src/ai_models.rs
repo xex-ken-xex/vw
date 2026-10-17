@@ -34,16 +34,21 @@ pub enum Item {
     Runtime,
     Tagger,
     Faces,
+    /// 地図で地名を探すための表。AI ではないが、取り方と確かめ方が同じなのでここで取る。
+    PlaceNames,
 }
 
 impl Item {
-    pub const ALL: [Item; 3] = [Item::Runtime, Item::Tagger, Item::Faces];
+    pub const ALL: [Item; 4] = [Item::Runtime, Item::Tagger, Item::Faces, Item::PlaceNames];
+    /// AI タグと顔に要るもの。
+    pub const AI: [Item; 3] = [Item::Runtime, Item::Tagger, Item::Faces];
 
     pub fn title(self) -> &'static str {
         match self {
             Item::Runtime => "ONNX Runtime",
             Item::Tagger => "WD tagger v3 (ViT)",
             Item::Faces => "YuNet + SFace (faces)",
+            Item::PlaceNames => "Place names (GeoNames)",
         }
     }
 
@@ -52,6 +57,7 @@ impl Item {
             Item::Runtime => "MIT",
             Item::Tagger => "Apache-2.0",
             Item::Faces => "MIT / Apache-2.0",
+            Item::PlaceNames => "CC BY 4.0",
         }
     }
 
@@ -61,6 +67,7 @@ impl Item {
             Item::Runtime => "~60 MB",
             Item::Tagger => "~380 MB",
             Item::Faces => "~39 MB",
+            Item::PlaceNames => "~4 MB",
         }
     }
 
@@ -69,6 +76,7 @@ impl Item {
             Item::Runtime => "https://github.com/microsoft/onnxruntime/releases",
             Item::Tagger => "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3",
             Item::Faces => "https://github.com/opencv/opencv_zoo",
+            Item::PlaceNames => crate::geonames::CREDIT_URL,
         }
     }
 
@@ -129,9 +137,24 @@ impl Item {
                 hash: Hash::Sha256(sha256),
             })
             .collect(),
+            // vw の Release に置いた表（.github/workflows/geodata.yml が作る）。
+            Item::PlaceNames => vec![Source {
+                url: format!(
+                    "{}/releases/download/{GEODATA_TAG}/{GEODATA_FILE}",
+                    crate::about::REPOSITORY
+                ),
+                target: PathBuf::from(GEODATA_DIR).join(GEODATA_FILE),
+                extract: None,
+                hash: Hash::Sha256(GEODATA_SHA256),
+            }],
         }
     }
 }
+
+const GEODATA_DIR: &str = "geonames";
+const GEODATA_FILE: &str = "vw-geonames.tsv.gz";
+const GEODATA_TAG: &str = "geodata-1";
+const GEODATA_SHA256: &str = "81744d13e788ba3d475e0be7519dce41dbddfedb65bd9e0a28ade4bfdf3eb40e";
 
 const FACES_DIR: &str = "faces";
 const FACE_DETECTOR: (&str, &str) = ("face_detection_yunet", "face_detection_yunet_2023mar.onnx");
@@ -279,6 +302,10 @@ impl Store {
         })
     }
 
+    pub fn place_names(&self) -> PathBuf {
+        self.dir.join(GEODATA_DIR).join(GEODATA_FILE)
+    }
+
     pub fn runtime(&self) -> PathBuf {
         self.dir.join(runtime_relative())
     }
@@ -353,19 +380,23 @@ fn fetch_all(dir: &Path, item: Item, progress: &Progress) -> Result<(), String> 
         .collect();
     let agent = agent();
     // 合計を先に知る。進み具合を 1 本の棒で出すため。
-    let mut sizes = Vec::new();
-    for s in &sources {
-        let size = content_length(&agent, &s.url)?;
-        sizes.push(size);
-    }
-    progress.total.store(sizes.iter().sum(), Ordering::Relaxed);
-    for s in &sources {
+    // HEAD で大きさが分からなくても止めない。GitHub の Release のファイルは
+    // 転送先が HEAD に 401 を返すことがあり、大きさは進み具合に使うだけなので。
+    // 分からなかった分は、取り始めたときの GET の大きさで足す。
+    let sizes: Vec<Option<u64>> = sources
+        .iter()
+        .map(|s| content_length(&agent, &s.url).ok())
+        .collect();
+    progress
+        .total
+        .store(sizes.iter().flatten().sum(), Ordering::Relaxed);
+    for (s, size) in sources.iter().zip(&sizes) {
         let target = dir.join(&s.target);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
         let part = target.with_extension("part");
-        fetch(&agent, &s.url, &part, progress)?;
+        fetch(&agent, &s.url, &part, progress, size.is_none())?;
         let result = s.hash.check(&part, &s.url).and_then(|()| match s.extract {
             Some(entry) => extract(&part, entry, &target).and_then(|()| {
                 std::fs::remove_file(&part).map_err(|e| format!("{}: {e}", part.display()))
@@ -408,22 +439,90 @@ fn agent() -> ureq::Agent {
                 .build(),
         )
         .http_status_as_error(true)
+        .max_redirects(0)
+        .max_redirects_will_error(false)
         .build()
         .new_agent()
 }
 
+/// 転送（3xx）は自分でたどる。ureq に任せると、転送の応答の空の本文が
+/// chunked で来たとき（vw の Release のファイルがそう）読み損ねて失敗するため。
+fn call(
+    agent: &ureq::Agent,
+    head: bool,
+    url: &str,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let mut url = url.to_owned();
+    for _ in 0..MAX_REDIRECTS {
+        let response = if head {
+            agent.head(&url).call()
+        } else {
+            agent.get(&url).call()
+        }
+        .map_err(|e| format!("{url}: {e}"))?;
+        if !response.status().is_redirection() {
+            return Ok(response);
+        }
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| format!("{url}: {} without a location", response.status()))?;
+        url = redirected(&url, location);
+    }
+    Err(format!("{url}: too many redirects"))
+}
+
+const MAX_REDIRECTS: usize = 10;
+
+/// 転送先。Hugging Face は `/api/...` のようにホストを省いて返す。
+fn redirected(from: &str, location: &str) -> String {
+    if location.contains("://") {
+        return location.to_owned();
+    }
+    let origin_end = from
+        .find("://")
+        .and_then(|i| from[i + 3..].find('/').map(|j| i + 3 + j))
+        .unwrap_or(from.len());
+    let origin = &from[..origin_end];
+    if location.starts_with('/') {
+        format!("{origin}{location}")
+    } else {
+        let dir_end = from
+            .rfind('/')
+            .filter(|&i| i >= origin_end)
+            .unwrap_or(origin_end);
+        format!("{}/{location}", &from[..dir_end])
+    }
+}
+
 fn content_length(agent: &ureq::Agent, url: &str) -> Result<u64, String> {
-    let response = agent.head(url).call().map_err(|e| format!("{url}: {e}"))?;
-    Ok(response
+    let response = call(agent, true, url)?;
+    Ok(length_of(&response))
+}
+
+fn length_of(response: &ureq::http::Response<ureq::Body>) -> u64 {
+    response
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0))
+        .unwrap_or(0)
 }
 
-fn fetch(agent: &ureq::Agent, url: &str, to: &Path, progress: &Progress) -> Result<(), String> {
-    let response = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
+fn fetch(
+    agent: &ureq::Agent,
+    url: &str,
+    to: &Path,
+    progress: &Progress,
+    add_to_total: bool,
+) -> Result<(), String> {
+    let response = call(agent, false, url)?;
+    if add_to_total {
+        progress
+            .total
+            .fetch_add(length_of(&response), Ordering::Relaxed);
+    }
     let mut body = response.into_body().into_reader();
     let mut file = std::fs::File::create(to).map_err(|e| format!("{}: {e}", to.display()))?;
     let mut buf = vec![0u8; 1 << 16];
@@ -559,7 +658,7 @@ impl Dialog {
         }
         let mut open = self.open;
         let mut start = None;
-        egui::Window::new(tr(lang, "AI models"))
+        egui::Window::new(tr(lang, "Downloads"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -584,7 +683,7 @@ impl Dialog {
                     .striped(true)
                     .show(ui, |ui| {
                         for item in Item::ALL {
-                            ui.label(item.title());
+                            ui.label(tr(lang, item.title()));
                             ui.label(item.size_text());
                             ui.hyperlink_to(item.license(), item.page());
                             let state =
@@ -633,7 +732,7 @@ impl Dialog {
                     }
                     ui.label(tr(
                         lang,
-                        "AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU.",
+                        "AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU. Place names are used to search the map.",
                     ));
                 });
             });
@@ -649,6 +748,32 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redirect_to_another_host_is_followed_as_given() {
+        assert_eq!(
+            redirected(
+                "https://github.com/o/r/releases/download/t/f",
+                "https://cdn.example/x?sig=1"
+            ),
+            "https://cdn.example/x?sig=1"
+        );
+    }
+
+    #[test]
+    fn redirect_without_a_host_stays_on_the_same_host() {
+        assert_eq!(
+            redirected(
+                "https://huggingface.co/a/b/resolve/r/model.onnx",
+                "/api/resolve-cache/x"
+            ),
+            "https://huggingface.co/api/resolve-cache/x"
+        );
+        assert_eq!(
+            redirected("https://example.org/dir/file", "other"),
+            "https://example.org/dir/other"
+        );
+    }
 
     #[test]
     fn store_knows_what_is_missing() {

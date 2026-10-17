@@ -41,6 +41,7 @@ const JA: &[(&str, &str)] = &[
     ("Author", "作者"),
     ("License", "ライセンス"),
     ("Report a bug or request a feature...", "不具合の報告・要望..."),
+    ("Place names: GeoNames, CC BY 4.0", "地名データ: GeoNames、CC BY 4.0"),
     ("Third-party licenses...", "サードパーティのライセンス..."),
     // 地図
     ("Map", "地図"),
@@ -60,6 +61,9 @@ const JA: &[(&str, &str)] = &[
     ("{} photos with a position", "位置のある写真 {} 枚"),
     ("{} photos", "{} 枚"),
     ("Cannot download the map pictures.", "地図の絵を取得できません。"),
+    ("Place names...", "地名..."),
+    ("Download the place names (GeoNames) to search the map by name.", "地名（GeoNames）をダウンロードすると、地図を地名で探せます。"),
+    ("Search places", "地名で探す"),
     ("Page opened by clicking the credit.", "出典をクリックしたときに開くページです。"),
     // AI タグ
     ("AI models...", "AI のモデル..."),
@@ -78,7 +82,9 @@ const JA: &[(&str, &str)] = &[
     ("Download", "ダウンロード"),
     ("Download again", "もう一度ダウンロード"),
     ("Open folder", "フォルダを開く"),
-    ("AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU.", "AI タグには ONNX Runtime と WD tagger、顔には ONNX Runtime と YuNet + SFace が要ります。モデルは CPU で動きます。"),
+    ("AI tags need ONNX Runtime and WD tagger; faces need ONNX Runtime and YuNet + SFace. Models run on the CPU. Place names are used to search the map.", "AI タグには ONNX Runtime と WD tagger、顔には ONNX Runtime と YuNet + SFace が要ります。モデルは CPU で動きます。地名は地図で場所を探すのに使います。"),
+    ("Downloads", "ダウンロード"),
+    ("Place names (GeoNames)", "地名（GeoNames）"),
     ("Rating", "レーティング"),
     ("AI model", "AI モデル"),
     ("Character", "キャラクター"),
@@ -467,6 +473,7 @@ const JA: &[(&str, &str)] = &[
     ("Latitude", "緯度"),
     ("Longitude", "経度"),
     ("Altitude", "高度"),
+    ("Place", "地名"),
     // 画像スロット
     ("Loading...", "読み込み中..."),
     ("Failed to load", "読み込めませんでした"),
