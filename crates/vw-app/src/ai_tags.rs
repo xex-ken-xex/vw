@@ -100,6 +100,44 @@ impl AiTagStore {
             .unwrap_or_default()
     }
 
+    /// 画像の記録（タグと顔の枠）を消す。フォルダごとに 1 回だけ書く。
+    /// 消して空になったフォルダのファイルは、ファイルごと消す。返すのは消した画像の数。
+    pub fn remove(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
+        let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
+        for p in paths {
+            if let Some((dir, name)) = split(p) {
+                by_dir.entry(dir).or_default().push(name);
+            }
+        }
+        let mut removed = 0;
+        for (dir, names) in by_dir {
+            let before = removed;
+            let empty = {
+                self.with_dir(dir, |_| ());
+                let mut dirs = self.dirs.borrow_mut();
+                let files = &mut dirs.get_mut(dir).expect("loaded above").file.files;
+                for n in &names {
+                    removed += usize::from(files.remove(n).is_some());
+                }
+                files.is_empty()
+            };
+            if removed == before {
+                continue;
+            }
+            if empty {
+                for path in [Some(dir.join(FILE_NAME)), self.fallback_path(dir)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let _ = std::fs::remove_file(path);
+                }
+            } else {
+                self.save(dir)?;
+            }
+        }
+        Ok(removed)
+    }
+
     pub fn forget(&self, dir: &Path) {
         self.dirs.borrow_mut().remove(dir);
     }
@@ -258,6 +296,20 @@ mod tests {
             .update(&dir.join("a.png"), |e| *e = entry("x", 0.5))
             .unwrap();
         assert!(dir.join(".vw-ai-tags.json.bak").exists());
+    }
+
+    #[test]
+    fn removing_every_entry_deletes_the_file() {
+        let dir = tempfile_dir();
+        let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+        let mut store = AiTagStore::new(None);
+        store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
+        store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
+        assert_eq!(store.remove(std::slice::from_ref(&a)).unwrap(), 1);
+        assert_eq!(AiTagStore::new(None).get(&a), None);
+        assert!(AiTagStore::new(None).get(&b).is_some());
+        assert_eq!(store.remove(&[a, b.clone()]).unwrap(), 1);
+        assert!(!dir.join(FILE_NAME).exists());
     }
 
     fn tempfile_dir() -> PathBuf {

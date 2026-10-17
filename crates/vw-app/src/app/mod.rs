@@ -184,6 +184,8 @@ pub struct VwApp {
     /// 見つけた顔の特徴（設定フォルダの faces）。
     face_store: crate::face_store::FaceStore,
     people_window: people_ui::PeopleWindow,
+    /// 消してよいか確かめている、フォルダと AI タグの記録がある画像。
+    ai_remove: Option<(PathBuf, Vec<PathBuf>)>,
     /// 顔の枠をスロットに描く。
     show_faces: bool,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
@@ -573,6 +575,7 @@ impl VwApp {
             people,
             face_store,
             people_window: Default::default(),
+            ai_remove: None,
             show_faces: true,
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
@@ -745,6 +748,10 @@ impl VwApp {
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
             Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
+            Action::RemoveAiTagsFolder => match self.current.clone() {
+                Some(dir) => self.ask_remove_ai_tags(&dir),
+                None => self.log.warn("No folder is open"),
+            },
             Action::ShowPeople => self.people_window.open = true,
             Action::ToggleFaceFrames => self.show_faces = !self.show_faces,
             Action::FlagGood => self.flag(Flag::Good),
@@ -1133,6 +1140,10 @@ impl eframe::App for VwApp {
                         }
                         TreeAction::FindFaces(p) => {
                             self.find_faces_folder(&ctx, &p);
+                            return;
+                        }
+                        TreeAction::RemoveAiTags(p) => {
+                            self.ask_remove_ai_tags(&p);
                             return;
                         }
                         TreeAction::Copy(p) => {

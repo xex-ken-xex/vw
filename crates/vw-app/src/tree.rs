@@ -106,6 +106,8 @@ pub enum TreeAction {
     AiTagFolder(PathBuf),
     /// フォルダの画像の顔を探す（右クリックメニュー）。
     FindFaces(PathBuf),
+    /// フォルダの画像の AI タグと顔の記録を消す（確かめてから）。
+    RemoveAiTags(PathBuf),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
@@ -494,6 +496,13 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
                 *out = Some(action);
                 ui.close();
             }
+        }
+        if ui
+            .button(tr(lang, "Remove AI tags from this folder..."))
+            .clicked()
+        {
+            *out = Some(TreeAction::RemoveAiTags(path.to_owned()));
+            ui.close();
         }
         ui.separator();
         // メニューを開いている間だけ確かめる。ツリーを描くたびに全フォルダで調べると、

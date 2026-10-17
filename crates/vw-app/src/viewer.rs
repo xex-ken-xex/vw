@@ -306,6 +306,8 @@ pub struct SlotResponse {
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
     pub find_faces: bool,
+    /// 右クリックメニューで「AI タグを消す」が選ばれた。
+    pub remove_ai_tags: bool,
     /// 顔の枠の右クリックで選ばれた操作（表示中の画像に対して）。
     pub face: Option<(PathBuf, FaceAction)>,
     /// 色導出から知らせること（ログに出す）。
@@ -1391,6 +1393,10 @@ impl Slot {
                     .clicked()
                 {
                     out.find_faces = true;
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Remove AI tags")).clicked() {
+                    out.remove_ai_tags = true;
                     ui.close();
                 }
                 let developable = self

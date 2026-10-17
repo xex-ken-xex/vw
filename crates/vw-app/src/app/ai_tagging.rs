@@ -12,7 +12,7 @@ use vw_core::Registry;
 use super::VwApp;
 use crate::ai_models::{self, Item};
 use crate::faces::{self, FaceMark, Found};
-use crate::i18n::tr;
+use crate::i18n::{tr, tr1};
 use crate::people::Sample;
 use crate::tagger::{self, Tags, Thresholds};
 
@@ -371,6 +371,7 @@ impl VwApp {
                         }
                     }
                     Event::Faces { path, found, size } => {
+                        self.people_window.counts = None;
                         if let Some(n) = self.save_faces(path, found, size) {
                             job.saved += 1;
                             job.faces += n;
@@ -405,6 +406,70 @@ impl VwApp {
         }
         self.ai_models.ui(ctx, lang, self.ai_store.as_ref());
         self.people_ui(ctx);
+        self.remove_dialog(ctx);
+    }
+
+    /// フォルダの AI タグを消してよいか聞く。記録がなければ、そう知らせるだけ。
+    pub(super) fn ask_remove_ai_tags(&mut self, dir: &Path) {
+        let images: Vec<PathBuf> = self
+            .folder_images(dir)
+            .into_iter()
+            .filter(|p| self.ai_tags.get(p).is_some())
+            .collect();
+        if images.is_empty() {
+            self.log.warn(format!("No AI tags in {}", dir.display()));
+            return;
+        }
+        self.ai_remove = Some((dir.to_path_buf(), images));
+    }
+
+    /// 画像の AI タグ・顔の枠・顔の特徴を消す。登録した人物（people.json）はそのまま。
+    pub(super) fn remove_ai_tags(&mut self, images: Vec<PathBuf>) {
+        if let Err(e) = self.face_store.remove(&images) {
+            self.log.error(format!("Cannot remove faces: {e}"));
+        }
+        match self.ai_tags.remove(&images) {
+            Ok(n) => self.log.info(format!("Removed AI tags from {n} image(s)")),
+            Err(e) => self.log.error(format!("Cannot remove AI tags: {e}")),
+        }
+        self.people_window.counts = None;
+    }
+
+    fn remove_dialog(&mut self, ctx: &egui::Context) {
+        let Some((dir, images)) = &self.ai_remove else {
+            return;
+        };
+        let lang = self.lang();
+        let mut answer = None;
+        egui::Window::new(tr(lang, "Remove AI tags"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(tr1(
+                    lang,
+                    "Remove the AI tags and faces of {} image(s)?",
+                    &images.len().to_string(),
+                ));
+                ui.weak(dir.display().to_string());
+                ui.weak(tr(lang, "Registered people are kept."));
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Remove")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        match answer {
+            Some(true) => {
+                let (_, images) = self.ai_remove.take().expect("shown above");
+                self.remove_ai_tags(images);
+            }
+            Some(false) => self.ai_remove = None,
+            None => {}
+        }
     }
 
     /// メタデータ欄の「AI tags」の行。タグも顔もなければ `None`。

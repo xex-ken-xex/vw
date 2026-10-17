@@ -600,6 +600,11 @@ impl VwApp {
                     self.ai_tag_paths(ui.ctx(), vec![path]);
                 }
             }
+            if resp.remove_ai_tags {
+                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+                    self.remove_ai_tags(vec![crate::frames::file_of(&path).to_path_buf()]);
+                }
+            }
             if resp.find_faces {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.find_faces_paths(ui.ctx(), vec![path]);

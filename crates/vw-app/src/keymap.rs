@@ -83,6 +83,7 @@ pub enum Action {
     ShowAiModels,
     AiTagFolder,
     FindFacesFolder,
+    RemoveAiTagsFolder,
     ShowPeople,
     ToggleFaceFrames,
 }
@@ -97,7 +98,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 70] = [
+    pub const ALL: [Action; 71] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -160,6 +161,7 @@ impl Action {
         Action::ShowAiModels,
         Action::AiTagFolder,
         Action::FindFacesFolder,
+        Action::RemoveAiTagsFolder,
         Action::ShowPeople,
         Action::ToggleFaceFrames,
         Action::FullscreenNext,
@@ -231,6 +233,7 @@ impl Action {
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
             Action::FindFacesFolder => "find_faces_folder",
+            Action::RemoveAiTagsFolder => "remove_ai_tags_folder",
             Action::ShowPeople => "show_people",
             Action::ToggleFaceFrames => "toggle_face_frames",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
@@ -310,6 +313,7 @@ impl Action {
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
             Action::FindFacesFolder => "Find faces in this folder",
+            Action::RemoveAiTagsFolder => "Remove AI tags from this folder...",
             Action::ShowPeople => "People...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
@@ -475,6 +479,7 @@ impl Action {
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
             Action::FindFacesFolder => vec![],
+            Action::RemoveAiTagsFolder => vec![],
             Action::ShowPeople => vec![],
             Action::ToggleFaceFrames => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],

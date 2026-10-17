@@ -91,6 +91,46 @@ impl FaceStore {
             .collect()
     }
 
+    /// 画像の顔を消す。フォルダごとに 1 回だけ書く。
+    pub fn remove(&self, images: &[PathBuf]) -> Result<(), String> {
+        let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
+        for image in images {
+            if let (Some(dir), Some(name)) =
+                (image.parent(), image.file_name().and_then(|n| n.to_str()))
+            {
+                by_dir.entry(dir).or_default().push(name.to_owned());
+            }
+        }
+        for (folder, names) in by_dir {
+            let Some(path) = self.path_of(folder) else {
+                continue;
+            };
+            let text = self.with(folder, |f| {
+                let before = f.files.len();
+                for n in &names {
+                    f.files.remove(n);
+                }
+                (f.files.len() != before).then(|| {
+                    if f.files.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_string(f).map_err(|e| e.to_string()))
+                    }
+                })
+            });
+            match text {
+                None => {}
+                Some(None) => {
+                    let _ = std::fs::remove_file(&path);
+                }
+                Some(Some(text)) => {
+                    std::fs::write(&path, text?).map_err(|e| format!("{}: {e}", path.display()))?
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 画像の顔を置き換えて保存する。
     pub fn set(&self, image: &Path, samples: Vec<Sample>) -> Result<(), String> {
         let folder = image
@@ -145,5 +185,7 @@ mod tests {
         assert_eq!(again.get(&images.join("a.jpg"), 0), Some(sample.clone()));
         assert_eq!(again.get(&images.join("a.jpg"), 1), None);
         assert_eq!(again.all(), vec![(images.join("a.jpg"), vec![sample])]);
+        again.remove(&[images.join("a.jpg")]).unwrap();
+        assert_eq!(FaceStore::new(Some(base.join("faces"))).all(), vec![]);
     }
 }

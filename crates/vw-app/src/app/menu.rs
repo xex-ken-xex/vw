@@ -187,6 +187,9 @@ impl VwApp {
                 chosen = Some(action);
             }
         }
+        if self.menu_item(ui, Action::RemoveAiTagsFolder, None) {
+            chosen = Some(Action::RemoveAiTagsFolder);
+        }
         ui.separator();
         if self.menu_item(ui, Action::ShowPeople, None) {
             chosen = Some(Action::ShowPeople);

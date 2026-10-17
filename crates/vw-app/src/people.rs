@@ -3,6 +3,7 @@
 //! 顔の特徴ベクトルは個人を見分けられる情報なので、画像のフォルダやデータセットの
 //! カタログには書かず、この PC の設定フォルダの中だけに置く。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -70,9 +71,19 @@ pub struct Person {
     pub name: String,
     #[serde(default)]
     pub faces: Vec<Sample>,
+    /// 最初に登録した時刻（UNIX 秒）。この項目のない古いファイルでは 0。
+    #[serde(default)]
+    pub added: i64,
+    /// 一覧に出す代表の顔（`faces` の番号）。
+    #[serde(default)]
+    pub cover: usize,
 }
 
 impl Person {
+    pub fn cover(&self) -> Option<&Sample> {
+        self.faces.get(self.cover).or_else(|| self.faces.first())
+    }
+
     /// 登録した顔の特徴の平均（長さ 1）。
     pub fn mean(&self) -> Option<Vec<f32>> {
         let first = self.faces.first()?;
@@ -84,6 +95,77 @@ impl Person {
         }
         Some(normalized(sum))
     }
+}
+
+/// 人物の一覧の並べ方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Order {
+    #[default]
+    OldestFirst,
+    NewestFirst,
+    FewestImages,
+    MostImages,
+}
+
+impl Order {
+    pub const ALL: [Order; 4] = [
+        Order::OldestFirst,
+        Order::NewestFirst,
+        Order::FewestImages,
+        Order::MostImages,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Order::OldestFirst => "Registered: oldest first",
+            Order::NewestFirst => "Registered: newest first",
+            Order::FewestImages => "Images: fewest first",
+            Order::MostImages => "Images: most first",
+        }
+    }
+}
+
+/// 名前に `query` を含む人物を `order` で並べる（大文字小文字は区別しない）。
+/// `images` は人物ごとの写っている画像の枚数。同じ値のときは名前順。
+pub fn arrange<'a>(
+    list: &'a [Person],
+    query: &str,
+    images: &HashMap<String, usize>,
+    order: Order,
+) -> Vec<&'a Person> {
+    let query = query.trim().to_lowercase();
+    let mut out: Vec<&Person> = list
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&query))
+        .collect();
+    let count = |p: &Person| images.get(&p.name).copied().unwrap_or(0);
+    out.sort_by(|a, b| {
+        let by = match order {
+            Order::OldestFirst => a.added.cmp(&b.added),
+            Order::NewestFirst => b.added.cmp(&a.added),
+            Order::FewestImages => count(a).cmp(&count(b)),
+            Order::MostImages => count(b).cmp(&count(a)),
+        };
+        by.then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+/// 顔の枠から、人物ごとの写っている画像の枚数を数える。1 枚に同じ人が 2 回写っていても 1 枚。
+pub fn image_counts<'a>(
+    images: impl IntoIterator<Item = &'a [FaceMark]>,
+) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for marks in images {
+        let mut seen: Vec<&str> = Vec::new();
+        for name in marks.iter().filter_map(|m| m.person.as_deref()) {
+            if !seen.contains(&name) {
+                seen.push(name);
+                *counts.entry(name.to_owned()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -154,6 +236,8 @@ impl People {
             None => self.list.push(Person {
                 name: name.to_owned(),
                 faces: vec![sample],
+                added: chrono::Local::now().timestamp(),
+                cover: 0,
             }),
         }
     }
@@ -176,6 +260,14 @@ impl People {
 
     pub fn remove(&mut self, name: &str) {
         self.list.retain(|p| p.name != name);
+    }
+
+    pub fn set_cover(&mut self, name: &str, index: usize) {
+        if let Some(p) = self.list.iter_mut().find(|p| p.name == name) {
+            if index < p.faces.len() {
+                p.cover = index;
+            }
+        }
     }
 
     /// 前に見つけた顔の枠を、今の登録に合わせ直したものと、新しく名前が付いた数。
@@ -310,6 +402,74 @@ mod tests {
         );
         assert_eq!(out[1].person, None);
         assert_eq!(n, 0);
+    }
+
+    fn person(name: &str, added: i64) -> Person {
+        Person {
+            name: name.into(),
+            faces: vec![sample([1.0, 0.0])],
+            added,
+            cover: 0,
+        }
+    }
+
+    #[test]
+    fn arrange_filters_by_name_and_sorts_by_date_or_images() {
+        let list = [
+            person("Taro", 30),
+            person("Hanako", 10),
+            person("taichi", 20),
+        ];
+        let images = HashMap::from([("Taro".to_owned(), 5), ("Hanako".to_owned(), 9)]);
+        let names = |v: Vec<&Person>| v.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            names(arrange(&list, "ta", &images, Order::OldestFirst)),
+            ["taichi", "Taro"]
+        );
+        assert_eq!(
+            names(arrange(&list, "", &images, Order::NewestFirst)),
+            ["Taro", "taichi", "Hanako"]
+        );
+        assert_eq!(
+            names(arrange(&list, "", &images, Order::MostImages)),
+            ["Hanako", "Taro", "taichi"]
+        );
+        assert_eq!(
+            names(arrange(&list, "", &images, Order::FewestImages)),
+            ["taichi", "Taro", "Hanako"]
+        );
+    }
+
+    #[test]
+    fn an_image_counts_once_per_person() {
+        let a = [
+            mark(Some("A"), false),
+            mark(Some("A"), false),
+            mark(Some("B"), false),
+        ];
+        let b = [mark(Some("A"), false), mark(None, false)];
+        let counts = image_counts([&a[..], &b[..]]);
+        assert_eq!(counts["A"], 2);
+        assert_eq!(counts["B"], 1);
+    }
+
+    #[test]
+    fn the_cover_falls_back_to_the_first_face() {
+        let mut people = People::default();
+        people.add("A", sample([1.0, 0.0]));
+        people.add("A", sample([0.0, 1.0]));
+        people.set_cover("A", 1);
+        assert_eq!(
+            people.list[0].cover().unwrap().feature,
+            sample([0.0, 1.0]).feature
+        );
+        people.set_cover("A", 9);
+        assert_eq!(people.list[0].cover, 1, "an index out of range is ignored");
+        people.list[0].faces.truncate(1);
+        assert_eq!(
+            people.list[0].cover().unwrap().feature,
+            sample([1.0, 0.0]).feature
+        );
     }
 
     #[test]

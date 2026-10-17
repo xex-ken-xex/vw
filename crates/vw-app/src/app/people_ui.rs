@@ -7,6 +7,7 @@ use eframe::egui;
 
 use super::VwApp;
 use crate::i18n::{tr, tr1};
+use crate::people::{arrange, image_counts, Order, Person, Sample};
 
 /// 「人物」ウインドウと、名前を聞く小さなウインドウの状態。
 #[derive(Default)]
@@ -21,7 +22,87 @@ pub(super) struct PeopleWindow {
     /// 名前を聞くウインドウを開いた直後。入力欄に一度だけ入力を向けるため
     /// （毎フレーム向けるとボタンが押せなくなる）。
     focus_name: bool,
-    thumbs: HashMap<(String, usize), egui::TextureHandle>,
+    /// 顔の縮小画像のテクスチャ。キーの番号が `None` なら代表の顔。
+    thumbs: HashMap<(String, Option<usize>), egui::TextureHandle>,
+    query: String,
+    order: Order,
+    size: CardSize,
+    /// 下に詳しく出している人物。
+    selected: Option<String>,
+    /// 人物ごとの写っている画像の枚数。顔や人物が変わったら `None` にして数え直す。
+    pub counts: Option<HashMap<String, usize>>,
+}
+
+/// 人物の一覧の、代表の顔の大きさ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CardSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl CardSize {
+    const ALL: [CardSize; 3] = [CardSize::Small, CardSize::Medium, CardSize::Large];
+
+    fn title(self) -> &'static str {
+        match self {
+            CardSize::Small => "Small",
+            CardSize::Medium => "Medium",
+            CardSize::Large => "Large",
+        }
+    }
+
+    fn side(self) -> f32 {
+        match self {
+            CardSize::Small => 48.0,
+            CardSize::Medium => 80.0,
+            CardSize::Large => 128.0,
+        }
+    }
+}
+
+enum Command {
+    Rename(String, String),
+    Delete(String),
+    Cover(String, usize),
+    Reveal(PathBuf),
+}
+
+fn texture(ctx: &egui::Context, name: String, thumb: &[u8]) -> egui::TextureHandle {
+    let img = crate::people::thumb_image(thumb)
+        .unwrap_or_else(|| egui::ColorImage::filled([1, 1], egui::Color32::GRAY));
+    ctx.load_texture(name, img, Default::default())
+}
+
+fn cover_texture(
+    ctx: &egui::Context,
+    thumbs: &mut HashMap<(String, Option<usize>), egui::TextureHandle>,
+    person: &Person,
+) -> egui::TextureHandle {
+    thumbs
+        .entry((person.name.clone(), None))
+        .or_insert_with(|| {
+            let thumb = person
+                .cover()
+                .map(|s| s.thumb.as_slice())
+                .unwrap_or_default();
+            texture(ctx, format!("person-{}-cover", person.name), thumb)
+        })
+        .clone()
+}
+
+fn face_texture(
+    ctx: &egui::Context,
+    thumbs: &mut HashMap<(String, Option<usize>), egui::TextureHandle>,
+    name: &str,
+    index: usize,
+    sample: &Sample,
+) -> egui::TextureHandle {
+    thumbs
+        .entry((name.to_owned(), Some(index)))
+        .or_insert_with(|| texture(ctx, format!("person-{name}-{index}"), &sample.thumb))
+        .clone()
 }
 
 impl PeopleWindow {
@@ -70,6 +151,7 @@ impl VwApp {
     /// 顔をもう一度探す（モデルにかける）のでなく保存した特徴を使うのは、
     /// 何千枚あっても比べるだけで済み、元の画像が読めない場所にあっても照合できるため。
     pub(super) fn rematch_faces(&mut self, renamed: Option<(&str, &str)>) {
+        self.people_window.counts = None;
         let threshold = self.settings().ai.face_threshold;
         let mut matched = 0;
         let mut problems = Vec::new();
@@ -108,6 +190,7 @@ impl VwApp {
         if let Err(e) = saved {
             self.log.error(format!("Cannot save AI tags: {e}"));
         }
+        self.people_window.counts = None;
     }
 
     pub(super) fn people_ui(&mut self, ctx: &egui::Context) {
@@ -168,16 +251,18 @@ impl VwApp {
             return;
         }
         let lang = self.lang();
+        if self.people_window.counts.is_none() {
+            self.people_window.counts = Some(self.people_image_counts());
+        }
         let mut open = true;
-        let mut rename: Option<(String, String)> = None;
-        let mut remove: Option<String> = None;
-        let mut reveal: Option<PathBuf> = None;
+        let mut command = None;
         let people = self.people.list.clone();
         let w = &mut self.people_window;
+        let counts = w.counts.clone().unwrap_or_default();
         egui::Window::new(tr(lang, "People"))
             .open(&mut open)
             .collapsible(false)
-            .default_width(360.0)
+            .default_width(520.0)
             .show(ctx, |ui| {
                 if people.is_empty() {
                     ui.weak(tr(
@@ -186,89 +271,176 @@ impl VwApp {
                     ));
                     return;
                 }
-                ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
-                egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
-                    for person in &people {
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            match &mut w.renaming {
-                                Some((who, text)) if *who == person.name => {
-                                    ui.text_edit_singleline(text);
-                                    if ui.button("OK").clicked() {
-                                        rename = Some((who.clone(), text.trim().to_owned()));
-                                    }
-                                }
-                                _ => {
-                                    ui.strong(&person.name);
-                                    ui.weak(tr1(lang, "{} face(s)", &person.faces.len().to_string()));
-                                    if ui.small_button(tr(lang, "Rename")).clicked() {
-                                        w.renaming = Some((person.name.clone(), person.name.clone()));
-                                    }
-                                    if w.deleting.as_deref() == Some(person.name.as_str()) {
-                                        if ui.small_button(tr(lang, "Really delete")).clicked() {
-                                            remove = Some(person.name.clone());
-                                        }
-                                    } else if ui.small_button(tr(lang, "Delete")).clicked() {
-                                        w.deleting = Some(person.name.clone());
-                                    }
-                                }
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.query)
+                            .hint_text(tr(lang, "Search by name"))
+                            .desired_width(140.0),
+                    );
+                    egui::ComboBox::from_id_salt("people_order")
+                        .selected_text(tr(lang, w.order.title()))
+                        .show_ui(ui, |ui| {
+                            for o in Order::ALL {
+                                ui.selectable_value(&mut w.order, o, tr(lang, o.title()));
                             }
                         });
-                        ui.horizontal_wrapped(|ui| {
-                            for (i, s) in person.faces.iter().enumerate().take(12) {
-                                let key = (person.name.clone(), i);
-                                let tex = w.thumbs.entry(key).or_insert_with(|| {
-                                    let img = crate::people::thumb_image(&s.thumb)
-                                        .unwrap_or_else(|| egui::ColorImage::filled([1, 1], egui::Color32::GRAY));
-                                    ui.ctx().load_texture(format!("person-{}-{i}", person.name), img, Default::default())
-                                });
-                                let r = ui
-                                    .add(egui::Image::new(&*tex).fit_to_exact_size(egui::vec2(48.0, 48.0)).sense(egui::Sense::click()));
-                                if let Some(src) = &s.source {
-                                    let r = r.on_hover_text(src.display().to_string());
-                                    if r.clicked() {
-                                        reveal = Some(src.clone());
-                                    }
-                                }
-                            }
-                        });
+                    for size in CardSize::ALL {
+                        ui.selectable_value(&mut w.size, size, tr(lang, size.title()));
                     }
                 });
+                ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
+                let shown = arrange(&people, &w.query, &counts, w.order);
+                let side = w.size.side();
+                egui::ScrollArea::vertical()
+                    .id_salt("people_cards")
+                    .max_height(360.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for person in &shown {
+                                let selected = w.selected.as_deref() == Some(person.name.as_str());
+                                let tex = cover_texture(ui.ctx(), &mut w.thumbs, person);
+                                let images = counts.get(&person.name).copied().unwrap_or(0);
+                                let card = ui.vertical(|ui| {
+                                    ui.set_width(side);
+                                    let mut image = egui::Image::new(&tex)
+                                        .fit_to_exact_size(egui::vec2(side, side));
+                                    if selected {
+                                        image = image.bg_fill(ui.visuals().selection.bg_fill);
+                                    }
+                                    let r = ui.add(egui::Button::image(image).selected(selected).frame(selected));
+                                    ui.add(egui::Label::new(&person.name).truncate());
+                                    ui.weak(tr1(lang, "{} image(s)", &images.to_string()));
+                                    r
+                                });
+                                if card.inner.clicked() {
+                                    w.selected = Some(person.name.clone());
+                                    w.renaming = None;
+                                    w.deleting = None;
+                                }
+                            }
+                        });
+                    });
+                let Some(person) = w
+                    .selected
+                    .as_ref()
+                    .and_then(|n| people.iter().find(|p| &p.name == n))
+                else {
+                    return;
+                };
+                ui.separator();
+                ui.horizontal(|ui| match &mut w.renaming {
+                    Some((who, text)) if *who == person.name => {
+                        ui.text_edit_singleline(text);
+                        if ui.button("OK").clicked() {
+                            command = Some(Command::Rename(who.clone(), text.trim().to_owned()));
+                        }
+                    }
+                    _ => {
+                        ui.strong(&person.name);
+                        if ui.small_button(tr(lang, "Rename")).clicked() {
+                            w.renaming = Some((person.name.clone(), person.name.clone()));
+                        }
+                        if w.deleting.as_deref() == Some(person.name.as_str()) {
+                            if ui.small_button(tr(lang, "Really delete")).clicked() {
+                                command = Some(Command::Delete(person.name.clone()));
+                            }
+                        } else if ui.small_button(tr(lang, "Delete")).clicked() {
+                            w.deleting = Some(person.name.clone());
+                        }
+                    }
+                });
+                let added = (person.added > 0)
+                    .then(|| chrono::DateTime::from_timestamp(person.added, 0))
+                    .flatten()
+                    .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "-".to_owned());
+                ui.weak(format!(
+                    "{}: {added}   {}   {}",
+                    tr(lang, "First registered"),
+                    tr1(lang, "{} image(s)", &counts.get(&person.name).copied().unwrap_or(0).to_string()),
+                    tr1(lang, "{} face(s)", &person.faces.len().to_string()),
+                ));
+                ui.weak(tr(lang, "Click a face to open its folder. Right-click to make it the cover."));
+                egui::ScrollArea::vertical()
+                    .id_salt("people_faces")
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for (i, s) in person.faces.iter().enumerate() {
+                                let tex = face_texture(ui.ctx(), &mut w.thumbs, &person.name, i, s);
+                                let cover = i == person.cover.min(person.faces.len() - 1);
+                                let image = egui::Image::new(&tex).fit_to_exact_size(egui::vec2(48.0, 48.0));
+                                let mut r = ui.add(egui::Button::image(image).selected(cover).frame(cover));
+                                if let Some(src) = &s.source {
+                                    r = r.on_hover_text(src.display().to_string());
+                                    if r.clicked() {
+                                        command = Some(Command::Reveal(src.clone()));
+                                    }
+                                }
+                                r.context_menu(|ui| {
+                                    if ui.button(tr(lang, "Use as cover")).clicked() {
+                                        command = Some(Command::Cover(person.name.clone(), i));
+                                        ui.close();
+                                    }
+                                });
+                            }
+                        });
+                    });
             });
         if !open {
             self.people_window.open = false;
             self.people_window.renaming = None;
             self.people_window.deleting = None;
         }
-        if let Some((from, to)) = rename {
-            if to.is_empty() {
+        match command {
+            Some(Command::Rename(from, to)) if to.is_empty() => {
+                let _ = from;
                 self.people_window.renaming = None;
-            } else {
-                match self.people.rename(&from, &to) {
-                    Ok(()) => {
-                        self.people_window.renaming = None;
-                        self.people_window.thumbs.clear();
-                        self.save_people();
-                        self.log.info(format!("Renamed {from} to {to}"));
-                        self.rematch_faces(Some((&from, &to)));
-                    }
-                    Err(e) => self.log.error(e),
+            }
+            Some(Command::Rename(from, to)) => match self.people.rename(&from, &to) {
+                Ok(()) => {
+                    self.people_window.renaming = None;
+                    self.people_window.thumbs.clear();
+                    self.people_window.selected = Some(to.clone());
+                    self.save_people();
+                    self.log.info(format!("Renamed {from} to {to}"));
+                    self.rematch_faces(Some((&from, &to)));
+                }
+                Err(e) => self.log.error(e),
+            },
+            Some(Command::Delete(name)) => {
+                self.people.remove(&name);
+                self.people_window.deleting = None;
+                self.people_window.selected = None;
+                self.people_window.thumbs.clear();
+                self.save_people();
+                self.log.info(format!("Deleted {name}"));
+                self.rematch_faces(None);
+            }
+            Some(Command::Cover(name, i)) => {
+                self.people.set_cover(&name, i);
+                self.people_window.thumbs.clear();
+                self.save_people();
+            }
+            Some(Command::Reveal(path)) => {
+                if let Some(dir) = path.parent() {
+                    self.open_in_file_manager(dir);
                 }
             }
+            None => {}
         }
-        if let Some(name) = remove {
-            self.people.remove(&name);
-            self.people_window.deleting = None;
-            self.people_window.thumbs.clear();
-            self.save_people();
-            self.log.info(format!("Deleted {name}"));
-            self.rematch_faces(None);
-        }
-        if let Some(path) = reveal {
-            if let Some(dir) = path.parent() {
-                self.open_in_file_manager(dir);
-            }
-        }
+    }
+
+    /// 人物ごとの写っている画像の枚数。顔の記録があるすべての画像の枠から数える。
+    fn people_image_counts(&self) -> HashMap<String, usize> {
+        let marks: Vec<Vec<crate::faces::FaceMark>> = self
+            .face_store
+            .all()
+            .into_iter()
+            .map(|(image, _)| self.ai_tags.faces(&image))
+            .collect();
+        image_counts(marks.iter().map(Vec::as_slice))
     }
 
     fn save_people(&mut self) {
