@@ -86,6 +86,7 @@ pub enum Action {
     RemoveAiTagsFolder,
     TidyAiTags,
     ShowPeople,
+    ShowPeopleGraph,
     OpenSettingsFolder,
     OpenModelsFolder,
     ToggleFaceFrames,
@@ -101,7 +102,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 74] = [
+    pub const ALL: [Action; 75] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -167,6 +168,7 @@ impl Action {
         Action::RemoveAiTagsFolder,
         Action::TidyAiTags,
         Action::ShowPeople,
+        Action::ShowPeopleGraph,
         Action::OpenSettingsFolder,
         Action::OpenModelsFolder,
         Action::ToggleFaceFrames,
@@ -244,6 +246,7 @@ impl Action {
             Action::OpenSettingsFolder => "open_settings_folder",
             Action::OpenModelsFolder => "open_models_folder",
             Action::ShowPeople => "show_people",
+            Action::ShowPeopleGraph => "show_people_graph",
             Action::ToggleFaceFrames => "toggle_face_frames",
             Action::FullscreenSlideshow => "fullscreen_slideshow",
             Action::FullscreenExit => "fullscreen_exit",
@@ -327,6 +330,7 @@ impl Action {
             Action::OpenSettingsFolder => "Open the settings folder",
             Action::OpenModelsFolder => "Open the AI models folder",
             Action::ShowPeople => "People...",
+            Action::ShowPeopleGraph => "Relationship charts...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
@@ -496,6 +500,7 @@ impl Action {
             Action::OpenSettingsFolder => vec![],
             Action::OpenModelsFolder => vec![],
             Action::ShowPeople => vec![],
+            Action::ShowPeopleGraph => vec![],
             Action::ToggleFaceFrames => vec![],
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],

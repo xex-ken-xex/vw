@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::faces::{cosine, normalized, FaceMark};
+use crate::people_graph::{self, Graph};
 
 pub const FILE_NAME: &str = "people.json";
 const VERSION: u32 = 1;
@@ -173,12 +174,16 @@ struct PeopleFile {
     version: u32,
     #[serde(default)]
     people: Vec<Person>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    graphs: Vec<Graph>,
 }
 
 #[derive(Default)]
 pub struct People {
     path: Option<PathBuf>,
     pub list: Vec<Person>,
+    /// 相関図。
+    pub graphs: Vec<Graph>,
 }
 
 impl People {
@@ -186,19 +191,19 @@ impl People {
     pub fn open(settings_dir: Option<&Path>) -> (Self, Option<String>) {
         let path = settings_dir.map(|d| d.join(FILE_NAME));
         let mut problem = None;
-        let list = match path.as_ref().map(std::fs::read_to_string) {
+        let (list, graphs) = match path.as_ref().map(std::fs::read_to_string) {
             Some(Ok(text)) => match serde_json::from_str::<PeopleFile>(&text) {
-                Ok(f) => f.people,
+                Ok(f) => (f.people, f.graphs),
                 Err(e) => {
                     let p = path.as_ref().expect("read above");
                     problem = Some(format!("{}: cannot read people ({e})", p.display()));
                     let _ = std::fs::rename(p, p.with_extension("json.bak"));
-                    Vec::new()
+                    Default::default()
                 }
             },
-            _ => Vec::new(),
+            _ => Default::default(),
         };
-        (Self { path, list }, problem)
+        (Self { path, list, graphs }, problem)
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -211,6 +216,7 @@ impl People {
         let file = PeopleFile {
             version: VERSION,
             people: self.list.clone(),
+            graphs: self.graphs.clone(),
         };
         let text = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
@@ -255,11 +261,14 @@ impl People {
             .find(|p| p.name == from)
             .ok_or_else(|| format!("{from} not found"))?;
         p.name = to.to_owned();
+        people_graph::rename_person(&mut self.graphs, from, to);
         Ok(())
     }
 
+    /// 人物を消す。相関図からも外す。
     pub fn remove(&mut self, name: &str) {
         self.list.retain(|p| p.name != name);
+        people_graph::remove_person(&mut self.graphs, name);
     }
 
     pub fn set_cover(&mut self, name: &str, index: usize) {
@@ -363,6 +372,28 @@ mod tests {
         assert!(!text.contains("0.6"), "{text}");
         let (again, _) = People::open(Some(&dir));
         assert_eq!(again.list, people.list);
+        assert!(!text.contains("graphs"), "no charts, no key: {text}");
+    }
+
+    #[test]
+    fn charts_are_saved_with_the_people_and_follow_renames() {
+        let dir = std::env::temp_dir().join(format!("vw-people-graphs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut people, _) = People::open(Some(&dir));
+        people.add("A", sample([1.0, 0.0]));
+        people.add("B", sample([0.0, 1.0]));
+        let mut g = Graph::new("Family");
+        g.add("A", [0.0, 0.0]);
+        g.add("B", [100.0, 0.0]);
+        g.connect("A", "B");
+        people.graphs.push(g);
+        people.rename("A", "C").unwrap();
+        people.save().unwrap();
+        let (mut again, _) = People::open(Some(&dir));
+        assert!(again.graphs[0].edge("C", "B").is_some());
+        again.remove("B");
+        assert_eq!(again.graphs[0].members.len(), 1);
+        assert!(again.graphs[0].edges.is_empty());
     }
 
     fn mark(person: Option<&str>, unlinked: bool) -> FaceMark {
