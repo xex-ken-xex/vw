@@ -24,6 +24,7 @@ mod dicom_send;
 mod discard;
 mod export;
 mod expr;
+mod face_groups;
 mod face_store;
 mod faces;
 mod fonts;

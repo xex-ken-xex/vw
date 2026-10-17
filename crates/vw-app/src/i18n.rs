@@ -109,6 +109,28 @@ const JA: &[(&str, &str)] = &[
     ("{} face(s)", "顔 {} 枚"),
     ("Rename", "名前を変える"),
     ("Really delete", "本当に削除"),
+    ("Registered people", "登録した人物"),
+    ("Unregistered faces ({})", "未登録の顔（{}）"),
+    (
+        "No unregistered faces. Right-click an image > Find faces to look for faces.",
+        "未登録の顔はありません。画像を右クリック →「顔を探す」で顔を探します。",
+    ),
+    (
+        "Similar faces are grouped. Name a group to register all its faces as that person.",
+        "似た顔をまとめています。まとまりに名前を付けると、その顔を全部その人物として登録します。",
+    ),
+    ("Hide", "隠す"),
+    (
+        "Hide these faces from this list (for example passers-by).",
+        "この一覧からこの顔を隠します（通りがかりの人など）。",
+    ),
+    ("Added to the registered person.", "登録済みの人物に足します。"),
+    ("Not in this group", "このまとまりから外す"),
+    ("Hide this face", "この顔を隠す"),
+    (
+        "{} more group(s). Register or hide the ones above to see them.",
+        "ほかに {} 個のまとまりがあります。上のまとまりを登録するか隠すと出てきます。",
+    ),
     ("CPU threads used by the tagger. 0 lets ONNX Runtime decide.", "タグ付けに使う CPU スレッド数。0 なら ONNX Runtime に任せます。"),
     ("Excluded tags", "付けないタグ"),
     (

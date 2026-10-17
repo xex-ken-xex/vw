@@ -312,6 +312,7 @@ mod tests {
                     person: Some("A".into()),
                     similarity: 0.5,
                     unlinked: false,
+                    hidden: false,
                 }]
             })
             .unwrap();
