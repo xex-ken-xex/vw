@@ -12,7 +12,7 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 use serde::{Deserialize, Serialize};
-use vw_core::VwImage;
+use vw_core::{ColorModel, VwImage};
 
 use crate::derive::{self, Derive, View};
 use crate::faces::FaceMark;
@@ -21,7 +21,7 @@ use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
 use crate::probe::{self, Mark};
 use crate::roi::{self, Region, Roi};
-use crate::settings::Language;
+use crate::settings::{ColorFormat, Language};
 
 /// 表示中の画像。縮小画像のテクスチャと、ログ・メタデータ表示用の情報を持つ。
 pub struct Shown {
@@ -223,6 +223,9 @@ pub struct Slot {
     last_body: Option<Vec2>,
     /// 画素値を確かめる十字の印。ファイルには書かず、スロットを閉じると消える。
     pub marks: Vec<Mark>,
+    /// 十字と ROI の色の値の書き方。描くたびに [`SlotLook::colors`] から受け取り、
+    /// コピー（描画の外から呼ばれる）でも同じ書き方にする。
+    colors: Colors,
     /// 選んでいる十字（[`Slot::marks`] の添字）。
     selected_mark: Option<usize>,
     /// 関心領域。十字と同じく、ファイルには書かずスロットを閉じると消える。
@@ -264,6 +267,14 @@ pub struct SlotLook<'a> {
     pub people: &'a [String],
     /// AI のモデルが全部揃っているか。揃うまで「AI タグを付ける」「顔を探す」は押せない。
     pub ai_ready: bool,
+    pub colors: Colors,
+}
+
+/// 色の値の書き方。十字（`metadata.color_format`）と ROI（`roi.color_format`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Colors {
+    pub probe: ColorFormat,
+    pub roi: ColorFormat,
 }
 
 /// 顔の枠の右クリックで選ばれた操作。番号は表示中の画像の枠の番号。
@@ -522,6 +533,7 @@ impl Slot {
             wheel: 0.0,
             last_body: None,
             marks: Vec::new(),
+            colors: Colors::default(),
             selected_mark: None,
             rois: Vec::new(),
             selected_roi: None,
@@ -553,6 +565,12 @@ impl Slot {
         let shown = self.shown.as_ref()?;
         let full = shown.full.as_ref()?;
         Some(roi::stats(&full.image, &shown.info.metadata, region))
+    }
+
+    /// カラー画像の ROI の中の色の平均。元の画像を読み込み中やモノクロなら `None`。
+    fn roi_color_means(&self, region: Region) -> Option<[f64; 3]> {
+        let full = self.shown.as_ref()?.full.as_ref()?;
+        roi::color_means(&full.image, region)
     }
 
     /// 選んでいる ROI をコピーするときの文字。
@@ -590,6 +608,7 @@ impl Slot {
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_roi();
         let unit = roi::unit(&shown.info.metadata);
+        let bits = shown.info.bits_per_sample;
         let shown_rois = self
             .rois
             .iter()
@@ -622,11 +641,20 @@ impl Slot {
                 ));
             }
             let stats = finished.then(|| self.roi_stats(region)).flatten();
-            let text = roi::label(tr(lang, kind.title()), region, stats.as_ref(), unit);
+            let means = finished.then(|| self.roi_color_means(region)).flatten();
+            let color_text = means.map(|m| crate::color_text::text(&m, bits, self.colors.roi));
+            let swatch = means.and_then(|m| crate::color_text::swatch(&m, bits));
+            let text = roi::label(
+                tr(lang, kind.title()),
+                region,
+                stats.as_ref(),
+                unit,
+                color_text.as_deref(),
+            );
             let galley =
                 painter.layout_no_wrap(text, egui::FontId::proportional(12.0), stroke_color);
             let pad = vec2(4.0, 1.0);
-            let size = galley.size() + 2.0 * pad;
+            let size = galley.size() + 2.0 * pad + swatch_room(swatch, galley.size().y);
             // 矩形の上に出し、枠の上端で切れるときは矩形の中に入れる。
             let y = if rect.top() - size.y - 2.0 >= body.top() {
                 rect.top() - size.y - 2.0
@@ -636,7 +664,8 @@ impl Slot {
             let x = rect.left().max(body.left()).min(body.right() - size.x);
             let pill = Rect::from_min_size(pos2(x, y), size);
             painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
-            painter.galley(pill.min + pad, galley, stroke_color);
+            let text_at = draw_swatch(&painter, pill.min + pad, galley.size().y, swatch);
+            painter.galley(text_at, galley, stroke_color);
         }
     }
 
@@ -650,14 +679,26 @@ impl Slot {
 
     /// 十字の位置の値。元の画像を読み込み中なら `None`。
     fn mark_value(&self, mark: &Mark) -> Option<String> {
+        self.mark_sample(mark).map(|(text, _)| text)
+    }
+
+    /// 十字の位置の値と、カラーならその色の見本。
+    fn mark_sample(&self, mark: &Mark) -> Option<(String, Option<[u8; 3]>)> {
         let shown = self.shown.as_ref()?;
         let full = shown.full.as_ref()?;
         let values = probe::sample(&full.image, &shown.info.metadata, mark.x, mark.y)?;
-        Some(probe::value_text(
+        let bits = shown.info.bits_per_sample;
+        let text = probe::value_text(
             full.image.color,
             &shown.info.metadata,
             &values,
-        ))
+            self.colors.probe,
+            bits,
+        );
+        let swatch = matches!(full.image.color, ColorModel::Rgb | ColorModel::Rgba)
+            .then(|| crate::color_text::swatch(&values, bits))
+            .flatten();
+        Some((text, swatch))
     }
 
     /// 選んでいる十字をコピーするときの文字。
@@ -758,14 +799,16 @@ impl Slot {
                 painter.line_segment([at - vec2(MARK_ARM, 0.0), at + vec2(MARK_ARM, 0.0)], stroke);
                 painter.line_segment([at - vec2(0.0, MARK_ARM), at + vec2(0.0, MARK_ARM)], stroke);
             }
-            let value = self.mark_value(mark);
+            let sample = self.mark_sample(mark);
+            let swatch = sample.as_ref().and_then(|(_, s)| *s);
+            let value = sample.map(|(text, _)| text);
             let galley = painter.layout_no_wrap(
                 probe::mark_label(mark.x, mark.y, value.as_deref()),
                 egui::FontId::proportional(12.0),
                 color,
             );
             let pad = vec2(4.0, 1.0);
-            let size = galley.size() + 2.0 * pad;
+            let size = galley.size() + 2.0 * pad + swatch_room(swatch, galley.size().y);
             let gap = MARK_ARM + 3.0;
             // ふだんは右上に出し、枠の端で切れるときは反対側に回す。
             let x = if at.x + gap + size.x <= body.right() {
@@ -780,7 +823,8 @@ impl Slot {
             };
             let pill = Rect::from_min_size(pos2(x, y), size);
             painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
-            painter.galley(pill.min + pad, galley, color);
+            let text_at = draw_swatch(&painter, pill.min + pad, galley.size().y, swatch);
+            painter.galley(text_at, galley, color);
         }
     }
 
@@ -981,7 +1025,9 @@ impl Slot {
             faces,
             people,
             ai_ready,
+            colors,
         } = look;
+        self.colors = colors;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
         let derivable = self.shown.as_ref().is_some_and(is_derivable);
@@ -1730,6 +1776,31 @@ fn draw_faces(
         painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
         painter.galley(pill.min + pad, galley, color);
     }
+}
+
+/// 色の見本の四角を置くために、文字の前に空ける幅。
+fn swatch_room(swatch: Option<[u8; 3]>, line: f32) -> Vec2 {
+    match swatch {
+        Some(_) => vec2(line + 4.0, 0.0),
+        None => Vec2::ZERO,
+    }
+}
+
+/// `at` に文字の高さの色の見本を描き、文字を置く位置を返す。見本がなければ `at` のまま。
+fn draw_swatch(painter: &egui::Painter, at: Pos2, line: f32, swatch: Option<[u8; 3]>) -> Pos2 {
+    let Some([r, g, b]) = swatch else {
+        return at;
+    };
+    let side = line - 2.0;
+    let rect = Rect::from_min_size(at + vec2(0.0, 1.0), vec2(side, side));
+    painter.rect_filled(rect, 1.0, Color32::from_rgb(r, g, b));
+    painter.rect_stroke(
+        rect,
+        1.0,
+        egui::Stroke::new(1.0, Color32::from_gray(200)),
+        egui::StrokeKind::Inside,
+    );
+    at + vec2(line + 4.0, 0.0)
 }
 
 #[cfg(test)]

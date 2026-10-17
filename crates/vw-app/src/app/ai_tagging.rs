@@ -16,6 +16,9 @@ use crate::i18n::{tr, tr1};
 use crate::people::Sample;
 use crate::tagger::{self, Tags, Thresholds};
 
+/// メタデータ欄の AI タグのグループの英語の名前。
+pub(super) const AI_TAGS: &str = "AI tags";
+
 /// タグ付けで読み込む画像の長辺。モデルの入力（448）より少し大きく、縮小の平均が効く程度に。
 const TAG_SIDE: u32 = 896;
 /// 顔探しで読み込む画像の長辺。検出は 640 で足りるが、顔の切り出しは元の画素から取るので、
@@ -475,46 +478,70 @@ impl VwApp {
         }
     }
 
-    /// メタデータ欄の「AI tags」の行と、行ごとのタグ名（消せるタグの行だけ）。タグも顔もなければ `None`。
-    pub(super) fn ai_tag_rows(&self, path: &Path) -> Option<Vec<(String, String, Option<String>)>> {
+    /// メタデータ欄の「AI tags」の行。消せるタグの行はタグ名も持つ。タグも顔もなければ `None`。
+    pub(super) fn ai_tag_rows(&self, path: &Path) -> Option<Vec<crate::meta_view::Row>> {
         let lang = self.lang();
         let file = crate::frames::file_of(path);
         let entry = self.ai_tags.get(&file)?;
         let mut rows = Vec::new();
+        let mut push = |key: &str, shown: String, value: String, tag: Option<String>| {
+            let mut row = crate::meta_view::Row::new(AI_TAGS, key, shown, value);
+            row.tag = tag;
+            rows.push(row);
+        };
         let people = entry.people();
         if !people.is_empty() {
-            rows.push((tr(lang, "People").to_owned(), people.join(", "), None));
+            push(
+                "People",
+                tr(lang, "People").to_owned(),
+                people.join(", "),
+                None,
+            );
         }
         for (i, f) in entry.faces.iter().enumerate() {
             let who = match &f.person {
                 Some(name) => format!("{name} ({:.2})", f.similarity),
                 None => tr(lang, "Unknown").to_owned(),
             };
-            rows.push((format!("{} {}", tr(lang, "Face"), i + 1), who, None));
+            let n = i + 1;
+            push(
+                &format!("Face {n}"),
+                format!("{} {n}", tr(lang, "Face")),
+                who,
+                None,
+            );
         }
         if let Some(r) = &entry.tags.rating {
-            rows.push((
+            push(
+                "Rating",
                 tr(lang, "Rating").to_owned(),
                 format!("{} ({:.2})", r.name, r.score),
                 None,
-            ));
+            );
         }
         for c in &entry.tags.characters {
-            rows.push((
+            push(
+                "Character",
                 tr(lang, "Character").to_owned(),
                 format!("{} ({:.2})", c.name, c.score),
                 Some(c.name.clone()),
-            ));
+            );
         }
         for g in &entry.tags.general {
-            rows.push((
+            push(
+                &g.name,
                 g.name.clone(),
                 format!("{:.2}", g.score),
                 Some(g.name.clone()),
-            ));
+            );
         }
         if !entry.model.is_empty() {
-            rows.push((tr(lang, "AI model").to_owned(), entry.model.clone(), None));
+            push(
+                "AI model",
+                tr(lang, "AI model").to_owned(),
+                entry.model.clone(),
+                None,
+            );
         }
         (!rows.is_empty()).then_some(rows)
     }

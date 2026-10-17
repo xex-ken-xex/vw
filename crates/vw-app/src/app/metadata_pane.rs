@@ -2,10 +2,13 @@
 
 use eframe::egui::{self, collapsing_header::CollapsingState, vec2};
 
+use egui_phosphor::regular as icon;
+
 use crate::copy::{self, Focus, MetaGroup, MetaSelection};
 use crate::frames;
 use crate::i18n::tr;
-use crate::settings::{HeaderClick, PathDisplay};
+use crate::meta_view::{self, Edit};
+use crate::settings::{HeaderClick, HeadingStyle, PathDisplay};
 
 use super::*;
 
@@ -30,17 +33,17 @@ impl VwApp {
         index
     }
 
-    /// メタデータ欄に出す表。ファイル情報のグループの後に、プラグインのメタデータのグループが続く。
-    /// 画像がなければ `None`。
-    pub(super) fn metadata_groups(&mut self) -> Option<Vec<MetaGroup>> {
+    /// 画像から読んだグループ。ファイル情報、AI タグ、プラグインのメタデータの順。画像がなければ `None`。
+    fn metadata_found(&mut self) -> Option<Vec<meta_view::Group>> {
         let lang = self.lang();
         let index = self.metadata_slot()?;
         let shown = self.slots[index].shown.as_ref()?;
         let info = &shown.info;
-        let row = |k: &'static str, v: String| (tr(lang, k).to_owned(), v);
+        let row =
+            |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
         let frame = frames::split(&shown.path);
         let mut file_rows = vec![
-            row("Path", frames::file_of(&shown.path).display().to_string()),
+            row(PATH, frames::file_of(&shown.path).display().to_string()),
             row("Size", format!("{} bytes", info.file_size)),
             row("Plugin", info.plugin.clone()),
             row("Pixels", format!("{} x {}", info.width, info.height)),
@@ -71,52 +74,107 @@ impl VwApp {
                 .map_or(0, |q| q.paths.len());
             file_rows.insert(1, row("Frame", format!("{} / {total}", i + 1)));
         }
-        let mut groups = vec![(tr(lang, "File").to_owned(), file_rows)];
-        let ai_rows = self.ai_tag_rows(&shown.path);
-        self.meta_ai_tags = None;
-        if let Some(rows) = ai_rows {
-            let name = tr(lang, "AI tags").to_owned();
-            let (rows, tags): (Vec<_>, Vec<_>) =
-                rows.into_iter().map(|(k, v, t)| ((k, v), t)).unzip();
-            self.meta_ai_tags = Some((name.clone(), tags));
-            groups.push((name, rows));
+        let mut groups = vec![meta_view::Group::new(
+            FILE,
+            tr(lang, FILE).to_owned(),
+            file_rows,
+        )];
+        let path = shown.path.clone();
+        let entries = info.metadata.entries.clone();
+        if let Some(rows) = self.ai_tag_rows(&path) {
+            groups.push(meta_view::Group::new(
+                super::ai_tagging::AI_TAGS,
+                tr(lang, super::ai_tagging::AI_TAGS).to_owned(),
+                rows,
+            ));
         }
-        groups.extend(
-            group_metadata(&info.metadata.entries)
+        groups.extend(group_metadata(&entries).into_iter().map(|(g, rows)| {
+            let rows = rows
                 .into_iter()
-                .map(|(g, rows)| {
-                    let rows = rows
-                        .into_iter()
-                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                        .collect();
-                    (g.to_owned(), rows)
-                }),
-        );
+                .map(|(k, v)| meta_view::Row::new(g, k, k.to_owned(), v.to_owned()))
+                .collect();
+            meta_view::Group::new(g, g.to_owned(), rows)
+        }));
         Some(groups)
+    }
+
+    /// メタデータ欄に出すグループ。隠した項目と自分で作ったグループの設定を当てたもの。
+    pub(super) fn pane_groups(&mut self) -> Option<Vec<meta_view::Group>> {
+        let found = self.metadata_found()?;
+        Some(meta_view::arrange(
+            found,
+            &self.settings().metadata,
+            self.meta_show_hidden,
+        ))
+    }
+
+    /// コピーに使う、見えているとおりの表。
+    pub(super) fn metadata_groups(&mut self) -> Option<Vec<MetaGroup>> {
+        Some(copy_groups(&self.pane_groups()?))
+    }
+
+    /// 欄の見出しの行。隠した項目があるときだけ、それを一時的に出す切り替えを右に置く。
+    pub(super) fn metadata_header_ui(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        ui.horizontal(|ui| {
+            vw_ui::panel::header(ui, tr(lang, "Metadata"));
+            if !meta_view::any_hidden(&self.settings().metadata) {
+                return;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let on = self.meta_show_hidden;
+                let glyph = if on { icon::EYE } else { icon::EYE_SLASH };
+                if ui
+                    .add(egui::Button::new(glyph).small().selected(on))
+                    .on_hover_text(tr(
+                        lang,
+                        if on {
+                            "Hidden items are shown faint. Click to hide them again."
+                        } else {
+                            "Show hidden items faint"
+                        },
+                    ))
+                    .clicked()
+                {
+                    self.meta_show_hidden = !on;
+                }
+            });
+        });
     }
 
     /// スロットの画像について、ファイル情報とプラグインのメタデータを表で出す。
     /// 見出しと行はクリックで選んでコピーでき、値の文字列はドラッグで範囲選択できる。
     pub(super) fn metadata_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let Some(groups) = self.metadata_groups() else {
+        let Some(groups) = self.pane_groups() else {
             ui.weak(tr(lang, "No image"));
             return;
         };
         let header_click = self.settings().behavior.header_click;
         let path_display = self.settings().metadata.path;
+        let heading_style = self.settings().metadata.heading_style;
+        let custom_names: Vec<String> = self
+            .settings()
+            .metadata
+            .groups
+            .iter()
+            .map(|g| g.name.clone())
+            .collect();
         let mut picked: Option<MetaSelection> = None;
         let mut copy: Option<MetaSelection> = None;
         let mut text_drag = false;
         let mut tag_action = None;
-        let ai_tags = self.meta_ai_tags.clone();
+        let mut edit: Option<Edit> = None;
+        let mut closed = self.meta_closed.clone();
         let selected = self.meta_selected.clone();
         let highlight = ui.visuals().selection.bg_fill;
+        let accent = ui.visuals().hyperlink_color;
+        let faint = ui.visuals().weak_text_color();
         let widest_key = groups
             .iter()
-            .flat_map(|(_, rows)| rows)
-            .map(|(k, _)| {
-                egui::WidgetText::from(k.as_str())
+            .flat_map(|g| &g.rows)
+            .map(|r| {
+                egui::WidgetText::from(r.key.as_str())
                     .into_galley(
                         ui,
                         Some(egui::TextWrapMode::Extend),
@@ -130,15 +188,20 @@ impl VwApp {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (group_index, (group, rows)) in groups.iter().enumerate() {
-                    let id = ui.make_persistent_id(("metadata", group));
-                    let state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
-                    let group_sel = MetaSelection::Group(group.clone());
+                for group in &groups {
+                    let title = &group.title;
+                    let open_key = group.id.clone();
+                    let id = ui.make_persistent_id(("metadata", &group.id, group.custom));
+                    let default_open = !closed.contains(&open_key);
+                    let state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+                    let group_sel = MetaSelection::Group(title.clone());
                     let is_selected = selected.as_ref() == Some(&group_sel);
+                    let heading =
+                        heading_text(title, heading_style, accent, group.hidden.then_some(faint));
                     let (_, head, _) = state
                         .show_header(ui, |ui| {
                             // 欄より長い見出しで欄が押し広げられ、その幅のまま戻らなくなるため省略する。
-                            ui.add(egui::Button::selectable(is_selected, group.as_str()).truncate())
+                            ui.add(egui::Button::selectable(is_selected, heading).truncate())
                         })
                         .body(|ui| {
                             let avail = ui.available_width();
@@ -146,30 +209,37 @@ impl VwApp {
                             let gap_y = ui.spacing().item_spacing.y;
                             let key_width = key_column_width(widest_key, avail - gap);
                             let value_width = (avail - gap - key_width).max(0.0);
-                            let row_of = |i: usize| MetaSelection::Row(group.clone(), i);
+                            let row_of = |i: usize| MetaSelection::Row(title.clone(), i);
                             let selected_row = match &selected {
-                                Some(MetaSelection::Row(g, i)) if g == group => Some(*i),
+                                Some(MetaSelection::Row(g, i)) if g == title => Some(*i),
                                 _ => None,
                             };
-                            for (i, (k, v)) in rows.iter().enumerate() {
+                            for (i, r) in group.rows.iter().enumerate() {
+                                let tint = |t: &str| {
+                                    let t = egui::RichText::new(t);
+                                    if r.hidden {
+                                        t.color(faint)
+                                    } else {
+                                        t
+                                    }
+                                };
                                 // 縞と選択の色は行の高さが決まってから塗るので、先に場所だけ取る。
                                 let background = ui.painter().add(egui::Shape::Noop);
                                 let row = ui.horizontal_top(|ui| {
                                     let key = fixed_width(ui, key_width, |ui| {
                                         ui.add(
-                                            egui::Label::new(k)
+                                            egui::Label::new(tint(&r.key))
                                                 .truncate()
                                                 .selectable(false)
                                                 .sense(egui::Sense::click()),
                                         )
                                     });
                                     // 折り返すと深いフォルダのパスが何行にもなり、表の頭が押し下げられる。
-                                    let is_path = group_index == 0 && i == PATH_ROW;
                                     let value = fixed_width(ui, value_width, |ui| {
-                                        if is_path {
-                                            path_label(ui, v, path_display)
+                                        if r.id == PATH_ID {
+                                            path_label(ui, &r.value, path_display)
                                         } else {
-                                            ui.add(egui::Label::new(v).wrap())
+                                            ui.add(egui::Label::new(tint(&r.value)).wrap())
                                         }
                                     });
                                     (key, value)
@@ -193,17 +263,19 @@ impl VwApp {
                                 if value.drag_started() {
                                     text_drag = true;
                                 }
-                                let tag = ai_tags
-                                    .as_ref()
-                                    .filter(|(g, _)| g == group)
-                                    .and_then(|(_, tags)| tags.get(i).cloned().flatten());
-                                for r in [&key, &value] {
-                                    vw_ui::menu::context(r, |ui| {
+                                for response in [&key, &value] {
+                                    vw_ui::menu::context(response, |ui| {
                                         if ui.button(tr(lang, "Copy")).clicked() {
                                             copy = Some(row_of(i));
                                             ui.close();
                                         }
-                                        if let Some(tag) = &tag {
+                                        ui.separator();
+                                        if let Some(e) = row_menu(ui, lang, group, r, &custom_names)
+                                        {
+                                            edit = Some(e);
+                                            ui.close();
+                                        }
+                                        if let Some(tag) = &r.tag {
                                             ui.separator();
                                             if let Some(a) = tag_menu(ui, lang, tag) {
                                                 tag_action = Some(a);
@@ -220,9 +292,16 @@ impl VwApp {
                         // ▶ を押したときと同じく、保存された開閉状態を反転して次のフレームから効かせる。
                         if header_click == HeaderClick::SelectAndToggle {
                             let mut state =
-                                CollapsingState::load_with_default_open(ui.ctx(), id, true);
+                                CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
                             state.toggle(ui);
                             state.store(ui.ctx());
+                        }
+                    }
+                    if let Some(state) = CollapsingState::load(ui.ctx(), id) {
+                        if state.is_open() {
+                            closed.remove(&open_key);
+                        } else {
+                            closed.insert(open_key);
                         }
                     }
                     vw_ui::menu::context(&label, |ui| {
@@ -230,9 +309,15 @@ impl VwApp {
                             copy = Some(group_sel.clone());
                             ui.close();
                         }
+                        ui.separator();
+                        if let Some(e) = group_menu(ui, lang, group) {
+                            edit = Some(e);
+                            ui.close();
+                        }
                     });
                 }
             });
+        self.meta_closed = closed;
         let ctx = ui.ctx().clone();
         if text_drag {
             self.set_focus(&ctx, Focus::MetadataText);
@@ -250,17 +335,197 @@ impl VwApp {
                 self.tag_action(&ctx, &image, action);
             }
         }
+        if let Some(edit) = edit {
+            self.metadata_edit(&ctx, edit);
+        }
         if let Some(c) = copy {
-            if let Some(text) = copy::metadata_text(&groups, &c) {
+            if let Some(text) = copy::metadata_text(&copy_groups(&groups), &c) {
                 let what = selection_name(&c);
                 self.copy_text(&ctx, text, &format!("metadata {what}"));
             }
         }
     }
+
+    /// 右クリックで選んだ、表示の設定の変更を当てて保存する。
+    fn metadata_edit(&mut self, ctx: &egui::Context, edit: Edit) {
+        if let Edit::NewGroup(row) = edit {
+            self.meta_new_group = Some((row, String::new(), true));
+            return;
+        }
+        let m = &mut self.settings.settings.metadata;
+        let changed = meta_view::apply(m, edit);
+        if changed {
+            self.settings_changed(ctx);
+        }
+    }
+
+    /// 「新しいグループ…」で名前を聞く。
+    pub(super) fn meta_new_group_ui(&mut self, ctx: &egui::Context) {
+        let Some((row, mut name, focus)) = self.meta_new_group.take() else {
+            return;
+        };
+        let lang = self.lang();
+        let taken = self
+            .settings()
+            .metadata
+            .groups
+            .iter()
+            .any(|g| g.name == name.trim());
+        let mut answer = None;
+        let mut focus = focus;
+        let mut open = true;
+        egui::Window::new(tr(lang, "New group"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(tr(lang, "Name of the new group"));
+                let r = ui.text_edit_singleline(&mut name);
+                // 毎フレーム焦点を求めると、ボタンのクリックが取られてしまう。開いたときだけにする。
+                if focus {
+                    r.request_focus();
+                    focus = false;
+                }
+                if taken {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        tr(lang, "A group with this name already exists."),
+                    );
+                }
+                let ok = !name.trim().is_empty() && !taken;
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(ok, egui::Button::new(tr(lang, "Create")))
+                        .clicked()
+                        || (ok && enter)
+                    {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        if !open {
+            answer = Some(false);
+        }
+        match answer {
+            Some(true) => {
+                let edit = Edit::AddToGroup(row, name.trim().to_owned());
+                self.metadata_edit(ctx, edit);
+            }
+            Some(false) => {}
+            None => self.meta_new_group = Some((row, name, focus)),
+        }
+    }
 }
 
-/// ファイル情報のグループでパスを出す行。コピーにはどの表示でもフルパスを使う。
-const PATH_ROW: usize = 0;
+/// ファイル情報のグループの英語の名前と、パスの行。パスはコピーにはどの表示でもフルパスを使う。
+const FILE: &str = "File";
+const PATH: &str = "Path";
+const PATH_ID: &str = "File/Path";
+
+fn copy_groups(groups: &[meta_view::Group]) -> Vec<MetaGroup> {
+    groups
+        .iter()
+        .map(|g| {
+            let rows = g
+                .rows
+                .iter()
+                .map(|r| (r.key.clone(), r.value.clone()))
+                .collect();
+            (g.title.clone(), rows)
+        })
+        .collect()
+}
+
+/// グループの見出しの字。隠したグループを一時的に出しているときは薄くする。
+fn heading_text(
+    title: &str,
+    style: HeadingStyle,
+    accent: egui::Color32,
+    faint: Option<egui::Color32>,
+) -> egui::RichText {
+    let text = egui::RichText::new(title);
+    let text = match style {
+        HeadingStyle::Color | HeadingStyle::Both => text.color(accent),
+        HeadingStyle::Underline | HeadingStyle::Plain => text,
+    };
+    let text = match style {
+        HeadingStyle::Underline | HeadingStyle::Both => text.underline(),
+        HeadingStyle::Color | HeadingStyle::Plain => text,
+    };
+    match faint {
+        Some(c) => text.color(c),
+        None => text,
+    }
+}
+
+/// 項目の右クリックに足す、表示の設定の項目。
+fn row_menu(
+    ui: &mut egui::Ui,
+    lang: crate::settings::Language,
+    group: &meta_view::Group,
+    row: &meta_view::Row,
+    custom_names: &[String],
+) -> Option<Edit> {
+    let mut edit = None;
+    if group.custom {
+        if ui.button(tr(lang, "Remove from this group")).clicked() {
+            edit = Some(Edit::RemoveFromGroup(row.id.clone(), group.id.clone()));
+        }
+    } else if row.hidden {
+        if ui.button(tr(lang, "Show this item")).clicked() {
+            edit = Some(Edit::Show(row.id.clone()));
+        }
+    } else if ui.button(tr(lang, "Hide this item")).clicked() {
+        edit = Some(Edit::Hide(row.id.clone()));
+    }
+    vw_ui::menu::submenu(ui, tr(lang, "Add to group"), |ui| {
+        for name in custom_names {
+            if *name == group.id && group.custom {
+                continue;
+            }
+            if ui.button(name).clicked() {
+                edit = Some(Edit::AddToGroup(row.id.clone(), name.clone()));
+                ui.close();
+            }
+        }
+        if !custom_names.is_empty() {
+            ui.separator();
+        }
+        if ui.button(tr(lang, "New group...")).clicked() {
+            edit = Some(Edit::NewGroup(row.id.clone()));
+            ui.close();
+        }
+    });
+    edit
+}
+
+/// グループの見出しの右クリックに足す、表示の設定の項目。
+fn group_menu(
+    ui: &mut egui::Ui,
+    lang: crate::settings::Language,
+    group: &meta_view::Group,
+) -> Option<Edit> {
+    if group.custom {
+        return ui
+            .button(tr(lang, "Delete this group"))
+            .clicked()
+            .then(|| Edit::DeleteGroup(group.id.clone()));
+    }
+    if group.hidden {
+        ui.button(tr(lang, "Show this group"))
+            .clicked()
+            .then(|| Edit::Show(group.id.clone()))
+    } else {
+        ui.button(tr(lang, "Hide this group"))
+            .clicked()
+            .then(|| Edit::Hide(group.id.clone()))
+    }
+}
 
 fn path_label(ui: &mut egui::Ui, path: &str, display: PathDisplay) -> egui::Response {
     match display {

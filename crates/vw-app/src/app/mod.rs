@@ -192,7 +192,13 @@ pub struct VwApp {
     /// 「AI タグの整理」。
     ai_tidy: Option<ai_tidy::TidyWindow>,
     /// メタデータ欄の AI タグのグループ名と、その行ごとのタグ名（タグでない行は `None`）。
-    meta_ai_tags: Option<(String, Vec<Option<String>>)>,
+    /// メタデータ欄で、隠した項目も薄く出す（起動している間だけ）。
+    meta_show_hidden: bool,
+    /// メタデータ欄で閉じたグループ（`metadata.remember_open` のとき state.toml に残す）。
+    meta_closed: HashSet<String>,
+    /// 「グループに追加」の「新しいグループ…」で名前を入れている項目と、その名前。
+    /// 3 つ目は、まだ名前の欄に入力の焦点を移していないか（移すのは開いたときだけ）。
+    meta_new_group: Option<(String, String, bool)>,
     /// 顔の枠をスロットに描く。
     show_faces: bool,
     /// 設定画面を開いている間は、ツール列とメニュー以外をすべて設定画面に置き換える。
@@ -470,6 +476,7 @@ impl VwApp {
         crate::fonts::load_cjk_in_background(&cc.egui_ctx);
         let mut log = Log::new(started);
         let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
+        let remember_open = settings.settings.metadata.remember_open;
         for n in notes {
             log.error(format!("Settings: {n}"));
         }
@@ -501,6 +508,11 @@ impl VwApp {
         for n in notes {
             log.error(format!("State: {n}"));
         }
+        let meta_closed: HashSet<String> = if remember_open {
+            saved.metadata_closed.iter().cloned().collect()
+        } else {
+            HashSet::new()
+        };
         // ウインドウ作成後の今なら、Windows でも拡大率を反映した座標で取れる。
         let restoring = match state::placement(saved.window.as_ref(), &state::current_monitors()) {
             Placement::Default => None,
@@ -588,7 +600,9 @@ impl VwApp {
             graph_window: Default::default(),
             ai_remove: None,
             ai_tidy: None,
-            meta_ai_tags: None,
+            meta_show_hidden: false,
+            meta_closed,
+            meta_new_group: None,
             show_faces: true,
             pipeline: {
                 let mut view = crate::pipeline_view::PipelineView::default();
@@ -1205,7 +1219,7 @@ impl eframe::App for VwApp {
                 .default_size(300.0)
                 .min_size(220.0)
                 .show(ui, |ui| {
-                    vw_ui::panel::header(ui, tr(lang, "Metadata"));
+                    self.metadata_header_ui(ui);
                     self.metadata_ui(ui);
                 });
         }
@@ -1224,6 +1238,7 @@ impl eframe::App for VwApp {
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
+        self.meta_new_group_ui(&ctx);
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
         self.finish_trash_job();
