@@ -13,7 +13,8 @@ use vw_quality::Thresholds;
 
 use crate::settings::{
     parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
-    LoadModifier, LogSettings, LogStyle, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
+    LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree,
+    Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -25,6 +26,7 @@ enum Section {
     Viewer,
     Tree,
     Behavior,
+    Metadata,
     Labels,
     Datasets,
     Fullscreen,
@@ -37,11 +39,12 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 13] = [
+    const ALL: [Section; 14] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
         Section::Behavior,
+        Section::Metadata,
         Section::Labels,
         Section::Datasets,
         Section::Fullscreen,
@@ -59,6 +62,7 @@ impl Section {
             Section::Viewer => "Viewer",
             Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
+            Section::Metadata => "Metadata panel",
             Section::Labels => "Flags and tags",
             Section::Datasets => "Datasets",
             Section::Fullscreen => "Fullscreen slideshow",
@@ -82,7 +86,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 56] = [
+const ITEMS: [Item; 57] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -250,6 +254,13 @@ const ITEMS: [Item; 56] = [
         title: "Auto reload",
         description: "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
         widget: auto_reload_widget,
+    },
+    Item {
+        section: Section::Metadata,
+        key: "metadata.path",
+        title: "Path",
+        description: "What the Path row of the metadata panel shows: the full path (its head is left out when it does not fit) or only the file name. Hover the row to see the full path.",
+        widget: path_display_widget,
     },
     Item {
         section: Section::Labels,
@@ -533,7 +544,7 @@ fn fullscreen_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -
 
 fn fullscreen_sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let before = s.fullscreen.sort;
-    egui::ComboBox::from_id_salt("fullscreen_sort")
+    vw_ui::menu::combo("fullscreen_sort")
         .selected_text(tr(lang, before.title()))
         .show_ui(ui, |ui| {
             for key in SortKey::ALL {
@@ -642,7 +653,7 @@ fn theme_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 
 fn language_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     let before = s.appearance.language;
-    egui::ComboBox::from_id_salt("language")
+    vw_ui::menu::combo("language")
         .selected_text(before.native_name())
         .show_ui(ui, |ui| {
             for l in Language::ALL {
@@ -691,7 +702,7 @@ pub fn layout_title(layout: SlotLayout, lang: Language) -> String {
 fn layout_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let before = s.viewer.layout;
     let custom = s.viewer.custom_layout;
-    egui::ComboBox::from_id_salt("viewer_layout")
+    vw_ui::menu::combo("viewer_layout")
         .selected_text(layout_title(before, lang))
         .show_ui(ui, |ui| {
             for layout in SlotLayout::PRESETS {
@@ -802,7 +813,7 @@ fn other_load_modifier_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Languag
 
 fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let before = s.tree.sort;
-    egui::ComboBox::from_id_salt("tree_sort")
+    vw_ui::menu::combo("tree_sort")
         .selected_text(tr(lang, before.title()))
         .show_ui(ui, |ui| {
             for key in SortKey::ALL {
@@ -1195,6 +1206,19 @@ fn header_click_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
         }
     });
     s.behavior.header_click != before
+}
+
+fn path_display_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.metadata.path;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (PathDisplay::Full, "Full path"),
+            (PathDisplay::Name, "File name only"),
+        ] {
+            ui.radio_value(&mut s.metadata.path, choice, tr(lang, label));
+        }
+    });
+    s.metadata.path != before
 }
 
 fn background_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

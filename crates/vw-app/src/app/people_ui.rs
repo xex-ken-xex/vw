@@ -406,7 +406,7 @@ impl VwApp {
                             .hint_text(tr(lang, "Search by name"))
                             .desired_width(140.0),
                     );
-                    egui::ComboBox::from_id_salt("people_order")
+                    vw_ui::menu::combo("people_order")
                         .selected_text(tr(lang, w.order.title()))
                         .show_ui(ui, |ui| {
                             for o in Order::ALL {
@@ -422,7 +422,7 @@ impl VwApp {
                         w.chart = None;
                     }
                     let all = tr(lang, "All people");
-                    egui::ComboBox::from_id_salt("people_chart")
+                    vw_ui::menu::combo("people_chart")
                         .selected_text(w.chart.clone().unwrap_or_else(|| all.to_owned()))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut w.chart, None, all);

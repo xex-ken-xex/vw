@@ -259,6 +259,32 @@ impl Behavior {
     }
 }
 
+/// メタデータ欄のパスの行に出すもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathDisplay {
+    /// フルパス。欄に収まらなければ頭を省略する。
+    #[default]
+    Full,
+    /// ファイル名だけ。
+    Name,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct MetadataSettings {
+    pub path: PathDisplay,
+}
+
+impl MetadataSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("metadata");
+        Self {
+            path: r.get("path").unwrap_or(d.path),
+        }
+    }
+}
+
 /// ログ欄の見た目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -960,6 +986,7 @@ pub struct Settings {
     pub viewer: Viewer,
     pub tree: Tree,
     pub behavior: Behavior,
+    pub metadata: MetadataSettings,
     pub labels: Labels,
     pub dicom: Dicom,
     pub dicom_send: DicomSend,
@@ -983,6 +1010,7 @@ impl Settings {
         let viewer = Viewer::read(&mut r);
         let tree = Tree::read(&mut r);
         let behavior = Behavior::read(&mut r);
+        let metadata = MetadataSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
@@ -1007,6 +1035,7 @@ impl Settings {
                 viewer,
                 tree,
                 behavior,
+                metadata,
                 labels,
                 dicom,
                 dicom_send,
@@ -1714,6 +1743,15 @@ ae_title = "PACS"
         let (s, problems) = Settings::from_toml("[behavior]\nheader_click = \"toggle\"\n").unwrap();
         assert_eq!(s.behavior.header_click, HeaderClick::SelectAndToggle);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn metadata_path_shows_the_full_path_unless_set_to_the_name() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.metadata.path, PathDisplay::Full);
+        let (s, problems) = Settings::from_toml("[metadata]\npath = \"name\"\n").unwrap();
+        assert_eq!(s.metadata.path, PathDisplay::Name);
+        assert!(problems.is_empty());
     }
 
     #[test]

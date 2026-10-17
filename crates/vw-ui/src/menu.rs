@@ -5,8 +5,8 @@
 
 use egui::containers::menu::{MenuBar, MenuButton, MenuConfig, SubMenuButton};
 use egui::{
-    vec2, Atom, AtomExt, Button, Color32, CornerRadius, IntoAtoms, Popup, Response, Shadow, Stroke,
-    Style, Ui,
+    vec2, Atom, AtomExt, Button, Color32, ComboBox, CornerRadius, IntoAtoms, Popup, Response,
+    Shadow, Stroke, Style, Ui,
 };
 
 /// チェック欄の幅。チェックのない項目もこの幅だけ字を右へずらし、頭をそろえる。
@@ -79,6 +79,11 @@ pub fn button<'a, R>(
         .config(MenuConfig::new().style(popup_style))
         .ui(ui, content);
     (response, inner.map(|r| r.inner))
+}
+
+/// ▼ で一覧を開く選択。一覧はメニューと同じ見た目にする。
+pub fn combo(id_salt: impl egui::AsIdSalt) -> ComboBox {
+    ComboBox::from_id_salt(id_salt).popup_style(popup_style.into())
 }
 
 /// チェック欄とキーの欄のあるメニューの 1 項目。押せないときの説明を付けられるよう、

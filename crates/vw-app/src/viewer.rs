@@ -235,6 +235,8 @@ pub struct Slot {
     selected_face: Option<(PathBuf, usize)>,
     /// 色導出。`None` は標準の表示。起動をまたいでは残さない。
     pub derive: Option<Derive>,
+    /// 直前のフレームで、色導出の帯を画像に重ねて出したか。
+    bar_floating: bool,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -352,26 +354,28 @@ fn roi_color(kind: roi::Kind) -> Color32 {
 /// タッチパッドは細かい量を何度も送ってくるので、1 回のイベントを 1 枚にはしない。
 /// 回す向きが変わったら、それまでの端数は捨てる。逆向きに回し始めたのに、
 /// 前の向きの端数を打ち消すまで反応しないのを避けるため。
-/// ヘッダの右側に並べる小さなボタン。マウスが乗ると濃くする。
+/// ヘッダの右側に並べる小さなボタン。マウスが乗ると面を敷いて濃くする。
 fn header_button(
     ui: &egui::Ui,
     painter: &egui::Painter,
     rect: Rect,
     id: impl std::hash::Hash + std::fmt::Debug,
     icon: &str,
+    size: f32,
 ) -> egui::Response {
     let response = ui.interact(rect, ui.id().with(id), Sense::click());
     let visuals = ui.visuals();
     let color = if response.hovered() {
+        painter.rect_filled(rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
         visuals.strong_text_color()
     } else {
-        visuals.weak_text_color()
+        visuals.text_color()
     };
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         icon,
-        egui::FontId::proportional(12.0),
+        egui::FontId::proportional(size),
         color,
     );
     response
@@ -524,6 +528,7 @@ impl Slot {
             drawing: None,
             selected_face: None,
             derive: None,
+            bar_floating: false,
         }
     }
 
@@ -882,7 +887,7 @@ impl Slot {
             .as_ref()
             .map_or_else(|| tr(lang, "Standard").to_owned(), |d| derive_name(d, lang));
         let mut choice: Option<Option<&crate::pipelines::Preset>> = None;
-        egui::ComboBox::from_id_salt(("derive", self.id))
+        vw_ui::menu::combo(("derive", self.id))
             .selected_text(selected)
             .width((inner.width() * 0.35).clamp(70.0, 180.0))
             .show_ui(ui, |ui| {
@@ -990,11 +995,20 @@ impl Slot {
             self.derive = None;
         }
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
-        let bar_height = if derivable && rect.height() > HEADER + 3.0 * DERIVE_BAR {
+        let hovering = ui.rect_contains_pointer(rect);
+        let bar_fits = derivable && rect.height() > HEADER + 3.0 * DERIVE_BAR;
+        // 標準の表示のスロットでは、色導出の帯はマウスを乗せたときだけ画像の下端に重ねる。
+        // 常に場所を取ると、並べたスロットのどれにも同じ行が並んで画像が狭くなるため。
+        // 帯の ▼ で開いた一覧へマウスを動かすとスロットの外に出るので、一覧が開いている間は残す。
+        let bar_height = if bar_fits && self.derive.is_some() {
             DERIVE_BAR
         } else {
             0.0
         };
+        let floating = bar_fits
+            && self.derive.is_none()
+            && (hovering || (self.bar_floating && egui::Popup::is_any_open(ui.ctx())));
+        self.bar_floating = floating;
         let body = Rect::from_min_max(
             pos2(rect.min.x, rect.min.y + HEADER),
             pos2(rect.max.x, rect.max.y - bar_height),
@@ -1003,7 +1017,12 @@ impl Slot {
         let painter = ui.painter_at(rect);
 
         painter.rect_filled(body, 0.0, background);
-        painter.rect_filled(header, 0.0, visuals.faint_bg_color);
+        let header_fill = if active {
+            visuals.selection.bg_fill
+        } else {
+            visuals.faint_bg_color
+        };
+        painter.rect_filled(header, 0.0, header_fill);
         if bar_height > 0.0 {
             painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
         }
@@ -1301,6 +1320,10 @@ impl Slot {
         if bar_height > 0.0 {
             self.derive_overlay(ui, body, lang);
             self.derive_bar(ui, bar, lang, presets, &mut out);
+        } else if floating {
+            let bar = Rect::from_min_max(pos2(body.min.x, body.max.y - DERIVE_BAR), body.max);
+            painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
+            self.derive_bar(ui, bar, lang, presets, &mut out);
         }
         if self.shown.is_some() {
             let mark_text = self.selected_mark_text();
@@ -1505,48 +1528,40 @@ impl Slot {
         if let Some(shown) = self.shown.as_ref().filter(|_| self.folder.is_none()) {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
         }
+        // ボタンはマウスを乗せたスロットにだけ出す。並んだスロットのすべてに出すと、
+        // 画像のヘッダがボタンで埋まって名前が読みにくくなるため。
         let close_rect = Rect::from_center_size(
             header.right_center() - vec2(HEADER / 2.0, 0.0),
             Vec2::splat(HEADER - 4.0),
         );
-        let close = ui.interact(close_rect, ui.id().with(("close", self.id)), Sense::click());
-        let close_color = if close.hovered() {
-            visuals.strong_text_color()
-        } else {
-            visuals.weak_text_color()
-        };
-        painter.text(
-            close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "×",
-            egui::FontId::proportional(14.0),
-            close_color,
-        );
-        out.close = close.on_hover_text(tr(lang, "Close slot")).clicked();
-        // フォルダへ移る印は、マウスが乗っているスロットにだけ出す。並んだスロットのすべてに
-        // 出すと、画像のヘッダが印で埋まって名前が読みにくくなるため。
-        let mut labels_right = close_rect.left();
-        if self.folder.is_some() && ui.rect_contains_pointer(rect) {
-            let open_rect = close_rect.translate(vec2(-(HEADER - 2.0), 0.0));
-            let open = ui.interact(open_rect, ui.id().with(("open", self.id)), Sense::click());
-            let open_color = if open.hovered() {
-                visuals.strong_text_color()
-            } else {
-                visuals.weak_text_color()
-            };
-            painter.text(
-                open_rect.center(),
-                egui::Align2::CENTER_CENTER,
+        let mut labels_right = header.right() - 4.0;
+        if hovering {
+            if header_button(ui, &painter, close_rect, ("close", self.id), "×", 14.0)
+                .on_hover_text(tr(lang, "Close slot"))
+                .clicked()
+            {
+                out.close = true;
+            }
+            labels_right = close_rect.left();
+        }
+        let next_rect = |right: f32| close_rect.translate(vec2(right - close_rect.right(), 0.0));
+        if self.folder.is_some() && hovering {
+            let open_rect = next_rect(labels_right);
+            out.open_folder = header_button(
+                ui,
+                &painter,
+                open_rect,
+                ("open", self.id),
                 egui_phosphor::regular::ARROW_SQUARE_IN,
-                egui::FontId::proportional(14.0),
-                open_color,
-            );
-            out.open_folder = open.on_hover_text(tr(lang, "Open this folder")).clicked();
+                14.0,
+            )
+            .on_hover_text(tr(lang, "Open this folder"))
+            .clicked();
             labels_right = open_rect.left();
         }
 
         if self.shown.as_ref().is_some_and(Shown::developing) {
-            let film_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
+            let film_rect = next_rect(labels_right);
             let film = ui.interact(film_rect, ui.id().with(("film", self.id)), Sense::hover());
             painter.text(
                 film_rect.center(),
@@ -1560,7 +1575,7 @@ impl Slot {
         }
 
         if let Some(d) = &self.derive {
-            let mark_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
+            let mark_rect = next_rect(labels_right);
             let mark = ui.interact(
                 mark_rect,
                 ui.id().with(("derived", self.id)),
@@ -1580,35 +1595,38 @@ impl Slot {
         // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと
         // ボタンを探しにくく、長い名前ではボタンが名前に重なるため。
         if self.shown.is_some() {
-            let zoom = format!("{:.0}%", base * self.zoom * 100.0);
-            let actual_rect = close_rect.translate(vec2(labels_right - close_rect.right(), 0.0));
-            if header_button(ui, &painter, actual_rect, ("actual", self.id), "1:1")
-                .on_hover_text(tr(lang, "Actual size (100%)"))
+            if hovering {
+                let actual_rect = next_rect(labels_right);
+                if header_button(ui, &painter, actual_rect, ("actual", self.id), "1:1", 12.0)
+                    .on_hover_text(tr(lang, "Actual size (100%)"))
+                    .clicked()
+                {
+                    self.actual_size();
+                    out.clicked = true;
+                }
+                let fit_rect = actual_rect.translate(vec2(-(HEADER - 2.0), 0.0));
+                if header_button(
+                    ui,
+                    &painter,
+                    fit_rect,
+                    ("fit", self.id),
+                    egui_phosphor::regular::FRAME_CORNERS,
+                    12.0,
+                )
+                .on_hover_text(tr(lang, "Fit image to slot"))
                 .clicked()
-            {
-                self.actual_size();
-                out.clicked = true;
-            }
-            let fit_rect = actual_rect.translate(vec2(-(HEADER - 2.0), 0.0));
-            if header_button(
-                ui,
-                &painter,
-                fit_rect,
-                ("fit", self.id),
-                egui_phosphor::regular::FRAME_CORNERS,
-            )
-            .on_hover_text(tr(lang, "Fit image to slot"))
-            .clicked()
-            {
-                self.reset_view();
-                out.clicked = true;
+                {
+                    self.reset_view();
+                    out.clicked = true;
+                }
+                labels_right = fit_rect.left();
             }
             let zoom = painter.text(
-                fit_rect.left_center() - vec2(2.0, 0.0),
+                pos2(labels_right - 2.0, header.center().y),
                 egui::Align2::RIGHT_CENTER,
-                zoom,
-                egui::FontId::proportional(13.0),
-                text_color,
+                format!("{:.0}%", base * self.zoom * 100.0),
+                egui::FontId::proportional(12.0),
+                visuals.weak_text_color(),
             );
             labels_right = zoom.left();
         }

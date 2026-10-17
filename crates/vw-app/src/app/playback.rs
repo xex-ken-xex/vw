@@ -259,7 +259,7 @@ impl VwApp {
             }
             ui.separator();
             let mut end = viewer.slideshow_end;
-            egui::ComboBox::from_id_salt("slideshow_end")
+            vw_ui::menu::combo("slideshow_end")
                 .selected_text(tr(lang, end.title()))
                 .show_ui(ui, |ui| {
                     for mode in EndMode::ALL {

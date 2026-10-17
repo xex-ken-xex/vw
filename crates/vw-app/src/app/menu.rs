@@ -1,6 +1,6 @@
 //! メニューバーと左端のツール列。
 
-use eframe::egui::{self, vec2};
+use eframe::egui;
 use egui_phosphor::regular as icon;
 
 use crate::export::Filter;
@@ -291,12 +291,9 @@ impl VwApp {
     pub(super) fn tool_column(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let big = |s: &str| egui::RichText::new(s).size(17.0);
-        let size = vec2(TOOL_BUTTON, TOOL_BUTTON);
         ui.vertical_centered(|ui| {
             ui.add_space(4.0);
             for tool in Tool::ALL {
-                let button =
-                    egui::Button::selectable(self.tool == tool, big(tool.icon())).min_size(size);
                 let mut tip = match tool.action() {
                     Some(action) => self.with_key(tr(lang, tool.title()), action),
                     None => tr(lang, tool.title()).to_owned(),
@@ -304,21 +301,26 @@ impl VwApp {
                 if let Some(hint) = tool.hint() {
                     tip = format!("{tip}\n{}", tr(lang, hint));
                 }
-                let r = ui
-                    .add_enabled(tool.available(), button)
-                    .on_hover_text(tip)
-                    .on_disabled_hover_text(format!(
+                let available = tool.available();
+                let r = tool_button(ui, self.tool == tool, available, big(tool.icon()));
+                let r = if available {
+                    r.on_hover_text(tip)
+                } else {
+                    r.on_hover_text(format!(
                         "{}\n{}",
                         tr(lang, tool.title()),
                         tr(lang, "Not available yet")
-                    ));
+                    ))
+                };
                 if r.clicked() {
                     self.tool = tool;
                 }
             }
             let tip = self.with_key(tr(lang, "Tagging mode"), Action::ToggleTagging);
-            let button = egui::Button::selectable(self.tagging, big(icon::TAG)).min_size(size);
-            if ui.add(button).on_hover_text(tip).clicked() {
+            if tool_button(ui, self.tagging, true, big(icon::TAG))
+                .on_hover_text(tip)
+                .clicked()
+            {
                 self.tagging ^= true;
             }
             let mut text = big(icon::FUNNEL);
@@ -331,15 +333,16 @@ impl VwApp {
                 filter_name(&self.filter, lang),
                 tr(lang, "Click to change")
             );
-            let button = egui::Button::selectable(!self.filter.is_all(), text).min_size(size);
-            if ui.add(button).on_hover_text(tip).clicked() {
+            if tool_button(ui, !self.filter.is_all(), true, text)
+                .on_hover_text(tip)
+                .clicked()
+            {
                 let next = self.filter.next(&self.settings().labels.tags);
                 self.set_filter(ui.ctx(), next);
             }
             ui.separator();
             let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);
-            if ui
-                .add(egui::Button::new(big(icon::PLUS_SQUARE)).min_size(size))
+            if tool_button(ui, false, true, big(icon::PLUS_SQUARE))
                 .on_hover_text(tip)
                 .clicked()
             {
@@ -349,18 +352,29 @@ impl VwApp {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.add_space(4.0);
             let tip = self.with_key(tr(lang, "Settings"), Action::ToggleSettings);
-            let button =
-                egui::Button::selectable(self.show_settings, big(icon::GEAR_SIX)).min_size(size);
-            if ui.add(button).on_hover_text(tip).clicked() {
+            if tool_button(ui, self.show_settings, true, big(icon::GEAR_SIX))
+                .on_hover_text(tip)
+                .clicked()
+            {
                 self.toggle_settings();
             }
             let tip = self.with_key(tr(lang, "Datasets"), Action::ToggleDatasets);
-            let button =
-                egui::Button::selectable(self.show_datasets, big(icon::DATABASE)).min_size(size);
-            if ui.add(button).on_hover_text(tip).clicked() {
+            if tool_button(ui, self.show_datasets, true, big(icon::DATABASE))
+                .on_hover_text(tip)
+                .clicked()
+            {
                 let ctx = ui.ctx().clone();
                 self.toggle_datasets(&ctx);
             }
         });
     }
+}
+
+fn tool_button(
+    ui: &mut egui::Ui,
+    selected: bool,
+    enabled: bool,
+    icon: egui::RichText,
+) -> egui::Response {
+    vw_ui::tool::button(ui, selected, enabled, icon, TOOL_BUTTON)
 }

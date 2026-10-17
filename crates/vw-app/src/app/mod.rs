@@ -947,7 +947,12 @@ impl eframe::App for VwApp {
         }
         self.run_hotkeys(&ctx);
 
-        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        // メニューと道具の列は窓の地の色、パネルはその一段上、画像の背後は一番奥の色にして、
+        // 枠・パネル・画像の 3 段が線に頼らず見分けられるようにする。
+        let chrome = ui.visuals().extreme_bg_color;
+        egui::Panel::top("menu")
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(chrome))
+            .show(ui, |ui| self.menu_bar(ui));
         self.activity_line(ui);
         self.send_ui(&ctx);
         self.update_evaluation(&ctx);
@@ -962,7 +967,8 @@ impl eframe::App for VwApp {
         // パネル既定の枠は左右に 8px の余白を取り、ボタンより内側の幅が狭くなって
         // ボタンが片側にはみ出す。余白を自分で決めて、列の幅をボタン + 両側の余白にする。
         let tool_frame = egui::Frame::side_top_panel(ui.style())
-            .inner_margin(egui::Margin::symmetric(TOOL_PADDING, 2));
+            .inner_margin(egui::Margin::symmetric(TOOL_PADDING, 2))
+            .fill(chrome);
         egui::Panel::left("tools")
             .frame(tool_frame)
             // 右端の 1px はパネルの区切り線が使うので、その分を足す。
@@ -1074,7 +1080,7 @@ impl eframe::App for VwApp {
                     let sending = self.send_job.as_ref().and_then(|j| j.progress());
                     let (cancel, header) = ui
                         .horizontal(|ui| {
-                            panel_header(ui, tr(lang, "Log"));
+                            vw_ui::panel::header(ui, tr(lang, "Log"));
                             let mut cancel = false;
                             if let Some((done, total)) = sending {
                                 ui.weak(format!(
@@ -1103,7 +1109,7 @@ impl eframe::App for VwApp {
                 .show(ui, |ui| {
                     // 絞り込み中は、ファイルが隠れていることに気づけるよう見出しに条件を出す。
                     if self.filter.is_all() {
-                        panel_header(ui, tr(lang, "Folders"));
+                        vw_ui::panel::header(ui, tr(lang, "Folders"));
                     } else {
                         let text = format!(
                             "{}  ({}: {})",
@@ -1111,7 +1117,7 @@ impl eframe::App for VwApp {
                             tr(lang, "Filter"),
                             filter_name(&self.filter, lang)
                         );
-                        panel_header(ui, &text);
+                        vw_ui::panel::header(ui, &text);
                     }
                     // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
                     let active_image = self.active_image().map(|p| frames::file_of(&p));
@@ -1187,7 +1193,7 @@ impl eframe::App for VwApp {
                 .default_size(300.0)
                 .min_size(220.0)
                 .show(ui, |ui| {
-                    panel_header(ui, tr(lang, "Metadata"));
+                    vw_ui::panel::header(ui, tr(lang, "Metadata"));
                     self.metadata_ui(ui);
                 });
         }
@@ -1413,11 +1419,6 @@ fn normal_line(ui: &egui::Ui, line: &log::Line, wrap: bool) -> egui::Label {
     );
     job.append(&line.text, 0.0, egui::TextFormat::simple(font, color));
     egui::Label::new(job).wrap_mode(wrap_mode(wrap))
-}
-
-fn panel_header(ui: &mut egui::Ui, text: &str) {
-    // 絞り込みの条件などで長くなっても、欄を押し広げないよう省略する。
-    ui.add(egui::Label::new(egui::RichText::new(text.to_uppercase()).small().weak()).truncate());
 }
 
 /// ログに出す、メタデータ欄で選んだものの名前。

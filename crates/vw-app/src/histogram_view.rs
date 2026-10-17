@@ -352,7 +352,7 @@ impl HistogramView {
             matches!(&self.counted, Some((_, Counted::Levels { before, .. })) if before.color);
         ui.horizontal(|ui| {
             ui.label(tr(lang, "Horizontal axis"));
-            egui::ComboBox::from_id_salt("histogram_axis")
+            vw_ui::menu::combo("histogram_axis")
                 .selected_text(axis_title(lang, self.axis))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
@@ -370,7 +370,7 @@ impl HistogramView {
                 });
             if self.axis == Axis::Brightness && color {
                 ui.label(tr(lang, "Channel"));
-                egui::ComboBox::from_id_salt("histogram_channel")
+                vw_ui::menu::combo("histogram_channel")
                     .selected_text(shown_title(lang, self.channel))
                     .show_ui(ui, |ui| {
                         for choice in [
@@ -391,7 +391,7 @@ impl HistogramView {
             ui.checkbox(&mut self.log, tr(lang, "Logarithmic vertical axis"));
             if rois.0 || rois.1 {
                 ui.label(tr(lang, "Range"));
-                egui::ComboBox::from_id_salt("histogram_range")
+                vw_ui::menu::combo("histogram_range")
                     .selected_text(tr(lang, self.range.title()))
                     .show_ui(ui, |ui| {
                         let choices = [

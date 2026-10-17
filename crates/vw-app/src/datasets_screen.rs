@@ -310,7 +310,7 @@ impl DatasetsScreen {
                     );
                     key_menu(ui, i, kind, key, keys);
                 }
-                egui::ComboBox::from_id_salt(("dataset-op", i))
+                vw_ui::menu::combo(("dataset-op", i))
                     .selected_text(tr(lang, c.op.title()))
                     .width(90.0)
                     .show_ui(ui, |ui| {
@@ -801,7 +801,7 @@ fn target_combo(
         kind: String::new(),
         key: String::new(),
     });
-    egui::ComboBox::from_id_salt(("dataset-target", row))
+    vw_ui::menu::combo(("dataset-target", row))
         .selected_text(target_title(target, lang))
         .width(110.0)
         .show_ui(ui, |ui| {
@@ -822,7 +822,6 @@ fn target_combo(
 /// 当たったファイルのパス。数万件あっても重くならないよう、見えている行だけを描く。
 fn hit_list(ui: &mut egui::Ui, hits: &[String], height: f32) {
     let row = ui.text_style_height(&egui::TextStyle::Body);
-    let font = egui::TextStyle::Body.resolve(ui.style());
     egui::ScrollArea::vertical()
         .id_salt("dataset-hits")
         .max_height(height)
@@ -830,38 +829,9 @@ fn hit_list(ui: &mut egui::Ui, hits: &[String], height: f32) {
         .show_rows(ui, row, hits.len(), |ui, range| {
             for path in &hits[range] {
                 let name = path.rsplit_once('/').map_or(path.as_str(), |(_, n)| n);
-                let width = ui.available_width();
-                let shown = tail_that_fits(name, |s| {
-                    ui.painter()
-                        .layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
-                        .size()
-                        .x
-                        <= width
-                });
-                ui.add(egui::Label::new(shown).extend()).on_hover_text(path);
+                vw_ui::text::tail_label(ui, name, Some(path));
             }
         });
-}
-
-/// `text` が `fits` に収まらなければ、頭を「…」にして末尾をできるだけ残す。
-///
-/// 連番のファイルは名前の違いが末尾に出るので、egui の省略（末尾を切る）は使わない。
-fn tail_that_fits(text: &str, fits: impl Fn(&str) -> bool) -> String {
-    if fits(text) {
-        return text.to_owned();
-    }
-    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
-    let tail = |k: usize| format!("…{}", &text[starts[k]..]);
-    let (mut lo, mut hi) = (0, starts.len().saturating_sub(1));
-    while lo < hi {
-        let mid = usize::midpoint(lo, hi);
-        if fits(&tail(mid)) {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    tail(lo)
 }
 
 /// 条件の値の候補。選ぶと `value` に入れる。
@@ -1033,17 +1003,6 @@ mod tests {
         let hits = dataset_search::search(&index, &query).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].files, [0]);
-    }
-
-    #[test]
-    fn long_names_keep_their_end_behind_an_ellipsis() {
-        let fits = |s: &str| s.chars().count() <= 8;
-        assert_eq!(tail_that_fits("a.png", fits), "a.png");
-        assert_eq!(tail_that_fits("scan-0001-0042.ima", fits), "…042.ima");
-        assert_eq!(
-            tail_that_fits("写真の名前がとても長い.jpg", fits),
-            "…も長い.jpg"
-        );
     }
 
     #[test]

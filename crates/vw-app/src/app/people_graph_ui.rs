@@ -143,7 +143,7 @@ fn toolbar(
             }
             None => {
                 let shown = w.current.clone().unwrap_or_default();
-                egui::ComboBox::from_id_salt("graph_pick")
+                vw_ui::menu::combo("graph_pick")
                     .selected_text(shown)
                     .show_ui(ui, |ui| {
                         for g in graphs.iter() {
