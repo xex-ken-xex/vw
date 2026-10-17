@@ -238,6 +238,7 @@ mod tests {
                     score: 0.95,
                     person: Some("A".into()),
                     similarity: 0.5,
+                    unlinked: false,
                 }]
             })
             .unwrap();

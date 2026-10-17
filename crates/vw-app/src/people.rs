@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::faces::{cosine, normalized};
+use crate::faces::{cosine, normalized, FaceMark};
 
 pub const FILE_NAME: &str = "people.json";
 const VERSION: u32 = 1;
@@ -177,6 +177,42 @@ impl People {
     pub fn remove(&mut self, name: &str) {
         self.list.retain(|p| p.name != name);
     }
+
+    /// 前に見つけた顔の枠を、今の登録に合わせ直したものと、新しく名前が付いた数。
+    /// `samples` は枠と同じ並びの特徴。`renamed` は (古い名前, 新しい名前)。
+    pub fn rematch(
+        &self,
+        marks: &[FaceMark],
+        samples: &[Sample],
+        threshold: f32,
+        renamed: Option<(&str, &str)>,
+    ) -> (Vec<FaceMark>, usize) {
+        let names = self.names();
+        let mut matched = 0;
+        let mut out = marks.to_vec();
+        for (i, mark) in out.iter_mut().enumerate() {
+            if let (Some((from, to)), Some(person)) = (renamed, &mark.person) {
+                if person == from {
+                    mark.person = Some(to.to_owned());
+                }
+            }
+            if mark.person.as_ref().is_some_and(|p| !names.contains(p)) {
+                mark.person = None;
+                mark.similarity = 0.0;
+            }
+            if mark.person.is_none() && !mark.unlinked {
+                let found = samples
+                    .get(i)
+                    .and_then(|s| self.best_match(&s.feature, threshold));
+                if let Some((name, similarity)) = found {
+                    mark.person = Some(name);
+                    mark.similarity = similarity;
+                    matched += 1;
+                }
+            }
+        }
+        (out, matched)
+    }
 }
 
 /// 縮小画像を画面に出す egui の画像にする。
@@ -235,6 +271,45 @@ mod tests {
         assert!(!text.contains("0.6"), "{text}");
         let (again, _) = People::open(Some(&dir));
         assert_eq!(again.list, people.list);
+    }
+
+    fn mark(person: Option<&str>, unlinked: bool) -> FaceMark {
+        FaceMark {
+            rect: [0.0, 0.0, 0.1, 0.1],
+            score: 0.9,
+            person: person.map(str::to_owned),
+            similarity: if person.is_some() { 1.0 } else { 0.0 },
+            unlinked,
+        }
+    }
+
+    #[test]
+    fn rematch_names_earlier_unknown_faces_but_not_unlinked_ones() {
+        let mut people = People::default();
+        people.add("A", sample([1.0, 0.0]));
+        let marks = [mark(None, false), mark(None, true), mark(None, false)];
+        let samples = [sample([0.9, 0.1]), sample([1.0, 0.0]), sample([0.0, 1.0])];
+        let (out, n) = people.rematch(&marks, &samples, 0.36, None);
+        assert_eq!(n, 1);
+        assert_eq!(out[0].person.as_deref(), Some("A"));
+        assert_eq!(out[1].person, None, "the person chose to unlink it");
+        assert_eq!(out[2].person, None, "not similar enough");
+    }
+
+    #[test]
+    fn rematch_follows_renames_and_drops_deleted_people() {
+        let mut people = People::default();
+        people.add("C", sample([1.0, 0.0]));
+        let marks = [mark(Some("A"), false), mark(Some("Gone"), false)];
+        let samples = [sample([1.0, 0.0]), sample([0.0, 1.0])];
+        let (out, n) = people.rematch(&marks, &samples, 0.36, Some(("A", "C")));
+        assert_eq!(out[0].person.as_deref(), Some("C"));
+        assert_eq!(
+            out[0].similarity, 1.0,
+            "a hand-registered face keeps its similarity"
+        );
+        assert_eq!(out[1].person, None);
+        assert_eq!(n, 0);
     }
 
     #[test]

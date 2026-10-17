@@ -50,6 +50,7 @@ impl VwApp {
             if let Some(f) = e.faces.get_mut(index) {
                 f.person = Some(name.to_owned());
                 f.similarity = 1.0;
+                f.unlinked = false;
             }
         });
         match saved {
@@ -59,6 +60,40 @@ impl VwApp {
                 .info(format!("Registered a face as {name}: {}", image.display())),
         }
         self.people_window.thumbs.clear();
+        self.rematch_faces(None);
+    }
+
+    /// 前に見つけた顔に付いた名前を、今の人物の登録に合わせ直す。
+    /// 消えた人物の名前は外し、名前のない顔は保存してある特徴で照合する。
+    /// `renamed` は (古い名前, 新しい名前)。
+    ///
+    /// 顔をもう一度探す（モデルにかける）のでなく保存した特徴を使うのは、
+    /// 何千枚あっても比べるだけで済み、元の画像が読めない場所にあっても照合できるため。
+    pub(super) fn rematch_faces(&mut self, renamed: Option<(&str, &str)>) {
+        let threshold = self.settings().ai.face_threshold;
+        let mut matched = 0;
+        let mut problems = Vec::new();
+        for (image, samples) in self.face_store.all() {
+            let marks = self.ai_tags.faces(&image);
+            if marks.is_empty() {
+                continue;
+            }
+            let (changed, n) = self.people.rematch(&marks, &samples, threshold, renamed);
+            matched += n;
+            if changed != marks {
+                if let Err(e) = self.ai_tags.update(&image, |e| e.faces = changed) {
+                    problems.push(e);
+                }
+            }
+        }
+        if matched > 0 {
+            self.log.info(format!(
+                "Matched {matched} earlier face(s) to registered people"
+            ));
+        }
+        for e in problems.into_iter().take(5) {
+            self.log.error(format!("Cannot save AI tags: {e}"));
+        }
     }
 
     /// 顔の枠から人物を外す（人物の登録はそのまま）。
@@ -67,6 +102,7 @@ impl VwApp {
             if let Some(f) = e.faces.get_mut(index) {
                 f.person = None;
                 f.similarity = 0.0;
+                f.unlinked = true;
             }
         });
         if let Err(e) = saved {
@@ -213,9 +249,8 @@ impl VwApp {
                         self.people_window.renaming = None;
                         self.people_window.thumbs.clear();
                         self.save_people();
-                        self.log.info(format!(
-                            "Renamed {from} to {to}. Find faces again to update names on images."
-                        ));
+                        self.log.info(format!("Renamed {from} to {to}"));
+                        self.rematch_faces(Some((&from, &to)));
                     }
                     Err(e) => self.log.error(e),
                 }
@@ -226,9 +261,8 @@ impl VwApp {
             self.people_window.deleting = None;
             self.people_window.thumbs.clear();
             self.save_people();
-            self.log.info(format!(
-                "Deleted {name}. Find faces again to update names on images."
-            ));
+            self.log.info(format!("Deleted {name}"));
+            self.rematch_faces(None);
         }
         if let Some(path) = reveal {
             if let Some(dir) = path.parent() {

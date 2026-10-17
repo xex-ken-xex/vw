@@ -65,6 +65,32 @@ impl FaceStore {
         })
     }
 
+    /// 記録してあるすべての画像と、その顔。人物を登録したときに、前に見つけた顔を照合し直すため。
+    pub fn all(&self) -> Vec<(PathBuf, Vec<Sample>)> {
+        let Some(entries) = self.dir.as_ref().and_then(|d| std::fs::read_dir(d).ok()) else {
+            return Vec::new();
+        };
+        let folders: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|t| serde_json::from_str::<FaceFile>(&t).ok())
+            .map(|f| f.folder)
+            .filter(|f| !f.as_os_str().is_empty())
+            .collect();
+        folders
+            .into_iter()
+            .flat_map(|folder| {
+                self.with(&folder, |f| {
+                    f.files
+                        .iter()
+                        .map(|(name, samples)| (folder.join(name), samples.clone()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect()
+    }
+
     /// 画像の顔を置き換えて保存する。
     pub fn set(&self, image: &Path, samples: Vec<Sample>) -> Result<(), String> {
         let folder = image
@@ -116,7 +142,8 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read_dir(&images).unwrap().count(), 0);
         let again = FaceStore::new(Some(base.join("faces")));
-        assert_eq!(again.get(&images.join("a.jpg"), 0), Some(sample));
+        assert_eq!(again.get(&images.join("a.jpg"), 0), Some(sample.clone()));
         assert_eq!(again.get(&images.join("a.jpg"), 1), None);
+        assert_eq!(again.all(), vec![(images.join("a.jpg"), vec![sample])]);
     }
 }
