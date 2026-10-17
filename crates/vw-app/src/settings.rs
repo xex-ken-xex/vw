@@ -270,9 +270,56 @@ pub enum PathDisplay {
     Name,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+/// メタデータ欄のグループの見出しの見た目。太字の書体は入れていないので、色と下線で見分ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadingStyle {
+    /// アクセント色の文字。
+    #[default]
+    Color,
+    Underline,
+    Both,
+    /// 項目と同じ文字。
+    Plain,
+}
+
+/// 色の値の書き方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorFormat {
+    /// `R 128 G 64 B 255`
+    #[default]
+    Rgb,
+    /// `#8040FF`（16 bit の画像は各色 4 桁）
+    Hex,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MetadataSettings {
     pub path: PathDisplay,
+    /// 隠す項目（`グループ/項目`）とグループ（`グループ`）。言語を切り替えても効くよう、英語の名前で持つ。
+    pub hidden: Vec<String>,
+    pub heading_style: HeadingStyle,
+    /// グループの開閉を次の起動でも同じにする。
+    pub remember_open: bool,
+    /// 十字（ピクセルプローブ）の値。
+    pub color_format: ColorFormat,
+    /// 自分で作ったグループ。欄の一番上に出す。キーは `グループ/項目`。
+    /// TOML では表の配列を最後に書く必要があるので、最後に置く。
+    pub groups: Vec<SearchGroup>,
+}
+
+impl Default for MetadataSettings {
+    fn default() -> Self {
+        Self {
+            path: PathDisplay::default(),
+            hidden: Vec::new(),
+            heading_style: HeadingStyle::default(),
+            remember_open: true,
+            color_format: ColorFormat::default(),
+            groups: Vec::new(),
+        }
+    }
 }
 
 impl MetadataSettings {
@@ -281,8 +328,52 @@ impl MetadataSettings {
         let mut r = r.at("metadata");
         Self {
             path: r.get("path").unwrap_or(d.path),
+            hidden: r.get("hidden").unwrap_or_default(),
+            heading_style: r.get("heading_style").unwrap_or(d.heading_style),
+            remember_open: r.get("remember_open").unwrap_or(d.remember_open),
+            color_format: r.get("color_format").unwrap_or(d.color_format),
+            groups: read_groups(&mut r, "groups").unwrap_or_default(),
         }
     }
+
+    /// `id`（`グループ` か `グループ/項目`）を隠しているか。
+    pub fn is_hidden(&self, id: &str) -> bool {
+        self.hidden.iter().any(|h| h == id)
+    }
+}
+
+/// ROI（[`crate::roi`]）。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct RoiSettings {
+    /// カラー画像の平均の色。
+    pub color_format: ColorFormat,
+}
+
+impl RoiSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("roi");
+        Self {
+            color_format: r.get("color_format").unwrap_or(d.color_format),
+        }
+    }
+}
+
+/// 名前とキーの組の並びを読む。誤った組だけを外し、残りは使えるようにする。
+fn read_groups(r: &mut crate::toml_reader::Section<'_, '_>, key: &str) -> Option<Vec<SearchGroup>> {
+    let groups = r.get::<Vec<SearchGroup>>(key)?;
+    Some(
+        groups
+            .into_iter()
+            .filter(|g| match g.problem() {
+                Some(p) => {
+                    r.problem(key, format!("{:?}: {p} (ignored)", g.name));
+                    false
+                }
+                None => true,
+            })
+            .collect(),
+    )
 }
 
 /// ログ欄の見た目。
@@ -736,20 +827,8 @@ impl Dataset {
                     "field names must be non-empty and unique",
                 )
                 .unwrap_or_else(|| d.fields.clone()),
-            search_groups: match r.get::<Vec<SearchGroup>>("search_groups") {
-                Some(groups) => groups
-                    .into_iter()
-                    .filter(|g| match g.problem() {
-                        // 誤った組だけを外し、残りは使えるようにする。
-                        Some(p) => {
-                            r.problem("search_groups", format!("{:?}: {p} (ignored)", g.name));
-                            false
-                        }
-                        None => true,
-                    })
-                    .collect(),
-                None => d.search_groups.clone(),
-            },
+            search_groups: read_groups(&mut r, "search_groups")
+                .unwrap_or_else(|| d.search_groups.clone()),
         }
     }
 }
@@ -991,6 +1070,7 @@ pub struct Settings {
     pub tree: Tree,
     pub behavior: Behavior,
     pub metadata: MetadataSettings,
+    pub roi: RoiSettings,
     pub labels: Labels,
     pub dicom: Dicom,
     pub dicom_send: DicomSend,
@@ -1015,6 +1095,7 @@ impl Settings {
         let tree = Tree::read(&mut r);
         let behavior = Behavior::read(&mut r);
         let metadata = MetadataSettings::read(&mut r);
+        let roi = RoiSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
@@ -1040,6 +1121,7 @@ impl Settings {
                 tree,
                 behavior,
                 metadata,
+                roi,
                 labels,
                 dicom,
                 dicom_send,
@@ -1376,6 +1458,32 @@ mod tests {
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
         assert_eq!(back, s);
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn metadata_display_settings_survive_a_save() {
+        let mut s = Settings::default();
+        s.metadata.hidden = vec!["File/Texture".into(), "AI tags".into()];
+        s.metadata.groups = vec![SearchGroup {
+            name: "Camera".into(),
+            keys: vec!["EXIF/Model".into(), "File/Path".into()],
+        }];
+        s.metadata.heading_style = HeadingStyle::Underline;
+        s.metadata.remember_open = false;
+        s.metadata.color_format = ColorFormat::Hex;
+        s.roi.color_format = ColorFormat::Hex;
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert_eq!(problems, Vec::<String>::new());
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn metadata_group_without_keys_is_dropped_alone() {
+        let text = "[metadata]\n[[metadata.groups]]\nname = \"Empty\"\nkeys = []\n[[metadata.groups]]\nname = \"Ok\"\nkeys = [\"File/Path\"]\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.metadata.groups.len(), 1);
+        assert_eq!(s.metadata.groups[0].name, "Ok");
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

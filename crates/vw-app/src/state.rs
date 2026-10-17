@@ -53,6 +53,8 @@ pub struct AppState {
     /// ヒストグラム・ズームマップなどの別ウインドウの位置と「常に最前面」。
     /// 鍵はウインドウの名前（`histogram`、`zoom_map`）。
     pub sub_windows: BTreeMap<String, sub_window::Saved>,
+    /// メタデータ欄で閉じていたグループ（英語の名前）。
+    pub metadata_closed: Vec<String>,
 }
 
 /// `[sub_windows.名前]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
@@ -136,6 +138,9 @@ impl AppState {
         let fullscreen_root = r.get::<PathBuf>("fullscreen", "root");
         let pipeline_nodes = read_pipeline_nodes(&mut r);
         let sub_windows = read_sub_windows(&mut r);
+        let metadata_closed = r
+            .get::<Vec<String>>("metadata", "closed")
+            .unwrap_or_default();
         (
             Self {
                 window,
@@ -145,6 +150,7 @@ impl AppState {
                 fullscreen_root,
                 pipeline_nodes,
                 sub_windows,
+                metadata_closed,
             },
             r.problems,
         )
@@ -188,6 +194,14 @@ impl AppState {
             let mut fullscreen = toml::Table::new();
             fullscreen.insert("root".into(), dir.into());
             root.insert("fullscreen".into(), fullscreen.into());
+        }
+        if !self.metadata_closed.is_empty() {
+            let mut metadata = toml::Table::new();
+            metadata.insert(
+                "closed".into(),
+                toml::Value::try_from(&self.metadata_closed).unwrap(),
+            );
+            root.insert("metadata".into(), metadata.into());
         }
         if !self.pipeline_nodes.is_empty() {
             let nodes: toml::Table = self
@@ -467,6 +481,7 @@ mod tests {
                 ),
             ]
             .into(),
+            metadata_closed: vec!["EXIF".into(), "AI tags".into()],
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -506,6 +521,7 @@ mod tests {
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
+            metadata_closed: Vec::new(),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -564,6 +580,7 @@ mod tests {
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
+            metadata_closed: Vec::new(),
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));

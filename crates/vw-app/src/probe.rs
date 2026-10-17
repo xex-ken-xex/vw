@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
+use crate::settings::ColorFormat;
+
 /// スロットに置いた十字の印。置いた画像（フレームならフレームのパス）にだけ出す。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mark {
@@ -58,8 +60,14 @@ fn unit(meta: &Metadata) -> Option<&'static str> {
     crate::roi::unit(meta)
 }
 
-/// 画素の値を画面とコピーに出す文字にする。
-pub fn value_text(color: ColorModel, meta: &Metadata, values: &[f64]) -> String {
+/// 画素の値を画面とコピーに出す文字にする。カラーは `format` の書き方にする（`bits` は 1 色のビット数）。
+pub fn value_text(
+    color: ColorModel,
+    meta: &Metadata,
+    values: &[f64],
+    format: ColorFormat,
+    bits: u32,
+) -> String {
     let n = |i: usize| {
         values
             .get(i)
@@ -73,8 +81,7 @@ pub fn value_text(color: ColorModel, meta: &Metadata, values: &[f64]) -> String 
             None => n(0),
         },
         ColorModel::GrayAlpha => format!("{} A {}", n(0), n(1)),
-        ColorModel::Rgb => format!("R {} G {} B {}", n(0), n(1), n(2)),
-        ColorModel::Rgba => format!("R {} G {} B {} A {}", n(0), n(1), n(2), n(3)),
+        ColorModel::Rgb | ColorModel::Rgba => crate::color_text::text(values, bits, format),
     }
 }
 
@@ -136,8 +143,12 @@ mod tests {
         let values = sample(&img, &meta(&[]), 0, 0).unwrap();
         assert_eq!(values, vec![12.0, 34.0, 56.0]);
         assert_eq!(
-            value_text(ColorModel::Rgb, &meta(&[]), &values),
+            value_text(ColorModel::Rgb, &meta(&[]), &values, ColorFormat::Rgb, 16),
             "R 12 G 34 B 56"
+        );
+        assert_eq!(
+            value_text(ColorModel::Rgb, &meta(&[]), &values, ColorFormat::Hex, 8),
+            "#0C2238"
         );
     }
 
@@ -146,13 +157,19 @@ mod tests {
         let m = meta(&[("Modality", "CT")]);
         let img = gray_f32(vec![-1000.0, -35.0]);
         let values = sample(&img, &m, 1, 0).unwrap();
-        assert_eq!(value_text(ColorModel::Gray, &m, &values), "-35 HU");
+        assert_eq!(
+            value_text(ColorModel::Gray, &m, &values, ColorFormat::Rgb, 16),
+            "-35 HU"
+        );
     }
 
     #[test]
     fn non_ct_values_have_no_unit() {
         let m = meta(&[("Modality", "MR")]);
-        assert_eq!(value_text(ColorModel::Gray, &m, &[812.0]), "812");
+        assert_eq!(
+            value_text(ColorModel::Gray, &m, &[812.0], ColorFormat::Rgb, 16),
+            "812"
+        );
     }
 
     #[test]
@@ -164,8 +181,14 @@ mod tests {
 
     #[test]
     fn fractional_values_keep_two_decimals() {
-        assert_eq!(value_text(ColorModel::Gray, &meta(&[]), &[0.126]), "0.13");
-        assert_eq!(value_text(ColorModel::Gray, &meta(&[]), &[7.0]), "7");
+        assert_eq!(
+            value_text(ColorModel::Gray, &meta(&[]), &[0.126], ColorFormat::Rgb, 16),
+            "0.13"
+        );
+        assert_eq!(
+            value_text(ColorModel::Gray, &meta(&[]), &[7.0], ColorFormat::Rgb, 16),
+            "7"
+        );
     }
 
     #[test]

@@ -12,9 +12,9 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, Fullscreen, FullscreenMode, HeaderClick, Labels, Language, LoadInto,
-    LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree,
-    Viewer,
+    parse_hex_color, ColorFormat, Fullscreen, FullscreenMode, HeaderClick, HeadingStyle, Labels,
+    Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup, Settings,
+    ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -86,7 +86,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 58] = [
+const ITEMS: [Item; 64] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -270,6 +270,41 @@ const ITEMS: [Item; 58] = [
         widget: path_display_widget,
     },
     Item {
+        section: Section::Metadata,
+        key: "metadata.hidden",
+        title: "Hidden items",
+        description: "Items and groups hidden from the metadata panel. Right-click an item or a group heading in the panel to hide it; press the x here to show it again. The eye button at the top of the panel shows hidden items faint for a while.",
+        widget: hidden_widget,
+    },
+    Item {
+        section: Section::Metadata,
+        key: "metadata.groups",
+        title: "Your groups",
+        description: "Groups you made by right-clicking items and choosing Add to group. They are shown at the top of the panel, one per line as name = group/item; group/item. Edit a line to rename a group or reorder its items, delete it to remove the group.",
+        widget: metadata_groups_widget,
+    },
+    Item {
+        section: Section::Metadata,
+        key: "metadata.heading_style",
+        title: "Group headings",
+        description: "How group headings such as File stand out from the items under them.",
+        widget: heading_style_widget,
+    },
+    Item {
+        section: Section::Metadata,
+        key: "metadata.remember_open",
+        title: "Remember open groups",
+        description: "Keep groups you closed closed at the next start. When off, every group starts open.",
+        widget: remember_open_widget,
+    },
+    Item {
+        section: Section::Metadata,
+        key: "metadata.color_format",
+        title: "Color values",
+        description: "How the color of a pixel is written next to a probe cross and when it is copied: R G B numbers or a color code (#RRGGBB; 16-bit images use four digits per color).",
+        widget: probe_color_widget,
+    },
+    Item {
         section: Section::Labels,
         key: "labels.tags",
         title: "Tags",
@@ -331,6 +366,13 @@ const ITEMS: [Item; 58] = [
         title: "Wrap long lines",
         description: "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",
         widget: log_wrap_widget,
+    },
+    Item {
+        section: Section::Quality,
+        key: "roi.color_format",
+        title: "ROI color values",
+        description: "How the mean color of an ROI on a color image is written: R G B numbers or a color code (#RRGGBB; 16-bit images use four digits per color).",
+        widget: roi_color_widget,
     },
     Item {
         section: Section::Quality,
@@ -1086,12 +1128,37 @@ fn dataset_roots_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
     changed
 }
 
-/// 1 行に 1 組。読めない行があるうちは反映しない（打っている途中の行で組が消えないように）。
 fn search_groups_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
-    let id = ui.make_persistent_id("dataset.search_groups.edit");
+    groups_editor(
+        ui,
+        lang,
+        "dataset.search_groups.edit",
+        "Patient = PatientID; PatientName",
+        &mut s.dataset.search_groups,
+    )
+}
+
+fn metadata_groups_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    groups_editor(
+        ui,
+        lang,
+        "metadata.groups.edit",
+        "Camera = EXIF/Model; EXIF/LensModel",
+        &mut s.metadata.groups,
+    )
+}
+
+/// 1 行に 1 組。読めない行があるうちは反映しない（打っている途中の行で組が消えないように）。
+fn groups_editor(
+    ui: &mut egui::Ui,
+    lang: Language,
+    id: &str,
+    hint: &str,
+    groups: &mut Vec<SearchGroup>,
+) -> bool {
+    let id = ui.make_persistent_id(id);
     let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| {
-        s.dataset
-            .search_groups
+        groups
             .iter()
             .map(SearchGroup::to_line)
             .collect::<Vec<_>>()
@@ -1099,7 +1166,7 @@ fn search_groups_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
     });
     let r = ui.add(
         egui::TextEdit::multiline(&mut text)
-            .hint_text("Patient = PatientID; PatientName")
+            .hint_text(hint)
             .desired_rows(4)
             .desired_width(420.0),
     );
@@ -1124,13 +1191,79 @@ fn search_groups_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, text));
     } else {
-        if r.lost_focus() && valid && parsed != s.dataset.search_groups {
-            s.dataset.search_groups = parsed;
+        if r.lost_focus() && valid && parsed != *groups {
+            *groups = parsed;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));
     }
     changed
+}
+
+/// 隠した項目を 1 行に 1 つ並べ、✕ で元に戻す。足すのはメタデータ欄の右クリックから。
+fn hidden_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    if s.metadata.hidden.is_empty() {
+        ui.weak(tr(lang, "Nothing is hidden."));
+        return false;
+    }
+    let mut remove = None;
+    for (i, id) in s.metadata.hidden.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(icon::X)
+                .on_hover_text(tr(lang, "Show it again"))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+            ui.label(id);
+        });
+    }
+    if let Some(i) = remove {
+        s.metadata.hidden.remove(i);
+    }
+    remove.is_some()
+}
+
+fn heading_style_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.metadata.heading_style;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (HeadingStyle::Color, "Accent color"),
+            (HeadingStyle::Underline, "Underline"),
+            (HeadingStyle::Both, "Color and underline"),
+            (HeadingStyle::Plain, "Plain"),
+        ] {
+            ui.radio_value(&mut s.metadata.heading_style, choice, tr(lang, label));
+        }
+    });
+    s.metadata.heading_style != before
+}
+
+fn remember_open_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.metadata.remember_open, tr(lang, "Remember"))
+        .changed()
+}
+
+fn probe_color_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    color_format_radio(ui, lang, &mut s.metadata.color_format)
+}
+
+fn roi_color_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    color_format_radio(ui, lang, &mut s.roi.color_format)
+}
+
+fn color_format_radio(ui: &mut egui::Ui, lang: Language, value: &mut ColorFormat) -> bool {
+    let before = *value;
+    ui.horizontal(|ui| {
+        for (choice, label) in [
+            (ColorFormat::Rgb, "RGB numbers (R 128 G 64 B 255)"),
+            (ColorFormat::Hex, "Color code (#8040FF)"),
+        ] {
+            ui.radio_value(value, choice, tr(lang, label));
+        }
+    });
+    *value != before
 }
 
 /// タグと同じくカンマ区切りで編集する。

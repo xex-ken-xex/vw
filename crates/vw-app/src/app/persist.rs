@@ -188,6 +188,13 @@ impl VwApp {
             extract_dir: self.last_extract_dir.clone(),
             fullscreen_root: self.last_fullscreen_root.clone(),
             pipeline_nodes: self.pipeline.node_positions(),
+            metadata_closed: if self.settings().metadata.remember_open {
+                let mut closed: Vec<String> = self.meta_closed.iter().cloned().collect();
+                closed.sort();
+                closed
+            } else {
+                Vec::new()
+            },
             sub_windows: [
                 ("histogram", self.histogram.window.saved()),
                 ("zoom_map", self.zoom_map.window.saved()),

@@ -554,6 +554,10 @@ impl VwApp {
         let mut open_folder = None;
         let mut dropped = None;
         let mut step = None;
+        let colors = crate::viewer::Colors {
+            probe: self.settings().metadata.color_format,
+            roi: self.settings().roi.color_format,
+        };
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();
         let hint = empty_slot_hint(self.current.is_some());
@@ -603,6 +607,7 @@ impl VwApp {
                     faces: &faces,
                     people: &people,
                     ai_ready,
+                    colors,
                 },
             );
             if let Some(event) = resp.derive {
@@ -717,6 +722,7 @@ impl VwApp {
                         faces: &[],
                         people: &[],
                         ai_ready: false,
+                        colors,
                     },
                 );
                 if resp.clicked {

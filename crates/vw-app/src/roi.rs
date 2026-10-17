@@ -62,6 +62,28 @@ pub fn stats(img: &VwImage, meta: &Metadata, region: Region) -> Stats {
     acc.stats()
 }
 
+/// カラー画像の `region` の中の、R・G・B それぞれの平均。モノクロや空の範囲では `None`。
+pub fn color_means(img: &VwImage, region: Region) -> Option<[f64; 3]> {
+    if !matches!(img.color, ColorModel::Rgb | ColorModel::Rgba) {
+        return None;
+    }
+    let channels = img.color.channels();
+    let mut sums = [0.0f64; 3];
+    let mut n = 0usize;
+    for i in region.indices(img.width) {
+        let at = i * channels;
+        for (k, sum) in sums.iter_mut().enumerate() {
+            *sum += match &img.data {
+                PixelData::U8(v) => f64::from(v[at + k]),
+                PixelData::U16(v) => f64::from(v[at + k]),
+                PixelData::F32(v) => f64::from(v[at + k]),
+            };
+        }
+        n += 1;
+    }
+    (n > 0).then(|| sums.map(|s| s / n as f64))
+}
+
 fn inverted(meta: &Metadata) -> bool {
     meta.get("DICOM", "Photometric")
         .is_some_and(|p| p.trim() == "MONOCHROME1")
@@ -75,15 +97,27 @@ pub fn unit(meta: &Metadata) -> Option<&'static str> {
 }
 
 /// 矩形の横に出す文字。統計がまだ読めない（元の画像を読み込み中）ときは大きさだけ。
-pub fn label(kind: &str, region: Region, stats: Option<&Stats>, unit: Option<&str>) -> String {
+/// `color` はカラー画像の平均の色（[`color_means`] を書いたもの）。あれば輝度の平均の代わりに出す。
+pub fn label(
+    kind: &str,
+    region: Region,
+    stats: Option<&Stats>,
+    unit: Option<&str>,
+    color: Option<&str>,
+) -> String {
     let size = format!("{kind}  {}×{}", region.w, region.h);
     match stats {
-        Some(s) => format!(
-            "{size}  mean {}{}  SD {}",
-            histogram::number(s.mean),
-            unit.map(|u| format!(" {u}")).unwrap_or_default(),
-            histogram::number(s.std_dev)
-        ),
+        Some(s) => {
+            let mean = match color {
+                Some(c) => c.to_owned(),
+                None => format!(
+                    "{}{}",
+                    histogram::number(s.mean),
+                    unit.map(|u| format!(" {u}")).unwrap_or_default()
+                ),
+            };
+            format!("{size}  mean {mean}  SD {}", histogram::number(s.std_dev))
+        }
         None => size,
     }
 }
@@ -183,13 +217,53 @@ mod tests {
             std_dev: 3.0,
         };
         assert_eq!(
-            label("Target", r, Some(&s), Some("HU")),
+            label("Target", r, Some(&s), Some("HU"), None),
             "Target  10×20  mean 12.50 HU  SD 3"
         );
-        assert_eq!(label("Target", r, None, None), "Target  10×20");
+        assert_eq!(label("Target", r, None, None, None), "Target  10×20");
         assert_eq!(
             clipboard_text("Target", r, Some(&s)),
             "Target, 3, 4, 10, 20, 200, 12.50, 3, -10, 40"
         );
+    }
+
+    #[test]
+    fn color_images_show_the_mean_of_each_channel() {
+        let img = VwImage::new(
+            2,
+            1,
+            ColorModel::Rgb,
+            PixelData::U8(vec![10, 20, 30, 20, 40, 60]),
+        )
+        .unwrap();
+        let r = Region {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 1,
+        };
+        assert_eq!(color_means(&img, r), Some([15.0, 30.0, 45.0]));
+        let s = Stats {
+            min: 0.0,
+            max: 0.0,
+            mean: 0.0,
+            std_dev: 2.0,
+        };
+        assert_eq!(
+            label("Target", r, Some(&s), None, Some("#0F1E2D")),
+            "Target  2×1  mean #0F1E2D  SD 2"
+        );
+    }
+
+    #[test]
+    fn gray_images_have_no_color_mean() {
+        let img = VwImage::new(1, 1, ColorModel::Gray, PixelData::U8(vec![5])).unwrap();
+        let r = Region {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        assert_eq!(color_means(&img, r), None);
     }
 }
