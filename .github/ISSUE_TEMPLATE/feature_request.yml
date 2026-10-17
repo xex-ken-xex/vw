@@ -1,0 +1,29 @@
+name: 改良・機能追加の要望 / Feature request
+description: こうなると便利、こういう機能がほしい
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること / Problem
+      description: 何をしたいときに、何が不便か
+      placeholder: 数千枚のフォルダで、○○ をするたびに ○○ しなければならない
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: こうなるとよい / Proposed solution
+      description: 画面や操作のイメージ。ほかのソフトの例があれば、それも
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 今の回避策 / Workarounds
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: 協力 / Contribution
+      options:
+        - label: 自分で PR を出してもよい（[CONTRIBUTING.md](https://github.com/xex-ken-xex/vw/blob/main/CONTRIBUTING.md)） / I'd like to send a PR

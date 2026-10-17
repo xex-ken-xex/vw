@@ -40,6 +40,7 @@ const JA: &[(&str, &str)] = &[
     ("Fast image viewer", "高速画像ビューワ"),
     ("Author", "作者"),
     ("License", "ライセンス"),
+    ("Report a bug or request a feature...", "不具合の報告・要望..."),
     ("Third-party licenses...", "サードパーティのライセンス..."),
     // AI タグ
     ("AI models...", "AI のモデル..."),
