@@ -21,6 +21,8 @@ use dicom_pixeldata::{
 };
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+use charset::Charset;
+
 pub mod charset;
 pub mod net;
 pub mod pipeline;
@@ -90,7 +92,7 @@ impl DecoderPlugin for DicomPlugin {
         ] {
             push_tag(&mut m, tag, value);
         }
-        all_tags(&obj, &mut m);
+        all_tags(&obj, &charset_of(&obj, Charset::default()), &mut m);
         Ok(m)
     }
 }
@@ -109,14 +111,14 @@ pub fn tag_name(key: &str) -> Option<&'static str> {
 }
 
 /// シーケンスの中も同じように辿る。入れ子の位置は持たない（検索では値が見つかれば足りるため）。
-fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
+fn all_tags(obj: &dicom_object::InMemDicomObject, charset: &Charset, m: &mut Metadata) {
     use dicom_core::value::Value;
     use dicom_core::VR;
     for e in obj.iter() {
         match e.value() {
             Value::Sequence(seq) => {
                 for item in seq.items() {
-                    all_tags(item, m);
+                    all_tags(item, &charset_of(item, *charset), m);
                 }
             }
             Value::PixelSequence(_) => {}
@@ -126,7 +128,7 @@ fn all_tags(obj: &dicom_object::InMemDicomObject, m: &mut Metadata) {
                     VR::OB | VR::OD | VR::OF | VR::OL | VR::OV | VR::OW | VR::UN
                 );
                 if !binary {
-                    push_tag(m, e.header().tag, &charset::value_text(p));
+                    push_tag(m, e.header().tag, &charset::value_text(p, charset));
                 }
             }
         }
@@ -159,8 +161,16 @@ fn frames_in(obj: &DefaultDicomObject) -> usize {
     int(obj, tags::NUMBER_OF_FRAMES).map_or(1, |n| n.max(1) as usize)
 }
 
+/// 項目の Specific Character Set。項目に書いていなければ、外側の `inherited` を使う。
+fn charset_of(obj: &dicom_object::InMemDicomObject, inherited: Charset) -> Charset {
+    obj.get(tags::SPECIFIC_CHARACTER_SET)
+        .and_then(|e| e.to_multi_str().ok())
+        .map_or(inherited, |values| Charset::from_values(&values))
+}
+
 fn text(obj: &DefaultDicomObject, tag: Tag) -> Option<String> {
-    let s = charset::value_text(obj.get(tag)?.value().primitive()?);
+    let charset = charset_of(obj, Charset::default());
+    let s = charset::value_text(obj.get(tag)?.value().primitive()?, &charset);
     let s = s.trim_matches([' ', '\0']);
     (!s.is_empty()).then(|| s.to_owned())
 }
@@ -449,10 +459,15 @@ fn tag_listing(obj: &DefaultDicomObject, m: &mut Metadata) {
             listed_value(name),
         );
     }
-    list_elements(obj, 0, m);
+    list_elements(obj, &charset_of(obj, Charset::default()), 0, m);
 }
 
-fn list_elements(obj: &dicom_object::InMemDicomObject, depth: usize, m: &mut Metadata) {
+fn list_elements(
+    obj: &dicom_object::InMemDicomObject,
+    charset: &Charset,
+    depth: usize,
+    m: &mut Metadata,
+) {
     use dicom_core::value::Value;
     use dicom_core::VR;
     for e in obj.iter() {
@@ -464,7 +479,7 @@ fn list_elements(obj: &dicom_object::InMemDicomObject, depth: usize, m: &mut Met
                 let unit = if n == 1 { "item" } else { "items" };
                 m.push(TAG_LISTING, key, format!("{n} {unit}"));
                 for item in seq.items() {
-                    list_elements(item, depth + 1, m);
+                    list_elements(item, &charset_of(item, *charset), depth + 1, m);
                 }
             }
             Value::PixelSequence(seq) => {
@@ -482,7 +497,7 @@ fn list_elements(obj: &dicom_object::InMemDicomObject, depth: usize, m: &mut Met
                 let value = if binary {
                     format!("({:?}, {} bytes)", e.vr(), p.calculate_byte_len())
                 } else {
-                    listed_value(&charset::value_text(p))
+                    listed_value(&charset::value_text(p, charset))
                 };
                 m.push(TAG_LISTING, key, value);
             }
@@ -767,6 +782,33 @@ mod tests {
         assert_eq!(
             catalog.get("DICOM", "0010,0010"),
             Some("Yamada^Taro=山田^太郎")
+        );
+    }
+
+    #[test]
+    fn latin_text_with_kanji_written_by_pydicom_is_read_everywhere() {
+        // pydicom 3 は漢字の後を ESC ( B ではなく ESC - A で戻す。`Synth` は ASCII しか書けないので、
+        // 同じ長さの印で書いてからバイト列を置き換える。
+        let written: &[u8] = b"\x1b-AKopf-CT \x1b$BF,It\x1b-A M\xfcller";
+        let mark = "#".repeat(written.len());
+        let mut bytes = Synth::ct(1, 1)
+            .text(
+                tags::SPECIFIC_CHARACTER_SET,
+                VR::CS,
+                "ISO 2022 IR 100\\ISO 2022 IR 87",
+            )
+            .text(tags::STUDY_DESCRIPTION, VR::LO, &mark)
+            .bytes();
+        let at = bytes
+            .windows(written.len())
+            .position(|w| w == mark.as_bytes())
+            .unwrap();
+        bytes[at..at + written.len()].copy_from_slice(written);
+        let shown = DicomPlugin.read_metadata(&bytes).unwrap();
+        assert_eq!(shown.get("DICOM", "Study"), Some("Kopf-CT 頭部 Müller"));
+        assert_eq!(
+            shown.get(TAG_LISTING, "(0008,1030) StudyDescription"),
+            Some("Kopf-CT 頭部 Müller")
         );
     }
 
