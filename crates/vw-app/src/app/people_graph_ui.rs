@@ -33,6 +33,8 @@ pub(super) struct GraphWindow {
     views: HashMap<String, TSTransform>,
     /// 代表の顔のテクスチャ。キーは (名前, 代表の番号, 顔の数)。顔を足すと作り直す。
     faces: HashMap<(String, usize, usize), egui::TextureHandle>,
+    /// 前に描いた図の範囲の中心。人を足したり貼り付けたりするときの置き場所。
+    center: Pos2,
 }
 
 /// 1 フレームで頼まれた、図の外にも響く変更。
@@ -43,56 +45,46 @@ struct Outcome {
 }
 
 impl VwApp {
-    pub(super) fn people_graph_ui(&mut self, ctx: &egui::Context) {
-        if !self.graph_window.open {
-            return;
-        }
+    /// 相関図の欄の中。
+    pub(super) fn people_graph_pane(&mut self, ui: &mut egui::Ui) {
         self.refresh_face_counts();
         let lang = self.lang();
         let together = self.people_window.together.clone().unwrap_or_default();
-        let mut close = false;
         let mut outcome = Outcome::default();
         let people = &mut self.people;
         let w = &mut self.graph_window;
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("people_graph"),
-            egui::ViewportBuilder::default()
-                .with_title(tr(lang, "Relationship charts"))
-                .with_inner_size([1000.0, 680.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                }
-                egui::Panel::top("graph_toolbar").show(ctx, |ui| {
-                    toolbar(ui, w, &people.list, &mut people.graphs, lang, &mut outcome);
-                });
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(ctx.style().visuals.extreme_bg_color))
-                    .show(ctx, |ui| {
-                        let Some(g) = w
-                            .current
-                            .as_ref()
-                            .and_then(|n| people.graphs.iter_mut().find(|g| &g.name == n))
-                        else {
-                            ui.centered_and_justified(|ui| {
-                                ui.weak(tr(
-                                    lang,
-                                    "Make a chart with New chart, then add people to it.",
-                                ));
-                            });
-                            return;
-                        };
-                        canvas(ui, w, g, &people.list, &together, lang, &mut outcome);
+        egui::Panel::top("graph_toolbar").show(ui, |ui| {
+            toolbar(ui, w, &people.list, &mut people.graphs, lang, &mut outcome);
+        });
+        let drawn = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                let Some(g) = w
+                    .current
+                    .as_ref()
+                    .and_then(|n| people.graphs.iter_mut().find(|g| &g.name == n))
+                else {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak(tr(
+                            lang,
+                            "Make a chart with New chart, then add people to it.",
+                        ));
                     });
-            },
-        );
-        if close {
-            self.graph_window.open = false;
-            self.graph_window.connecting = None;
-        }
+                    return;
+                };
+                canvas(ui, w, g, &people.list, &together, lang, &mut outcome);
+            });
+        self.graph_window.center = drawn.response.rect.center();
         if outcome.save {
             self.save_people();
         }
+    }
+
+    /// 相関図の欄を閉じた。
+    pub(super) fn people_graph_closed(&mut self) {
+        self.graph_window.open = false;
+        self.graph_window.connecting = None;
     }
 }
 
@@ -221,7 +213,7 @@ fn toolbar(
                                 let at = w
                                     .views
                                     .get(&g.name)
-                                    .map(|t| t.inverse() * ui.ctx().content_rect().center())
+                                    .map(|t| t.inverse() * w.center)
                                     .unwrap_or(pos2(0.0, 0.0));
                                 // 続けて足した人が重ならないよう、画面の中央から升目に並べる。
                                 let n = g.members.len();
@@ -259,7 +251,7 @@ fn toolbar(
                 lang,
                 "Remove the selected people from this chart (Delete). They stay registered.",
             ));
-        let typing = ui.ctx().egui_wants_keyboard_input();
+        let typing = ui.ctx().egui_wants_keyboard_input() || !crate::sub_window::owns_keys(ui);
         let (key_copy, key_paste, key_delete) = ui.input(|i| {
             (
                 !typing && i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
@@ -278,7 +270,7 @@ fn toolbar(
             let at = w
                 .views
                 .get(&g.name)
-                .map(|t| t.inverse() * (ui.ctx().content_rect().center() - CARD))
+                .map(|t| t.inverse() * (w.center - CARD))
                 .unwrap_or(pos2(0.0, 0.0));
             w.selected = g.paste(clip, [at.x, at.y]).into_iter().collect();
             w.edge = None;

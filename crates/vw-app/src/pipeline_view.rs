@@ -270,54 +270,41 @@ impl PipelineView {
         vec![Command::Closed]
     }
 
-    /// 1 フレーム分。ウインドウを描き、スロットと保存したパイプラインに当てる操作を返す。
+    /// 欄の見出し。「画素の変換 - ファイル名」。
+    pub fn title(&self, lang: Language) -> String {
+        crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref())
+    }
+
+    /// 1 フレーム分。欄の中を描き、スロットと保存したパイプラインに当てる操作を返す。
     pub fn ui(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         lang: Language,
         target: Option<Target<'_>>,
     ) -> Vec<Command> {
-        if !self.open {
-            return Vec::new();
-        }
-        self.follow(ctx, target.as_ref());
+        self.follow(&ui.ctx().clone(), target.as_ref());
         let mut out = Vec::new();
-        let title = crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref());
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
         let preset = target.as_ref().and_then(|t| t.preset);
         let saved = target.as_ref().map(|t| t.saved.clone()).unwrap_or_default();
         let info = target.as_ref().map(|t| t.info);
-        let mut close = false;
-        let mut edited = false;
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("pixel_pipeline"),
-            egui::ViewportBuilder::default()
-                .with_title(title)
-                .with_inner_size([1560.0, 560.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                }
-                if let Some((report, thresholds)) = evaluation {
-                    egui::Panel::bottom("pipeline_evaluation").show(ctx, |ui| {
-                        crate::quality_view::summary(ui, lang, report, thresholds);
-                    });
-                }
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(ctx.style().visuals.extreme_bg_color))
-                    .show(ctx, |ui| {
-                        edited = self.contents(ui, lang, &marks, preset, &saved, info, &mut out);
-                    });
-            },
-        );
+        if let Some((report, thresholds)) = evaluation {
+            egui::Panel::bottom("pipeline_evaluation").show(ui, |ui| {
+                crate::quality_view::summary(ui, lang, report, thresholds);
+            });
+        }
+        let edited = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                self.contents(ui, lang, &marks, preset, &saved, info, &mut out)
+            })
+            .inner;
         if edited {
             if let Some(values) = self.values() {
                 out.insert(0, Command::Edit(values));
             }
-        }
-        if close {
-            out.extend(self.close());
         }
         out
     }

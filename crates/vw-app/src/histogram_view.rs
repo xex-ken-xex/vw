@@ -17,7 +17,6 @@ use crate::quality::Report;
 use crate::quality_view::{self, Command};
 use crate::roi::Region;
 use crate::settings::{Language, Quality};
-use crate::sub_window::SubWindow;
 
 /// ウインドウに渡す、アクティブなスロットの画像。
 pub struct Target<'a> {
@@ -140,7 +139,6 @@ enum Counted {
 #[derive(Default)]
 pub struct HistogramView {
     pub open: bool,
-    pub window: SubWindow,
     tab: Tab,
     axis: Axis,
     channel: Shown,
@@ -161,55 +159,37 @@ impl HistogramView {
         self.counting = None;
     }
 
-    /// 1 フレーム分。評価の表から頼まれたことを返す。
+    /// 欄の見出し。「解析 - ファイル名」。
+    pub fn title(&self, lang: Language) -> String {
+        crate::sub_window::title(lang, "Analysis", self.path.as_deref())
+    }
+
+    /// 1 フレーム分、欄の中を描く。評価の表から頼まれたことを返す。
     pub fn ui(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         lang: Language,
         target: Option<Target<'_>>,
         evaluated: Evaluated<'_>,
     ) -> Option<Command> {
-        if !self.open {
-            return None;
-        }
-        self.follow(ctx, target.as_ref());
+        let ctx = ui.ctx().clone();
+        self.follow(&ctx, target.as_ref());
         if let Some(t) = &target {
-            self.count(ctx, t);
+            self.count(&ctx, t);
         }
-        let title = crate::sub_window::title(lang, "Analysis", self.path.as_deref());
         let rois = target.as_ref().map_or((false, false), |t| {
             (t.target_roi.is_some(), t.background_roi.is_some())
         });
-        let mut close = false;
-        let mut command = None;
         let has_image = target.as_ref().is_some_and(|t| t.image.is_some());
-        let has_target = target.is_some();
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("histogram"),
-            self.window.builder(title, [760.0, 480.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                }
-                self.window.track(ctx);
-                self.window.pin_overlay(ctx, lang);
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    if !has_target {
-                        ui.centered_and_justified(|ui| {
-                            ui.weak(tr(lang, "Select an image in a slot."))
-                        });
-                    } else if !has_image {
-                        ui.centered_and_justified(|ui| ui.spinner());
-                    } else {
-                        command = self.tabs(ui, lang, rois, &evaluated);
-                    }
-                });
-            },
-        );
-        if close {
-            self.close();
+        if target.is_none() {
+            ui.centered_and_justified(|ui| ui.weak(tr(lang, "Select an image in a slot.")));
+            None
+        } else if !has_image {
+            ui.centered_and_justified(|ui| ui.spinner());
+            None
+        } else {
+            self.tabs(ui, lang, rois, &evaluated)
         }
-        command
     }
 
     /// タブの行と、選んだタブの中身。ウインドウが高ければタブを出さずに両方を並べる。

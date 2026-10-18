@@ -415,7 +415,6 @@ impl VwApp {
         }
         self.ai_models.ui(ctx, lang, self.ai_store.as_ref());
         self.people_ui(ctx);
-        self.people_graph_ui(ctx);
         self.remove_dialog(ctx);
         self.ai_tidy_ui(ctx);
     }
