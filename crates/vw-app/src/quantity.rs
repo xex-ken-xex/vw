@@ -4,6 +4,8 @@
 use vw_core::Metadata;
 
 use crate::histogram;
+use crate::i18n::tr_text;
+use crate::settings::Language;
 
 /// 画素の値（Rescale を当てた値）の量。
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +65,15 @@ impl Quantity {
     }
 }
 
+/// 足りない項目（`SUVbw needs` の、カンマで区切った英語の名前）を画面の言葉にする。
+pub fn missing_text(lang: Language, missing: &str) -> String {
+    missing
+        .split(", ")
+        .map(|m| tr_text(lang, m))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// SUV は 1 前後の値なので、整数でも小数 2 桁まで出す（`histogram::number` は整数なら丸める）。
 fn suv(v: f64) -> String {
     format!("{v:.2} SUVbw")
@@ -113,6 +124,18 @@ mod tests {
         assert_eq!(q.text(12_400.0), "12400 Bq/ml");
         assert_eq!(q.suv_max(1.0), None);
         assert_eq!(q.missing(), Some("Patient weight"));
+    }
+
+    #[test]
+    fn missing_items_are_shown_in_the_chosen_language() {
+        assert_eq!(
+            missing_text(Language::Japanese, "Patient weight, Injection time"),
+            "体重, 投与の時刻"
+        );
+        assert_eq!(
+            missing_text(Language::English, "Patient weight"),
+            "Patient weight"
+        );
     }
 
     #[test]

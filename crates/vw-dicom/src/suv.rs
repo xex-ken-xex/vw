@@ -47,7 +47,7 @@ pub fn factor(i: &Inputs) -> Result<f64, Missing> {
     if half_life.is_none() {
         missing.push("Half-life");
     }
-    let decay = decay_seconds(i);
+    let decay = elapsed_seconds(i);
     if let Err(m) = &decay {
         missing.push(m);
     }
@@ -60,7 +60,7 @@ pub fn factor(i: &Inputs) -> Result<f64, Missing> {
 }
 
 /// 投与から、画素の値が補正されている時刻までの秒。
-fn decay_seconds(i: &Inputs) -> Result<f64, &'static str> {
+pub fn elapsed_seconds(i: &Inputs) -> Result<f64, &'static str> {
     let reference = match i.decay_correction.as_deref().map(str::trim) {
         // 投与の時刻に戻して補正済みなので、減衰させない。
         Some("ADMIN") => return Ok(0.0),

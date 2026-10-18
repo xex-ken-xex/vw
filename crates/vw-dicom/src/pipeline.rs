@@ -82,6 +82,8 @@ pub struct Gray {
     pub modality: Modality,
     pub voi: Voi,
     pub presentation: Presentation,
+    /// PET の Bq/ml の画像なら、SUVbw に換算するのに使う値。表示の道からの枝として出す。
+    pub suv: Option<crate::suv::Inputs>,
 }
 
 /// カラー画像の段。
@@ -113,8 +115,13 @@ pub fn read(data: &[u8], frame: usize) -> Result<Pipeline, DecodeError> {
     }
     let groups = Groups::of(&obj, frame);
     let invert = stored.photometric == "MONOCHROME1";
+    let modality = modality(&obj, &groups);
+    let suv = (modality.modality.as_deref() == Some("PT")
+        && modality.units.as_deref() == Some("BQML"))
+    .then(|| crate::suv::read(&obj));
     Ok(Pipeline::Gray(Box::new(Gray {
-        modality: modality(&obj, &groups),
+        suv,
+        modality,
         voi: voi(&obj, &groups),
         presentation: Presentation {
             shape: text(&obj, tags::PRESENTATION_LUT_SHAPE),
@@ -278,6 +285,18 @@ mod tests {
             Pipeline::Gray(g) => *g,
             other => panic!("not gray: {other:?}"),
         }
+    }
+
+    #[test]
+    fn pet_in_bq_per_ml_carries_what_suv_needs() {
+        use dicom_core::VR;
+        let bytes = Synth::new(crate::synth::PET_IMAGE, 1, 1)
+            .pixels_u16(&[1], 16)
+            .text(tags::UNITS, VR::CS, "BQML")
+            .text(tags::PATIENT_WEIGHT, VR::DS, "70")
+            .bytes();
+        assert_eq!(gray(&bytes).suv.and_then(|s| s.weight_kg), Some(70.0));
+        assert_eq!(gray(&Synth::ct(1, 1).bytes()).suv, None);
     }
 
     #[test]

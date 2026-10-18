@@ -796,9 +796,13 @@ impl Slot {
         let Some(shown) = &self.shown else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_mark();
-        let missing = Quantity::of(&shown.info.metadata)
-            .missing()
-            .map(|m| format!("{} {m}", tr(lang, "SUVbw needs:")));
+        let missing = Quantity::of(&shown.info.metadata).missing().map(|m| {
+            format!(
+                "{} {}",
+                tr(lang, "SUVbw needs:"),
+                crate::quantity::missing_text(lang, m)
+            )
+        });
         for mark in self.marks.iter().filter(|m| m.path == shown.path) {
             let at = mark_pos(mark);
             let color = if selected == Some(mark) {

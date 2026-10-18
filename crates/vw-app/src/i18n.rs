@@ -44,6 +44,16 @@ const JA: &[(&str, &str)] = &[
     ("Place names: GeoNames, CC BY 4.0", "地名データ: GeoNames、CC BY 4.0"),
     ("Map tiles:", "地図の絵:"),
     ("SUVbw needs:", "SUVbw に足りない項目:"),
+    ("Patient weight", "体重"),
+    ("Injected dose", "投与量"),
+    ("Half-life", "半減期"),
+    ("Decay correction", "減衰の補正"),
+    ("Since injection", "投与からの時間"),
+    ("Injection time", "投与の時刻"),
+    (
+        "Bq/ml × weight ÷ dose decayed to the reference time",
+        "Bq/ml × 体重 ÷ 基準の時刻まで減衰させた投与量",
+    ),
     ("Third-party licenses...", "サードパーティのライセンス..."),
     // 地図
     ("Map", "地図"),
