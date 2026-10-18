@@ -31,7 +31,7 @@ use crate::state::{self, AppState, Placement, WindowState};
 use crate::sub_window::SubWindow;
 use crate::theme;
 use crate::transfer::Transfer;
-use crate::tree::{self, FolderTree, TreeAction};
+use crate::tree::{FolderTree, TreeAction};
 use crate::viewer::{Sequence, Slot, KEY_ZOOM_FACTOR};
 use crate::watch::FolderWatcher;
 
@@ -40,6 +40,7 @@ mod ai_tagging;
 mod ai_tidy;
 mod clipboard;
 mod dataset_dialogs;
+mod docking;
 mod export_dialog;
 mod folders;
 mod labeling;
@@ -126,14 +127,6 @@ const TOOL_BUTTON: f32 = 26.0;
 /// ツール列の左右の余白。
 const TOOL_PADDING: i8 = 1;
 
-/// 4 つのフィールドそれぞれの表示・非表示（View メニュー）。
-struct Fields {
-    tree: bool,
-    metadata: bool,
-    images: bool,
-    log: bool,
-}
-
 /// パスワードを尋ねている暗号化されたアーカイブ。
 struct PasswordPrompt {
     zip: PathBuf,
@@ -157,7 +150,8 @@ pub struct VwApp {
     active: usize,
     /// スロット番号と読み込み要求番号の両方に使う連番。
     next_id: u64,
-    fields: Fields,
+    /// フォルダ・画像・メタデータ・ログの並びと表示・非表示。描く間だけ取り出すので `Option`。
+    dock: Option<vw_dock::Dock>,
     tool: Tool,
     settings: SettingsStore,
     settings_ui: SettingsUi,
@@ -525,6 +519,8 @@ impl VwApp {
             Placement::Default => None,
             Placement::Restore(saved) => Some(Restore { saved, frames: 0 }),
         };
+        // 別ウインドウに出したペインの前の位置は、モニタの構成が変わると画面の外かもしれない。
+        let monitors_changed = saved.window.is_some() && restoring.is_none();
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
@@ -585,12 +581,17 @@ impl VwApp {
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
-            fields: Fields {
-                tree: true,
-                metadata: true,
-                images: true,
-                log: true,
-            },
+            dock: Some(match saved.dock.clone() {
+                Some(layout) => {
+                    let mut dock =
+                        vw_dock::Dock::restored(docking::default_layout(), &docking::PANES, layout);
+                    if monitors_changed {
+                        dock.bring_floats_home();
+                    }
+                    dock
+                }
+                None => vw_dock::Dock::new(docking::default_layout(), &docking::PANES),
+            }),
             tool: Tool::Browse,
             settings,
             settings_ui: SettingsUi::default(),
@@ -846,10 +847,10 @@ impl VwApp {
                 self.close_all_slots();
             }
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Action::ToggleFolderTree => self.fields.tree ^= true,
-            Action::ToggleMetadata => self.fields.metadata ^= true,
-            Action::ToggleImages => self.fields.images ^= true,
-            Action::ToggleLog => self.fields.log ^= true,
+            Action::ToggleFolderTree => self.toggle_pane(docking::TREE),
+            Action::ToggleMetadata => self.toggle_pane(docking::METADATA),
+            Action::ToggleImages => self.toggle_pane(docking::IMAGES),
+            Action::ToggleLog => self.toggle_pane(docking::LOG),
             Action::ToggleSettings => self.toggle_settings(),
             Action::ToggleDatasets => self.toggle_datasets(ctx),
             Action::FullscreenSlideshow => self.toggle_fullscreen_setup(),
@@ -1045,6 +1046,7 @@ impl eframe::App for VwApp {
             }
             // 外部のエディタでの書き換えを、ウィンドウに触れなくても拾えるようにする。
             ctx.request_repaint_after(Duration::from_secs(1));
+            self.floating_panes_ui(&ctx);
             return;
         }
 
@@ -1061,6 +1063,7 @@ impl eframe::App for VwApp {
                 }
                 None => {}
             }
+            self.floating_panes_ui(&ctx);
             return;
         }
 
@@ -1111,145 +1114,11 @@ impl eframe::App for VwApp {
             self.dataset_window(&ctx);
             self.outer_update_dialog(&ctx);
             self.password_dialog(&ctx);
+            self.floating_panes_ui(&ctx);
             return;
         }
 
-        let lang = self.lang();
-        if self.fields.log {
-            egui::Panel::bottom("log")
-                .resizable(true)
-                .default_size(140.0)
-                .show(ui, |ui| {
-                    let sending = self.send_job.as_ref().and_then(|j| j.progress());
-                    let (cancel, header) = ui
-                        .horizontal(|ui| {
-                            vw_ui::panel::header(ui, tr(lang, "Log"));
-                            let mut cancel = false;
-                            if let Some((done, total)) = sending {
-                                ui.weak(format!(
-                                    "{} {} / {}",
-                                    tr(lang, "Sending"),
-                                    thousands(done),
-                                    thousands(total)
-                                ));
-                                cancel = ui.small_button(tr(lang, "Cancel sending")).clicked();
-                            }
-                            (cancel, self.log_header(ui))
-                        })
-                        .inner;
-                    if cancel {
-                        self.cancel_send();
-                    }
-                    if let Some(action) = header {
-                        self.log_action(&ctx, action);
-                    }
-                    self.log_ui(ui);
-                });
-        }
-        if self.fields.tree {
-            egui::Panel::left("tree")
-                .default_size(260.0)
-                .show(ui, |ui| {
-                    // 絞り込み中は、ファイルが隠れていることに気づけるよう見出しに条件を出す。
-                    if self.filter.is_all() {
-                        vw_ui::panel::header(ui, tr(lang, "Folders"));
-                    } else {
-                        let text = format!(
-                            "{}  ({}: {})",
-                            tr(lang, "Folders"),
-                            tr(lang, "Filter"),
-                            filter_name(&self.filter, lang)
-                        );
-                        vw_ui::panel::header(ui, &text);
-                    }
-                    // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
-                    let active_image = self.active_image().map(|p| frames::file_of(&p));
-                    let destinations = self.destination_names();
-                    let ai_ready = self.ai_ready();
-                    let click_expands = self.settings.settings.tree.click_expands;
-                    let drawn = egui::ScrollArea::both()
-                        .auto_shrink(false)
-                        .show(ui, |ui| {
-                            self.tree.ui(
-                                ui,
-                                tree::Context {
-                                    registry: self.loader.registry(),
-                                    series: &self.series,
-                                    current: self.current.as_deref(),
-                                    active_image: active_image.as_deref(),
-                                    lang,
-                                    destinations: &destinations,
-                                    ai_ready,
-                                    click_expands,
-                                },
-                            )
-                        })
-                        .inner;
-                    let ctx = ui.ctx().clone();
-                    for (dir, files) in drawn.scans {
-                        let registry = self.loader.registry().clone();
-                        let wake = ctx.clone();
-                        self.series
-                            .start(dir, files, registry, move || wake.request_repaint());
-                    }
-                    let Some(action) = drawn.action else {
-                        return;
-                    };
-                    match action {
-                        TreeAction::Cd(p) => self.open_folder(&ctx, p),
-                        TreeAction::Dataset(request) => self.open_dataset_dialog(&ctx, request),
-                        TreeAction::Send { choice, targets } => self.send_to(choice, targets),
-                        TreeAction::Mount(zip) => self.mount(&ctx, &zip),
-                        TreeAction::Unmount(dir) => self.unmount(&ctx, &dir),
-                        TreeAction::Series { folder, files } => {
-                            self.show_series(&ctx, folder, &files)
-                        }
-                        TreeAction::Drop { file, dir } => {
-                            self.drop_file(&ctx, file, dir);
-                            return;
-                        }
-                        TreeAction::OpenInFileManager(p) => {
-                            self.open_in_file_manager(&p);
-                            return;
-                        }
-                        TreeAction::AiTagFolder(p) => {
-                            self.ai_tag_folder(&ctx, &p);
-                            return;
-                        }
-                        TreeAction::FindFaces(p) => {
-                            self.find_faces_folder(&ctx, &p);
-                            return;
-                        }
-                        TreeAction::RemoveAiTags(p) => {
-                            self.ask_remove_ai_tags(&p);
-                            return;
-                        }
-                        TreeAction::Copy(p) => {
-                            let what = format!("path {}", p.display());
-                            self.copy_text(&ctx, p.display().to_string(), &what);
-                            return;
-                        }
-                    }
-                    self.set_focus(&ctx, Focus::Tree);
-                });
-        }
-        if self.fields.metadata {
-            egui::Panel::right("metadata")
-                .default_size(300.0)
-                .min_size(220.0)
-                .show(ui, |ui| {
-                    self.metadata_header_ui(ui);
-                    self.metadata_ui(ui);
-                });
-        }
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            if self.fields.images {
-                self.images_ui(ui);
-            } else {
-                let background = self.canvas_color(ui.ctx());
-                ui.painter().rect_filled(ui.max_rect(), 0.0, background);
-            }
-        });
+        self.docked_ui(ui);
         self.copy_selection(&ctx);
         self.export_window(&ctx);
         self.toast_ui(&ctx);
