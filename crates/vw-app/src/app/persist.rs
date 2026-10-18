@@ -195,6 +195,7 @@ impl VwApp {
             } else {
                 Vec::new()
             },
+            dock: self.dock.as_ref().map(vw_dock::Dock::layout),
             sub_windows: [
                 ("histogram", self.histogram.window.saved()),
                 ("zoom_map", self.zoom_map.window.saved()),

@@ -14,8 +14,8 @@ pub mod tree;
 use std::collections::BTreeMap;
 
 use egui::{
-    vec2, Align2, CursorIcon, FontId, Id, LayerId, Order, Pos2, Rect, Sense, Ui, UiBuilder, Vec2,
-    ViewportBuilder, ViewportCommand, ViewportId,
+    vec2, CursorIcon, Id, LayerId, Order, Pos2, Rect, Sense, Ui, UiBuilder, Vec2, ViewportBuilder,
+    ViewportCommand, ViewportId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,19 @@ pub trait Panes {
     }
     /// 見出しの行の右に置くボタン。
     fn header_buttons(&mut self, _ui: &mut Ui, _pane: &str) {}
+    /// 見出しの行の中身。左から右へ並べる行で呼ぶ。既定は名前と、右に詰めた [`Panes::header_buttons`]。
+    /// 行のどこを押してもドラッグになるが、行に置いたボタンはボタンとして押せる。
+    fn header(&mut self, ui: &mut Ui, pane: &str) {
+        vw_ui::panel::header(ui, &self.title(pane));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            self.header_buttons(ui, pane);
+        });
+    }
 }
+
+/// 見出しの行の左右の余白。egui のパネルの枠（`Frame::side_top_panel`）の余白と同じにして、
+/// 見出しの字と中身の字の頭をそろえる。
+pub const HEADER_MARGIN: f32 = 8.0;
 
 /// 見出しの高さ（ポイント）。vw の今の見出しと同じ。
 pub const HEADER: f32 = 20.0;
@@ -154,7 +166,7 @@ pub struct Dock {
     resize: Option<Resize>,
     geometry: BTreeMap<Window, Geometry>,
     next_id: u64,
-    log: Vec<String>,
+    log: Vec<LogLine>,
     /// 前に記録した各ウインドウの位置。変わったときだけ記録する。
     logged_rects: BTreeMap<Window, Rect>,
     logged_ppp: BTreeMap<Window, (f32, Option<Vec2>)>,
@@ -214,7 +226,7 @@ impl Dock {
         dock.docked = saved.docked;
         dock.floated = saved.floated;
         dock.adopt(all);
-        dock.note(format!(
+        dock.event(format!(
             "restored layout: main {:?}, {} floating window(s), hidden {:?}",
             dock.main.as_ref().map(Node::panes),
             dock.floats.len(),
@@ -270,12 +282,24 @@ impl Dock {
     }
 
     /// たまった記録を取り出す。
-    pub fn take_log(&mut self) -> Vec<String> {
+    pub fn take_log(&mut self) -> Vec<LogLine> {
         std::mem::take(&mut self.log)
     }
 
-    fn note(&mut self, line: String) {
-        self.log.push(line);
+    /// ドラッグの途中の位置のような、調べるときに使う細かい記録。
+    fn note(&mut self, text: String) {
+        self.log.push(LogLine {
+            text,
+            summary: false,
+        });
+    }
+
+    /// 並びが変わった結果の記録。
+    fn event(&mut self, text: String) {
+        self.log.push(LogLine {
+            text,
+            summary: true,
+        });
     }
 
     pub fn is_shown(&self, pane: &str) -> bool {
@@ -299,11 +323,11 @@ impl Dock {
         }
         if shown {
             let back = self.hidden.remove(pane).expect("hidden pane has a place");
-            self.note(format!("show {pane}: {back:?}"));
+            self.event(format!("show {pane}: {back:?}"));
             self.put(pane, back);
         } else {
             let back = self.take(pane);
-            self.note(format!("hide {pane}: will come back to {back:?}"));
+            self.event(format!("hide {pane}: will come back to {back:?}"));
             self.hidden.insert(pane.to_owned(), back);
         }
     }
@@ -368,7 +392,7 @@ impl Dock {
         let rect = rect.unwrap_or([200.0, 200.0, 360.0, 280.0]);
         let back = self.take(pane);
         self.hidden.remove(pane);
-        self.note(format!("float {pane} (was {back:?})"));
+        self.event(format!("float {pane} (was {back:?})"));
         self.new_float(pane, rect);
     }
 
@@ -381,7 +405,7 @@ impl Dock {
             .unwrap_or_else(|| Target::edge(Side::Right));
         self.take(pane);
         self.hidden.remove(pane);
-        self.note(format!("dock {pane} back to {target:?}"));
+        self.event(format!("dock {pane} back to {target:?}"));
         tree::insert(&mut self.main, pane, &target);
     }
 
@@ -396,7 +420,7 @@ impl Dock {
         self.hidden.clear();
         let refs: Vec<&str> = all.iter().map(String::as_str).collect();
         self.adopt(&refs);
-        self.note("reset layout to default".to_owned());
+        self.event("reset layout to default".to_owned());
     }
 
     /// 別ウインドウの中身をすべて本体へ戻す。モニタの構成が変わり、前の位置が
@@ -416,7 +440,7 @@ impl Dock {
             }
         }
         self.floated.clear();
-        self.note("monitor layout changed: brought floating panes into the main window".into());
+        self.event("monitor layout changed: brought floating panes into the main window".into());
     }
 
     fn all_panes(&self) -> Vec<String> {
@@ -468,10 +492,24 @@ impl Dock {
         let area = ui.available_rect_before_wrap();
         ui.allocate_rect(area, Sense::hover());
         self.window_ui(ui, Window::Main, area, panes, labels);
+        self.floats_ui(&ctx, panes, labels);
+    }
+
+    /// 別ウインドウだけを出す。本体の中を設定画面などに使っていて [`Dock::show`] を
+    /// 呼ばないフレームでも、別ウインドウは開いたままにするため。
+    pub fn show_floats(&mut self, ctx: &egui::Context, panes: &mut impl Panes, labels: &Labels) {
+        self.log_window_changes(ctx);
+        // 本体にはペインを出していないので、ガイドで本体に入れられないようにする。
+        self.geometry.remove(&Window::Main);
+        self.track_drag(ctx);
+        self.floats_ui(ctx, panes, labels);
+    }
+
+    fn floats_ui(&mut self, ctx: &egui::Context, panes: &mut impl Panes, labels: &Labels) {
         self.floats.retain(|f| !f.close);
         let ids: Vec<u64> = self.floats.iter().map(|f| f.id).collect();
         for id in ids {
-            self.float_viewport(&ctx, id, panes, labels);
+            self.float_viewport(ctx, id, panes, labels);
         }
         let closed: Vec<u64> = self
             .floats
@@ -497,7 +535,7 @@ impl Dock {
         let f = self.floats.remove(i);
         let rect = f.rect();
         for p in f.root.as_ref().map(Node::panes).unwrap_or_default() {
-            self.note(format!("window #{id} closed: hide {p}"));
+            self.event(format!("window #{id} closed: hide {p}"));
             self.floated.insert(p.clone(), rect);
             self.hidden.insert(p, Back::Float(rect));
         }
@@ -627,21 +665,14 @@ impl Dock {
             content.min.y += HEADER;
             let id = Id::new(("vw-dock-header", pane));
             let response = ui.interact(header, id, Sense::click_and_drag());
-            let color = ui.visuals().text_color();
-            let galley_pos = header.left_center() + vec2(6.0, 0.0);
-            ui.painter().with_clip_rect(header).text(
-                galley_pos,
-                Align2::LEFT_CENTER,
-                panes.title(pane),
-                FontId::proportional(12.0),
-                color,
-            );
-            let mut buttons = ui.new_child(
+            let mut row = ui.new_child(
                 UiBuilder::new()
-                    .max_rect(header.shrink2(vec2(4.0, 0.0)))
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    .max_rect(header.shrink2(vec2(HEADER_MARGIN, 0.0)))
+                    .id_salt(("vw-dock-header-row", pane))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
-            panes.header_buttons(&mut buttons, pane);
+            row.set_clip_rect(header.intersect(ui.clip_rect()));
+            panes.header(&mut row, pane);
             if response.drag_started_by(egui::PointerButton::Primary) {
                 self.begin_drag(ui.ctx(), window, placed, &panes.title(pane));
             }
@@ -907,6 +938,7 @@ impl Dock {
     }
 
     fn finish_drag(&mut self, ctx: &egui::Context) {
+        let unshrunk = self.drag.as_ref().and_then(|d| d.shrunk);
         if self.drag.as_ref().is_some_and(|d| d.hover.is_none()) {
             self.follow(ctx, false);
         }
@@ -924,11 +956,18 @@ impl Dock {
                 self.note(format!("  move window #{} to {to:?}", f.id));
             }
             if let Some(id) = drag.float {
-                let rect = self.floats.iter().find(|f| f.id == id).map(Float::rect);
-                if let Some(rect) = rect {
+                // 動かしたり大きさを戻したりした結果は次のフレームまで egui に届かないので、
+                // 置いた位置と大きさをここで決めて覚える。
+                if let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
+                    let size = unshrunk
+                        .or(f.inner.map(|r| r.size()))
+                        .unwrap_or(vec2(f.initial[2], f.initial[3]));
+                    let inner = Rect::from_min_size(drag.screen - drag.grab, size);
+                    f.inner = Some(inner);
+                    let rect = f.rect();
                     self.floated.insert(drag.pane.clone(), rect);
                 }
-                self.note(format!(
+                self.event(format!(
                     "drag end: {} stays in window #{id} at screen {:?} ({} frames)",
                     drag.pane, drag.screen, drag.moves
                 ));
@@ -949,7 +988,7 @@ impl Dock {
         if window == Window::Main {
             self.docked.insert(drag.pane.clone(), button.target.clone());
         }
-        self.note(format!(
+        self.event(format!(
             "drag end: {} docked into {window:?} by guide {:?} ({:?}) ({} frames)",
             drag.pane, button.side, button.target, drag.moves
         ));
@@ -967,13 +1006,13 @@ impl Dock {
                         f.root = None;
                     }
                 }
-                self.note(format!(
+                self.event(format!(
                     "drag cancelled (Esc): {} back to {back:?}",
                     drag.pane
                 ));
                 self.put(&drag.pane, back);
             }
-            None => self.note(format!(
+            None => self.event(format!(
                 "drag cancelled (Esc): {} stays where it is",
                 drag.pane
             )),
@@ -1042,8 +1081,19 @@ impl Dock {
         for (id, vp) in floats {
             watch(Window::Float(id), vp, self);
         }
-        self.log.extend(lines);
+        for line in lines {
+            self.note(line);
+        }
     }
+}
+
+/// 記録の 1 行。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogLine {
+    pub text: String,
+    /// 並びが変わった結果か。偽なら、ドラッグ中の座標のような細かい記録で、アプリは
+    /// ログ欄には出さずログファイルにだけ残すなどに使い分ける。
+    pub summary: bool,
 }
 
 /// メニューの文字。アプリの言語で渡す。

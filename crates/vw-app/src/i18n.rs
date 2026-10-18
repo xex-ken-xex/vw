@@ -892,6 +892,7 @@ const JA: &[(&str, &str)] = &[
     // 画像の操作とレイアウト
     ("Image", "画像"),
     ("Layout", "レイアウト"),
+    ("Panes", "欄の配置"),
     ("Auto", "自動"),
     ("Custom", "カスタム"),
     ("Previous slot", "前のスロット"),

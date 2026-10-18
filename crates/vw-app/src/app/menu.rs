@@ -40,16 +40,18 @@ impl VwApp {
             });
             ui.menu_button(tr(lang, "View"), |ui| {
                 let toggles = [
-                    (Action::ToggleFolderTree, self.fields.tree),
-                    (Action::ToggleMetadata, self.fields.metadata),
-                    (Action::ToggleImages, self.fields.images),
-                    (Action::ToggleLog, self.fields.log),
+                    (Action::ToggleFolderTree, self.pane_shown(docking::TREE)),
+                    (Action::ToggleMetadata, self.pane_shown(docking::METADATA)),
+                    (Action::ToggleImages, self.pane_shown(docking::IMAGES)),
+                    (Action::ToggleLog, self.pane_shown(docking::LOG)),
                 ];
                 for (action, shown) in toggles {
                     if self.menu_item(ui, action, Some(shown)) {
                         chosen = Some(action);
                     }
                 }
+                vw_ui::menu::submenu(ui, tr(lang, "Panes"), |ui| self.panes_menu(ui));
+                ui.separator();
                 let pipeline = self.pipeline.open;
                 if self.menu_item(ui, Action::TogglePixelPipeline, Some(pipeline)) {
                     chosen = Some(Action::TogglePixelPipeline);

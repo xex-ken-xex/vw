@@ -391,7 +391,7 @@ impl eframe::App for Demo {
             self.dock.show(ui, &mut content, labels);
         });
         for line in self.dock.take_log() {
-            self.log.line(&line);
+            self.log.line(&line.text);
         }
     }
 

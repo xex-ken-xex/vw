@@ -467,7 +467,6 @@ fn send_all(endpoint: &Endpoint, items: &[Item], shared: &Shared, events: &Sende
             break;
         }
     }
-    drop(one);
     let cancelled = shared.cancel.load(Ordering::Relaxed);
     if cancelled || stopped.is_some() {
         store.abort();

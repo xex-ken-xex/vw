@@ -4039,6 +4039,7 @@ dependencies = [
  "vw-bmp",
  "vw-core",
  "vw-dicom",
+ "vw-dock",
  "vw-gif",
  "vw-jpeg",
  "vw-png",

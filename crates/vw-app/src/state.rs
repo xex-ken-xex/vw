@@ -55,6 +55,8 @@ pub struct AppState {
     pub sub_windows: BTreeMap<String, sub_window::Saved>,
     /// メタデータ欄で閉じていたグループ（英語の名前）。
     pub metadata_closed: Vec<String>,
+    /// ペイン（フォルダ・画像・メタデータ・ログ）の並びと、別ウインドウに出したもの。
+    pub dock: Option<vw_dock::Layout>,
 }
 
 /// `[sub_windows.名前]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
@@ -92,6 +94,18 @@ fn read_pipeline_nodes(r: &mut Reader<'_>) -> BTreeMap<String, [f32; 2]> {
         .keys()
         .filter_map(|key| Some((key.clone(), r.get::<[f32; 2]>("pipeline_nodes", key)?)))
         .collect()
+}
+
+/// `[dock]` を読む。読めなければ既定の並びに戻すので、捨てて説明を残す。
+fn read_dock(table: &toml::Table, problems: &mut Vec<String>) -> Option<vw_dock::Layout> {
+    let value = table.get("dock")?.clone();
+    match value.try_into::<vw_dock::Layout>() {
+        Ok(layout) => Some(layout),
+        Err(e) => {
+            problems.push(format!("dock: {e} (the default pane layout is used)"));
+            None
+        }
+    }
 }
 
 /// 起動時にウインドウをどう置くか。
@@ -141,6 +155,7 @@ impl AppState {
         let metadata_closed = r
             .get::<Vec<String>>("metadata", "closed")
             .unwrap_or_default();
+        let dock = read_dock(&table, &mut r.problems);
         (
             Self {
                 window,
@@ -151,6 +166,7 @@ impl AppState {
                 pipeline_nodes,
                 sub_windows,
                 metadata_closed,
+                dock,
             },
             r.problems,
         )
@@ -225,6 +241,14 @@ impl AppState {
                 })
                 .collect();
             root.insert("sub_windows".into(), windows.into());
+        }
+        if let Some(dock) = &self.dock {
+            match toml::Value::try_from(dock) {
+                Ok(v) => {
+                    root.insert("dock".into(), v);
+                }
+                Err(e) => eprintln!("vw: cannot save the pane layout: {e}"),
+            }
         }
         toml::to_string(&root).expect("state is always representable in TOML")
     }
@@ -482,8 +506,42 @@ mod tests {
             ]
             .into(),
             metadata_closed: vec!["EXIF".into(), "AI tags".into()],
+            dock: Some(saved_dock()),
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
+    }
+
+    /// ログを別ウインドウに出し、メタデータを隠した並び。
+    fn saved_dock() -> vw_dock::Layout {
+        use vw_dock::{Axis, Back, FloatSaved, Node, Side, Target};
+        vw_dock::Layout {
+            main: Some(Node::Split {
+                axis: Axis::Row,
+                ratio: 0.25,
+                first: Box::new(Node::Pane("tree".into())),
+                second: Box::new(Node::Pane("images".into())),
+            }),
+            floats: vec![FloatSaved {
+                root: Node::Pane("log".into()),
+                rect: [1930.0, 40.5, 600.0, 300.0],
+            }],
+            hidden: [(
+                "metadata".to_owned(),
+                Back::Main(Target::beside("images", Side::Right)),
+            )]
+            .into(),
+            docked: [("log".to_owned(), Target::edge(Side::Bottom))].into(),
+            floated: [("log".to_owned(), [1930.0, 40.5, 600.0, 300.0])].into(),
+        }
+    }
+
+    #[test]
+    fn broken_pane_layout_falls_back_to_the_default_and_says_so() {
+        let (state, problems) = AppState::from_toml("[dock]\nmain = 3\n[tree]\nopen = [\"/a\"]\n");
+        assert_eq!(state.dock, None);
+        assert_eq!(state.open_folders, vec![PathBuf::from("/a")]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with("dock:"), "{problems:?}");
     }
 
     #[test]
@@ -522,6 +580,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
+            dock: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -581,6 +640,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
+            dock: None,
         };
         state.save(&path).unwrap();
         assert_eq!(AppState::load(&path), (state, vec![]));
