@@ -75,6 +75,7 @@ pub enum Action {
     FullscreenPause,
     TogglePixelProbe,
     ToggleRoi,
+    ToggleHandTool,
     DeleteProbePoint,
     TogglePixelPipeline,
     ToggleHistogram,
@@ -104,7 +105,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 77] = [
+    pub const ALL: [Action; 78] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -130,6 +131,7 @@ impl Action {
         Action::LayoutCustom,
         Action::TogglePixelProbe,
         Action::ToggleRoi,
+        Action::ToggleHandTool,
         Action::DeleteProbePoint,
         Action::TogglePixelPipeline,
         Action::ToggleHistogram,
@@ -263,6 +265,7 @@ impl Action {
             Action::FullscreenPause => "fullscreen_pause",
             Action::TogglePixelProbe => "toggle_pixel_probe",
             Action::ToggleRoi => "toggle_roi",
+            Action::ToggleHandTool => "toggle_hand_tool",
             Action::DeleteProbePoint => "delete_probe_point",
         }
     }
@@ -350,6 +353,7 @@ impl Action {
             Action::FullscreenPause => "Fullscreen: pause/resume",
             Action::TogglePixelProbe => "Pixel probe on/off",
             Action::ToggleRoi => "ROI tool on/off",
+            Action::ToggleHandTool => "Hand tool on/off",
             Action::DeleteProbePoint => "Delete selected probe point or ROI",
         }
     }
@@ -520,6 +524,7 @@ impl Action {
             Action::FullscreenSlideshow => vec![KeyCombo::plain(F5)],
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::ToggleRoi => vec![KeyCombo::plain(R)],
+            Action::ToggleHandTool => vec![KeyCombo::plain(H)],
             Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],
             Action::FullscreenExit => vec![KeyCombo::plain(Escape)],
             Action::FullscreenNext => vec![KeyCombo::plain(ArrowRight)],

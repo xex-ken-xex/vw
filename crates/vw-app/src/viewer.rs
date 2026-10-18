@@ -255,6 +255,9 @@ pub struct SlotLook<'a> {
     pub probe: bool,
     /// ROI ツールを使っている（ドラッグで矩形を描く。左ドラッグはパンではなく描画になる）。
     pub roi: bool,
+    /// 画像の上の左ドラッグで表示位置を動かす（手のひら・画素値の確認ツール）。
+    /// 動かさないとき（矢印）は、見出しと同じく画像を運ぶドラッグになる。
+    pub pan: bool,
     /// 右クリックの「送信 ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
     /// 下の帯のドロップダウンに並べる、保存したパイプライン。
@@ -1019,6 +1022,7 @@ impl Slot {
             label: image_label,
             probe: probing,
             roi: roi_tool,
+            pan: pan_tool,
             destinations,
             presets,
             texture_options,
@@ -1108,8 +1112,15 @@ impl Slot {
         self.last_body = Some(body.size());
         let base = self.base_scale(body);
         if let Some(shown) = &self.shown {
-            if response.dragged_by(PAN_BUTTON) && !roi_tool {
-                self.pan += response.drag_delta();
+            if pan_tool && !roi_tool {
+                if response.dragged_by(PAN_BUTTON) {
+                    self.pan += response.drag_delta();
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                } else if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+            } else if !roi_tool && self.folder.is_none() {
+                response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
             }
             if response.dragged_by(ZOOM_BUTTON) {
                 let factor = (-response.drag_delta().y * DRAG_ZOOM_RATE).exp();
@@ -1562,7 +1573,7 @@ impl Slot {
         } else {
             visuals.weak_text_color()
         };
-        // 画像の移動はヘッダのドラッグで始める。画像の上のドラッグはパンに使っているため。
+        // 画像の移動はヘッダのドラッグでも始められる。手のひらのツールでは画像の上のドラッグがパンになるため。
         let header_response = ui.interact(
             header,
             ui.id().with(("header", self.id)),

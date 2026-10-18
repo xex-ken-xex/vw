@@ -57,6 +57,8 @@ pub struct AppState {
     pub metadata_closed: Vec<String>,
     /// ペイン（フォルダ・画像・メタデータ・ログ）の並びと、別ウインドウに出したもの。
     pub dock: Option<vw_dock::Layout>,
+    /// 画像の左ドラッグを矢印（画像を運ぶ）にしていた。既定は手のひら（表示位置を動かす）。
+    pub arrow_tool: bool,
 }
 
 /// `[sub_windows.名前]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
@@ -156,6 +158,7 @@ impl AppState {
             .get::<Vec<String>>("metadata", "closed")
             .unwrap_or_default();
         let dock = read_dock(&table, &mut r.problems);
+        let arrow_tool = r.get::<bool>("viewer", "arrow_tool").unwrap_or(false);
         (
             Self {
                 window,
@@ -167,6 +170,7 @@ impl AppState {
                 sub_windows,
                 metadata_closed,
                 dock,
+                arrow_tool,
             },
             r.problems,
         )
@@ -210,6 +214,11 @@ impl AppState {
             let mut fullscreen = toml::Table::new();
             fullscreen.insert("root".into(), dir.into());
             root.insert("fullscreen".into(), fullscreen.into());
+        }
+        if self.arrow_tool {
+            let mut viewer = toml::Table::new();
+            viewer.insert("arrow_tool".into(), true.into());
+            root.insert("viewer".into(), viewer.into());
         }
         if !self.metadata_closed.is_empty() {
             let mut metadata = toml::Table::new();
@@ -507,6 +516,7 @@ mod tests {
             .into(),
             metadata_closed: vec!["EXIF".into(), "AI tags".into()],
             dock: Some(saved_dock()),
+            arrow_tool: true,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
     }
@@ -580,6 +590,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
+            arrow_tool: false,
             dock: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
@@ -640,6 +651,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
+            arrow_tool: false,
             dock: None,
         };
         state.save(&path).unwrap();
