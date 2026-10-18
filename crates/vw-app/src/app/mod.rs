@@ -22,7 +22,7 @@ use crate::i18n::tr;
 use crate::keymap::{Action, KeyCombo, Scope};
 use crate::labels::{Flag, LabelStore};
 use crate::loader::{Job, Loader};
-use crate::log::{self, Level, Log, LogFile};
+use crate::log::{self, Log, LogFile};
 use crate::series::SeriesIndex;
 use crate::settings::{parse_hex_color, Language, LoadInto, LogStyle, SettingsStore};
 use crate::settings_ui::SettingsUi;
@@ -303,6 +303,8 @@ pub struct VwApp {
     trash_job: Option<TrashJob>,
     /// 裏で進めているドラッグでの移動・コピー。
     transfer_jobs: Vec<crate::transfer::Job>,
+    /// ターミナル風のログ欄の「(済んだ数/全部の数)」。
+    tally: crate::status::Tally,
     /// 監視を始められなかった。毎フレーム作り直してログを埋めないよう、設定を切り替えるまで諦める。
     watcher_failed: bool,
 }
@@ -679,6 +681,7 @@ impl VwApp {
             dataset_dialog: None,
             trash_job: None,
             transfer_jobs: Vec::new(),
+            tally: Default::default(),
         };
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
         // ファイルを開くのが目的なので、前回のフォルダには移らない。
@@ -1267,75 +1270,6 @@ enum LogAction {
     OpenFile,
     OpenFolder,
     CopyAll,
-}
-
-/// ターミナル風のログ欄の地の色。テーマによらず黒地にする。
-const TERMINAL_BACKGROUND: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
-
-fn terminal_line(line: &log::Line, wrap: bool) -> egui::Label {
-    let color = match line.level {
-        Level::Info => Color32::from_rgb(0xcc, 0xcc, 0xcc),
-        Level::Warn => Color32::from_rgb(0xe5, 0xc0, 0x7b),
-        Level::Error => Color32::from_rgb(0xf0, 0x71, 0x78),
-    };
-    egui::Label::new(
-        egui::RichText::new(line.terminal())
-            .monospace()
-            .color(color),
-    )
-    .wrap_mode(wrap_mode(wrap))
-}
-
-fn wrap_mode(wrap: bool) -> egui::TextWrapMode {
-    if wrap {
-        egui::TextWrapMode::Wrap
-    } else {
-        egui::TextWrapMode::Extend
-    }
-}
-
-/// 状態の 1 行。ターミナル風は黒地に決まった色、普通の見た目はテーマの色で。
-fn status_job(
-    line: &[crate::status::Segment],
-    terminal: bool,
-    visuals: &egui::Visuals,
-) -> egui::text::LayoutJob {
-    use crate::status::Tone;
-    let font = egui::FontId::monospace(12.0);
-    let mut job = egui::text::LayoutJob::default();
-    for (text, tone) in line {
-        let color = match (tone, terminal) {
-            (Tone::Label, true) => Color32::from_rgb(0x8a, 0x8a, 0x8a),
-            (Tone::Value, true) => Color32::from_rgb(0xe6, 0xe6, 0xe6),
-            (Tone::Dim, true) => Color32::from_rgb(0x5c, 0x5c, 0x5c),
-            (Tone::Bad, true) => Color32::from_rgb(0xf0, 0x71, 0x78),
-            (Tone::Label | Tone::Dim, false) => visuals.weak_text_color(),
-            (Tone::Value, false) => visuals.text_color(),
-            (Tone::Bad, false) => visuals.error_fg_color,
-            (Tone::Accent, _) => Color32::from_rgb(0xe0, 0x8a, 0x5a),
-        };
-        job.append(text, 0.0, egui::TextFormat::simple(font.clone(), color));
-    }
-    job
-}
-
-/// 時刻を薄く、本文を重さの色で。1 つのラベルにするのは、範囲選択でコピーしたときに時刻と本文が 1 行に並ぶようにするため。
-fn normal_line(ui: &egui::Ui, line: &log::Line, wrap: bool) -> egui::Label {
-    let visuals = ui.visuals();
-    let color = match line.level {
-        Level::Info => visuals.text_color(),
-        Level::Warn => visuals.warn_fg_color,
-        Level::Error => visuals.error_fg_color,
-    };
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
-    job.append(
-        &format!("{}  ", line.clock()),
-        0.0,
-        egui::TextFormat::simple(font.clone(), visuals.weak_text_color()),
-    );
-    job.append(&line.text, 0.0, egui::TextFormat::simple(font, color));
-    egui::Label::new(job).wrap_mode(wrap_mode(wrap))
 }
 
 /// ログに出す、メタデータ欄で選んだものの名前。

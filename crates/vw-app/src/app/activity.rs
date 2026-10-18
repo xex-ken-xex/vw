@@ -5,74 +5,91 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, vec2};
 
 use crate::i18n::tr;
-use crate::status::Job;
+use crate::status::Task;
 use crate::theme;
 
 use super::*;
 
 impl VwApp {
-    /// 進めている処理と、その進み具合。ZIP の展開・ドラッグでの移動やコピー・データセットの
-    /// 読み込みや取り出し・書き出し・送信・AI。名前は訳す前のもの。
-    pub(super) fn jobs(&self) -> Vec<Job> {
-        let transfers = (!self.transfer_jobs.is_empty()).then(|| {
-            self.transfer_jobs
-                .iter()
-                .map(|j| j.progress())
-                .fold((0, 0), |(d, t), (done, total)| (d + done, t + total))
-        });
-        let in_bytes = [
-            ("Extracting ZIP", self.archives.progress()),
-            ("Moving or copying", transfers),
-        ];
-        let in_items = [
-            (
-                "Dataset job",
-                self.dataset_dialog.as_ref().and_then(|d| d.progress()),
-            ),
-            (
-                "Exporting",
-                self.export
-                    .as_ref()
-                    .and_then(|d| d.job.as_ref())
-                    .map(|j| (j.done.load(std::sync::atomic::Ordering::Relaxed), j.total)),
-            ),
-            ("Sending", self.send_job.as_ref().and_then(|j| j.progress())),
-            (
-                self.ai_job_name(),
-                self.ai_job.as_ref().map(|j| j.progress()),
-            ),
-            ("Downloading AI models", self.ai_models.progress()),
-        ];
-        let job = |bytes| {
-            move |(name, p): (&'static str, Option<(usize, usize)>)| {
-                p.map(|(done, total)| Job {
-                    name,
-                    done,
-                    total,
-                    bytes,
-                })
-            }
+    /// 進めている処理 1 件ずつと、その進み具合。ZIP の展開・ドラッグでの移動やコピー・データセットの
+    /// 読み込みや取り出し・書き出し・送信・AI・AI のモデルのダウンロード・RAW の現像。
+    pub(super) fn tasks(&self) -> Vec<Task> {
+        let lang = self.lang();
+        let task = |kind: &'static str, name: String, (done, total): (usize, usize), bytes| Task {
+            kind: tr(lang, kind).to_owned(),
+            name,
+            done,
+            total,
+            bytes,
         };
-        in_bytes
-            .into_iter()
-            .filter_map(job(true))
-            .chain(in_items.into_iter().filter_map(job(false)))
-            .collect()
+        let mut tasks = Vec::new();
+        for (name, done, total) in self.archives.progress() {
+            tasks.push(task("Extracting ZIP", name, (done, total), true));
+        }
+        for job in &self.transfer_jobs {
+            let kind = match job.transfer.op {
+                crate::transfer::Op::Move => "Moving",
+                crate::transfer::Op::Copy => "Copying",
+            };
+            tasks.push(task(
+                kind,
+                file_name(&job.transfer.file),
+                job.progress(),
+                true,
+            ));
+        }
+        for (name, done, total) in self.ai_models.progress() {
+            tasks.push(task("Downloading", name.to_owned(), (done, total), true));
+        }
+        if let Some(d) = &self.dataset_dialog {
+            if let Some(p) = d.progress() {
+                tasks.push(task("Dataset job", file_name(d.dir()), p, false));
+            }
+        }
+        if let Some(job) = self.export.as_ref().and_then(|d| d.job.as_ref()) {
+            let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
+            tasks.push(task("Exporting", String::new(), (done, job.total), false));
+        }
+        if let Some(job) = &self.send_job {
+            if let Some(p) = job.progress() {
+                tasks.push(task("Sending", job.destination.name.clone(), p, false));
+            }
+        }
+        if let Some(job) = &self.ai_job {
+            tasks.push(task(
+                self.ai_job_name(),
+                String::new(),
+                job.progress(),
+                false,
+            ));
+        }
+        for shown in self.slots.iter().filter_map(|s| s.shown.as_ref()) {
+            if shown.developing() {
+                tasks.push(task(
+                    "Developing RAW",
+                    file_name(&shown.path),
+                    (0, 0),
+                    false,
+                ));
+            }
+        }
+        tasks
     }
 
     /// 進めている処理の進み具合。何もしていなければ `None`。
     pub(super) fn activity(&self) -> Option<Activity> {
-        let jobs = self.jobs();
-        if jobs.is_empty() {
+        let tasks = self.tasks();
+        if tasks.is_empty() {
             return None;
         }
-        if jobs.iter().any(|j| j.total == 0) {
+        if tasks.iter().any(|t| t.total == 0) {
             return Some(Activity::Unknown);
         }
         // 一番遅れているものに合わせる。合計で出すと、終わりかけのものに隠れて
         // 長い処理がもうすぐ終わるように見えてしまうため。
-        jobs.iter()
-            .map(|j| (j.done as f32 / j.total as f32).clamp(0.0, 1.0))
+        tasks
+            .iter()
+            .map(|t| (t.done as f32 / t.total as f32).clamp(0.0, 1.0))
             .reduce(f32::min)
             .map(Activity::Fraction)
     }
@@ -115,16 +132,15 @@ impl VwApp {
 
     /// 進み具合の短い言い方（「ZIP の展開 37%」）。いくつもあれば最初のものに数を添える。
     pub(super) fn activity_summary(&self) -> Option<String> {
-        let jobs = self.jobs();
-        let first = jobs.first()?;
-        let lang = self.lang();
-        let mut text = tr(lang, first.name).to_owned();
+        let tasks = self.tasks();
+        let first = tasks.first()?;
+        let mut text = first.kind.clone();
         if first.total > 0 {
             let percent = 100.0 * first.done as f32 / first.total as f32;
             text.push_str(&format!(" {percent:.0}%"));
         }
-        if jobs.len() > 1 {
-            text.push_str(&format!(" (+{})", jobs.len() - 1));
+        if tasks.len() > 1 {
+            text.push_str(&format!(" (+{})", tasks.len() - 1));
         }
         Some(text)
     }
@@ -149,6 +165,13 @@ impl VwApp {
             });
         ctx.request_repaint_after(toast.until - now);
     }
+}
+
+/// 処理の行に出すファイルやフォルダの名前。
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// 下の線の進み具合。

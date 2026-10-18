@@ -620,19 +620,18 @@ pub struct Dialog {
 }
 
 impl Dialog {
-    /// 進み具合（活動ラインに出す）。合計バイトに対する済みバイト。
-    pub fn progress(&self) -> Option<(usize, usize)> {
-        if self.downloads.is_empty() {
-            return None;
-        }
-        let (done, total) = self.downloads.iter().fold((0, 0), |(d, t), (_, dl)| {
-            (
-                d + dl.progress.done.load(Ordering::Relaxed),
-                t + dl.progress.total.load(Ordering::Relaxed),
-            )
-        });
-        // 1 MB 単位。活動ラインは usize で受けるため。
-        Some(((done >> 20) as usize, (total >> 20).max(1) as usize))
+    /// ダウンロード中のもの 1 つずつの（名前, 済んだバイト数, 全部のバイト数）。
+    pub fn progress(&self) -> Vec<(&'static str, usize, usize)> {
+        self.downloads
+            .iter()
+            .map(|(item, dl)| {
+                (
+                    item.title(),
+                    dl.progress.done.load(Ordering::Relaxed) as usize,
+                    dl.progress.total.load(Ordering::Relaxed) as usize,
+                )
+            })
+            .collect()
     }
 
     /// 終わったダウンロードの結果（ログに出す）。

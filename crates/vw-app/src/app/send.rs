@@ -118,7 +118,7 @@ impl VwApp {
                         (Some(e), _) => self.log.error(format!("{line} (stopped: {e})")),
                         (None, true) => self.log.warn(format!("{line} (cancelled)")),
                         (None, false) if failed > 0 => self.log.error(line),
-                        (None, false) => self.log.info(line),
+                        (None, false) => self.log.done("Sent", format!("{sent} file(s) to {name}")),
                     }
                 }
             }

@@ -856,7 +856,12 @@ impl VwApp {
             .archives
             .mount(zip, None, move || ctx.request_repaint())
         {
-            self.log.info(format!("Extracting {}…", zip.display()));
+            // 展開している間はログ欄の下に 1 行で出し、済んだら「Extracted」の行を積むので、
+            // 始めたことはファイルにだけ残す。
+            self.log.detail(
+                crate::log::Level::Info,
+                format!("Extracting {}…", zip.display()),
+            );
         }
     }
 
@@ -865,8 +870,10 @@ impl VwApp {
         for event in self.archives.poll() {
             match event {
                 archive::Event::Mounted { mount, files } => {
-                    self.log
-                        .info(format!("Opened {} ({files} files)", mount.zip.display()));
+                    self.log.done(
+                        "Extracted",
+                        format!("{} ({files} files)", mount.zip.display()),
+                    );
                     self.tree.add_mounted_root(mount.dir.clone(), mount.name());
                     let into = self.settings().tree.load_into;
                     self.cd(ctx, mount.dir, into);

@@ -1,4 +1,7 @@
-//! ログ欄の上に出す、常に書き換わる状態の行。今動いている処理と、読み込みの集計を出す。
+//! ログ欄の下に出す、常に書き換わる状態の行。今動いている処理と、読み込みの集計を出す。
+//!
+//! 動いている処理は uv の画面のように、全体の数の行の下に 1 件 1 行で名前・棒・量を並べる。
+//! 済んだものはこの行から消え、上のログに「済み」の行として積まれる（[`crate::log::Log::done`]）。
 //!
 //! 1 枚ごとの読み込みの記録はログファイルにだけ書き、ここには平均と数だけを出す。
 //! ログ欄を 1 枚ごとの行で埋めると、何が起きたかの話題（フォルダを開いた、失敗した）が流れてしまうため。
@@ -6,7 +9,7 @@
 //! 文字だけで棒や波形を描くのは、ログと同じ等幅の文字の並びの中に収め、
 //! そのまま選んでコピーしても読める形にするため。
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 /// 行の中の 1 区切りの役目。色は描く側が決める。
@@ -17,18 +20,50 @@ pub enum Tone {
     Accent,
     Dim,
     Bad,
+    /// 進み具合の棒。
+    Bar,
 }
 
 pub type Segment = (String, Tone);
 
-/// 進めている処理 1 つ。
-pub struct Job {
-    pub name: &'static str,
+/// 進めている処理 1 件（ZIP 1 つ、コピー 1 つなど）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Task {
+    /// 何をしているか（訳した短い名前。「ZIP の展開」）。
+    pub kind: String,
+    /// 何に対してか（ファイルやフォルダの名前）。
+    pub name: String,
     pub done: usize,
-    /// 全部の量。まだ分からない（ZIP の目次を読んでいるなど）ときは 0。
+    /// 全部の量。まだ分からない（ZIP の目次を読んでいる、RAW を現像しているなど）ときは 0。
     pub total: usize,
     /// 量がバイト数か（そうでなければ件数）。
     pub bytes: bool,
+}
+
+/// 動き始めてから済んだ処理の数と、全部の数（「(164/179)」）。何も動かなくなったら数え直す。
+///
+/// 処理の側に数を持たせないのは、ZIP・コピー・送信などがそれぞれ別の仕組みで動いていて、
+/// 見えている行の出入りから数えるのが一番どれにも手を入れずに済むため。
+#[derive(Default)]
+pub struct Tally {
+    seen: HashSet<(String, String)>,
+}
+
+impl Tally {
+    /// 今動いている処理を渡し、（済んだ数, 全部の数）を返す。
+    pub fn update(&mut self, running: &[Task]) -> (usize, usize) {
+        if running.is_empty() {
+            self.seen.clear();
+            return (0, 0);
+        }
+        let now: HashSet<(String, String)> = running
+            .iter()
+            .map(|t| (t.kind.clone(), t.name.clone()))
+            .collect();
+        let finished = self.seen.difference(&now).count();
+        self.seen.extend(now);
+        (finished, self.seen.len())
+    }
 }
 
 /// 状態の行を作るための、その時点の値。
@@ -44,7 +79,9 @@ pub struct Snapshot {
     /// 持っているフル解像度の画像のバイト数と、その上限。
     pub resident: usize,
     pub limit: usize,
-    pub jobs: Vec<Job>,
+    pub tasks: Vec<Task>,
+    /// 動き始めてから済んだ処理の数と、全部の数（[`Tally`]）。
+    pub tally: (usize, usize),
     /// 回るしるし。何か動いているときだけ回す。
     pub spinner: char,
     pub files: usize,
@@ -108,8 +145,18 @@ pub struct Words<'a> {
     pub waiting: &'a str,
     pub per_second: &'a str,
     pub full: &'a str,
-    pub idle: &'a str,
+    /// 処理がいくつかの種類にまたがるときの、全体の数の行の名前。
+    pub working: &'a str,
+    /// 行に出しきれない処理の数に添える語（「ほか 3 件」の「ほか」）。
+    pub more: &'a str,
 }
+
+/// 1 件 1 行で出す処理の数の上限。コピーを何十も重ねたときに、ログが押し出されないように。
+pub const TASK_LINES: usize = 8;
+/// 処理の名前の欄の幅（文字）。長い名前は頭を「…」で縮める（ファイル名は末尾のほうが見分けやすい）。
+const NAME_WIDTH: usize = 32;
+/// 進み具合の棒の幅（文字）。
+const BAR_WIDTH: usize = 30;
 
 /// 1 秒ごとの完了数を数え、直近の流れを波形にする。
 pub struct Throughput {
@@ -214,20 +261,84 @@ pub fn spinner(seconds: f64) -> char {
     FRAMES[(seconds * 8.0) as usize % FRAMES.len()]
 }
 
-/// 1.2 GB・820 MB のような短い形。
+/// 1.2 GB・820 MB・36.1 MB・512 KB のような短い形。
 pub fn bytes(n: usize) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     let mb = n as f64 / MB;
     if mb >= 1024.0 {
         format!("{:.1} GB", mb / 1024.0)
-    } else {
+    } else if mb >= 100.0 {
         format!("{mb:.0} MB")
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} KB", n as f64 / 1024.0)
     }
 }
 
-/// 状態の行。読み込みの集計、最後に読んだファイル、フル解像度のメモリ、
-/// そのあとに進めている処理を 1 つ 1 行で（なければ「待機中」の 1 行）。
+/// `text` を `width` 文字にそろえる。長ければ頭を「…」にして末尾を残す。
+fn fit(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return format!("{text}{}", " ".repeat(width - count));
+    }
+    let tail: String = text.chars().skip(count - (width - 1)).collect();
+    format!("…{tail}")
+}
+
+/// 状態の行。動いている処理があれば、全体の数の行と 1 件 1 行の進み具合を先に。
+/// そのあとに読み込みの集計、最後に読んだファイル、フル解像度のメモリ。
 pub fn lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
+    let mut out = task_lines(s, w);
+    out.extend(load_lines(s, w));
+    out
+}
+
+fn task_lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
+    let seg = |text: String, tone| (text, tone);
+    let Some(first) = s.tasks.first() else {
+        return Vec::new();
+    };
+    let title = if s.tasks.iter().all(|t| t.kind == first.kind) {
+        first.kind.as_str()
+    } else {
+        w.working
+    };
+    let (finished, all) = s.tally;
+    let mut out = vec![vec![
+        seg(format!("{} ", s.spinner), Tone::Accent),
+        seg(format!("{title}... "), Tone::Label),
+        seg(format!("({finished}/{all})"), Tone::Value),
+    ]];
+    for task in s.tasks.iter().take(TASK_LINES) {
+        let name = fit(&format!("{} {}", task.kind, task.name), NAME_WIDTH);
+        let mut line = vec![seg(format!("{name} "), Tone::Value)];
+        if task.total == 0 {
+            line.push(seg("…".into(), Tone::Dim));
+        } else {
+            let amount = if task.bytes {
+                format!("{}/{}", bytes(task.done), bytes(task.total))
+            } else {
+                format!("{}/{}", task.done, task.total)
+            };
+            line.push(seg(
+                bar(task.done as f32 / task.total as f32, BAR_WIDTH),
+                Tone::Bar,
+            ));
+            line.push(seg(format!(" {amount}"), Tone::Value));
+        }
+        out.push(line);
+    }
+    if s.tasks.len() > TASK_LINES {
+        out.push(vec![seg(
+            format!("{} {}", w.more, s.tasks.len() - TASK_LINES),
+            Tone::Dim,
+        )]);
+    }
+    out
+}
+
+fn load_lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
     let seg = |text: String, tone| (text, tone);
     let busy = s.waiting + s.running > 0;
     let mut load = vec![
@@ -278,34 +389,7 @@ pub fn lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
             Tone::Value,
         ),
     ];
-    let mut out = vec![load, last, memory];
-    if s.jobs.is_empty() {
-        out.push(vec![seg(format!("  {}", w.idle), Tone::Dim)]);
-    }
-    for job in &s.jobs {
-        let mut line = vec![
-            seg(format!("{} ", s.spinner), Tone::Accent),
-            seg(format!("{} ", job.name), Tone::Label),
-        ];
-        if job.total == 0 {
-            line.push(seg("…".into(), Tone::Value));
-            out.push(line);
-            continue;
-        }
-        let fraction = job.done as f32 / job.total as f32;
-        let amount = if job.bytes {
-            format!("{}/{}", bytes(job.done), bytes(job.total))
-        } else {
-            format!("{}/{}", job.done, job.total)
-        };
-        line.push(seg(bar(fraction, 16), Tone::Accent));
-        line.push(seg(
-            format!(" {:3.0}% {amount}", fraction * 100.0),
-            Tone::Value,
-        ));
-        out.push(line);
-    }
-    out
+    vec![load, last, memory]
 }
 
 #[cfg(test)]
@@ -322,7 +406,8 @@ mod tests {
         waiting: "waiting",
         per_second: "/s",
         full: "full",
-        idle: "idle",
+        working: "Working",
+        more: "more",
     };
 
     fn snapshot() -> Snapshot {
@@ -334,7 +419,8 @@ mod tests {
             rate: 0.0,
             resident: 0,
             limit: 4 << 30,
-            jobs: Vec::new(),
+            tasks: Vec::new(),
+            tally: (0, 0),
             spinner: '/',
             files: 0,
             failed: 0,
@@ -420,37 +506,113 @@ mod tests {
         assert!(line.ends_with("███───────── 1.0 GB / 4.0 GB"), "{line}");
     }
 
+    fn task(kind: &str, name: &str, done: usize, total: usize, bytes: bool) -> Task {
+        Task {
+            kind: kind.into(),
+            name: name.into(),
+            done,
+            total,
+            bytes,
+        }
+    }
+
     #[test]
-    fn each_running_job_gets_its_own_line() {
-        assert_eq!(text(&lines(&snapshot(), &WORDS)[3]), "  idle");
+    fn nothing_running_shows_only_the_loading_lines() {
+        let all = lines(&snapshot(), &WORDS);
+        assert_eq!(all.len(), 3);
+        assert!(text(&all[0]).starts_with("  load"));
+    }
+
+    #[test]
+    fn each_running_task_gets_a_line_under_the_overall_count() {
         let s = Snapshot {
-            jobs: vec![
-                Job {
-                    name: "Send",
-                    done: 35,
-                    total: 70,
-                    bytes: false,
-                },
-                Job {
-                    name: "ZIP",
-                    done: 1 << 30,
-                    total: 4 << 30,
-                    bytes: true,
-                },
-                Job {
-                    name: "Copy",
-                    done: 0,
-                    total: 0,
-                    bytes: true,
-                },
+            tasks: vec![
+                task("Send", "PACS", 35, 70, false),
+                task("ZIP", "photos.zip", 1 << 30, 4 << 30, true),
+                task("Copy", "a.png", 0, 0, true),
             ],
+            tally: (2, 5),
             ..snapshot()
         };
         let all = lines(&s, &WORDS);
-        assert_eq!(all.len(), 6);
-        assert_eq!(text(&all[3]), "/ Send ████████────────  50% 35/70");
-        assert_eq!(text(&all[4]), "/ ZIP ████────────────  25% 1.0 GB/4.0 GB");
-        assert_eq!(text(&all[5]), "/ Copy …");
+        assert_eq!(all.len(), 4 + 3);
+        assert_eq!(text(&all[0]), "/ Working... (2/5)");
+        assert_eq!(
+            text(&all[1]),
+            format!(
+                "{:<32} {}{} 35/70",
+                "Send PACS",
+                "█".repeat(15),
+                "─".repeat(15)
+            )
+        );
+        assert!(
+            text(&all[2]).ends_with(" 1.0 GB/4.0 GB"),
+            "{}",
+            text(&all[2])
+        );
+        assert_eq!(text(&all[3]), format!("{:<32} …", "Copy a.png"));
+        assert!(text(&all[4]).starts_with("/ load") || text(&all[4]).starts_with("  load"));
+    }
+
+    #[test]
+    fn tasks_of_one_kind_are_counted_under_that_kind() {
+        let s = Snapshot {
+            tasks: vec![
+                task("Copy", "a.png", 1, 2, true),
+                task("Copy", "b.png", 1, 2, true),
+            ],
+            tally: (0, 2),
+            ..snapshot()
+        };
+        assert_eq!(text(&lines(&s, &WORDS)[0]), "/ Copy... (0/2)");
+    }
+
+    #[test]
+    fn long_names_keep_their_end() {
+        let name = format!("{}.zip", "x".repeat(40));
+        let s = Snapshot {
+            tasks: vec![task("ZIP", &name, 1, 2, false)],
+            ..snapshot()
+        };
+        let line = text(&lines(&s, &WORDS)[1]);
+        assert!(line.starts_with('…'), "{line}");
+        assert!(line.contains("xxx.zip "), "{line}");
+    }
+
+    #[test]
+    fn tasks_beyond_the_limit_are_only_counted() {
+        let tasks: Vec<Task> = (0..TASK_LINES + 3)
+            .map(|i| task("Copy", &format!("{i}.png"), 1, 2, false))
+            .collect();
+        let s = Snapshot {
+            tasks,
+            ..snapshot()
+        };
+        let all = lines(&s, &WORDS);
+        assert_eq!(text(&all[TASK_LINES + 1]), "more 3");
+    }
+
+    #[test]
+    fn the_tally_counts_tasks_that_have_left_until_everything_stops() {
+        let mut tally = Tally::default();
+        let a = task("Copy", "a.png", 0, 1, true);
+        let b = task("Copy", "b.png", 0, 1, true);
+        assert_eq!(tally.update(&[a.clone(), b.clone()]), (0, 2));
+        assert_eq!(tally.update(std::slice::from_ref(&b)), (1, 2));
+        let c = task("ZIP", "c.zip", 0, 0, true);
+        assert_eq!(tally.update(&[b, c.clone()]), (1, 3));
+        assert_eq!(tally.update(&[c]), (2, 3));
+        assert_eq!(tally.update(&[]), (0, 0));
+        assert_eq!(tally.update(&[a]), (0, 1));
+    }
+
+    #[test]
+    fn sizes_are_short_with_the_unit_that_fits() {
+        assert_eq!(bytes(512 * 1024), "512 KB");
+        assert_eq!(bytes(36 * 1024 * 1024 + 150 * 1024), "36.1 MB");
+        assert_eq!(bytes(674 * 1024 * 1024), "674 MB");
+        assert_eq!(bytes(3 << 29), "1.5 GB");
     }
 
     #[test]

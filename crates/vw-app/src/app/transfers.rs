@@ -72,7 +72,7 @@ impl VwApp {
             match result {
                 Ok(dest) => {
                     self.log
-                        .info(format!("{verb} {} to {}", t.file.display(), dest.display()));
+                        .done(verb, format!("{} to {}", t.file.display(), dest.display()));
                     if let Some(e) = t.carry_labels(&mut self.labels, &dest) {
                         self.log.error(format!("Labels were not carried over: {e}"));
                     }
@@ -299,10 +299,10 @@ impl VwApp {
         dialog.job = None;
         // ログの欄はこの画面より先に描いているので、結果を出すにはもう一度描く。
         ctx.request_repaint();
-        self.log.info(format!(
-            "Export: copied {copied} images ({} not copied)",
-            failed.len()
-        ));
+        self.log.done(
+            "Exported",
+            format!("{copied} images ({} not copied)", failed.len()),
+        );
         for e in failed {
             self.log.error(format!("Export: {e}"));
         }

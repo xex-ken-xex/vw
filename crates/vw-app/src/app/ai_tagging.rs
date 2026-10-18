@@ -265,14 +265,18 @@ impl VwApp {
 
     /// 終わった仕事を、ZIP の展開と同じく 1 行にまとめてログに出す。
     fn log_ai_job(&mut self, job: &Job) {
-        let what = match job.work {
-            Work::Tag => format!("AI tags added to {} image(s)", job.saved),
-            Work::Faces => format!("Found {} face(s) in {} image(s)", job.faces, job.saved),
+        let (verb, what) = match job.work {
+            Work::Tag => ("Tagged", format!("{} image(s) with AI tags", job.saved)),
+            Work::Faces => (
+                "Found",
+                format!("{} face(s) in {} image(s)", job.faces, job.saved),
+            ),
         };
         if job.failed.is_empty() {
-            self.log.info(what);
+            self.log.done(verb, what);
             return;
         }
+        let what = format!("{verb} {what}");
         self.log
             .warn(format!("{what}, {} failed", job.failed.len()));
         for (path, e) in job.failed.iter().take(FAILURES_SHOWN) {
@@ -400,7 +404,7 @@ impl VwApp {
         for (item, result) in self.ai_models.finished() {
             match result {
                 Ok(()) => {
-                    self.log.info(format!("Downloaded {}", item.title()));
+                    self.log.done("Downloaded", item.title());
                     if item == Item::PlaceNames {
                         self.reload_place_names();
                     }

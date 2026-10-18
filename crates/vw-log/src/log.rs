@@ -14,6 +14,8 @@ use chrono::{DateTime, Local};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
     Info,
+    /// 処理が済んだ知らせ。ターミナル風の表示で、頭の動詞を緑で出す（uv の「Built」のように）。
+    Done,
     Warn,
     Error,
 }
@@ -22,6 +24,7 @@ impl Level {
     fn tag(self) -> &'static str {
         match self {
             Level::Info => "INFO ",
+            Level::Done => "DONE ",
             Level::Warn => "WARN ",
             Level::Error => "ERROR",
         }
@@ -34,6 +37,8 @@ pub struct Line {
     pub at: DateTime<Local>,
     pub level: Level,
     pub text: String,
+    /// `text` の頭の、済んだことを表す動詞のバイト数（[`Log::done`] の行だけ。ほかは 0）。
+    pub verb: usize,
 }
 
 impl Line {
@@ -93,6 +98,7 @@ impl Log {
             at: Local::now(),
             level,
             text: msg.into(),
+            verb: 0,
         }
     }
 
@@ -108,6 +114,14 @@ impl Log {
     pub fn detail(&mut self, level: Level, msg: impl Into<String>) {
         if let Some(f) = &self.file {
             f.write_line(&self.line(level, msg).raw());
+        }
+    }
+
+    /// 処理が済んだ行。`verb` は「Copied」のような済んだことを表す語で、`rest` はその後に続ける。
+    pub fn done(&mut self, verb: &str, rest: impl AsRef<str>) {
+        self.push(Level::Done, format!("{verb} {}", rest.as_ref()));
+        if let Some(line) = self.lines.last_mut() {
+            line.verb = verb.len();
         }
     }
 
@@ -206,7 +220,35 @@ pub fn log_dir(settings_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::TempDir;
+
+    /// テストごとの空のフォルダ。落としたときに消す。
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("vw-log-test-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn touch(&self, name: &str) {
+            std::fs::write(self.0.join(name), b"").unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn at(s: &str) -> DateTime<Local> {
         let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
@@ -229,6 +271,16 @@ mod tests {
             [(Level::Info, "a"), (Level::Warn, "b"), (Level::Error, "c")]
         );
         assert!(log.lines.windows(2).all(|w| w[0].elapsed <= w[1].elapsed));
+    }
+
+    #[test]
+    fn a_done_line_starts_with_its_verb() {
+        let mut log = Log::new(Instant::now());
+        log.done("Copied", "a.png to b");
+        let line = &log.lines[0];
+        assert_eq!(line.level, Level::Done);
+        assert_eq!(line.text, "Copied a.png to b");
+        assert_eq!(&line.text[..line.verb], "Copied");
     }
 
     #[test]

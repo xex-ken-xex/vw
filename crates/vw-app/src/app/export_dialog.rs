@@ -207,11 +207,10 @@ impl VwApp {
                     .collect();
                 let out = PathBuf::from(dialog.list_path.trim());
                 match export::write_list(&out, format, &items) {
-                    Ok(()) => self.log.info(format!(
-                        "Export: wrote {} images to {}",
-                        items.len(),
-                        out.display()
-                    )),
+                    Ok(()) => self.log.done(
+                        "Exported",
+                        format!("{} images to {}", items.len(), out.display()),
+                    ),
                     Err(e) => self.log.error(format!("Export: {e}")),
                 }
             }
