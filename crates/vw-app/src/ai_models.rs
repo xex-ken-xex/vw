@@ -660,11 +660,14 @@ impl Dialog {
         }
         let mut open = self.open;
         let mut start = None;
+        // 最初は真ん中に出すが、anchor では留めない。取ってくるのに時間がかかり、開いたまま
+        // 後ろの画像を見ることがあるので、見たいところから動かせるようにする。
         egui::Window::new(tr(lang, "Downloads"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 let Some(store) = store else {
                     ui.label(tr(
