@@ -16,6 +16,8 @@ accepted = [
     "IJG",
     "OFL-1.1",
     "Ubuntu-font-1.0",
+    # egui の等幅フォント Hack の元になった Bitstream Vera。名前を変えずに改変しなければ再配布できる。
+    "Bitstream-Vera",
     # カメラ RAW の rawler。vw のソースを公開しているので、利用者が rawler を差し替えて
     # 作り直せるという LGPL の条件を満たせる。
     "LGPL-2.1",
@@ -31,3 +33,47 @@ targets = [
 ]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+
+# 以下は、crate の license 欄だけでは同梱しているものの表記が抜けるもの。
+# checksum はそのファイルの SHA-256。crate の版を上げてファイルが変わると生成が失敗するので、
+# そのときは中身を読み直してから値を書き換える。
+
+# egui の既定のフォント。等幅の Hack は MIT と Bitstream Vera License の 2 つで、
+# crate の license 欄に Bitstream Vera が無いため、そのまま生成するとこの条文が載らない。
+[epaint_default_fonts.clarify]
+license = "MIT AND OFL-1.1 AND Ubuntu-font-1.0 AND Bitstream-Vera"
+
+[[epaint_default_fonts.clarify.files]]
+path = "fonts/Hack-Regular.txt"
+license = "MIT AND Bitstream-Vera"
+checksum = "47c0cccbeec7e8614548cc485588b28149e7874188df5f41b36efebcee285c87"
+
+[[epaint_default_fonts.clarify.files]]
+path = "fonts/emoji-icon-font-mit-license.txt"
+license = "MIT"
+checksum = "b9d2c1d909aa149996fd4c91dcb92b2362a04431640c1d200959da94caf8cde1"
+
+[[epaint_default_fonts.clarify.files]]
+path = "fonts/OFL.txt"
+license = "OFL-1.1"
+checksum = "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+
+[[epaint_default_fonts.clarify.files]]
+path = "fonts/UFL.txt"
+license = "Ubuntu-font-1.0"
+checksum = "2f0015108d68627bd788d313f529c21ff4da2c2c42a5e1f3883acc83480f9002"
+
+# JPEG-LS の CharLS（C++）。crate の license 欄は Rust の包みの MIT だけで、
+# 一緒にビルドして入る CharLS 本体の BSD-3-Clause が載らない。
+[charls-sys.clarify]
+license = "MIT AND BSD-3-Clause"
+
+[[charls-sys.clarify.files]]
+path = "LICENSE.md"
+license = "MIT"
+checksum = "b2c06a33544de153d64c76ad9f2cb69c61224815aecde5fe4bc4de676595e2a5"
+
+[[charls-sys.clarify.files]]
+path = "charls/LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "e293ccc327ee42f4e723e73aac39b23ffc40655cc6f8baec5c046f2e7d093695"

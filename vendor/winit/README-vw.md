@@ -8,3 +8,6 @@ crates.io の winit 0.30.13 をそのまま写し、次だけを変えている�
 - `rustfmt.toml`: 整形しない（vw の `cargo fmt --check` の対象から外す）
 
 上流で直った 0.30.x が出たら、ルートの `Cargo.toml` の `[patch.crates-io]` とこのフォルダを消す。
+
+変えたファイルの先頭には、変えたことを英語で書いてある（Apache License 2.0 の 4(b) が、変えたファイルに
+その旨を目立つように書くことを求めているため）。

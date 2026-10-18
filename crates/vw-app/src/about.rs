@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::i18n::tr;
-use crate::settings::Language;
+use crate::settings::{Language, MapSettings};
 
 pub const COPYRIGHT: &str = "Copyright (c) 2026 vw contributors";
 pub const AUTHOR: &str = "xex (xex-ken-xex)";
@@ -26,7 +26,8 @@ pub struct About {
 
 impl About {
     /// 開いていれば描く。一覧を開けなかったときは、その理由を返す（ログに出す）。
-    pub fn ui(&mut self, ctx: &egui::Context, lang: Language) -> Option<String> {
+    /// 地図の出典は、地図の絵の取り先を設定で変えられるので、いまの設定のものを出す。
+    pub fn ui(&mut self, ctx: &egui::Context, lang: Language, map: &MapSettings) -> Option<String> {
         if !self.open {
             return None;
         }
@@ -57,6 +58,10 @@ impl About {
                     crate::geonames::CREDIT_URL,
                 )
                 .on_hover_text(crate::geonames::CREDIT);
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, "Map tiles:"));
+                    ui.hyperlink_to(&map.attribution, &map.attribution_url);
+                });
                 ui.add_space(6.0);
                 let path = third_party_path();
                 let exists = path.as_ref().is_some_and(|p| p.exists());

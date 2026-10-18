@@ -56,7 +56,7 @@ impl Item {
         match self {
             Item::Runtime => "MIT",
             Item::Tagger => "Apache-2.0",
-            Item::Faces => "MIT / Apache-2.0",
+            Item::Faces => "MIT (YuNet) / Apache-2.0 (SFace)",
             Item::PlaceNames => "CC BY 4.0",
         }
     }
@@ -83,6 +83,9 @@ impl Item {
     /// 取ってくるファイルと、置き場に入れる相対パス（`None` は書庫から取り出す）。
     fn sources(self) -> Vec<Source> {
         match self {
+            // 書庫の LICENSE や ThirdPartyNotices.txt は取り出さない。vw は ONNX Runtime を配らず、
+            // 使う人が Microsoft の Release から取ったものを手元に置くだけなので、
+            // 表記はそのページ（[`Item::page`]）で読める。
             Item::Runtime => vec![Source {
                 url: runtime_url(),
                 target: runtime_relative(),

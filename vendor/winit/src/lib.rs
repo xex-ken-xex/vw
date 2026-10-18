@@ -1,3 +1,6 @@
+// Modified by the vw contributors (2026): lints are allowed below so that vw's
+// `cargo clippy -- -D warnings` passes. See vendor/winit/README-vw.md.
+
 //! Winit is a cross-platform window creation and event loop management library.
 //!
 //! # Building windows

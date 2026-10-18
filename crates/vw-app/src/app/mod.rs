@@ -986,7 +986,8 @@ impl eframe::App for VwApp {
         self.map_tick(&ctx);
         self.sync_tool_panes();
         self.ai_ui(&ctx);
-        if let Some(e) = self.about.ui(&ctx, self.lang()) {
+        let lang = self.lang();
+        if let Some(e) = self.about.ui(&ctx, lang, &self.settings.settings.map) {
             self.log
                 .error(format!("Third-party licenses: cannot open {e}"));
         }
