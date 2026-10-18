@@ -905,11 +905,6 @@ impl VwApp {
             if self.show_settings && action != Action::ToggleSettings {
                 continue;
             }
-            if self.show_datasets
-                && !matches!(action, Action::ToggleDatasets | Action::ToggleSettings)
-            {
-                continue;
-            }
             if self.show_fullscreen_setup
                 && !matches!(
                     action,
@@ -1053,57 +1048,6 @@ impl eframe::App for VwApp {
             return;
         }
 
-        if self.show_datasets {
-            let lang = self.lang();
-            let dataset = &self.settings.settings.dataset;
-            let destinations = self.destination_names();
-            let action = self.datasets.ui(
-                ui,
-                lang,
-                &dataset.roots,
-                &dataset.fields,
-                &dataset.search_groups,
-                &destinations,
-            );
-            match action {
-                Some(crate::datasets_screen::Action::Close) => self.show_datasets = false,
-                Some(crate::datasets_screen::Action::Show(dir)) => {
-                    self.show_dataset(&ctx, dir);
-                }
-                Some(crate::datasets_screen::Action::ShowFiles(dir, files)) => {
-                    self.show_dataset_files(&dir, &files);
-                }
-                Some(crate::datasets_screen::Action::Extract(dir, hits)) => {
-                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Extract(dir, hits));
-                }
-                Some(crate::datasets_screen::Action::Edit(dir)) => {
-                    self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Edit(dir));
-                }
-                Some(crate::datasets_screen::Action::Update(dirs)) => {
-                    self.dataset_queue.extend(dirs);
-                }
-                Some(crate::datasets_screen::Action::Send(dir, hits, choice)) => {
-                    let targets = crate::dicom_send::dataset_targets(&dir, hits.as_deref());
-                    self.send_targets(choice, targets);
-                }
-                Some(crate::datasets_screen::Action::SaveGroup(group)) => {
-                    self.save_search_group(&ctx, group);
-                }
-                Some(crate::datasets_screen::Action::Reload) => {
-                    self.datasets.reload(&dataset.roots, &ctx);
-                    // ツリーのデータセットの色も、カタログの有無に合わせて付け直す。
-                    self.tree.forget_peeks();
-                }
-                None => {}
-            }
-            self.next_queued_update(&ctx);
-            self.dataset_window(&ctx);
-            self.outer_update_dialog(&ctx);
-            self.password_dialog(&ctx);
-            self.floating_panes_ui(&ctx);
-            return;
-        }
-
         self.docked_ui(ui);
         self.copy_selection(&ctx);
         self.export_window(&ctx);
@@ -1113,6 +1057,7 @@ impl eframe::App for VwApp {
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
         self.meta_new_group_ui(&ctx);
+        self.next_queued_update(&ctx);
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
         self.finish_trash_job();

@@ -29,7 +29,6 @@ impl VwApp {
         let lang = self.lang();
         let i = match choice {
             Choice::Configure => {
-                self.show_datasets = false;
                 self.show_fullscreen_setup = false;
                 if !self.show_settings {
                     self.toggle_settings();

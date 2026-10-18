@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, vec2};
 
-use crate::i18n::tr;
+use crate::i18n::{tr, tr1};
 use crate::status::Task;
 use crate::theme;
 
@@ -12,7 +12,7 @@ use super::*;
 
 impl VwApp {
     /// 進めている処理 1 件ずつと、その進み具合。ZIP の展開・ドラッグでの移動やコピー・データセットの
-    /// 読み込みや取り出し・書き出し・送信・AI・AI のモデルのダウンロード・RAW の現像。
+    /// 探し出し・読み込みや取り出し・書き出し・送信・AI・AI のモデルのダウンロード・RAW の現像。
     pub(super) fn tasks(&self) -> Vec<Task> {
         let lang = self.lang();
         let task = |kind: &'static str, name: String, (done, total): (usize, usize), bytes| Task {
@@ -21,8 +21,19 @@ impl VwApp {
             done,
             total,
             bytes,
+            note: String::new(),
         };
         let mut tasks = Vec::new();
+        for (root, folders, found, _) in self.datasets.progress().into_iter().filter(|p| !p.3) {
+            tasks.push(Task {
+                note: format!(
+                    "{}, {}",
+                    tr1(lang, "{} folders", &thousands(folders)),
+                    tr1(lang, "{} datasets", &thousands(found))
+                ),
+                ..task("Looking for datasets", file_name(root), (0, 0), false)
+            });
+        }
         for (name, done, total) in self.archives.progress() {
             tasks.push(task("Extracting ZIP", name, (done, total), true));
         }

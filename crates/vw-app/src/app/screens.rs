@@ -395,6 +395,45 @@ impl VwApp {
         }
     }
 
+    /// データセットの欄の中身。
+    pub(super) fn datasets_pane(&mut self, ui: &mut egui::Ui) {
+        use crate::datasets_screen::Action;
+        let ctx = ui.ctx().clone();
+        let lang = self.lang();
+        let dataset = &self.settings.settings.dataset;
+        let destinations = self.destination_names();
+        let action = self.datasets.ui(
+            ui,
+            lang,
+            &dataset.roots,
+            &dataset.fields,
+            &dataset.search_groups,
+            &destinations,
+        );
+        match action {
+            Some(Action::Show(dir)) => self.show_dataset(&ctx, dir),
+            Some(Action::ShowFiles(dir, files)) => self.show_dataset_files(&dir, &files),
+            Some(Action::Extract(dir, hits)) => {
+                self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Extract(dir, hits));
+            }
+            Some(Action::Edit(dir)) => {
+                self.open_dataset_dialog(&ctx, crate::dataset_ui::Request::Edit(dir));
+            }
+            Some(Action::Update(dirs)) => self.dataset_queue.extend(dirs),
+            Some(Action::Send(dir, hits, choice)) => {
+                let targets = crate::dicom_send::dataset_targets(&dir, hits.as_deref());
+                self.send_targets(choice, targets);
+            }
+            Some(Action::SaveGroup(group)) => self.save_search_group(&ctx, group),
+            Some(Action::Reload) => {
+                self.datasets.reload(&dataset.roots, &ctx);
+                // ツリーのデータセットの色も、カタログの有無に合わせて付け直す。
+                self.tree.forget_peeks();
+            }
+            None => {}
+        }
+    }
+
     pub(super) fn toggle_settings(&mut self) {
         self.show_settings = !self.show_settings;
         if self.show_settings {
@@ -406,7 +445,6 @@ impl VwApp {
         self.show_fullscreen_setup = !self.show_fullscreen_setup;
         if self.show_fullscreen_setup {
             self.show_settings = false;
-            self.show_datasets = false;
             self.fullscreen_setup.open(
                 self.last_fullscreen_root.as_deref(),
                 self.current.as_deref(),

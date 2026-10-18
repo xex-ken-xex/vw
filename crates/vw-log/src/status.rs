@@ -38,6 +38,8 @@ pub struct Task {
     pub total: usize,
     /// 量がバイト数か（そうでなければ件数）。
     pub bytes: bool,
+    /// 全部の量が分からないときに、「…」の後ろに出す途中の数（「1,234 フォルダ」）。
+    pub note: String,
 }
 
 /// 動き始めてから済んだ処理の数と、全部の数（「(164/179)」）。何も動かなくなったら数え直す。
@@ -315,6 +317,9 @@ fn task_lines(s: &Snapshot, w: &Words) -> Vec<Vec<Segment>> {
         let mut line = vec![seg(format!("{name} "), Tone::Value)];
         if task.total == 0 {
             line.push(seg("…".into(), Tone::Dim));
+            if !task.note.is_empty() {
+                line.push(seg(format!(" {}", task.note), Tone::Value));
+            }
         } else {
             let amount = if task.bytes {
                 format!("{}/{}", bytes(task.done), bytes(task.total))
@@ -513,7 +518,21 @@ mod tests {
             done,
             total,
             bytes,
+            note: String::new(),
         }
+    }
+
+    #[test]
+    fn a_task_of_unknown_size_shows_how_far_it_has_got() {
+        let s = Snapshot {
+            tasks: vec![Task {
+                note: "120 folders".into(),
+                ..task("Find", "share", 0, 0, false)
+            }],
+            ..snapshot()
+        };
+        let line = text(&lines(&s, &WORDS)[1]);
+        assert!(line.ends_with("… 120 folders"), "{line}");
     }
 
     #[test]

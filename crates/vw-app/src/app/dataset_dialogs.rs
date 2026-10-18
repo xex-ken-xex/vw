@@ -118,7 +118,6 @@ impl VwApp {
     /// ファイルは並べない。開くには展開が要り、当たったファイルのためにアーカイブをいくつも展開すると
     /// 待たされるため。その数はログに出し、取り出せば見られることを伝える。
     pub(super) fn show_dataset_files(&mut self, dir: &Path, files: &[String]) {
-        self.show_datasets = false;
         self.finish_folder_load();
         self.close_all_slots();
         self.tree.reveal(dir, &self.loader.registry().clone());
@@ -157,7 +156,6 @@ impl VwApp {
     /// Datasets 画面から、データセットのフォルダへ移ってファイルを読み込む。検索カタログにあるのに
     /// 見つからないファイルはログに出し、更新を促す。
     pub(super) fn show_dataset(&mut self, ctx: &egui::Context, dir: PathBuf) {
-        self.show_datasets = false;
         let into = self.settings().tree.load_into;
         self.cd(ctx, dir.clone(), into);
         let Some(entry) = self
