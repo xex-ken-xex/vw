@@ -56,7 +56,7 @@ mod send;
 mod slots;
 mod transfers;
 
-/// 左端のツール列のツール。Browse と PixelProbe 以外はまだ機能がなく、押せない状態で置いてある。
+/// 左端のツール列のツール。Zoom と Measure はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Browse,
@@ -90,8 +90,8 @@ impl Tool {
 
     fn title(self) -> &'static str {
         match self {
-            Tool::Browse => "Browse",
-            Tool::Pan => "Pan",
+            Tool::Browse => "Select",
+            Tool::Pan => "Hand",
             Tool::Zoom => "Zoom",
             Tool::PixelProbe => "Pixel probe",
             Tool::Roi => "ROI",
@@ -100,7 +100,10 @@ impl Tool {
     }
 
     fn available(self) -> bool {
-        matches!(self, Tool::Browse | Tool::PixelProbe | Tool::Roi)
+        matches!(
+            self,
+            Tool::Browse | Tool::Pan | Tool::PixelProbe | Tool::Roi
+        )
     }
 
     /// キーで切り替えられるツールの操作。
@@ -108,6 +111,7 @@ impl Tool {
         match self {
             Tool::PixelProbe => Some(Action::TogglePixelProbe),
             Tool::Roi => Some(Action::ToggleRoi),
+            Tool::Pan => Some(Action::ToggleHandTool),
             _ => None,
         }
     }
@@ -116,6 +120,8 @@ impl Tool {
     fn hint(self) -> Option<&'static str> {
         match self {
             Tool::Roi => Some("Drag to draw the target ROI, Shift+drag for the background ROI"),
+            Tool::Browse => Some("Drag an image to a folder to move it, Ctrl+drag to copy it"),
+            Tool::Pan => Some("Drag an image to move the view"),
             _ => None,
         }
     }
@@ -152,6 +158,8 @@ pub struct VwApp {
     /// フォルダ・画像・メタデータ・ログの並びと表示・非表示。描く間だけ取り出すので `Option`。
     dock: Option<vw_dock::Dock>,
     tool: Tool,
+    /// 画素値の確認や ROI のツールを止めたときに戻るツール（矢印か手のひら）。
+    base_tool: Tool,
     settings: SettingsStore,
     settings_ui: SettingsUi,
     /// 他の機器への送信（数えている・確かめている・送っている）。一度に 1 つだけ。
@@ -584,7 +592,8 @@ impl VwApp {
             active: 0,
             next_id: 1,
             dock: Some(docking::restored_dock(&saved, monitors_changed)),
-            tool: Tool::Browse,
+            tool: base_tool(saved.arrow_tool),
+            base_tool: base_tool(saved.arrow_tool),
             settings,
             settings_ui: SettingsUi::default(),
             send_job: None,
@@ -696,11 +705,14 @@ impl VwApp {
     }
 
     fn toggle_tool(&mut self, tool: Tool) {
-        self.tool = if self.tool == tool {
-            Tool::Browse
-        } else {
-            tool
-        };
+        self.select_tool(toggled(self.tool, self.base_tool, tool));
+    }
+
+    fn select_tool(&mut self, tool: Tool) {
+        if matches!(tool, Tool::Browse | Tool::Pan) {
+            self.base_tool = tool;
+        }
+        self.tool = tool;
     }
 
     fn lang(&self) -> Language {
@@ -743,6 +755,7 @@ impl VwApp {
             Action::ToggleTagging => self.tagging ^= true,
             Action::TogglePixelProbe => self.toggle_tool(Tool::PixelProbe),
             Action::ToggleRoi => self.toggle_tool(Tool::Roi),
+            Action::ToggleHandTool => self.toggle_tool(Tool::Pan),
             Action::DeleteProbePoint => {
                 let slot = &mut self.slots[self.active];
                 if !slot.delete_selected_mark() {
@@ -1142,6 +1155,24 @@ pub fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
 }
 
 /// 絞り込みの名前。タグはそのまま（翻訳しない）。
+fn base_tool(arrow: bool) -> Tool {
+    if arrow {
+        Tool::Browse
+    } else {
+        Tool::Pan
+    }
+}
+
+/// キーでツールを切り替えたあとのツール。使っているツールのキーなら戻り先へ戻る。
+fn toggled(current: Tool, base: Tool, pressed: Tool) -> Tool {
+    match pressed {
+        // 手のひらは戻り先にもなるので、ほかと同じく戻り先へ戻すと止まらない。止めたら矢印にする。
+        Tool::Pan if current == Tool::Pan => Tool::Browse,
+        _ if current == pressed => base,
+        _ => pressed,
+    }
+}
+
 fn filter_name(filter: &Filter, lang: Language) -> String {
     let name = match filter {
         Filter::All => "all",
@@ -1367,6 +1398,26 @@ fn zip_stem(zip: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turning_a_tool_off_returns_to_the_arrow_or_hand_last_chosen() {
+        assert!(toggled(Tool::Pan, Tool::Pan, Tool::PixelProbe) == Tool::PixelProbe);
+        assert!(toggled(Tool::PixelProbe, Tool::Pan, Tool::PixelProbe) == Tool::Pan);
+        assert!(toggled(Tool::Roi, Tool::Browse, Tool::Roi) == Tool::Browse);
+    }
+
+    #[test]
+    fn the_hand_key_switches_between_hand_and_arrow() {
+        assert!(toggled(Tool::Browse, Tool::Browse, Tool::Pan) == Tool::Pan);
+        assert!(toggled(Tool::Pan, Tool::Pan, Tool::Pan) == Tool::Browse);
+        assert!(toggled(Tool::Roi, Tool::Browse, Tool::Pan) == Tool::Pan);
+    }
+
+    #[test]
+    fn the_hand_is_the_default_so_dragging_an_image_still_pans() {
+        assert!(base_tool(false) == Tool::Pan);
+        assert!(base_tool(true) == Tool::Browse);
+    }
     #[test]
     fn file_counts_are_grouped_by_thousands() {
         assert_eq!(thousands(0), "0");

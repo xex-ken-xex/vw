@@ -17,7 +17,7 @@ impl VwApp {
         let ctx = ui.ctx().clone();
         let mut chosen = None;
         vw_ui::menu::bar(ui, |ui| {
-            ui.menu_button(tr(lang, "File"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "File"), |ui| {
                 for action in [Action::NewSlot, Action::CloseSlot, Action::CloseAllSlots] {
                     if self.menu_item(ui, action, None) {
                         chosen = Some(action);
@@ -38,7 +38,7 @@ impl VwApp {
                     chosen = Some(Action::Quit);
                 }
             });
-            ui.menu_button(tr(lang, "View"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "View"), |ui| {
                 let toggles = [
                     (Action::ToggleFolderTree, self.pane_shown(docking::TREE)),
                     (Action::ToggleMetadata, self.pane_shown(docking::METADATA)),
@@ -88,17 +88,17 @@ impl VwApp {
                     chosen = Some(Action::ToggleDatasets);
                 }
             });
-            ui.menu_button(tr(lang, "Labels"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "Labels"), |ui| {
                 if let Some(action) = self.labels_menu(ui) {
                     chosen = Some(action);
                 }
             });
-            ui.menu_button(tr(lang, "AI tags"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "AI tags"), |ui| {
                 if let Some(action) = self.ai_menu(ui) {
                     chosen = Some(action);
                 }
             });
-            ui.menu_button(tr(lang, "Image"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
                 let groups: [&[Action]; 5] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
@@ -122,7 +122,7 @@ impl VwApp {
                     }
                 }
             });
-            ui.menu_button(tr(lang, "Settings"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "Settings"), |ui| {
                 if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
                     chosen = Some(Action::ToggleSettings);
                 }
@@ -133,7 +133,7 @@ impl VwApp {
                     }
                 }
             });
-            ui.menu_button(tr(lang, "Help"), |ui| {
+            vw_ui::menu::bar_menu(ui, tr(lang, "Help"), |ui| {
                 if self.menu_item(ui, Action::ShowAbout, None) {
                     chosen = Some(Action::ShowAbout);
                 }
@@ -331,7 +331,7 @@ impl VwApp {
                     ))
                 };
                 if r.clicked() {
-                    self.tool = tool;
+                    self.select_tool(tool);
                 }
             }
             let tip = self.with_key(tr(lang, "Tagging mode"), Action::ToggleTagging);

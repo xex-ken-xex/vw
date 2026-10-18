@@ -53,13 +53,41 @@ fn bar_style(s: &mut Style) {
     }
 }
 
-/// メニューバーを描く。中の [`Ui::menu_button`] はこの見た目のメニューを開く。
+/// メニューバーを描く。中には [`bar_menu`] でメニューを並べる。
 pub fn bar<R>(ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> R {
     MenuBar::new()
         .style(bar_style)
         .config(MenuConfig::new().style(popup_style))
         .ui(ui, content)
         .inner
+}
+
+/// メニューバーの 1 つのメニュー。どれかを開いている間は、名前にマウスを乗せるだけでそのメニューに
+/// 切り替わる（Windows の標準のメニューと同じ）。
+///
+/// egui のメニューバーは、隣のメニューを開くのにもう一度クリックが要る。
+/// 切り替わったメニューは次のフレームで開く（ボタンを描いたあとでないと乗っているか分からず、
+/// そのときには元のメニューはもう描いてあるため）。
+pub fn bar_menu<'a, R>(
+    ui: &mut Ui,
+    atoms: impl IntoAtoms<'a>,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> (Response, Option<R>) {
+    let open_key = ui.id().with("vw-open-bar-menu");
+    let (response, inner) = MenuButton::new(atoms).ui(ui, content);
+    let ctx = ui.ctx();
+    let popup_id = Popup::default_response_id(&response);
+    let other_open = ui
+        .data(|d| d.get_temp::<egui::Id>(open_key))
+        .is_some_and(|open| open != popup_id && Popup::is_id_open(ctx, open));
+    if other_open && response.hovered() {
+        Popup::open_id(ctx, popup_id);
+        ctx.request_repaint();
+    }
+    if Popup::is_id_open(ctx, popup_id) {
+        ui.data_mut(|d| d.insert_temp(open_key, popup_id));
+    }
+    (response, inner.map(|r| r.inner))
 }
 
 /// 右クリックで開くメニュー。
