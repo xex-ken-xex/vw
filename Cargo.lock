@@ -4026,6 +4026,7 @@ dependencies = [
  "notify",
  "ort",
  "png",
+ "raw-window-handle",
  "regex",
  "serde",
  "serde_json",

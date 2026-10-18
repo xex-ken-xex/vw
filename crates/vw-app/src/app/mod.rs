@@ -225,6 +225,7 @@ pub struct VwApp {
     throughput: crate::status::Throughput,
     load_stats: crate::status::LoadStats,
     first_frame: bool,
+    keep_in_front: crate::owned_windows::KeepInFront,
     /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
     state_path: Option<PathBuf>,
     /// 起動時に戻すウインドウ。戻し終えたら `None`。
@@ -665,6 +666,7 @@ impl VwApp {
             throughput: crate::status::Throughput::new(started),
             load_stats: crate::status::LoadStats::default(),
             first_frame: true,
+            keep_in_front: Default::default(),
             state_path,
             restoring,
             window: None,
@@ -948,8 +950,9 @@ impl eframe::App for VwApp {
     /// 毎フレーム呼ばれる。パネルは外側から順に追加する必要があるので、
     /// メニュー → ツール列（左端）→ ログ（下）→ ツリー（左）→ メタデータ（右）→ 画像（中央）の順に置く。
     /// 設定画面を開いているときは、ツール列より内側をすべて設定画面にする。
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.keep_in_front.update(&ctx, frame);
         if self.first_frame {
             self.first_frame = false;
             self.log.info(format!(

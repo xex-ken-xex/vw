@@ -48,6 +48,7 @@ mod map_window;
 mod memory;
 mod meta_view;
 mod nodes;
+mod owned_windows;
 mod people;
 mod people_graph;
 mod pipeline_view;
