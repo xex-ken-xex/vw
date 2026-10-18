@@ -1,12 +1,14 @@
 //! Datasets の欄。データセットを探して一覧する。ほかの欄と同じく本体に並べるか別ウインドウに出す。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 use eframe::egui;
 use egui_phosphor::regular as icon;
 
-use crate::dataset_search::{self, Condition, Hit, Index, Op, Query, Target};
+use crate::dataset_search::{self, Condition, Hit, Index, Op, Progress, Query, Target};
 use crate::i18n::{tr, tr1};
 use crate::settings::{Language, SearchGroup};
 
@@ -42,9 +44,18 @@ enum Column {
     Location,
 }
 
+/// 1 つのデータセットのフォルダを探しているスレッド。
+struct Walk {
+    root: PathBuf,
+    progress: Arc<Progress>,
+    rx: Receiver<Index>,
+    done: Option<Index>,
+}
+
 pub struct DatasetsScreen {
     index: Option<Index>,
-    loading: Option<Receiver<Index>>,
+    /// データセットのフォルダごとに探しているもの。全部そろったら 1 つにまとめる。
+    loading: Vec<Walk>,
     query: Query,
     advanced: bool,
     hits: Vec<Hit>,
@@ -67,7 +78,7 @@ impl Default for DatasetsScreen {
     fn default() -> Self {
         Self {
             index: None,
-            loading: None,
+            loading: Vec::new(),
             query: Query::default(),
             advanced: true,
             hits: Vec::new(),
@@ -94,11 +105,44 @@ impl DatasetsScreen {
     }
 
     /// データセットのフォルダ以下を別スレッドで探し直す。ネットワークドライブでは数秒かかるため。
+    /// フォルダごとにスレッドを分けるのは、遅いドライブのフォルダがほかのフォルダを待たせないため。
     pub fn reload(&mut self, roots: &[String], ctx: &egui::Context) {
-        let roots: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
-        self.loading = Some(crate::background::compute(ctx, move || {
-            Index::discover(&roots)
-        }));
+        self.loading = roots
+            .iter()
+            .map(|r| {
+                let root = PathBuf::from(r);
+                let progress = Arc::new(Progress::default());
+                let rx = {
+                    let (root, progress) = (root.clone(), progress.clone());
+                    crate::background::compute(ctx, move || Index::walk_root(&root, &progress))
+                };
+                Walk {
+                    root,
+                    progress,
+                    rx,
+                    done: None,
+                }
+            })
+            .collect();
+        if self.loading.is_empty() {
+            self.finish(Index::default());
+        }
+    }
+
+    /// 探しているデータセットのフォルダごとの、（フォルダ, 見たフォルダの数, 見つけたカタログの数,
+    /// 探し終えたか）。ほかのフォルダを待っていて、まだ一覧に出していないものも入る。
+    pub fn progress(&self) -> Vec<(&Path, usize, usize, bool)> {
+        self.loading
+            .iter()
+            .map(|w| {
+                (
+                    w.root.as_path(),
+                    w.progress.folders.load(Ordering::Relaxed),
+                    w.progress.found.load(Ordering::Relaxed),
+                    w.done.is_some(),
+                )
+            })
+            .collect()
     }
 
     /// 編集や更新が終わったデータセットを読み直す。
@@ -115,19 +159,31 @@ impl DatasetsScreen {
     }
 
     fn poll(&mut self) {
-        let Some(rx) = &self.loading else {
+        if self.loading.is_empty() {
             return;
-        };
-        if let Ok(index) = rx.try_recv() {
-            if let Some(dir) = &self.selected {
-                if !index.entries.iter().any(|e| &e.dir == dir) {
-                    self.selected = None;
-                }
-            }
-            self.index = Some(index);
-            self.loading = None;
-            self.searched = None;
         }
+        for w in &mut self.loading {
+            if w.done.is_none() {
+                w.done = w.rx.try_recv().ok();
+            }
+        }
+        if self.loading.iter().all(|w| w.done.is_some()) {
+            let parts = std::mem::take(&mut self.loading)
+                .into_iter()
+                .filter_map(|w| w.done)
+                .collect();
+            self.finish(Index::merge(parts));
+        }
+    }
+
+    fn finish(&mut self, index: Index) {
+        if let Some(dir) = &self.selected {
+            if !index.entries.iter().any(|e| &e.dir == dir) {
+                self.selected = None;
+            }
+        }
+        self.index = Some(index);
+        self.searched = None;
     }
 
     fn search(&mut self) {
@@ -242,9 +298,18 @@ impl DatasetsScreen {
                 ui.weak(tr(lang, "Add dataset folders in Settings > Datasets."));
                 return;
             }
-            if self.loading.is_some() {
+            if !self.loading.is_empty() {
+                let (folders, found) = self
+                    .progress()
+                    .iter()
+                    .fold((0, 0), |(f, n), (_, a, b, _)| (f + a, n + b));
                 ui.spinner();
                 ui.weak(tr(lang, "Looking for datasets…"));
+                ui.weak(format!(
+                    "{}, {}",
+                    tr1(lang, "{} folders", &folders.to_string()),
+                    tr1(lang, "{} datasets", &found.to_string())
+                ));
                 return;
             }
             if let Some(e) = &self.error {
@@ -939,7 +1004,7 @@ mod tests {
     use crate::catalog::{self, Catalog};
 
     fn wait_for_index(screen: &mut DatasetsScreen) -> &Index {
-        while screen.loading.is_some() {
+        while !screen.loading.is_empty() {
             std::thread::sleep(std::time::Duration::from_millis(5));
             screen.poll();
         }

@@ -7,8 +7,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::catalog::{self, Catalog};
+
+/// 探している途中の数。別のスレッドから数え、画面が毎フレーム読む。
+#[derive(Default)]
+pub struct Progress {
+    /// 中を見たフォルダの数。
+    pub folders: AtomicUsize,
+    /// 見つけたカタログの数。
+    pub found: AtomicUsize,
+}
 
 /// 見つけたデータセット 1 つ。
 pub struct Entry {
@@ -30,23 +40,56 @@ impl Index {
     /// `roots` 以下の全フォルダからカタログを集める。カタログのあるフォルダの下も探す
     /// （データセットの中に別のデータセットがあってよいため）。
     pub fn discover(roots: &[PathBuf]) -> Self {
+        let progress = Progress::default();
+        Self::merge(
+            roots
+                .iter()
+                .map(|r| Self::walk_root(r, &progress))
+                .collect(),
+        )
+    }
+
+    /// 1 つのデータセットのフォルダ以下を探す。データセットのフォルダごとに別のスレッドで
+    /// 探し、[`Index::merge`] でまとめるのに使う。
+    pub fn walk_root(root: &Path, progress: &Progress) -> Self {
+        let mut index = Index::default();
+        index.walk(root, progress);
+        index
+    }
+
+    /// フォルダごとに探した結果をまとめる。データセットのフォルダが入れ子になっていると
+    /// 同じカタログを二度見つけるので、1 つにする。
+    pub fn merge(parts: Vec<Index>) -> Self {
         let mut index = Index::default();
         let mut seen = BTreeSet::new();
-        for root in roots {
-            index.walk(root, &mut seen);
+        for part in parts {
+            for e in part.entries {
+                if seen.insert(e.dir.clone()) {
+                    index.entries.push(e);
+                }
+            }
+            for p in part.problems {
+                if !index.problems.contains(&p) {
+                    index.problems.push(p);
+                }
+            }
         }
         index.entries.sort_by(|a, b| a.dir.cmp(&b.dir));
         index.collect_keys();
         index
     }
 
-    fn walk(&mut self, dir: &Path, seen: &mut BTreeSet<PathBuf>) {
-        if catalog::exists_in(dir) && seen.insert(dir.to_path_buf()) {
+    fn walk(&mut self, dir: &Path, progress: &Progress) {
+        progress.folders.fetch_add(1, Ordering::Relaxed);
+        if catalog::exists_in(dir) {
             match catalog::load(dir) {
-                Ok(c) => self.entries.push(Entry {
-                    dir: dir.to_path_buf(),
-                    catalog: c,
-                }),
+                Ok(c) => {
+                    progress.found.fetch_add(1, Ordering::Relaxed);
+                    self.entries.push(Entry {
+                        dir: dir.to_path_buf(),
+                        catalog: c,
+                    })
+                }
                 Err(e) => self.problems.push(e),
             }
         }
@@ -56,7 +99,7 @@ impl Index {
         for e in read.flatten() {
             let bin = crate::tree::is_recycle_bin(&e.file_name().to_string_lossy());
             if !bin && e.file_type().is_ok_and(|t| t.is_dir()) {
-                self.walk(&e.path(), seen);
+                self.walk(&e.path(), progress);
             }
         }
     }
@@ -700,6 +743,22 @@ mod tests {
         };
         assert!(search(&i, &q(cond(Target::Name, Op::Regex, "("))).is_err());
         assert!(search(&i, &q(cond(meta("", "width"), Op::Range, "abc"))).is_err());
+    }
+
+    #[test]
+    fn nested_dataset_folders_find_each_catalog_once_and_count_progress() {
+        let tmp = crate::test_util::TempDir::new();
+        catalog::save(&tmp.mkdir("a/b"), &Catalog::default()).unwrap();
+        let progress = Progress::default();
+        let parts = vec![
+            Index::walk_root(tmp.path(), &progress),
+            Index::walk_root(&tmp.path().join("a"), &progress),
+        ];
+        assert_eq!(progress.folders.load(Ordering::Relaxed), 3 + 2);
+        assert_eq!(progress.found.load(Ordering::Relaxed), 2);
+        let i = Index::merge(parts);
+        let found: Vec<_> = i.entries.iter().map(|e| e.dir.clone()).collect();
+        assert_eq!(found, [tmp.path().join("a/b")]);
     }
 
     #[test]
