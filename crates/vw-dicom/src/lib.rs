@@ -24,6 +24,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 pub mod charset;
 pub mod net;
 pub mod pipeline;
+pub mod suv;
 pub mod synth;
 
 /// 128 バイトのプリアンブルの後ろに置かれる印。
@@ -349,6 +350,7 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
         ("Patient", "ID", tags::PATIENT_ID),
         ("Patient", "Birth date", tags::PATIENT_BIRTH_DATE),
         ("Patient", "Sex", tags::PATIENT_SEX),
+        ("Patient", "Weight (kg)", tags::PATIENT_WEIGHT),
         ("DICOM", "Modality", tags::MODALITY),
         ("DICOM", "Study date", tags::STUDY_DATE),
         ("DICOM", "Study time", tags::STUDY_TIME),
@@ -372,6 +374,8 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
         ("DICOM", "Pixel representation", tags::PIXEL_REPRESENTATION),
         ("DICOM", "Rescale slope", tags::RESCALE_SLOPE),
         ("DICOM", "Rescale intercept", tags::RESCALE_INTERCEPT),
+        ("DICOM", "Units", tags::UNITS),
+        ("DICOM", "Decay correction", tags::DECAY_CORRECTION),
         ("DICOM", "Window center", tags::WINDOW_CENTER),
         ("DICOM", "Window width", tags::WINDOW_WIDTH),
         ("DICOM", "Slice thickness", tags::SLICE_THICKNESS),
@@ -389,12 +393,23 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
             m.push(group, key, v);
         }
     }
+    if m.get("DICOM", "Modality") == Some("PT") && m.get("DICOM", "Units") == Some("BQML") {
+        match suv::factor(&suv::read(obj)) {
+            Ok(f) => m.push("DICOM", SUV_FACTOR, f.to_string()),
+            Err(missing) => m.push("DICOM", SUV_NEEDS, missing.join(", ")),
+        }
+    }
     let ts = obj.meta().transfer_syntax().trim_end_matches('\0');
     let ts_name = dicom_transfer_syntax_name(ts);
     m.push("DICOM", "Transfer syntax", ts_name.unwrap_or(ts));
     tag_listing(obj, &mut m);
     m
 }
+
+/// PET の Bq/ml に掛けると SUVbw になる値（[`suv::factor`]）のメタデータのキー。
+pub const SUV_FACTOR: &str = "SUVbw factor";
+/// SUVbw を出せないときに、足りない項目を並べるキー。
+pub const SUV_NEEDS: &str = "SUVbw needs";
 
 /// メタデータ欄で全タグを並べるグループ。
 pub const TAG_LISTING: &str = "DICOM tags";
@@ -648,6 +663,39 @@ mod tests {
             m.get("DICOM", "Transfer syntax"),
             Some("Explicit VR Little Endian")
         );
+    }
+
+    fn pet(weight: Option<&str>) -> Synth {
+        let mut s = Synth::new(synth::PET_IMAGE, 1, 1)
+            .pixels_u16(&[100], 16)
+            .rescale(124.0, 0.0)
+            .text(tags::UNITS, dicom_core::VR::CS, "BQML")
+            .text(tags::DECAY_CORRECTION, dicom_core::VR::CS, "START")
+            .text(tags::SERIES_DATE, dicom_core::VR::DA, "20261018")
+            .text(tags::SERIES_TIME, dicom_core::VR::TM, "100000")
+            .radiopharmaceutical(Some(370e6), Some(6586.2), Some("090000"));
+        if let Some(w) = weight {
+            s = s.text(tags::PATIENT_WEIGHT, dicom_core::VR::DS, w);
+        }
+        s
+    }
+
+    #[test]
+    fn pet_in_bq_per_ml_carries_the_suv_factor() {
+        let m = DicomPlugin.read_metadata(&pet(Some("70")).bytes()).unwrap();
+        assert_eq!(m.get("DICOM", "Units"), Some("BQML"));
+        assert_eq!(m.get("Patient", "Weight (kg)"), Some("70"));
+        let decayed = 370e6 * 0.5f64.powf(3600.0 / 6586.2);
+        let factor: f64 = m.get("DICOM", SUV_FACTOR).unwrap().parse().unwrap();
+        assert!((factor - 70_000.0 / decayed).abs() < 1e-12);
+        assert_eq!(m.get("DICOM", SUV_NEEDS), None);
+    }
+
+    #[test]
+    fn pet_without_a_weight_names_what_suv_needs() {
+        let m = DicomPlugin.read_metadata(&pet(None).bytes()).unwrap();
+        assert_eq!(m.get("DICOM", SUV_FACTOR), None);
+        assert_eq!(m.get("DICOM", SUV_NEEDS), Some("Patient weight"));
     }
 
     #[test]

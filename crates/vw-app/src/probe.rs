@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
+use crate::quantity::Quantity;
 use crate::settings::ColorFormat;
 
 /// スロットに置いた十字の印。置いた画像（フレームならフレームのパス）にだけ出す。
@@ -55,11 +56,6 @@ fn inverted(meta: &Metadata) -> bool {
         .is_some_and(|p| p.trim() == "MONOCHROME1")
 }
 
-/// CT の値は HU（Rescale を当てた値）なので単位を付ける。ほかは単位のない生の値。
-fn unit(meta: &Metadata) -> Option<&'static str> {
-    crate::roi::unit(meta)
-}
-
 /// 画素の値を画面とコピーに出す文字にする。カラーは `format` の書き方にする（`bits` は 1 色のビット数）。
 pub fn value_text(
     color: ColorModel,
@@ -76,10 +72,10 @@ pub fn value_text(
             .unwrap_or_default()
     };
     match color {
-        ColorModel::Gray => match unit(meta) {
-            Some(unit) => format!("{} {unit}", n(0)),
-            None => n(0),
-        },
+        ColorModel::Gray => values
+            .first()
+            .map(|&v| Quantity::of(meta).text(v))
+            .unwrap_or_default(),
         ColorModel::GrayAlpha => format!("{} A {}", n(0), n(1)),
         ColorModel::Rgb | ColorModel::Rgba => crate::color_text::text(values, bits, format),
     }

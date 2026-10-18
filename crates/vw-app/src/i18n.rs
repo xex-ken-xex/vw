@@ -43,6 +43,7 @@ const JA: &[(&str, &str)] = &[
     ("Report a bug or request a feature...", "不具合の報告・要望..."),
     ("Place names: GeoNames, CC BY 4.0", "地名データ: GeoNames、CC BY 4.0"),
     ("Map tiles:", "地図の絵:"),
+    ("SUVbw needs:", "SUVbw に足りない項目:"),
     ("Third-party licenses...", "サードパーティのライセンス..."),
     // 地図
     ("Map", "地図"),

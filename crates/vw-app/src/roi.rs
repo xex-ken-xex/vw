@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
 use crate::histogram::{self, Accumulator, Stats};
+use crate::quantity::Quantity;
 
 pub use vw_quality::Region;
 
@@ -89,20 +90,13 @@ fn inverted(meta: &Metadata) -> bool {
         .is_some_and(|p| p.trim() == "MONOCHROME1")
 }
 
-/// CT の値は HU（Rescale を当てた値）なので単位を付ける。ほかは単位のない生の値。
-pub fn unit(meta: &Metadata) -> Option<&'static str> {
-    meta.get("DICOM", "Modality")
-        .is_some_and(|m| m.trim() == "CT")
-        .then_some("HU")
-}
-
 /// 矩形の横に出す文字。統計がまだ読めない（元の画像を読み込み中）ときは大きさだけ。
 /// `color` はカラー画像の平均の色（[`color_means`] を書いたもの）。あれば輝度の平均の代わりに出す。
 pub fn label(
     kind: &str,
     region: Region,
     stats: Option<&Stats>,
-    unit: Option<&str>,
+    quantity: &Quantity,
     color: Option<&str>,
 ) -> String {
     let size = format!("{kind}  {}×{}", region.w, region.h);
@@ -110,11 +104,10 @@ pub fn label(
         Some(s) => {
             let mean = match color {
                 Some(c) => c.to_owned(),
-                None => format!(
-                    "{}{}",
-                    histogram::number(s.mean),
-                    unit.map(|u| format!(" {u}")).unwrap_or_default()
-                ),
+                None => match quantity.suv_max(s.max) {
+                    Some(max) => format!("{}  {max}", quantity.text(s.mean)),
+                    None => quantity.text(s.mean),
+                },
             };
             format!("{size}  mean {mean}  SD {}", histogram::number(s.std_dev))
         }
@@ -217,13 +210,36 @@ mod tests {
             std_dev: 3.0,
         };
         assert_eq!(
-            label("Target", r, Some(&s), Some("HU"), None),
+            label("Target", r, Some(&s), &Quantity::Unit("HU"), None),
             "Target  10×20  mean 12.50 HU  SD 3"
         );
-        assert_eq!(label("Target", r, None, None, None), "Target  10×20");
+        assert_eq!(
+            label("Target", r, None, &Quantity::Raw, None),
+            "Target  10×20"
+        );
         assert_eq!(
             clipboard_text("Target", r, Some(&s)),
             "Target, 3, 4, 10, 20, 200, 12.50, 3, -10, 40"
+        );
+    }
+
+    #[test]
+    fn pet_rois_show_the_mean_and_the_maximum_suv() {
+        let r = Region {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        };
+        let s = Stats {
+            min: 1000.0,
+            max: 20_000.0,
+            mean: 10_000.0,
+            std_dev: 500.0,
+        };
+        assert_eq!(
+            label("Target", r, Some(&s), &Quantity::Pet(Ok(0.0002)), None),
+            "Target  4×4  mean 2.00 SUVbw  10000 Bq/ml  SUVmax 4.00  SD 500"
         );
     }
 
@@ -250,7 +266,7 @@ mod tests {
             std_dev: 2.0,
         };
         assert_eq!(
-            label("Target", r, Some(&s), None, Some("#0F1E2D")),
+            label("Target", r, Some(&s), &Quantity::Raw, Some("#0F1E2D")),
             "Target  2×1  mean #0F1E2D  SD 2"
         );
     }
