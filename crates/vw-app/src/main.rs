@@ -57,6 +57,7 @@ mod pixel_pipeline;
 mod probe;
 mod quality;
 mod quality_view;
+mod quantity;
 mod roi;
 mod series;
 mod settings;

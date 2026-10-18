@@ -14,6 +14,8 @@ use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
 pub const CT_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.2";
 /// X-Ray Angiographic Image Storage（シネのマルチフレーム）。
 pub const XA_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.12.1";
+/// Positron Emission Tomography Image Storage。
+pub const PET_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.128";
 /// Secondary Capture Image Storage（カラーの画面写しなど）。
 pub const SC_IMAGE: &str = "1.2.840.10008.5.1.4.1.1.7";
 
@@ -41,6 +43,7 @@ impl Synth {
         let modality = match sop_class {
             CT_IMAGE => "CT",
             XA_IMAGE => "XA",
+            PET_IMAGE => "PT",
             _ => "OT",
         };
         s.put_str(tags::SOP_CLASS_UID, VR::UI, sop_class);
@@ -211,6 +214,39 @@ impl Synth {
             tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
             VR::SQ,
             DataSetSequence::from(items),
+        ));
+        self
+    }
+
+    /// PET の投与の情報（Radiopharmaceutical Information Sequence の 1 項目）。
+    /// 値が `None` のものは書かない（足りないファイルを作るため）。
+    pub fn radiopharmaceutical(
+        mut self,
+        dose_bq: Option<f64>,
+        half_life_s: Option<f64>,
+        start_time: Option<&str>,
+    ) -> Self {
+        let mut item = InMemDicomObject::new_empty();
+        let mut put = |tag: Tag, vr: VR, value: String| {
+            item.put(DataElement::new(tag, vr, PrimitiveValue::from(value)));
+        };
+        if let Some(dose) = dose_bq {
+            put(tags::RADIONUCLIDE_TOTAL_DOSE, VR::DS, dose.to_string());
+        }
+        if let Some(half_life) = half_life_s {
+            put(tags::RADIONUCLIDE_HALF_LIFE, VR::DS, half_life.to_string());
+        }
+        if let Some(time) = start_time {
+            put(
+                tags::RADIOPHARMACEUTICAL_START_TIME,
+                VR::TM,
+                time.to_owned(),
+            );
+        }
+        self.obj.put(DataElement::new(
+            tags::RADIOPHARMACEUTICAL_INFORMATION_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![item]),
         ));
         self
     }

@@ -20,6 +20,7 @@ use crate::i18n::{tr, tr1};
 use crate::labels::{self, Label};
 use crate::loader::ImageInfo;
 use crate::probe::{self, Mark};
+use crate::quantity::Quantity;
 use crate::roi::{self, Region, Roi};
 use crate::settings::{ColorFormat, Language};
 
@@ -610,7 +611,7 @@ impl Slot {
         let Some(shown) = &self.shown else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_roi();
-        let unit = roi::unit(&shown.info.metadata);
+        let quantity = Quantity::of(&shown.info.metadata);
         let bits = shown.info.bits_per_sample;
         let shown_rois = self
             .rois
@@ -651,7 +652,7 @@ impl Slot {
                 tr(lang, kind.title()),
                 region,
                 stats.as_ref(),
-                unit,
+                &quantity,
                 color_text.as_deref(),
             );
             let galley =
@@ -785,10 +786,23 @@ impl Slot {
     }
 
     /// 表示中の画像に置いた十字と、その値を描く。
-    fn draw_marks(&self, ui: &egui::Ui, body: Rect, mark_pos: &dyn Fn(&Mark) -> Pos2) {
+    fn draw_marks(
+        &self,
+        ui: &egui::Ui,
+        body: Rect,
+        lang: Language,
+        mark_pos: &dyn Fn(&Mark) -> Pos2,
+    ) {
         let Some(shown) = &self.shown else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_mark();
+        let missing = Quantity::of(&shown.info.metadata).missing().map(|m| {
+            format!(
+                "{} {}",
+                tr(lang, "SUVbw needs:"),
+                crate::quantity::missing_text(lang, m)
+            )
+        });
         for mark in self.marks.iter().filter(|m| m.path == shown.path) {
             let at = mark_pos(mark);
             let color = if selected == Some(mark) {
@@ -814,10 +828,11 @@ impl Slot {
             let size = galley.size() + 2.0 * pad + swatch_room(swatch, galley.size().y);
             let gap = MARK_ARM + 3.0;
             // ふだんは右上に出し、枠の端で切れるときは反対側に回す。
+            // どちらにも入りきらない狭い枠では、左端に寄せて頭の値を残す。
             let x = if at.x + gap + size.x <= body.right() {
                 at.x + gap
             } else {
-                at.x - gap - size.x
+                (at.x - gap - size.x).max(body.left())
             };
             let y = if at.y - gap - size.y >= body.top() {
                 at.y - gap - size.y
@@ -828,6 +843,19 @@ impl Slot {
             painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
             let text_at = draw_swatch(&painter, pill.min + pad, galley.size().y, swatch);
             painter.galley(text_at, galley, color);
+            // 値の札は描いただけの絵なので、ウィジェットにせず、カーソルが乗ったかを自分で見る。
+            // 札を hover のウィジェットにすると、その上ではスロットの本体が hover でなくなり、
+            // ホイールやドラッグが効かなくなるため。
+            if let Some(missing) = missing.as_ref().filter(|_| ui.rect_contains_pointer(pill)) {
+                let id = ui.id().with(("mark-missing", mark.x, mark.y));
+                egui::Tooltip::always_open(
+                    ui.ctx().clone(),
+                    ui.layer_id(),
+                    id,
+                    egui::PopupAnchor::Pointer,
+                )
+                .show(|ui| ui.label(missing));
+            }
         }
     }
 
@@ -1299,7 +1327,7 @@ impl Slot {
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
             out.wants_full |= has_marks || has_rois || (probing && response.hovered());
             self.draw_rois(ui, body, lang, &region_rect, drawing);
-            self.draw_marks(ui, body, &mark_pos);
+            self.draw_marks(ui, body, lang, &mark_pos);
             if probing {
                 let hover = response.hover_pos().and_then(pixel_at);
                 if let Some((x, y)) = hover {

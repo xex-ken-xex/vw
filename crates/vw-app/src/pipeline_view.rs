@@ -78,6 +78,8 @@ enum Node {
     /// 自由なノードの鎖の `i` 番目。
     Chain(usize),
     Display,
+    /// PET の、Unit（Bq/ml）から表示の道と分かれて SUVbw に換算する枝。
+    Suv,
 }
 
 /// 関係するノードをまとめる枠。
@@ -156,7 +158,7 @@ impl Kind {
 }
 
 impl Node {
-    const ALL: [Node; 7] = [
+    const ALL: [Node; 8] = [
         Node::Stored,
         Node::Modality,
         Node::Unit,
@@ -164,6 +166,7 @@ impl Node {
         Node::Presentation,
         Node::ColorSpace,
         Node::Display,
+        Node::Suv,
     ];
 
     fn key(self) -> &'static str {
@@ -177,6 +180,7 @@ impl Node {
             Node::Stage(_) => "stage",
             Node::Chain(_) => "chain",
             Node::Display => "display",
+            Node::Suv => "suv",
         }
     }
 }
@@ -630,8 +634,10 @@ impl PipelineView {
         let (outer, background) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let mut edited = self.add_menus(ui, lang, &background);
+        let branch = self.has_suv_branch().then_some(Node::Suv);
         let content = flow
             .iter()
+            .chain(&branch)
             .filter_map(|n| self.rects.get(n))
             .fold(Rect::NOTHING, |a, r| a.union(*r));
         let mut transform = match self.transform {
@@ -708,6 +714,22 @@ impl PipelineView {
             ));
             ports.extend([from, to]);
         }
+        if let (Some(_), Some(a), Some(b)) = (
+            branch,
+            self.rects.get(&Node::Unit),
+            self.rects.get(&Node::Suv),
+        ) {
+            let from = transform * port(*a, true);
+            let to = transform * port(*b, false);
+            let dx = ((to.x - from.x) * 0.5).max(30.0 * scale);
+            painter.add(CubicBezierShape::from_points_stroke(
+                [from, from + vec2(dx, 0.0), to - vec2(dx, 0.0), to],
+                false,
+                Color32::TRANSPARENT,
+                wire,
+            ));
+            ports.extend([from, to]);
+        }
 
         // 鎖のノードは並び順で置く（足す・外す・入れ替えるたびに番号が変わるので、覚えない）。
         // 形式ごとの段も同じ（形式が変わると数が変わる）。表示のノードは覚えた位置を、
@@ -739,6 +761,26 @@ impl PipelineView {
             if moved != Vec2::ZERO && !matches!(node, Node::Chain(_) | Node::Stage(_)) {
                 self.positions
                     .insert((kind, node), pos + moved / scale - shift);
+            }
+        }
+        if let Some(node) = branch {
+            // 表示の道の下に、VOI の段と同じ列から置く。VOI の段は関数やグラフで高さが変わるので、
+            // 前のフレームの大きさの下にする。
+            let below = self
+                .rects
+                .get(&Node::Voi)
+                .map_or(320.0, |r| r.max.y + NODE_GAP);
+            let default = pos2(3.0 * (NODE_WIDTH + NODE_GAP), below);
+            let pos = self
+                .positions
+                .get(&(kind, node))
+                .copied()
+                .unwrap_or(default);
+            let (rect, moved, _, _) =
+                self.node(&mut canvas, lang, node, transform * pos, marks, info);
+            self.rects.insert(node, transform.inverse().mul_rect(rect));
+            if moved != Vec2::ZERO {
+                self.positions.insert((kind, node), pos + moved / scale);
             }
         }
         if let Some((_, c)) = chain_edit {
@@ -911,6 +953,11 @@ impl PipelineView {
         }
     }
 
+    /// PET の Bq/ml の画像で、SUVbw の枝を出すか。
+    fn has_suv_branch(&self) -> bool {
+        matches!(&self.loaded, Some(Loaded::Gray(g)) if g.info.suv.is_some())
+    }
+
     /// 十字の位置の、各段の値。
     fn traces(&self, marks: &[(u32, u32)]) -> Vec<(u32, u32, Trace)> {
         let Some(Loaded::Gray(g)) = &self.loaded else {
@@ -931,6 +978,71 @@ impl PipelineView {
             })
             .collect()
     }
+}
+
+/// SUVbw の枝。換算に使うファイルの値と掛ける値、十字の位置の SUVbw。
+fn suv_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    inputs: &vw_dicom::suv::Inputs,
+    traces: &[(u32, u32, Trace)],
+) {
+    let or_missing = |v: Option<String>| v.unwrap_or_else(|| "—".to_owned());
+    let rows = [
+        (
+            "Patient weight",
+            or_missing(inputs.weight_kg.map(|w| format!("{} kg", number(w)))),
+        ),
+        (
+            "Injected dose",
+            or_missing(inputs.dose_bq.map(|d| format!("{} MBq", number(d / 1e6)))),
+        ),
+        (
+            "Half-life",
+            or_missing(inputs.half_life_s.map(|h| format!("{} s", number(h)))),
+        ),
+        (
+            "Decay correction",
+            or_missing(inputs.decay_correction.clone()),
+        ),
+        (
+            "Since injection",
+            or_missing(
+                vw_dicom::suv::elapsed_seconds(inputs)
+                    .ok()
+                    .map(|s| format!("{} min", number(s / 60.0))),
+            ),
+        ),
+    ];
+    egui::Grid::new("suv_inputs").num_columns(2).show(ui, |ui| {
+        for (name, value) in rows {
+            ui.weak(tr(lang, name));
+            ui.label(value);
+            ui.end_row();
+        }
+    });
+    match vw_dicom::suv::factor(inputs) {
+        Ok(f) => {
+            ui.label(format!("× {f:.6}"));
+            for (x, y, t) in traces {
+                ui.monospace(format!("({x}, {y})  {:.2} SUVbw", t.modality * f));
+            }
+        }
+        Err(missing) => {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "{} {}",
+                    tr(lang, "SUVbw needs:"),
+                    crate::quantity::missing_text(lang, &missing.join(", "))
+                ),
+            );
+        }
+    }
+    ui.weak(tr(
+        lang,
+        "Bq/ml × weight ÷ dose decayed to the reference time",
+    ));
 }
 
 /// `content`（キャンバスの座標）が `outer` に収まる変換。等倍より大きくはしない。
@@ -995,6 +1107,7 @@ fn node_title(node: Node) -> &'static str {
         Node::Stage(_) => "Stage",
         Node::Chain(_) => "Node",
         Node::Display => "Display",
+        Node::Suv => "SUVbw",
     }
 }
 
@@ -1133,6 +1246,12 @@ fn gray_body(
                 ui.weak(format!("Rescale Type {t}"));
             }
             ui.weak(tr(lang, "stored × slope + intercept"));
+        }
+        Node::Suv => {
+            let Some(inputs) = &info.suv else {
+                return false;
+            };
+            suv_body(ui, lang, inputs, traces);
         }
         Node::Unit => {
             let unit = pixel_pipeline::unit_of(info);
