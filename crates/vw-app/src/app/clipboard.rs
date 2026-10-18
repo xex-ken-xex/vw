@@ -64,8 +64,8 @@ impl VwApp {
     /// Ctrl+C（egui はこれを `Event::Copy` として届ける）で、対象の欄で選んでいるものをコピーする。
     pub(super) fn copy_selection(&mut self, ctx: &egui::Context) {
         let pressed = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        // 文字入力欄にいるときは、その欄のコピーに任せる。
-        if !pressed || self.show_settings || ctx.egui_wants_keyboard_input() {
+        // 文字入力欄や道具の欄の上にいるときは、そちらのコピーに任せる。
+        if !pressed || self.show_settings || ctx.egui_wants_keyboard_input() || self.tool_hovered {
             return;
         }
         match self.focus {

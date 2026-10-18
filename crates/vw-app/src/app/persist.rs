@@ -196,15 +196,8 @@ impl VwApp {
                 Vec::new()
             },
             dock: self.dock.as_ref().map(vw_dock::Dock::layout),
-            sub_windows: [
-                ("histogram", self.histogram.window.saved()),
-                ("zoom_map", self.zoom_map.window.saved()),
-                ("map", self.map.window.saved()),
-            ]
-            .into_iter()
-            .filter(|(_, saved)| saved.rect.is_some() || saved.on_top)
-            .map(|(name, saved)| (name.to_owned(), saved))
-            .collect(),
+            // 道具の位置は欄の並び（`dock`）が持つ。前の版の値は最初の起動で読んだら要らない。
+            sub_windows: Default::default(),
         };
         // 終了処理中でログ欄はもう見えないので、標準エラーに出す。
         if let Err(e) = state.save(path) {

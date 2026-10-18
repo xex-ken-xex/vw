@@ -85,6 +85,15 @@ pub struct Layout {
     pub floated: BTreeMap<String, [f32; 4]>,
 }
 
+impl Layout {
+    /// 並び（本体・別ウインドウ・隠したもの）のどこかに `pane` があるか。
+    pub fn mentions(&self, pane: &str) -> bool {
+        self.main.as_ref().is_some_and(|n| n.contains(pane))
+            || self.floats.iter().any(|f| f.root.contains(pane))
+            || self.hidden.contains_key(pane)
+    }
+}
+
 struct Float {
     id: u64,
     root: Option<Node>,
@@ -329,6 +338,14 @@ impl Dock {
             let back = self.take(pane);
             self.event(format!("hide {pane}: will come back to {back:?}"));
             self.hidden.insert(pane.to_owned(), back);
+        }
+    }
+
+    /// 隠しているペインを、次に出すときは別ウインドウ（`rect` は画面の `[左, 上, 幅, 高さ]`）で
+    /// 出すようにする。もとは別ウインドウだった道具を、初めて出すときに前と同じ所へ出すのに使う。
+    pub fn show_next_in_float(&mut self, pane: &str, rect: [f32; 4]) {
+        if let Some(back) = self.hidden.get_mut(pane) {
+            *back = Back::Float(rect);
         }
     }
 
@@ -1121,4 +1138,40 @@ impl Labels {
         hide: "隠す",
         reset: "レイアウトを元に戻す",
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dock() -> Dock {
+        Dock::new(Node::Pane("images".into()), &["images", "map"])
+    }
+
+    #[test]
+    fn a_hidden_pane_set_to_float_comes_back_in_its_own_window() {
+        let mut d = dock();
+        d.show_next_in_float("map", [10.0, 20.0, 300.0, 200.0]);
+        d.set_shown("map", true);
+        assert!(matches!(d.window_of("map"), Some(Window::Float(_))));
+        assert_eq!(d.layout().floats[0].rect, [10.0, 20.0, 300.0, 200.0]);
+    }
+
+    #[test]
+    fn a_shown_pane_is_not_moved_by_show_next_in_float() {
+        let mut d = dock();
+        d.show_next_in_float("images", [10.0, 20.0, 300.0, 200.0]);
+        assert_eq!(d.window_of("images"), Some(Window::Main));
+    }
+
+    #[test]
+    fn a_layout_mentions_panes_in_every_place() {
+        let mut d = dock();
+        assert!(d.layout().mentions("images"));
+        assert!(d.layout().mentions("map"));
+        assert!(!d.layout().mentions("histogram"));
+        d.set_shown("map", true);
+        d.float("map");
+        assert!(d.layout().mentions("map"));
+    }
 }

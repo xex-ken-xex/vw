@@ -7,12 +7,10 @@ use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke, Texture
 
 use crate::i18n::tr;
 use crate::settings::Language;
-use crate::sub_window::SubWindow;
 use crate::viewer::ViewWindow;
 
-/// ウインドウに渡す、アクティブなスロットの表示。
+/// 欄に渡す、アクティブなスロットの表示。
 pub struct Target<'a> {
-    pub title: String,
     /// 変更前（ファイルの値での表示）。
     pub before: &'a TextureHandle,
     /// 変更後。ピクセルパイプラインで値を変えていなければ `None`。
@@ -36,50 +34,25 @@ pub enum Command {
 #[derive(Default)]
 pub struct ZoomMap {
     pub open: bool,
-    pub window: SubWindow,
     /// 枠の中をつかんでドラッグしている。つかんだ点と枠の中心のずれ（割合）。
     grab: Option<egui::Vec2>,
 }
 
 impl ZoomMap {
+    /// 1 フレーム分、欄の中を描く。
     pub fn ui(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         lang: Language,
         target: Option<Target<'_>>,
     ) -> Vec<Command> {
-        if !self.open {
-            return Vec::new();
+        match &target {
+            None => {
+                ui.centered_and_justified(|ui| ui.weak(tr(lang, "Select an image in a slot.")));
+                Vec::new()
+            }
+            Some(t) => self.contents(ui, lang, t),
         }
-        let title = match &target {
-            Some(t) => format!("{} - {}", tr(lang, "Zoom map"), t.title),
-            None => tr(lang, "Zoom map").to_owned(),
-        };
-        let mut out = Vec::new();
-        let mut close = false;
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("zoom_map"),
-            self.window.builder(title, [640.0, 380.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                }
-                self.window.track(ctx);
-                self.window.pin_overlay(ctx, lang);
-                egui::CentralPanel::default().show(ctx, |ui| match &target {
-                    None => {
-                        ui.centered_and_justified(|ui| {
-                            ui.weak(tr(lang, "Select an image in a slot."))
-                        });
-                    }
-                    Some(t) => out = self.contents(ui, lang, t),
-                });
-            },
-        );
-        if close {
-            self.open = false;
-        }
-        out
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, lang: Language, t: &Target<'_>) -> Vec<Command> {

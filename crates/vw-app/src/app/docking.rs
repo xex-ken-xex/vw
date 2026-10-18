@@ -1,4 +1,5 @@
-//! 本体の中のペイン（フォルダ・画像・メタデータ・ログ）の並べ替えと、別ウインドウへの出し入れ。
+//! 本体の中のペイン（フォルダ・画像・メタデータ・ログ）と道具の欄（解析・ズームマップ・
+//! 画素の変換・相関図・地図）の並べ替えと、別ウインドウへの出し入れ。
 //! 並べ方そのものは vw-dock が持ち、ここは各ペインの中身と見出しを渡す。
 
 use eframe::egui;
@@ -16,6 +17,63 @@ pub(super) const IMAGES: &str = "images";
 pub(super) const METADATA: &str = "metadata";
 pub(super) const LOG: &str = "log";
 pub(super) const PANES: [&str; 4] = [TREE, IMAGES, METADATA, LOG];
+
+pub(super) const ANALYSIS: &str = "analysis";
+pub(super) const ZOOM_MAP: &str = "zoom_map";
+pub(super) const PIPELINE: &str = "pixel_pipeline";
+pub(super) const CHARTS: &str = "relationship_charts";
+pub(super) const MAP: &str = "map";
+/// もとは別ウインドウだった道具。開いているかどうかは今までどおり各道具の `open` が持ち、
+/// 欄の出し入れをそれに合わせる（道具を開く操作があちこちにあり、閉じるときの後始末も
+/// 道具ごとに違うため）。
+pub(super) const TOOLS: [&str; 5] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP];
+
+/// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
+fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
+    match tool {
+        ANALYSIS => ([760.0, 480.0], Some("histogram")),
+        ZOOM_MAP => ([640.0, 380.0], Some("zoom_map")),
+        PIPELINE => ([1560.0, 560.0], None),
+        CHARTS => ([1000.0, 680.0], None),
+        _ => ([900.0, 640.0], Some("map")),
+    }
+}
+
+/// 保存した並びから始める。並びを保存する前の版から来たときは、道具を前の別ウインドウの
+/// 位置に出す。
+pub(super) fn restored_dock(saved: &crate::state::AppState, monitors_changed: bool) -> Dock {
+    let all: Vec<&str> = PANES.iter().chain(TOOLS.iter()).copied().collect();
+    let mut dock = match saved.dock.clone() {
+        Some(layout) => Dock::restored(default_layout(), &all, layout),
+        None => Dock::new(default_layout(), &all),
+    };
+    if monitors_changed {
+        dock.bring_floats_home();
+    }
+    // 本体の左上から少しずらした所。本体の位置が分からなければ画面の左上寄り。
+    let near_main = saved
+        .window
+        .as_ref()
+        .filter(|_| !monitors_changed)
+        .and_then(|w| {
+            let [x, y] = w.position?;
+            Some([x as f32 / w.scale + 80.0, y as f32 / w.scale + 80.0])
+        })
+        .unwrap_or([120.0, 120.0]);
+    for tool in TOOLS {
+        if saved.dock.as_ref().is_some_and(|l| l.mentions(tool)) {
+            continue;
+        }
+        let ([w, h], key) = first_float(tool);
+        let before = key
+            .and_then(|k| saved.sub_windows.get(k))
+            .and_then(|s| s.rect)
+            .filter(|_| !monitors_changed);
+        let rect = before.unwrap_or([near_main[0], near_main[1], w, h]);
+        dock.show_next_in_float(tool, rect);
+    }
+    dock
+}
 
 /// 既定の並び。上にフォルダ・画像・メタデータ、下の端から端までログ（今までのパネルの並び）。
 pub(super) fn default_layout() -> Node {
@@ -52,6 +110,11 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         TREE => "Folders",
         IMAGES => "Images",
         METADATA => "Metadata",
+        ANALYSIS => "Analysis",
+        ZOOM_MAP => "Zoom map",
+        PIPELINE => "Pixel pipeline",
+        CHARTS => "Relationship charts",
+        MAP => "Map",
         _ => "Log",
     }
 }
@@ -74,7 +137,15 @@ fn content_frame() -> egui::Frame {
 
 impl Panes for AppPanes<'_> {
     fn title(&self, pane: &str) -> String {
-        tr(self.app.lang(), pane_name(pane)).to_owned()
+        let lang = self.app.lang();
+        match pane {
+            ANALYSIS => self.app.histogram.title(lang),
+            PIPELINE => self.app.pipeline.title(lang),
+            ZOOM_MAP => {
+                crate::sub_window::title(lang, "Zoom map", self.app.active_image().as_deref())
+            }
+            _ => tr(lang, pane_name(pane)).to_owned(),
+        }
     }
 
     fn has_header(&self, pane: &str) -> bool {
@@ -99,7 +170,7 @@ impl Panes for AppPanes<'_> {
                 }
             }
             METADATA => self.app.metadata_header_ui(ui),
-            _ => {
+            LOG => {
                 vw_ui::panel::header(ui, tr(lang, "Log"));
                 let sending = self.app.send_job.as_ref().and_then(|j| j.progress());
                 let mut cancel = false;
@@ -120,10 +191,17 @@ impl Panes for AppPanes<'_> {
                     self.app.log_action(&self.ctx, action);
                 }
             }
+            _ => {
+                let title = self.title(pane);
+                vw_ui::panel::header(ui, &title);
+            }
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, pane: &str) {
+        if TOOLS.contains(&pane) && ui.ctx().viewport_id() == egui::ViewportId::ROOT {
+            self.app.tool_hovered |= ui.rect_contains_pointer(ui.max_rect());
+        }
         match pane {
             IMAGES => self.app.images_ui(ui),
             TREE => {
@@ -132,6 +210,15 @@ impl Panes for AppPanes<'_> {
             METADATA => {
                 content_frame().show(ui, |ui| self.app.metadata_ui(ui));
             }
+            ANALYSIS => {
+                content_frame().show(ui, |ui| self.app.histogram_pane(ui));
+            }
+            ZOOM_MAP => {
+                content_frame().show(ui, |ui| self.app.zoom_map_pane(ui));
+            }
+            PIPELINE => self.app.pipeline_pane(ui),
+            CHARTS => self.app.people_graph_pane(ui),
+            MAP => self.app.map_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
             }
@@ -147,6 +234,7 @@ impl VwApp {
         };
         let labels = labels(self.lang());
         let ctx = ui.ctx().clone();
+        self.tool_hovered = false;
         egui::CentralPanel::no_frame().show(ui, |ui| {
             dock.show(
                 ui,
@@ -159,6 +247,7 @@ impl VwApp {
         });
         self.log_dock(&mut dock);
         self.dock = Some(dock);
+        self.close_hidden_tools();
     }
 
     /// 本体の中を設定画面などに使っている間も、別ウインドウに出したペインは出しておく。
@@ -167,6 +256,7 @@ impl VwApp {
             return;
         };
         let labels = labels(self.lang());
+        self.tool_hovered = false;
         dock.show_floats(
             ctx,
             &mut AppPanes {
@@ -177,6 +267,51 @@ impl VwApp {
         );
         self.log_dock(&mut dock);
         self.dock = Some(dock);
+        self.close_hidden_tools();
+    }
+
+    fn tool_open(&mut self, tool: &str) -> &mut bool {
+        match tool {
+            ANALYSIS => &mut self.histogram.open,
+            ZOOM_MAP => &mut self.zoom_map.open,
+            PIPELINE => &mut self.pipeline.open,
+            CHARTS => &mut self.graph_window.open,
+            _ => &mut self.map.open,
+        }
+    }
+
+    /// 道具の開閉を欄の出し入れに映す。描く前に毎フレーム呼ぶ。
+    pub(super) fn sync_tool_panes(&mut self) {
+        if std::mem::take(&mut self.pipeline.open_histogram) {
+            self.histogram.open = true;
+        }
+        if std::mem::take(&mut self.pipeline.open_zoom_map) {
+            self.zoom_map.open = true;
+        }
+        for tool in TOOLS {
+            let open = *self.tool_open(tool);
+            if let Some(dock) = self.dock.as_mut() {
+                dock.set_shown(tool, open);
+            }
+        }
+    }
+
+    /// 欄の側で閉じた道具（別ウインドウの × や、見出しの右クリックの「隠す」）の後始末をする。
+    fn close_hidden_tools(&mut self) {
+        for tool in TOOLS {
+            if !*self.tool_open(tool) || self.pane_shown(tool) {
+                continue;
+            }
+            match tool {
+                ANALYSIS => self.histogram.close(),
+                PIPELINE => {
+                    let commands = self.pipeline.close();
+                    self.apply_pipeline(commands);
+                }
+                CHARTS => self.people_graph_closed(),
+                _ => *self.tool_open(tool) = false,
+            }
+        }
     }
 
     fn log_dock(&mut self, dock: &mut Dock) {
@@ -208,7 +343,7 @@ impl VwApp {
         let Some(dock) = self.dock.as_mut() else {
             return;
         };
-        for pane in PANES {
+        for pane in PANES.into_iter().chain(TOOLS) {
             if !dock.is_shown(pane) {
                 continue;
             }
@@ -292,5 +427,46 @@ impl VwApp {
             }
         }
         self.set_focus(&ctx, Focus::Tree);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+
+    #[test]
+    fn tools_start_hidden_and_main_panes_shown() {
+        let dock = restored_dock(&AppState::default(), false);
+        assert!(TOOLS.iter().all(|t| !dock.is_shown(t)));
+        assert!(PANES.iter().all(|p| dock.is_shown(p)));
+    }
+
+    #[test]
+    fn a_tool_first_opens_where_its_old_window_was() {
+        let mut saved = AppState::default();
+        saved.sub_windows.insert(
+            "map".into(),
+            crate::sub_window::Saved {
+                rect: Some([5.0, 6.0, 700.0, 500.0]),
+                on_top: false,
+            },
+        );
+        let mut dock = restored_dock(&saved, false);
+        dock.set_shown(MAP, true);
+        assert_eq!(dock.layout().floats[0].rect, [5.0, 6.0, 700.0, 500.0]);
+    }
+
+    #[test]
+    fn a_tool_already_in_the_saved_layout_keeps_its_place() {
+        let mut first = restored_dock(&AppState::default(), false);
+        first.set_shown(MAP, true);
+        first.dock(MAP);
+        let saved = AppState {
+            dock: Some(first.layout()),
+            ..AppState::default()
+        };
+        let dock = restored_dock(&saved, false);
+        assert_eq!(dock.window_of(MAP), Some(vw_dock::Window::Main));
     }
 }

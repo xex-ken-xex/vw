@@ -1,4 +1,4 @@
-//! 主画面を置き換える画面（設定・データセット・全画面）と、別ウインドウ（画素の変換・ヒストグラム・ズームマップ）の開閉。
+//! 主画面を置き換える画面（設定・データセット・全画面）と、道具の欄（画素の変換・ヒストグラム・ズームマップ・地図）の中身。
 
 use std::path::PathBuf;
 
@@ -17,11 +17,8 @@ impl VwApp {
         }
     }
 
-    /// 画素の変換の図。アクティブなスロットの画像を見せ、手で変えた値とノードを表示に当てる。
-    pub(super) fn pipeline_ui(&mut self, ctx: &egui::Context) {
-        if !self.pipeline.open {
-            return;
-        }
+    /// 画素の変換の欄。アクティブなスロットの画像を見せ、手で変えた値とノードを表示に当てる。
+    pub(super) fn pipeline_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
             let shown = slot.shown.as_ref()?;
@@ -49,7 +46,7 @@ impl VwApp {
                     .collect(),
             })
         });
-        let commands = self.pipeline.ui(ctx, lang, target);
+        let commands = self.pipeline.ui(ui, lang, target);
         self.apply_pipeline(commands);
     }
 
@@ -212,14 +209,8 @@ impl VwApp {
         }
     }
 
-    /// 画像全体のヒストグラム。色導出画面で値を変えていれば、変更後も重ねる。
-    pub(super) fn histogram_ui(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.pipeline.open_histogram) {
-            self.histogram.open = true;
-        }
-        if !self.histogram.open {
-            return;
-        }
+    /// 解析の欄（画像全体のヒストグラムと評価）。色導出画面で値を変えていれば、変更後も重ねる。
+    pub(super) fn histogram_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
             let shown = slot.shown.as_ref()?;
@@ -246,9 +237,9 @@ impl VwApp {
             computing: self.evaluation.computing(),
             thresholds: &self.settings.settings.quality,
         };
-        match self.histogram.ui(ctx, lang, target, evaluated) {
+        match self.histogram.ui(ui, lang, target, evaluated) {
             Some(crate::quality_view::Command::Copy(text)) => {
-                self.copy_text(ctx, text, "evaluation as CSV");
+                self.copy_text(&ui.ctx().clone(), text, "evaluation as CSV");
             }
             Some(crate::quality_view::Command::ClearReference) => {
                 self.quality_reference = None;
@@ -257,15 +248,9 @@ impl VwApp {
         }
     }
 
-    /// ズームマップ。枠やつまみの操作をアクティブなスロットの表示に当てる。
-    pub(super) fn zoom_map_ui(&mut self, ctx: &egui::Context) {
+    /// ズームマップの欄。枠やつまみの操作をアクティブなスロットの表示に当てる。
+    pub(super) fn zoom_map_pane(&mut self, ui: &mut egui::Ui) {
         use crate::zoom_map::Command;
-        if std::mem::take(&mut self.pipeline.open_zoom_map) {
-            self.zoom_map.open = true;
-        }
-        if !self.zoom_map.open {
-            return;
-        }
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
             let shown = slot.shown.as_ref()?;
@@ -274,20 +259,14 @@ impl VwApp {
                 .as_ref()
                 .and_then(|d| d.ready_for(shown))
                 .map(|r| &r.derived);
-            let name = crate::frames::file_of(&shown.path);
             Some(crate::zoom_map::Target {
-                title: name
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
                 before: &shown.thumb,
                 after,
                 size: [shown.info.width, shown.info.height],
                 view: slot.view_window()?,
             })
         });
-        let commands = self.zoom_map.ui(ctx, lang, target);
+        let commands = self.zoom_map.ui(ui, lang, target);
         let Some(slot) = self.slots.get_mut(self.active) else {
             return;
         };
@@ -301,14 +280,20 @@ impl VwApp {
         }
     }
 
-    /// 地図のウインドウ。点から開いた画像は、そのフォルダへ移って選ぶ。
-    pub(super) fn map_ui(&mut self, ctx: &egui::Context) {
+    /// 地図の欄が閉じていても毎フレームすること。
+    pub(super) fn map_tick(&mut self, ctx: &egui::Context) {
         self.keep_place_names(ctx);
         self.drop_on_map(ctx);
-        let settings = &self.settings.settings;
-        if !settings.map.enabled {
+        if !self.settings.settings.map.enabled {
             self.map.open = false;
         }
+        self.map.forget_while_closed();
+    }
+
+    /// 地図の欄。点から開いた画像は、そのフォルダへ移って選ぶ。
+    pub(super) fn map_pane(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let settings = &self.settings.settings;
         let cache = self
             .settings
             .path
@@ -327,7 +312,7 @@ impl VwApp {
             places: self.place_names.as_deref(),
             labels: &self.labels,
         };
-        let commands = self.map.ui(ctx, &inputs);
+        let commands = self.map.ui(ui, &inputs);
         for problem in self.map.take_problems() {
             self.log.error(format!("Map: {problem}"));
         }
@@ -339,7 +324,7 @@ impl VwApp {
                     };
                     // 今のフォルダなら読み直さずに選ぶ（スロットの表示や拡大を崩さないため）。
                     if self.current.as_deref() != Some(dir.as_path()) {
-                        self.open_folder(ctx, dir);
+                        self.open_folder(&ctx, dir);
                     }
                     self.select_when_loaded = Some(path);
                 }

@@ -28,7 +28,6 @@ use crate::settings::{parse_hex_color, Language, LoadInto, LogStyle, SettingsSto
 use crate::settings_ui::SettingsUi;
 use crate::slideshow::{Clock, EndMode, Playback};
 use crate::state::{self, AppState, Placement, WindowState};
-use crate::sub_window::SubWindow;
 use crate::theme;
 use crate::transfer::Transfer;
 use crate::tree::{FolderTree, TreeAction};
@@ -226,6 +225,8 @@ pub struct VwApp {
     load_stats: crate::status::LoadStats,
     first_frame: bool,
     keep_in_front: crate::owned_windows::KeepInFront,
+    /// 前のフレームで、本体に並べた道具の欄の上にマウスがあった。
+    tool_hovered: bool,
     /// 終了時の状態の保存先。設定ファイルの場所が決まらない環境では保存しない。
     state_path: Option<PathBuf>,
     /// 起動時に戻すウインドウ。戻し終えたら `None`。
@@ -582,17 +583,7 @@ impl VwApp {
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
-            dock: Some(match saved.dock.clone() {
-                Some(layout) => {
-                    let mut dock =
-                        vw_dock::Dock::restored(docking::default_layout(), &docking::PANES, layout);
-                    if monitors_changed {
-                        dock.bring_floats_home();
-                    }
-                    dock
-                }
-                None => vw_dock::Dock::new(docking::default_layout(), &docking::PANES),
-            }),
+            dock: Some(docking::restored_dock(&saved, monitors_changed)),
             tool: Tool::Browse,
             settings,
             settings_ui: SettingsUi::default(),
@@ -618,39 +609,14 @@ impl VwApp {
                 view.restore_node_positions(&saved.pipeline_nodes);
                 view
             },
-            histogram: {
-                let mut view = crate::histogram_view::HistogramView::default();
-                view.window = SubWindow::restored(
-                    saved
-                        .sub_windows
-                        .get("histogram")
-                        .copied()
-                        .unwrap_or_default(),
-                );
-                view
-            },
+            histogram: Default::default(),
             evaluation: Default::default(),
             quality_reference: None,
             presets,
-            zoom_map: {
-                let mut view = crate::zoom_map::ZoomMap::default();
-                view.window = SubWindow::restored(
-                    saved
-                        .sub_windows
-                        .get("zoom_map")
-                        .copied()
-                        .unwrap_or_default(),
-                );
-                view
-            },
+            zoom_map: Default::default(),
             place_names: None,
             place_names_load: None,
-            map: {
-                let mut map = crate::map_window::MapWindow::default();
-                map.window =
-                    SubWindow::restored(saved.sub_windows.get("map").copied().unwrap_or_default());
-                map
-            },
+            map: Default::default(),
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -667,6 +633,7 @@ impl VwApp {
             load_stats: crate::status::LoadStats::default(),
             first_frame: true,
             keep_in_front: Default::default(),
+            tool_hovered: false,
             state_path,
             restoring,
             window: None,
@@ -904,7 +871,8 @@ impl VwApp {
         let keys = &self.settings().keys;
         // テキスト入力中は、文字入力と区別できる Ctrl / Alt 付きのキーだけを実行する。
         // 全部止めると、設定画面の検索欄にいるときに Ctrl+, で設定を閉じられない。
-        let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() {
+        // 本体に並べた道具の欄の上にマウスがあるときも同じにする（Delete などは欄が使う）。
+        let events: Vec<egui::Event> = if ctx.egui_wants_keyboard_input() || self.tool_hovered {
             events
                 .into_iter()
                 .filter(|e| match e {
@@ -999,10 +967,8 @@ impl eframe::App for VwApp {
         self.activity_line(ui);
         self.send_ui(&ctx);
         self.update_evaluation(&ctx);
-        self.pipeline_ui(&ctx);
-        self.histogram_ui(&ctx);
-        self.zoom_map_ui(&ctx);
-        self.map_ui(&ctx);
+        self.map_tick(&ctx);
+        self.sync_tool_panes();
         self.ai_ui(&ctx);
         if let Some(e) = self.about.ui(&ctx, self.lang()) {
             self.log

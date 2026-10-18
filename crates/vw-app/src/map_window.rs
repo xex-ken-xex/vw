@@ -22,7 +22,6 @@ use crate::labels::{LabelStore, Position};
 use crate::map_tiles::Tiles;
 use crate::settings::{Language, MapSettings};
 use crate::sort::SortOrder;
-use crate::sub_window::SubWindow;
 
 /// 点をまとめる升の大きさ（画素）。
 const CLUSTER_CELL: f64 = 44.0;
@@ -152,7 +151,6 @@ pub struct Inputs<'a> {
 
 pub struct MapWindow {
     pub open: bool,
-    pub window: SubWindow,
     scope: Scope,
     view: Option<View>,
     tiles: Option<Tiles>,
@@ -173,6 +171,8 @@ pub struct MapWindow {
     /// 地名の検索欄と、その候補。
     query: String,
     names: Vec<FoundName>,
+    /// 地図を描いたウインドウ（本体か、欄を出した別ウインドウ）。
+    drawn_in: Option<egui::ViewportId>,
     /// 前に描いた地図の範囲（このウインドウの中の座標）。ドロップの場所を地図の座標にするのに使う。
     last_rect: Option<Rect>,
     /// ドラッグ中の画像を放す所（このウインドウの中の座標）と、そこの緯度・経度。
@@ -185,7 +185,6 @@ impl Default for MapWindow {
     fn default() -> Self {
         Self {
             open: false,
-            window: SubWindow::default(),
             scope: Scope::Folder,
             view: None,
             tiles: None,
@@ -201,15 +200,12 @@ impl Default for MapWindow {
             problems: Vec::new(),
             query: String::new(),
             names: Vec::new(),
+            drawn_in: None,
             last_rect: None,
             drop_hover: None,
             context: None,
         }
     }
-}
-
-fn viewport_id() -> egui::ViewportId {
-    egui::ViewportId::from_hash_of("map")
 }
 
 impl MapWindow {
@@ -218,46 +214,37 @@ impl MapWindow {
         std::mem::take(&mut self.problems)
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, inputs: &Inputs<'_>) -> Vec<Command> {
+    /// 閉じている間は地図の絵を取りに行かない。
+    pub fn forget_while_closed(&mut self) {
         if !self.open {
-            // 閉じている間は地図の絵を取りに行かない。
             self.tiles = None;
             self.scan = None;
-            return Vec::new();
         }
-        self.follow_source(ctx, inputs);
+    }
+
+    /// 1 フレーム分、欄の中を描く。
+    pub fn ui(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
+        let ctx = ui.ctx().clone();
+        self.follow_source(&ctx, inputs);
         self.receive_scan();
         if self.stale {
             self.rebuild(inputs.labels);
         }
-        let lang = inputs.lang;
+        self.drawn_in = Some(ctx.viewport_id());
         let mut out = Vec::new();
-        let mut close = false;
-        ctx.show_viewport_immediate(
-            viewport_id(),
-            self.window
-                .builder(tr(lang, "Map").to_owned(), [900.0, 640.0]),
-            |ctx, _class| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                }
-                self.window.track(ctx);
-                // 検索欄に打っている間は、文字の取り消しに使う。
-                if !ctx.egui_wants_keyboard_input()
-                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
-                {
-                    out.push(Command::Undo);
-                }
-                egui::Panel::top("map_bar").show(ctx, |ui| out.extend(self.bar(ui, inputs)));
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| out.extend(self.map(ui, inputs)));
-                self.window.pin_overlay(ctx, lang);
-            },
-        );
-        if close {
-            self.open = false;
+        // 検索欄に打っている間は、文字の取り消しに使う。
+        if crate::sub_window::owns_keys(ui)
+            && !ctx.egui_wants_keyboard_input()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
+        {
+            out.push(Command::Undo);
         }
+        egui::Panel::top("map_bar").show(ui, |ui| out.extend(self.bar(ui, inputs)));
+        // 地図は渡された範囲いっぱいに描くので、上の帯を除いた範囲だけを渡す。
+        let rest = ui.available_rect_before_wrap();
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rest), |ui| {
+            out.extend(self.map(ui, inputs));
+        });
         out
     }
 
@@ -280,7 +267,7 @@ impl MapWindow {
         if !self.open {
             return None;
         }
-        let inner = ctx.input_for(viewport_id(), |i| i.viewport().inner_rect)?;
+        let inner = ctx.input_for(self.drawn_in?, |i| i.viewport().inner_rect)?;
         let rect = self.last_rect?;
         let view = self.view?;
         let local = global - inner.min.to_vec2();
