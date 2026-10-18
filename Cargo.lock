@@ -4087,6 +4087,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vw-dock"
+version = "0.5.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui-phosphor",
+ "serde",
+ "serde_json",
+ "vw-ui",
+]
+
+[[package]]
 name = "vw-gif"
 version = "0.5.0"
 dependencies = [

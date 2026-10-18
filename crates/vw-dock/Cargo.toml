@@ -1,0 +1,18 @@
+[package]
+name = "vw-dock"
+description = "vw's docking: panes split side by side or stacked, moved with Visual Studio-like guides, and pulled out into their own windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egui = { version = "0.36", default-features = false }
+serde = { version = "1", features = ["derive"] }
+vw-ui = { workspace = true }
+
+[dev-dependencies]
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+serde_json = "1"
+egui-phosphor = "0.14"
