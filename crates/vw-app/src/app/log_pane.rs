@@ -83,22 +83,16 @@ impl VwApp {
         action
     }
 
-    /// ログの上の状態の行。動いているものがあれば回るしるしのために細かく描き直し、
+    /// ログの下の状態の行。動いているものがあれば回るしるしのために細かく描き直し、
     /// 何もなくても波形が流れるよう 1 秒ごとに描き直す。
-    pub(super) fn status_lines(&self, ctx: &egui::Context) -> Vec<Vec<crate::status::Segment>> {
+    pub(super) fn status_lines(&mut self, ctx: &egui::Context) -> Vec<Vec<crate::status::Segment>> {
         use crate::status::{self, Snapshot, Words};
         let lang = self.lang();
         let now = Instant::now();
         let counts = self.loader.counts();
-        let jobs: Vec<status::Job> = self
-            .jobs()
-            .into_iter()
-            .map(|job| status::Job {
-                name: tr(lang, job.name),
-                ..job
-            })
-            .collect();
-        let busy = counts.waiting + counts.running > 0 || !jobs.is_empty();
+        let tasks = self.tasks();
+        let tally = self.tally.update(&tasks);
+        let busy = counts.waiting + counts.running > 0 || !tasks.is_empty();
         ctx.request_repaint_after(Duration::from_millis(if busy { 125 } else { 1000 }));
         let snapshot = Snapshot {
             waiting: counts.waiting,
@@ -108,7 +102,8 @@ impl VwApp {
             rate: self.throughput.rate(now),
             resident: self.full_states().iter().filter_map(|f| f.resident).sum(),
             limit: self.settings().viewer.full_image_limit_bytes(),
-            jobs,
+            tasks,
+            tally,
             spinner: status::spinner(now.duration_since(self.started).as_secs_f64()),
             files: self.load_stats.files,
             failed: self.load_stats.failed,
@@ -121,7 +116,8 @@ impl VwApp {
             waiting: tr(lang, "waiting"),
             per_second: tr(lang, "files/s"),
             full: tr(lang, "Full-res"),
-            idle: tr(lang, "Idle"),
+            working: tr(lang, "Working"),
+            more: tr(lang, "more"),
         };
         status::lines(&snapshot, &words)
     }
@@ -168,74 +164,24 @@ impl VwApp {
         }
     }
 
-    /// ログを新しいものが下に来る順で出し、末尾に自動で追従する。
-    /// 文字はドラッグで行をまたいで範囲選択でき、Ctrl+C でコピーする（コピーは egui のラベル選択に任せる）。
-    ///
-    /// 行ごとに別のラベルにして 1 つの文字列にまとめないのは、行ごとに色を変えるのと、
-    /// 新しい行が増えても選んだ範囲が行のラベルに付いたまま動かないようにするため。
+    /// ログ欄の中身。文字はドラッグで行をまたいで範囲選択でき、Ctrl+C でコピーする
+    /// （コピーは egui のラベル選択に任せる）。
     pub(super) fn log_ui(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let terminal = self.settings().log.style == LogStyle::Terminal;
         let wrap = self.settings().log.wrap;
         let mut action = None;
-        let mut selecting = false;
-        let frame = if terminal {
-            egui::Frame::new()
-                .fill(TERMINAL_BACKGROUND)
-                .inner_margin(egui::Margin::symmetric(4, 2))
-        } else {
-            egui::Frame::new()
-        };
         // 集計の行はターミナル風だけに出す。普通の見た目はログファイルの中身と同じ行だけにして、
-        // 欄の上の数行が絶えず書き換わって目に入らないようにする（読み込み中かはスロットで分かる）。
+        // 欄の下の数行が絶えず書き換わって目に入らないようにする（読み込み中かはスロットで分かる）。
         let status = if terminal {
             self.status_lines(ui.ctx())
         } else {
             Vec::new()
         };
-        let mut menu_target: Option<egui::Response> = None;
-        frame.show(ui, |ui| {
-            let visuals = ui.visuals().clone();
-            for line in &status {
-                // 折り返さないときは状態の行を切り詰める。ログと違って横に送る場所がないため。
-                let label =
-                    egui::Label::new(status_job(line, terminal, &visuals)).selectable(false);
-                ui.add(if wrap { label.wrap() } else { label.truncate() });
-            }
-            if !status.is_empty() {
-                ui.add_space(2.0);
-            }
-            let scroll = if wrap {
-                egui::ScrollArea::vertical()
-            } else {
-                egui::ScrollArea::both()
-            };
-            scroll
-                .auto_shrink(false)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.set_min_width(ui.available_width());
-                    for (i, line) in self.log.lines.iter().enumerate() {
-                        let label = if terminal {
-                            terminal_line(line, wrap)
-                        } else {
-                            normal_line(ui, line, wrap)
-                        };
-                        let r = ui.push_id(i, |ui| ui.add(label)).inner;
-                        selecting |= r.drag_started();
-                        menu_target = Some(match menu_target.take() {
-                            Some(m) => m.union(r),
-                            None => r,
-                        });
-                    }
-                    let rest = ui.allocate_response(ui.available_size(), egui::Sense::click());
-                    menu_target = Some(match menu_target.take() {
-                        Some(m) => m.union(rest),
-                        None => rest,
-                    });
-                })
-        });
+        let vw_log::view::Shown {
+            menu_target,
+            selecting,
+        } = vw_log::view::show(ui, &self.log, &status, terminal, wrap);
         let Some(menu_target) = menu_target else {
             return;
         };

@@ -153,18 +153,18 @@ impl Archives {
         true
     }
 
-    /// 展開中のものの進み具合（書いたバイト数, 全部のバイト数）。目次を読んでいる間は全部が 0。
-    /// 展開中のものがなければ `None`。
-    pub fn progress(&self) -> Option<(usize, usize)> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        Some(self.pending.iter().fold((0, 0), |(done, total), p| {
-            (
-                done + p.progress.done.load(Ordering::Relaxed),
-                total + p.progress.total.load(Ordering::Relaxed),
-            )
-        }))
+    /// 展開中のもの 1 つずつの（ZIP の名前, 書いたバイト数, 全部のバイト数）。目次を読んでいる間は全部が 0。
+    pub fn progress(&self) -> Vec<(String, usize, usize)> {
+        self.pending
+            .iter()
+            .map(|p| {
+                (
+                    p.mount.name(),
+                    p.progress.done.load(Ordering::Relaxed),
+                    p.progress.total.load(Ordering::Relaxed),
+                )
+            })
+            .collect()
     }
 
     /// 展開が終わったものを受け取る。

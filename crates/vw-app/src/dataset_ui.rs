@@ -508,11 +508,10 @@ impl DatasetDialog {
         c.set_info(self.info());
         match catalog::save(&self.dir, &c) {
             Ok(()) => {
-                log.info(format!(
-                    "Dataset \"{}\" saved: {}",
-                    c.name,
-                    self.dir.display()
-                ));
+                log.done(
+                    "Saved",
+                    format!("dataset \"{}\": {}", c.name, self.dir.display()),
+                );
                 true
             }
             Err(e) => {
@@ -544,24 +543,30 @@ impl DatasetDialog {
         match result {
             Ok(Outcome::Extracted(x)) => {
                 let dest = PathBuf::from(self.dest.trim());
-                log.info(format!(
-                    "Dataset \"{}\" extracted: {} files from {} to {}",
-                    self.name.trim(),
-                    x.copied,
-                    self.dir.display(),
-                    dest.display()
-                ));
+                log.done(
+                    "Extracted",
+                    format!(
+                        "dataset \"{}\": {} files from {} to {}",
+                        self.name.trim(),
+                        x.copied,
+                        self.dir.display(),
+                        dest.display()
+                    ),
+                );
                 for f in &x.failed {
                     log.warn(format!("Dataset \"{}\": not copied: {f}", self.name.trim()));
                 }
                 if let Some(report) = &x.registered {
                     let c = &report.catalog;
-                    log.info(format!(
-                        "Dataset \"{}\" registered: {} files in {}",
-                        c.name,
-                        c.files.len(),
-                        dest.display()
-                    ));
+                    log.done(
+                        "Registered",
+                        format!(
+                            "dataset \"{}\": {} files in {}",
+                            c.name,
+                            c.files.len(),
+                            dest.display()
+                        ),
+                    );
                     for p in &c.skipped {
                         log.warn(format!("Dataset \"{}\": {p}", c.name));
                     }
@@ -573,18 +578,21 @@ impl DatasetDialog {
             Ok(Outcome::Scanned(report)) => {
                 let c = &report.catalog;
                 let verb = match self.kind {
-                    Kind::Register => "registered",
-                    Kind::Edit | Kind::Update | Kind::Extract => "updated",
+                    Kind::Register => "Registered",
+                    Kind::Edit | Kind::Update | Kind::Extract => "Updated",
                 };
-                log.info(format!(
-                    "Dataset \"{}\" {verb}: {} files ({} added, {} removed, {} changed) in {}",
-                    c.name,
-                    c.files.len(),
-                    report.added,
-                    report.removed,
-                    report.changed,
-                    self.dir.display()
-                ));
+                log.done(
+                    verb,
+                    format!(
+                        "dataset \"{}\": {} files ({} added, {} removed, {} changed) in {}",
+                        c.name,
+                        c.files.len(),
+                        report.added,
+                        report.removed,
+                        report.changed,
+                        self.dir.display()
+                    ),
+                );
                 for p in &c.skipped {
                     log.warn(format!("Dataset \"{}\": {p}", c.name));
                 }

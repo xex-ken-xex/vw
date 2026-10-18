@@ -4043,6 +4043,7 @@ dependencies = [
  "vw-dock",
  "vw-gif",
  "vw-jpeg",
+ "vw-log",
  "vw-png",
  "vw-quality",
  "vw-raw",
@@ -4116,6 +4117,14 @@ dependencies = [
  "vw-core",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "vw-log"
+version = "0.5.0"
+dependencies = [
+ "chrono",
+ "egui",
 ]
 
 [[package]]

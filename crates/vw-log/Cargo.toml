@@ -1,0 +1,12 @@
+[package]
+name = "vw-log"
+description = "vw's log pane: the log lines and file, the live status lines and how both are drawn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+egui = { version = "0.36", default-features = false }
