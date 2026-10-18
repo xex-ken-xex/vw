@@ -1,3 +1,6 @@
+// Modified by the vw contributors (2026): WM_DPICHANGED uses the suggested rect while the
+// window is being dragged (same idea as winit PR #4694). See vendor/winit/README-vw.md.
+
 #![allow(non_snake_case)]
 
 mod runner;

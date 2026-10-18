@@ -1,1 +1,2 @@
+# Changed by the vw contributors (2026): keep vw's `cargo fmt --check` off this copy.
 disable_all_formatting = true

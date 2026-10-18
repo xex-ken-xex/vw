@@ -534,7 +534,7 @@ AI のモデルで、画像に内容のタグを付けたり、写っている�
    すべて揃うまで、AI タグ付けと顔探しは押せません
    - ONNX Runtime（約 60 MB、MIT）: どちらの機能にも要ります
    - WD tagger v3（約 380 MB、Apache-2.0）: AI タグ用
-   - YuNet + SFace（約 39 MB、MIT / Apache-2.0）: 顔用
+   - YuNet + SFace（約 39 MB、YuNet は MIT、SFace は Apache-2.0）: 顔用
    - どれも配布元の決まった版を取り、vw が持っている SHA-256 などのハッシュと合うかを確かめます。合わないファイルは使いません
 2. **AI タグ**: 画像を右クリック → **AI タグを付ける**。フォルダごとなら **AI タグ → このフォルダに AI タグを付ける**
    か、フォルダツリーの右クリック。タグは確信度つきでメタデータ欄の「AI タグ」に出ます。
@@ -1142,5 +1142,7 @@ vw は [MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) の�
 無償で、改変・再配布・商用利用ができます。どちらのライセンスでも、vw は現状のまま提供され、いかなる保証もありません。作者は vw の利用によって生じた損害に責任を負いません。
 
 地図で使う地名のデータは [GeoNames](https://www.geonames.org/) のもので、[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) で提供されています。vw 用に必要な列だけを抜き出し、Release の `geodata-1` などに置いています（作り方: [tools/geodata/make_geodata.py](tools/geodata/make_geodata.py)）。地図の絵は © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors です。
+
+AI のモデル（ONNX Runtime・WD tagger v3・YuNet・SFace）は配布物に入っておらず、使う人が「AI のモデル」の画面で選んだときに、それぞれの公開元から取ってきます。ライセンスはその画面と、上の「[AI タグと顔](#ai-タグと顔)」の一覧に書いてあります。日本語の文字は OS に入っているフォント（Windows は Yu Gothic やメイリオ）を使い、配布物には入れていません。英数字と記号は egui に入っているフォント（Ubuntu・Hack・Noto Emoji など）で、そのライセンスは下の一覧に入っています。
 
 vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります（「vw について」の「サードパーティのライセンス...」でも開けます）。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。
