@@ -1,5 +1,5 @@
 //! 本体の中のペイン（フォルダ・画像・メタデータ・ログ）と道具の欄（解析・ズームマップ・
-//! 画素の変換・相関図・地図）の並べ替えと、別ウインドウへの出し入れ。
+//! 画素の変換・相関図・地図・データセット）の並べ替えと、別ウインドウへの出し入れ。
 //! 並べ方そのものは vw-dock が持ち、ここは各ペインの中身と見出しを渡す。
 
 use eframe::egui;
@@ -23,10 +23,11 @@ pub(super) const ZOOM_MAP: &str = "zoom_map";
 pub(super) const PIPELINE: &str = "pixel_pipeline";
 pub(super) const CHARTS: &str = "relationship_charts";
 pub(super) const MAP: &str = "map";
-/// もとは別ウインドウだった道具。開いているかどうかは今までどおり各道具の `open` が持ち、
-/// 欄の出し入れをそれに合わせる（道具を開く操作があちこちにあり、閉じるときの後始末も
-/// 道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 5] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP];
+pub(super) const DATASETS: &str = "datasets";
+/// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
+/// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
+/// あり、閉じるときの後始末も道具ごとに違うため）。
+pub(super) const TOOLS: [&str; 6] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
 fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
@@ -35,6 +36,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         ZOOM_MAP => ([640.0, 380.0], Some("zoom_map")),
         PIPELINE => ([1560.0, 560.0], None),
         CHARTS => ([1000.0, 680.0], None),
+        DATASETS => ([1100.0, 700.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -115,6 +117,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         PIPELINE => "Pixel pipeline",
         CHARTS => "Relationship charts",
         MAP => "Map",
+        DATASETS => "Datasets",
         _ => "Log",
     }
 }
@@ -219,6 +222,7 @@ impl Panes for AppPanes<'_> {
             PIPELINE => self.app.pipeline_pane(ui),
             CHARTS => self.app.people_graph_pane(ui),
             MAP => self.app.map_pane(ui),
+            DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
             }
@@ -276,6 +280,7 @@ impl VwApp {
             ZOOM_MAP => &mut self.zoom_map.open,
             PIPELINE => &mut self.pipeline.open,
             CHARTS => &mut self.graph_window.open,
+            DATASETS => &mut self.show_datasets,
             _ => &mut self.map.open,
         }
     }

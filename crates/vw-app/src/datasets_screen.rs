@@ -1,4 +1,4 @@
-//! Datasets 画面。設定画面と同じくメインの領域を置き換え、データセットを探して一覧する。
+//! Datasets の欄。データセットを探して一覧する。ほかの欄と同じく本体に並べるか別ウインドウに出す。
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -10,10 +10,12 @@ use crate::dataset_search::{self, Condition, Hit, Index, Op, Query, Target};
 use crate::i18n::{tr, tr1};
 use crate::settings::{Language, SearchGroup};
 
+/// 詳しい情報を表の横に並べる、欄の幅の下限。これより細ければ表の下に出す。
+const SIDE_DETAIL_MIN_WIDTH: f32 = 640.0;
+
 /// 画面から頼まれること。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    Close,
     /// データセットのフォルダへ移ってファイルを読み込む。
     Show(PathBuf),
     /// データセットの中の、検索で当たったファイル（カタログのパス）だけをスロットに並べる。
@@ -164,16 +166,8 @@ impl DatasetsScreen {
             .unwrap_or_else(|| fields.to_vec());
         egui::Panel::top("datasets_header").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .button(format!("{} {}", icon::ARROW_LEFT, tr(lang, "Back")))
-                    .clicked()
-                {
-                    action = Some(Action::Close);
-                }
-                ui.heading(tr(lang, "Datasets"));
-            });
-            ui.horizontal(|ui| {
+            // 欄を細くしても、ボタンが切れずに次の行へ回るようにする。
+            ui.horizontal_wrapped(|ui| {
                 ui.label(icon::MAGNIFYING_GLASS);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.query.text)
@@ -476,111 +470,122 @@ impl DatasetsScreen {
         // 絞り込んだときだけ。すべてのファイルが当たったときは、データセットを開くのと同じため。
         let hits = narrowed_paths(index, hit);
         let mut action = None;
-        egui::Panel::right("dataset_detail")
-            .default_size(300.0)
-            .min_size(220.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_space(4.0);
-                    ui.heading(&c.name);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(entry.dir.display().to_string())
-                                .monospace()
-                                .weak(),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Show")).clicked() {
-                            action = Some(Action::Show(entry.dir.clone()));
-                        }
-                        if ui.button(tr(lang, "Extract...")).clicked() {
-                            action = Some(Action::Extract(entry.dir.clone(), hits.clone()));
-                        }
-                        if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
-                            action = Some(Action::Send(entry.dir.clone(), hits.clone(), choice));
-                        }
-                    });
-                    if let Some(hits) = &hits {
-                        if ui
-                            .button(tr1(lang, "Show the {} files found", &hits.len().to_string()))
-                            .on_hover_text(tr(
-                                lang,
-                                "Show only the files that meet the search conditions, one slot each.",
-                            ))
-                            .clicked()
-                        {
-                            action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
-                        }
+        // 細い欄に入れたときは、横に並べると表が隠れるので、下に出す。
+        let panel = if ui.available_width() < SIDE_DETAIL_MIN_WIDTH {
+            egui::Panel::bottom("dataset_detail_below")
+                .default_size(300.0)
+                .min_size(160.0)
+        } else {
+            egui::Panel::right("dataset_detail")
+                .default_size(300.0)
+                .min_size(220.0)
+        };
+        panel.show(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.heading(&c.name);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(entry.dir.display().to_string())
+                            .monospace()
+                            .weak(),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Show")).clicked() {
+                        action = Some(Action::Show(entry.dir.clone()));
                     }
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Edit...")).clicked() {
-                            action = Some(Action::Edit(entry.dir.clone()));
-                        }
-                        if ui.button(tr(lang, "Update")).clicked() {
-                            action = Some(Action::Update(vec![entry.dir.clone()]));
-                        }
-                    });
-                    ui.separator();
-                    if !c.memo.is_empty() {
-                        ui.label(&c.memo);
-                        ui.separator();
+                    if ui.button(tr(lang, "Extract...")).clicked() {
+                        action = Some(Action::Extract(entry.dir.clone(), hits.clone()));
                     }
-                    egui::Grid::new("dataset-detail-grid")
-                        .num_columns(2)
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.label(tr(lang, "Tags"));
-                            ui.label(c.tags.join(", "));
-                            ui.end_row();
-                            for f in field_names {
-                                ui.label(f);
-                                ui.label(c.fields.get(f).map_or("", String::as_str));
-                                ui.end_row();
-                            }
-                            ui.label(tr(lang, "Files"));
-                            ui.label(c.files.len().to_string());
-                            ui.end_row();
-                            ui.label(tr(lang, "Updated"));
-                            ui.label(&c.updated);
-                            ui.end_row();
-                            if let Some(s) = &c.source {
-                                ui.label(tr(lang, "Extracted from"));
-                                ui.label(format!("{} ({})", s.name, s.path));
-                                ui.end_row();
-                            }
-                        });
-                    if let Some(hits) = &hits {
-                        ui.separator();
-                        // パネルの下まで使う。読めなかったファイルの見出しの分だけ空けておく。
-                        let row = ui.spacing().interact_size.y;
-                        let reserve = if c.skipped.is_empty() { 2.0 } else { 4.0 } * row;
-                        let height = (ui.available_height() - reserve).max(8.0 * row);
-                        egui::CollapsingHeader::new(tr1(
-                            lang,
-                            "Files found ({})",
-                            &hits.len().to_string(),
-                        ))
-                        .default_open(true)
-                        .show(ui, |ui| hit_list(ui, hits, height));
-                    }
-                    if !c.skipped.is_empty() {
-                        ui.separator();
-                        egui::CollapsingHeader::new(tr1(
-                            lang,
-                            "Not read ({})",
-                            &c.skipped.len().to_string(),
-                        ))
-                        .show(ui, |ui| {
-                            for s in &c.skipped {
-                                ui.label(s.to_string());
-                            }
-                        });
+                    if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
+                        action = Some(Action::Send(entry.dir.clone(), hits.clone(), choice));
                     }
                 });
+                if let Some(hits) = &hits {
+                    if ui
+                        .button(tr1(
+                            lang,
+                            "Show the {} files found",
+                            &hits.len().to_string(),
+                        ))
+                        .on_hover_text(tr(
+                            lang,
+                            "Show only the files that meet the search conditions, one slot each.",
+                        ))
+                        .clicked()
+                    {
+                        action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Edit...")).clicked() {
+                        action = Some(Action::Edit(entry.dir.clone()));
+                    }
+                    if ui.button(tr(lang, "Update")).clicked() {
+                        action = Some(Action::Update(vec![entry.dir.clone()]));
+                    }
+                });
+                ui.separator();
+                if !c.memo.is_empty() {
+                    ui.label(&c.memo);
+                    ui.separator();
+                }
+                egui::Grid::new("dataset-detail-grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label(tr(lang, "Tags"));
+                        ui.label(c.tags.join(", "));
+                        ui.end_row();
+                        for f in field_names {
+                            ui.label(f);
+                            ui.label(c.fields.get(f).map_or("", String::as_str));
+                            ui.end_row();
+                        }
+                        ui.label(tr(lang, "Files"));
+                        ui.label(c.files.len().to_string());
+                        ui.end_row();
+                        ui.label(tr(lang, "Updated"));
+                        ui.label(&c.updated);
+                        ui.end_row();
+                        if let Some(s) = &c.source {
+                            ui.label(tr(lang, "Extracted from"));
+                            ui.label(format!("{} ({})", s.name, s.path));
+                            ui.end_row();
+                        }
+                    });
+                if let Some(hits) = &hits {
+                    ui.separator();
+                    // パネルの下まで使う。読めなかったファイルの見出しの分だけ空けておく。
+                    let row = ui.spacing().interact_size.y;
+                    let reserve = if c.skipped.is_empty() { 2.0 } else { 4.0 } * row;
+                    let height = (ui.available_height() - reserve).max(8.0 * row);
+                    egui::CollapsingHeader::new(tr1(
+                        lang,
+                        "Files found ({})",
+                        &hits.len().to_string(),
+                    ))
+                    .default_open(true)
+                    .show(ui, |ui| hit_list(ui, hits, height));
+                }
+                if !c.skipped.is_empty() {
+                    ui.separator();
+                    egui::CollapsingHeader::new(tr1(
+                        lang,
+                        "Not read ({})",
+                        &c.skipped.len().to_string(),
+                    ))
+                    .show(ui, |ui| {
+                        for s in &c.skipped {
+                            ui.label(s.to_string());
+                        }
+                    });
+                }
             });
+        });
         action
     }
 
