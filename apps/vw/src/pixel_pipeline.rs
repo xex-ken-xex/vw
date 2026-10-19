@@ -224,7 +224,7 @@ pub fn float_of_params(image: &VwImage, decoded: &Decoded, p: &Params) -> Float 
     Float::new(w, h, 1, data)
 }
 
-/// 標準の写し方（[`vw_core::display::to_display`] と同じ式）で 0〜1 にした表示の値。
+/// 標準の写し方（[`vw_core::display::to_display`] と同じ式、曲線も含む）で 0〜1 にした表示の値。
 /// DICOM 以外の画像と、カラーの DICOM に使う。U16 は有効ビットの全範囲、F32 は
 /// 画像の窓か最小〜最大を 0〜1 に写すので、8bit に落とす前の階調が残る。
 pub fn float_of_display(image: &VwImage) -> Float {
@@ -262,6 +262,11 @@ pub fn float_of_display(image: &VwImage) -> Float {
             });
             let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
             push(&|i| ((v[i] - lo) * scale).clamp(0.0, 255.0) / 255.0);
+        }
+    }
+    if image.curve != vw_core::Curve::Linear {
+        for v in &mut data {
+            *v = image.curve.apply(*v);
         }
     }
     Float::new(w, h, channels, data)

@@ -712,6 +712,44 @@ impl FitsStretch {
     }
 }
 
+/// 天体の画像の、黒と白の間の明るさの付け方（[`vw_core::Curve`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitsCurve {
+    #[default]
+    Linear,
+    Sqrt,
+    Log,
+    Asinh,
+}
+
+impl FitsCurve {
+    pub const ALL: [FitsCurve; 4] = [
+        FitsCurve::Linear,
+        FitsCurve::Asinh,
+        FitsCurve::Log,
+        FitsCurve::Sqrt,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FitsCurve::Linear => "Linear",
+            FitsCurve::Sqrt => "Square root",
+            FitsCurve::Log => "Logarithm",
+            FitsCurve::Asinh => "asinh",
+        }
+    }
+
+    fn curve(self) -> vw_core::Curve {
+        match self {
+            FitsCurve::Linear => vw_core::Curve::Linear,
+            FitsCurve::Sqrt => vw_core::Curve::Sqrt,
+            FitsCurve::Log => vw_core::Curve::Log,
+            FitsCurve::Asinh => vw_core::Curve::Asinh,
+        }
+    }
+}
+
 /// 天体の画像（FITS）の表示。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Fits {
@@ -720,6 +758,7 @@ pub struct Fits {
     pub low_percent: f32,
     /// [`FitsStretch::Percentile`] で白にする位置（％）。
     pub high_percent: f32,
+    pub curve: FitsCurve,
     /// `ROWORDER` のないファイルの上下を返す。
     pub flip_rows: bool,
     /// `BAYERPAT` のモザイクをカラーにする。
@@ -733,6 +772,7 @@ impl Default for Fits {
             stretch: FitsStretch::Percentile,
             low_percent: d.low_percent,
             high_percent: d.high_percent,
+            curve: FitsCurve::Linear,
             flip_rows: d.flip_rows,
             demosaic: d.demosaic,
         }
@@ -763,6 +803,7 @@ impl Fits {
             stretch: r.get("stretch").unwrap_or(d.stretch),
             low_percent,
             high_percent,
+            curve: r.get("curve").unwrap_or(d.curve),
             flip_rows: r.get("flip_rows").unwrap_or(d.flip_rows),
             demosaic: r.get("demosaic").unwrap_or(d.demosaic),
         }
@@ -777,6 +818,7 @@ impl Fits {
             },
             low_percent: self.low_percent,
             high_percent: self.high_percent,
+            curve: self.curve.curve(),
             flip_rows: self.flip_rows,
             demosaic: self.demosaic,
         }

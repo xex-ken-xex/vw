@@ -12,7 +12,7 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, ColorFormat, FitsStretch, Fullscreen, FullscreenMode, HeaderClick,
+    parse_hex_color, ColorFormat, FitsCurve, FitsStretch, Fullscreen, FullscreenMode, HeaderClick,
     HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay,
     SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
@@ -92,7 +92,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 73] = [
+const ITEMS: [Item; 74] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -524,7 +524,7 @@ const ITEMS: [Item; 73] = [
         section: Section::Fits,
         key: "fits.stretch",
         title: "First black and white",
-        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black. Adjust them afterwards with the usual window drag.",
+        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black.",
         widget: fits_stretch_widget,
     },
     Item {
@@ -540,6 +540,13 @@ const ITEMS: [Item; 73] = [
         title: "White percentile",
         description: "With Percentiles, pixels above this percent are drawn white (%).",
         widget: fits_high_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.curve",
+        title: "Curve between black and white",
+        description: "How the values between black and white are brightened. Linear keeps them in proportion; asinh, Logarithm and Square root lift faint parts such as nebulae while keeping bright stars from turning white (strongest first).",
+        widget: fits_curve_widget,
     },
     Item {
         section: Section::Fits,
@@ -1064,6 +1071,16 @@ fn fits_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
         }
     });
     s.fits.stretch != before
+}
+
+fn fits_curve_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fits.curve;
+    ui.horizontal(|ui| {
+        for curve in FitsCurve::ALL {
+            ui.radio_value(&mut s.fits.curve, curve, tr(lang, curve.title()));
+        }
+    });
+    s.fits.curve != before
 }
 
 /// 黒は白より小さく、白は黒より大きくしか動かせない。

@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::sync::{Arc, RwLock};
 
+pub use vw_core::Curve;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
 pub use header::is_fits;
@@ -32,6 +33,8 @@ pub struct Options {
     /// [`Stretch::Percentile`] の黒と白の位置（％）。
     pub low_percent: f32,
     pub high_percent: f32,
+    /// 黒と白の間の明るさの付け方。淡い星雲を見るときは直線以外にする。
+    pub curve: Curve,
     /// `ROWORDER` のないファイルの上下を返す（規格どおり、最初の行を下にする）。
     pub flip_rows: bool,
     /// `BAYERPAT` のモザイクを RGB にする。
@@ -44,6 +47,7 @@ impl Default for Options {
             stretch: Stretch::Percentile,
             low_percent: 0.5,
             high_percent: 99.5,
+            curve: Curve::Linear,
             flip_rows: false,
             demosaic: true,
         }
@@ -222,6 +226,7 @@ fn decode_with(data: &[u8], frame: usize, options: Options) -> Result<VwImage, D
         options.low_percent,
         options.high_percent,
     );
+    img.curve = options.curve;
     img.metadata = metadata(&hdus, &image, frame);
     Ok(img)
 }

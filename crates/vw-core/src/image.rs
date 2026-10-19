@@ -85,6 +85,34 @@ impl Metadata {
     }
 }
 
+/// 黒（0）〜白（1）の間の値 `t` を、表示の明るさ 0〜1 に写す曲線。
+///
+/// 強さは astropy や SAOImage ds9 の既定に合わせて固定にしている。設定で変えられるように
+/// しないのは、黒と白の割合を変えれば見え方の調整はおおむね足りるため。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Curve {
+    #[default]
+    Linear,
+    Sqrt,
+    Log,
+    Asinh,
+}
+
+impl Curve {
+    const LOG_A: f32 = 1000.0;
+    const ASINH_A: f32 = 0.1;
+
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Curve::Linear => t,
+            Curve::Sqrt => t.sqrt(),
+            Curve::Log => (Self::LOG_A * t).ln_1p() / Self::LOG_A.ln_1p(),
+            Curve::Asinh => (t / Self::ASINH_A).asinh() / (1.0 / Self::ASINH_A).asinh(),
+        }
+    }
+}
+
 /// 形式に依存しない、vw 共通の画像メモリ形式。
 #[derive(Clone, Debug)]
 pub struct VwImage {
@@ -98,6 +126,8 @@ pub struct VwImage {
     /// ファイルが勧める表示の階調 `(黒, 白)`（DICOM のウィンドウ幅/レベルなど）。
     /// 表示時に [`crate::DisplayParams::window`] の指定がなければこれを使う。
     pub window: Option<(f32, f32)>,
+    /// 黒〜白の間の明るさの付け方。天体の画像で淡い部分を持ち上げるのに使う。
+    pub curve: Curve,
     pub metadata: Metadata,
     /// [`crate::DecoderPlugin::develop`] で、この画像の代わりに作れる画像の大きさ `(幅, 高さ)`。
     /// カメラ RAW の埋め込みプレビューを表示したときの、センサーの大きさ（向きは補正後）。
@@ -131,6 +161,7 @@ impl VwImage {
             data,
             significant_bits,
             window: None,
+            curve: Curve::Linear,
             metadata: Metadata::default(),
             develop_size: None,
         })

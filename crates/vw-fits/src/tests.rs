@@ -344,6 +344,17 @@ fn first_window_is_the_half_percent_range_by_default() {
 }
 
 #[test]
+fn curve_is_linear_by_default_and_follows_the_setting() {
+    let file = fits(&image_cards(8, &[2, 1]), &[0, 255]);
+    assert_eq!(decode(&file).curve, Curve::Linear);
+    let asinh = Options {
+        curve: Curve::Asinh,
+        ..Options::default()
+    };
+    assert_eq!(decode_opts(&file, asinh).curve, Curve::Asinh);
+}
+
+#[test]
 fn stretch_methods_choose_black_and_white() {
     let mut v: Vec<f32> = (0..1000).map(|i| 100.0 + (i % 10) as f32).collect();
     v[0] = 60000.0; // 明るい星
