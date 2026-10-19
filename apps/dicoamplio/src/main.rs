@@ -168,8 +168,13 @@ fn build_config(a: &Args, dir: &Path) -> Result<Config> {
         c.store.as_is_dir = d.clone();
     }
     if let Some(f) = &a.rules {
-        let text = std::fs::read_to_string(f).with_context(|| format!("規則ファイルを読めない: {}", f.display()))?;
-        for l in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let text = std::fs::read_to_string(f)
+            .with_context(|| format!("規則ファイルを読めない: {}", f.display()))?;
+        for l in text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
             c.rules.push(RuleSpec::parse(l)?);
         }
     }
@@ -198,7 +203,10 @@ fn main() -> Result<()> {
         attach_console();
     }
     let args = Args::parse();
-    let dir = args.preset_dir.clone().unwrap_or_else(config::default_preset_dir);
+    let dir = args
+        .preset_dir
+        .clone()
+        .unwrap_or_else(config::default_preset_dir);
 
     if args.list_presets {
         for n in config::list_presets(&dir) {
@@ -227,7 +235,10 @@ fn main() -> Result<()> {
         if !cfg.store.enabled {
             anyhow::bail!("--send-only には --send AET@host:port が要る");
         }
-        let progress = Progress { echo: true, ..Default::default() };
+        let progress = Progress {
+            echo: true,
+            ..Default::default()
+        };
         let sent = Engine::new(&cfg)?.run_send_as_is(&progress)?;
         eprintln!("送信 {sent} 個");
         return Ok(());
@@ -241,19 +252,36 @@ fn main() -> Result<()> {
         std::process::exit(2);
     }
     if args.threads > 0 {
-        rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global()?;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()?;
     }
-    let progress = Progress { echo: true, ..Default::default() };
+    let progress = Progress {
+        echo: true,
+        ..Default::default()
+    };
     let done = Engine::new(&cfg)?.run(&progress)?;
-    eprintln!("{} {done} 個", if cfg.store.enabled { "送信" } else { "書き出し" });
+    eprintln!(
+        "{} {done} 個",
+        if cfg.store.enabled {
+            "送信"
+        } else {
+            "書き出し"
+        }
+    );
     Ok(())
 }
 
 #[cfg(feature = "gui")]
 fn open_gui(args: Args, dir: PathBuf) -> Result<()> {
-    let initial = build_config(&args, &dir).ok().filter(|_| args.preset.is_some() || args.input.is_some());
+    let initial = build_config(&args, &dir)
+        .ok()
+        .filter(|_| args.preset.is_some() || args.input.is_some());
     // 名前で指定したプリセットだけを「いま使っているプリセット」として見せる(パスで指定したものは名前がない)
-    let preset = args.preset.clone().filter(|p| !p.ends_with(".toml") && !p.contains(['/', '\\']));
+    let preset = args
+        .preset
+        .clone()
+        .filter(|p| !p.ends_with(".toml") && !p.contains(['/', '\\']));
     gui::run(dir, initial, preset)
 }
 

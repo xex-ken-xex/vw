@@ -91,7 +91,10 @@ fn address(cfg: &StoreConfig) -> String {
 
 impl Connection {
     /// `contexts` は (SOP Class UID, 転送構文 UID の候補)。受け側が受けつけなかった SOP Class も返す。
-    pub fn open(cfg: &StoreConfig, contexts: &[(String, Vec<String>)]) -> Result<(Connection, Vec<String>)> {
+    pub fn open(
+        cfg: &StoreConfig,
+        contexts: &[(String, Vec<String>)],
+    ) -> Result<(Connection, Vec<String>)> {
         if contexts.is_empty() {
             bail!("送るものがない");
         }
@@ -100,11 +103,16 @@ impl Connection {
         }
         let mut opt = options(cfg);
         for (sop, ts) in contexts {
-            opt = opt.with_presentation_context(sop.as_str(), ts.iter().map(String::as_str).collect());
+            opt = opt
+                .with_presentation_context(sop.as_str(), ts.iter().map(String::as_str).collect());
         }
-        let assoc = opt
-            .establish(address(cfg))
-            .map_err(|e| anyhow!("{} ({}) にアソシエーションを張れない: {e}", address(cfg), cfg.called_ae.trim()))?;
+        let assoc = opt.establish(address(cfg)).map_err(|e| {
+            anyhow!(
+                "{} ({}) にアソシエーションを張れない: {e}",
+                address(cfg),
+                cfg.called_ae.trim()
+            )
+        })?;
         // 提案した順に ID が 1, 3, 5, … と振られる(PS3.8)
         let mut accepted = HashMap::new();
         for pc in assoc.presentation_contexts() {
@@ -113,15 +121,32 @@ impl Connection {
             }
             let index = (pc.id as usize).saturating_sub(1) / 2;
             if let Some((sop, _)) = contexts.get(index) {
-                accepted.entry(sop.clone()).or_insert((pc.id, pc.transfer_syntax.trim_end_matches('\0').to_string()));
+                accepted
+                    .entry(sop.clone())
+                    .or_insert((pc.id, pc.transfer_syntax.trim_end_matches('\0').to_string()));
             }
         }
-        let refused: Vec<String> = contexts.iter().filter(|(s, _)| !accepted.contains_key(s)).map(|(s, _)| s.clone()).collect();
+        let refused: Vec<String> = contexts
+            .iter()
+            .filter(|(s, _)| !accepted.contains_key(s))
+            .map(|(s, _)| s.clone())
+            .collect();
         if accepted.is_empty() {
             let _ = assoc.abort();
-            bail!("受け側が提示コンテキストを 1 つも受け入れない(SOP Class か転送構文が合わない): {}", refused.join(", "));
+            bail!(
+                "受け側が提示コンテキストを 1 つも受け入れない(SOP Class か転送構文が合わない): {}",
+                refused.join(", ")
+            );
         }
-        Ok((Connection { assoc, accepted, message_id: 1, stats: Stats::default() }, refused))
+        Ok((
+            Connection {
+                assoc,
+                accepted,
+                message_id: 1,
+                stats: Stats::default(),
+            },
+            refused,
+        ))
     }
 
     /// 1 インスタンスを送る。通信の失敗は Err(アソシエーションは打ち切る)。
@@ -151,36 +176,74 @@ impl Connection {
     }
 
     pub fn close(self) -> Result<Stats> {
-        self.assoc.release().map_err(|e| anyhow!("アソシエーションの解放に失敗: {e}"))?;
+        self.assoc
+            .release()
+            .map_err(|e| anyhow!("アソシエーションの解放に失敗: {e}"))?;
         Ok(self.stats)
     }
 }
 
 /// 1 インスタンスを送り、受け側の状態(0 なら成功)を返す。
-fn store_one(assoc: &mut ClientAssociation<TcpStream>, pc_id: u8, ts_uid: &str, inst: &Instance, message_id: u16) -> Result<u16> {
-    let ts = TransferSyntaxRegistry.get(ts_uid).with_context(|| format!("転送構文 {ts_uid} を知らない"))?;
+fn store_one(
+    assoc: &mut ClientAssociation<TcpStream>,
+    pc_id: u8,
+    ts_uid: &str,
+    inst: &Instance,
+    message_id: u16,
+) -> Result<u16> {
+    let ts = TransferSyntaxRegistry
+        .get(ts_uid)
+        .with_context(|| format!("転送構文 {ts_uid} を知らない"))?;
     let mut data = Vec::new();
-    inst.object.write_dataset_with_ts(&mut data, ts).with_context(|| format!("転送構文 {} でデータセットを書けない", ts.name()))?;
+    inst.object
+        .write_dataset_with_ts(&mut data, ts)
+        .with_context(|| format!("転送構文 {} でデータセットを書けない", ts.name()))?;
 
     let cmd = InMemDicomObject::command_from_element_iter([
-        DataElement::new(tags::AFFECTED_SOP_CLASS_UID, VR::UI, PrimitiveValue::from(inst.sop_class.as_str())),
+        DataElement::new(
+            tags::AFFECTED_SOP_CLASS_UID,
+            VR::UI,
+            PrimitiveValue::from(inst.sop_class.as_str()),
+        ),
         DataElement::new(tags::COMMAND_FIELD, VR::US, dicom_value!(U16, [0x0001])),
         DataElement::new(tags::MESSAGE_ID, VR::US, dicom_value!(U16, [message_id])),
         DataElement::new(tags::PRIORITY, VR::US, dicom_value!(U16, [0x0000])),
-        DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0000])),
-        DataElement::new(tags::AFFECTED_SOP_INSTANCE_UID, VR::UI, PrimitiveValue::from(inst.sop_instance.as_str())),
+        DataElement::new(
+            tags::COMMAND_DATA_SET_TYPE,
+            VR::US,
+            dicom_value!(U16, [0x0000]),
+        ),
+        DataElement::new(
+            tags::AFFECTED_SOP_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from(inst.sop_instance.as_str()),
+        ),
     ]);
     let mut cmd_bytes = Vec::new();
     cmd.write_dataset_with_ts(&mut cmd_bytes, &IMPLICIT_VR_LITTLE_ENDIAN.erased())?;
 
     let max = assoc.acceptor_max_pdu_length() as usize;
-    let command = PDataValue { presentation_context_id: pc_id, value_type: PDataValueType::Command, is_last: true, data: cmd_bytes };
+    let command = PDataValue {
+        presentation_context_id: pc_id,
+        value_type: PDataValueType::Command,
+        is_last: true,
+        data: cmd_bytes,
+    };
     if max == 0 || command.data.len() + data.len() + 100 < max {
         // 小さければコマンドとデータを 1 つの PDU で送る(往復が減る)
-        let payload = PDataValue { presentation_context_id: pc_id, value_type: PDataValueType::Data, is_last: true, data };
-        assoc.send(&Pdu::PData { data: vec![command, payload] })?;
+        let payload = PDataValue {
+            presentation_context_id: pc_id,
+            value_type: PDataValueType::Data,
+            is_last: true,
+            data,
+        };
+        assoc.send(&Pdu::PData {
+            data: vec![command, payload],
+        })?;
     } else {
-        assoc.send(&Pdu::PData { data: vec![command] })?;
+        assoc.send(&Pdu::PData {
+            data: vec![command],
+        })?;
         let mut w = assoc.send_pdata(pc_id);
         w.write_all(&data)?;
         w.finish()?;
@@ -192,8 +255,14 @@ fn store_one(assoc: &mut ClientAssociation<TcpStream>, pc_id: u8, ts_uid: &str, 
 fn read_status(assoc: &mut ClientAssociation<TcpStream>) -> Result<u16> {
     match assoc.receive()? {
         Pdu::PData { data } => {
-            let v = data.into_iter().find(|v| v.value_type == PDataValueType::Command).context("応答にコマンドがない")?;
-            let obj = InMemDicomObject::read_dataset_with_ts(&v.data[..], &IMPLICIT_VR_LITTLE_ENDIAN.erased())?;
+            let v = data
+                .into_iter()
+                .find(|v| v.value_type == PDataValueType::Command)
+                .context("応答にコマンドがない")?;
+            let obj = InMemDicomObject::read_dataset_with_ts(
+                &v.data[..],
+                &IMPLICIT_VR_LITTLE_ENDIAN.erased(),
+            )?;
             Ok(obj.element(tags::STATUS)?.to_int::<u16>()?)
         }
         Pdu::AbortRQ { source } => bail!("受け側がアソシエーションを打ち切った({source:?})"),
@@ -207,7 +276,13 @@ pub fn echo(cfg: &StoreConfig) -> Result<String> {
     let mut assoc = options(cfg)
         .with_abstract_syntax(VERIFICATION)
         .establish(address(cfg))
-        .map_err(|e| anyhow!("{} ({}) にアソシエーションを張れない: {e}", address(cfg), cfg.called_ae.trim()))?;
+        .map_err(|e| {
+            anyhow!(
+                "{} ({}) にアソシエーションを張れない: {e}",
+                address(cfg),
+                cfg.called_ae.trim()
+            )
+        })?;
     let pc = assoc
         .presentation_contexts()
         .iter()
@@ -215,20 +290,41 @@ pub fn echo(cfg: &StoreConfig) -> Result<String> {
         .map(|pc| pc.id)
         .context("受け側が C-ECHO(Verification)を受けつけない")?;
     let cmd = InMemDicomObject::command_from_element_iter([
-        DataElement::new(tags::AFFECTED_SOP_CLASS_UID, VR::UI, PrimitiveValue::from(VERIFICATION)),
+        DataElement::new(
+            tags::AFFECTED_SOP_CLASS_UID,
+            VR::UI,
+            PrimitiveValue::from(VERIFICATION),
+        ),
         DataElement::new(tags::COMMAND_FIELD, VR::US, dicom_value!(U16, [0x0030])),
         DataElement::new(tags::MESSAGE_ID, VR::US, dicom_value!(U16, [1])),
-        DataElement::new(tags::COMMAND_DATA_SET_TYPE, VR::US, dicom_value!(U16, [0x0101])),
+        DataElement::new(
+            tags::COMMAND_DATA_SET_TYPE,
+            VR::US,
+            dicom_value!(U16, [0x0101]),
+        ),
     ]);
     let mut bytes = Vec::new();
     cmd.write_dataset_with_ts(&mut bytes, &IMPLICIT_VR_LITTLE_ENDIAN.erased())?;
-    assoc.send(&Pdu::PData { data: vec![PDataValue { presentation_context_id: pc, value_type: PDataValueType::Command, is_last: true, data: bytes }] })?;
+    assoc.send(&Pdu::PData {
+        data: vec![PDataValue {
+            presentation_context_id: pc,
+            value_type: PDataValueType::Command,
+            is_last: true,
+            data: bytes,
+        }],
+    })?;
     let status = read_status(&mut assoc)?;
-    assoc.release().map_err(|e| anyhow!("アソシエーションの解放に失敗: {e}"))?;
+    assoc
+        .release()
+        .map_err(|e| anyhow!("アソシエーションの解放に失敗: {e}"))?;
     if status != 0 {
         bail!("C-ECHO の応答が失敗(status {status:04X})");
     }
-    Ok(format!("C-ECHO 成功: {} ({} ms)", cfg.target(), started.elapsed().as_millis()))
+    Ok(format!(
+        "C-ECHO 成功: {} ({} ms)",
+        cfg.target(),
+        started.elapsed().as_millis()
+    ))
 }
 
 #[cfg(test)]
@@ -239,7 +335,13 @@ mod tests {
     fn uncompressed_little_endian_proposes_both_vr_encodings_with_the_original_first() {
         assert_eq!(proposable(EXPLICIT_LE), vec![EXPLICIT_LE, IMPLICIT_LE]);
         assert_eq!(proposable(IMPLICIT_LE), vec![IMPLICIT_LE, EXPLICIT_LE]);
-        assert_eq!(proposable("1.2.840.10008.1.2.4.50"), vec!["1.2.840.10008.1.2.4.50"]);
-        assert_eq!(proposable("1.2.840.10008.1.2.2"), vec!["1.2.840.10008.1.2.2"]);
+        assert_eq!(
+            proposable("1.2.840.10008.1.2.4.50"),
+            vec!["1.2.840.10008.1.2.4.50"]
+        );
+        assert_eq!(
+            proposable("1.2.840.10008.1.2.2"),
+            vec!["1.2.840.10008.1.2.2"]
+        );
     }
 }

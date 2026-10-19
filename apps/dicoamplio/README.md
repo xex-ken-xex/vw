@@ -3,8 +3,10 @@
 DICOM のタグを書き換えて、評価用に患者・検査・シリーズ・画像を水増しする(Rust、rayon で並列)。
 引数なしで起動すると画面が開く。画面の見た目は [vw](https://github.com/xex-ken-xex/vw) と同じ。
 
+[vw](https://github.com/xex-ken-xex/vw) のリポジトリの `apps/dicoamplio` にある。見た目のクレート(`vw-ui`)を vw と共有するため。
+
 ```
-cargo build --release
+cargo build --release -p dicoamplio     # リポジトリのルートで
 ./target/release/dicoamplio 元のディレクトリ 出力先 \
   --patients 100 --studies 3 --series 2 --images 4 \
   --csv people.csv \
@@ -15,10 +17,10 @@ cargo build --release
 ## ビルド
 
 ```
-cargo build --release
+cargo build --release -p dicoamplio    # リポジトリのルートで。できるのは target/release/dicoamplio
 ```
 
-配布用の実行ファイルは GitHub の Releases にある(`v*` のタグを push するか、Actions の `release` を手動で実行して `tag` に `v0.1.0` のように入れると、Linux と Windows の実行ファイルを作って Release に添付する)。
+配布用の実行ファイルは vw の [Releases](https://github.com/xex-ken-xex/vw/releases) にある。vw と同じ版で一緒に出す(`dicoamplio-windows-x64.zip` / `dicoamplio-linux-x64.tar.gz`。main の最新は `main-latest`)。出し方は vw の README の「リリース」のとおり。
 
 できる実行ファイルは `target/release/dicoamplio`(Windows は `target\release\dicoamplio.exe`)。`target/` は `.gitignore` で除いてあるので、リポジトリには入らない。画面なしで作るなら `cargo build --release --no-default-features`(eframe などを入れないので小さい)。
 

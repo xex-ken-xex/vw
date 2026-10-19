@@ -55,7 +55,11 @@ impl Template {
             if k >= cs.len() || cs[k] != '(' {
                 bail!("`%` の次は `(名前)` か `%` が必要: {src}");
             }
-            let close = cs[k..].iter().position(|&c| c == ')').context("`)` がない")? + k;
+            let close = cs[k..]
+                .iter()
+                .position(|&c| c == ')')
+                .context("`)` がない")?
+                + k;
             let name: String = cs[k + 1..close].iter().collect();
             k = close + 1;
             let (mut left, mut zero, mut plus) = (false, false, false);
@@ -90,7 +94,15 @@ impl Template {
             if !lit.is_empty() {
                 pieces.push(Piece::Lit(std::mem::take(&mut lit)));
             }
-            pieces.push(Piece::Spec { name, left, zero, plus, width, prec, conv });
+            pieces.push(Piece::Spec {
+                name,
+                left,
+                zero,
+                plus,
+                width,
+                prec,
+                conv,
+            });
         }
         if !lit.is_empty() {
             pieces.push(Piece::Lit(lit));
@@ -116,7 +128,15 @@ impl Template {
         for p in &self.pieces {
             match p {
                 Piece::Lit(s) => out.push_str(s),
-                Piece::Spec { name, left, zero, plus, width, prec, conv } => {
+                Piece::Spec {
+                    name,
+                    left,
+                    zero,
+                    plus,
+                    width,
+                    prec,
+                    conv,
+                } => {
                     let int = v.ints.iter().find(|(n, _)| n == name).map(|(_, x)| *x);
                     let text: Option<&str> = v
                         .strs
@@ -128,9 +148,12 @@ impl Template {
                         'd' | 'x' | 'X' => {
                             let n = match (int, text) {
                                 (Some(n), _) => n,
-                                (None, Some(t)) => t.trim().parse::<f64>()
-                                    .with_context(|| format!("`{name}` が数でない: {t}"))?
-                                    .round() as i64,
+                                (None, Some(t)) => {
+                                    t.trim()
+                                        .parse::<f64>()
+                                        .with_context(|| format!("`{name}` が数でない: {t}"))?
+                                        .round() as i64
+                                }
                                 _ => bail!("変数 `{name}` がない"),
                             };
                             let digits = match conv {
@@ -138,18 +161,32 @@ impl Template {
                                 'X' => format!("{:X}", n.unsigned_abs()),
                                 _ => n.unsigned_abs().to_string(),
                             };
-                            let sign = if n < 0 { "-" } else if *plus { "+" } else { "" };
+                            let sign = if n < 0 {
+                                "-"
+                            } else if *plus {
+                                "+"
+                            } else {
+                                ""
+                            };
                             pad_num(sign, &digits, *width, *left, *zero)
                         }
                         'f' => {
                             let x = match (int, text) {
                                 (Some(n), _) => n as f64,
-                                (None, Some(t)) => t.trim().parse::<f64>()
+                                (None, Some(t)) => t
+                                    .trim()
+                                    .parse::<f64>()
                                     .with_context(|| format!("`{name}` が数でない: {t}"))?,
                                 _ => bail!("変数 `{name}` がない"),
                             };
                             let digits = format!("{:.*}", prec.unwrap_or(6), x.abs());
-                            let sign = if x < 0.0 { "-" } else if *plus { "+" } else { "" };
+                            let sign = if x < 0.0 {
+                                "-"
+                            } else if *plus {
+                                "+"
+                            } else {
+                                ""
+                            };
                             pad_num(sign, &digits, *width, *left, *zero)
                         }
                         _ => {
@@ -178,7 +215,11 @@ fn pad(s: &str, width: usize, left: bool) -> String {
         return s.to_string();
     }
     let fill = " ".repeat(width - n);
-    if left { format!("{s}{fill}") } else { format!("{fill}{s}") }
+    if left {
+        format!("{s}{fill}")
+    } else {
+        format!("{fill}{s}")
+    }
 }
 
 fn pad_num(sign: &str, digits: &str, width: usize, left: bool, zero: bool) -> String {
@@ -202,7 +243,18 @@ mod tests {
 
     fn vars(csv: Option<&HashMap<String, String>>) -> Vars<'_> {
         Vars {
-            ints: &[("p", 12), ("s", 0), ("r", 1), ("i", 3), ("p1", 13), ("s1", 1), ("r1", 2), ("i1", 4), ("n", 99), ("inst", 7)],
+            ints: &[
+                ("p", 12),
+                ("s", 0),
+                ("r", 1),
+                ("i", 3),
+                ("p1", 13),
+                ("s1", 1),
+                ("r1", 2),
+                ("i1", 4),
+                ("n", 99),
+                ("inst", 7),
+            ],
             strs: &[("src_patient_id", "ORIG-7")],
             csv,
         }
@@ -216,10 +268,14 @@ mod tests {
 
     #[test]
     fn csv() {
-        let m: HashMap<String, String> =
-            [("name", "Yamada^Taro"), ("weight", "62.46")].map(|(a, b)| (a.into(), b.into())).into();
+        let m: HashMap<String, String> = [("name", "Yamada^Taro"), ("weight", "62.46")]
+            .map(|(a, b)| (a.into(), b.into()))
+            .into();
         let t = Template::parse("%(name)s|%(weight).1f|%(weight)8.2f|%(name)-12s|").unwrap();
-        assert_eq!(t.render(&vars(Some(&m))).unwrap(), "Yamada^Taro|62.5|   62.46|Yamada^Taro |");
+        assert_eq!(
+            t.render(&vars(Some(&m))).unwrap(),
+            "Yamada^Taro|62.5|   62.46|Yamada^Taro |"
+        );
     }
 
     #[test]
@@ -232,6 +288,9 @@ mod tests {
     fn errors() {
         assert!(Template::parse("%d").is_err());
         assert!(Template::parse("%(p)q").is_err());
-        assert!(Template::parse("%(zz)d").unwrap().render(&vars(None)).is_err());
+        assert!(Template::parse("%(zz)d")
+            .unwrap()
+            .render(&vars(None))
+            .is_err());
     }
 }

@@ -8,8 +8,8 @@ use crate::template::{Template, Vars};
 use crate::tree::{self, Place};
 use anyhow::{bail, Context, Result};
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry, VirtualVr};
-use dicom_core::value::Value;
 use dicom_core::header::Header;
+use dicom_core::value::Value;
 use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::{tags, StandardDataDictionary};
 use dicom_encoding::text::{SpecificCharacterSet, TextCodec};
@@ -65,7 +65,9 @@ pub const DEFAULT_RULES: &[(&str, Level, &str)] = &[
 ];
 
 /// 規則の値に使える整数の変数。小文字は複製の番号、大文字は元の木での番号。
-pub const BUILTIN_VARS: [&str; 14] = ["p", "p1", "P", "s", "s1", "S", "r", "r1", "R", "i", "i1", "I", "n", "inst"];
+pub const BUILTIN_VARS: [&str; 14] = [
+    "p", "p1", "P", "s", "s1", "S", "r", "r1", "R", "i", "i1", "I", "n", "inst",
+];
 
 /// 元ファイルの値をそのまま使う文字列の変数(レベルの粗い順)。
 pub const SRC_VARS: [&str; 7] = [
@@ -127,7 +129,10 @@ pub fn standard_level(tag: Tag) -> Level {
         Tag(0x0018, 0x1030), // ProtocolName
         Tag(0x0020, 0x0011), // SeriesNumber
     ];
-    if matches!(tag, Tag(0x0010, 0x1010) | Tag(0x0010, 0x1020) | Tag(0x0010, 0x1030)) {
+    if matches!(
+        tag,
+        Tag(0x0010, 0x1010) | Tag(0x0010, 0x1020) | Tag(0x0010, 0x1030)
+    ) {
         Level::Study
     } else if tag.group() == 0x0010 {
         Level::Patient
@@ -142,7 +147,10 @@ pub fn standard_level(tag: Tag) -> Level {
 
 /// 日本語などを文字コードで符号化する文字列の VR。AE・CS などは ASCII 限りなので含めない。
 fn is_text_vr(vr: VR) -> bool {
-    matches!(vr, VR::PN | VR::LO | VR::SH | VR::LT | VR::ST | VR::UT | VR::UC)
+    matches!(
+        vr,
+        VR::PN | VR::LO | VR::SH | VR::LT | VR::ST | VR::UT | VR::UC
+    )
 }
 
 pub const CANCELLED: &str = "中断した";
@@ -235,7 +243,12 @@ const WORKER_LOG_LINES: usize = 3000;
 impl Progress {
     /// 接続 `k` の端末風のログに 1 行足す。
     pub fn wlog(&self, k: usize, msg: impl Into<String>) {
-        let secs = self.started.lock().unwrap().map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let secs = self
+            .started
+            .lock()
+            .unwrap()
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
         let line = format!("[{secs:8.3}] {}", msg.into());
         let mut logs = self.worker_logs.lock().unwrap();
         if let Some(l) = logs.get_mut(k) {
@@ -304,24 +317,43 @@ impl Engine {
             .iter()
             .map(|(t, l, v)| RuleSpec::new(t, *l, v))
             .collect();
-        specs.extend(cfg.rules.iter().filter(|r| !(r.tag.trim().is_empty() && r.value.is_empty())).cloned());
+        specs.extend(
+            cfg.rules
+                .iter()
+                .filter(|r| !(r.tag.trim().is_empty() && r.value.is_empty()))
+                .cloned(),
+        );
         let mut rules: Vec<Rule> = Vec::new();
         for s in &specs {
             let own = match s.csv.trim() {
                 "" => None,
-                path => Some(table(path, s.csv_encoding.unwrap_or(cfg.csv_encoding)).with_context(|| s.tag.clone())?),
+                path => Some(
+                    table(path, s.csv_encoding.unwrap_or(cfg.csv_encoding))
+                        .with_context(|| s.tag.clone())?,
+                ),
             };
             let r = parse_rule(s, own.or_else(|| global.clone()))?;
             rules.retain(|x| x.tag != r.tag);
             rules.push(r);
         }
-        let (csv_columns, csv_rows) = global.map(|t| (t.columns.clone(), t.rows.len())).unwrap_or_default();
-        Ok(Engine { cfg: cfg.clone(), ns: Uuid::NAMESPACE_OID, rules, csv_columns, csv_rows, tables })
+        let (csv_columns, csv_rows) = global
+            .map(|t| (t.columns.clone(), t.rows.len()))
+            .unwrap_or_default();
+        Ok(Engine {
+            cfg: cfg.clone(),
+            ns: Uuid::NAMESPACE_OID,
+            rules,
+            csv_columns,
+            csv_rows,
+            tables,
+        })
     }
 
     /// タグごとの CSV の列と行数(画面の表示用)。読み込めていなければ None。
     pub fn table_info(&self, path: &str, enc: CsvEncoding) -> Option<(Vec<String>, usize)> {
-        self.tables.get(&(path.trim().to_string(), enc)).map(|t| (t.columns.clone(), t.rows.len()))
+        self.tables
+            .get(&(path.trim().to_string(), enc))
+            .map(|t| (t.columns.clone(), t.rows.len()))
     }
 
     fn uid(&self, orig: &str, level: UidLevel, ix: Idx) -> String {
@@ -330,13 +362,21 @@ impl Engine {
             UidLevel::Series => format!("{orig}|{}|{}|{}", ix.p, ix.s, ix.r),
             UidLevel::Instance => format!("{orig}|{}|{}|{}|{}", ix.p, ix.s, ix.r, ix.i),
         };
-        format!("{}.{}", self.cfg.uid_root.trim(), Uuid::new_v5(&self.ns, key.as_bytes()).as_u128())
+        format!(
+            "{}.{}",
+            self.cfg.uid_root.trim(),
+            Uuid::new_v5(&self.ns, key.as_bytes()).as_u128()
+        )
     }
 
     /// 通し番号(0 始まり)。元の画像の通し番号 → 患者 → 検査 → シリーズ → 画像の複製の順で、全出力で一意。
     fn serial(&self, ix: Idx, ordinal: u64) -> u64 {
         let c = &self.cfg;
-        (((ordinal * c.patients as u64 + ix.p as u64) * c.studies as u64 + ix.s as u64) * c.series as u64 + ix.r as u64) * c.images as u64 + ix.i as u64
+        (((ordinal * c.patients as u64 + ix.p as u64) * c.studies as u64 + ix.s as u64)
+            * c.series as u64
+            + ix.r as u64)
+            * c.images as u64
+            + ix.i as u64
     }
 
     fn csv_row<'a>(&self, rule: &'a Rule, ix: Idx, place: &Place) -> Option<&'a Row> {
@@ -383,7 +423,11 @@ impl Engine {
         self.rules
             .iter()
             .map(|r| {
-                let vars = Vars { ints: &ints, strs: &strs, csv: self.csv_row(r, ix, place) };
+                let vars = Vars {
+                    ints: &ints,
+                    strs: &strs,
+                    csv: self.csv_row(r, ix, place),
+                };
                 let value = r.tpl.render(&vars).map_err(|e| format!("{e:#}"));
                 let vr = r.vr;
                 let mut warnings = Vec::new();
@@ -409,7 +453,9 @@ impl Engine {
                     tag: r.tag.to_string(),
                     name: r.name.clone(),
                     level: r.level,
-                    vr: vr.map(|v| v.to_string().to_string()).unwrap_or_else(|| "?".into()),
+                    vr: vr
+                        .map(|v| v.to_string().to_string())
+                        .unwrap_or_else(|| "?".into()),
                     value,
                     encoded,
                     warnings,
@@ -429,14 +475,21 @@ impl Engine {
         let r = self.rules.iter().find(|r| r.tag == tag)?;
         let ints = self.ints(ix, place, 1);
         let strs = Self::strs(place);
-        let vars = Vars { ints: &ints, strs: &strs, csv: self.csv_row(r, ix, place) };
+        let vars = Vars {
+            ints: &ints,
+            strs: &strs,
+            csv: self.csv_row(r, ix, place),
+        };
         Some(r.tpl.render(&vars).map_err(|e| format!("{e:#}")))
     }
 
     /// InstanceNumber の規則が既定(`元の番号 + 複製番号 × 10000`)のままか。
     /// そのときだけ、画面が複製後の画像の番号の範囲を元の範囲から計算できる。
     pub fn instance_number_is_default(&self) -> bool {
-        self.rules.iter().find(|r| r.tag == tags::INSTANCE_NUMBER).is_some_and(|r| r.value == "%(inst)d")
+        self.rules
+            .iter()
+            .find(|r| r.tag == tags::INSTANCE_NUMBER)
+            .is_some_and(|r| r.value == "%(inst)d")
     }
 
     /// 規則が読む CSV の、`ix` の複製で使う行(1 行目の列名を含めた行番号)。
@@ -457,7 +510,9 @@ impl Engine {
         let k = match rule.level {
             Level::Patient => place.patient as u64 * np + ix.p as u64,
             Level::Study => (place.study_ordinal * np + ix.p as u64) * ns + ix.s as u64,
-            Level::Series => ((place.series_ordinal * np + ix.p as u64) * ns + ix.s as u64) * nr + ix.r as u64,
+            Level::Series => {
+                ((place.series_ordinal * np + ix.p as u64) * ns + ix.s as u64) * nr + ix.r as u64
+            }
             Level::Image => self.serial(ix, place.ordinal),
         };
         k as usize
@@ -488,7 +543,9 @@ impl Engine {
         // 元の木を先に読む。元の患者の番号などを規則の変数にし、送信では提示コンテキストを集めるため
         let tree = tree::scan(&files, &AtomicBool::new(false), &AtomicU64::new(0));
         let c = tree.counts();
-        progress.total.store(self.planned(tree.files), Ordering::Relaxed);
+        progress
+            .total
+            .store(self.planned(tree.files), Ordering::Relaxed);
         progress.say(format!(
             "元: {} 患者 / {} 検査 / {} シリーズ / {} 画像({} ファイル) → {} {} 個",
             c.patients,
@@ -496,7 +553,11 @@ impl Engine {
             c.series,
             c.images,
             tree.files,
-            if self.cfg.store.enabled { "送信" } else { "出力" },
+            if self.cfg.store.enabled {
+                "送信"
+            } else {
+                "出力"
+            },
             progress.total.load(Ordering::Relaxed)
         ));
         tree::log_skipped(&tree.skipped, |m| progress.say(m));
@@ -523,24 +584,49 @@ impl Engine {
         use crate::config::AssocUnit;
         let c = &self.cfg;
         let n = c.store.connections.max(1) as u64;
-        let mut listed: Vec<(&PathBuf, &Place)> = files.iter().filter_map(|f| tree.places.get(f).map(|p| (f, p))).collect();
+        let mut listed: Vec<(&PathBuf, &Place)> = files
+            .iter()
+            .filter_map(|f| tree.places.get(f).map(|p| (f, p)))
+            .collect();
         listed.sort_by_key(|(_, p)| p.ordinal);
         let mut map: std::collections::BTreeMap<String, Group> = std::collections::BTreeMap::new();
         for (f, place) in listed {
-            let mut per_key: std::collections::BTreeMap<String, Vec<Idx>> = std::collections::BTreeMap::new();
+            let mut per_key: std::collections::BTreeMap<String, Vec<Idx>> =
+                std::collections::BTreeMap::new();
             for ix in self.combos() {
                 let key = match c.store.unit {
-                    AssocUnit::Modality => format!("モダリティ {}", if place.modality.is_empty() { "(なし)" } else { &place.modality }),
+                    AssocUnit::Modality => format!(
+                        "モダリティ {}",
+                        if place.modality.is_empty() {
+                            "(なし)"
+                        } else {
+                            &place.modality
+                        }
+                    ),
                     AssocUnit::Patient => format!("患者 P{} p{}", place.patient, ix.p),
-                    AssocUnit::Study => format!("検査 P{} p{} S{} s{}", place.patient, ix.p, place.study, ix.s),
-                    AssocUnit::Series => format!("シリーズ P{} p{} S{} s{} R{} r{}", place.patient, ix.p, place.study, ix.s, place.series, ix.r),
+                    AssocUnit::Study => format!(
+                        "検査 P{} p{} S{} s{}",
+                        place.patient, ix.p, place.study, ix.s
+                    ),
+                    AssocUnit::Series => format!(
+                        "シリーズ P{} p{} S{} s{} R{} r{}",
+                        place.patient, ix.p, place.study, ix.s, place.series, ix.r
+                    ),
                     AssocUnit::All => format!("組 {}", self.serial(ix, place.ordinal) % n + 1),
                 };
                 per_key.entry(key).or_default().push(ix);
             }
             for (key, ixs) in per_key {
-                let g = map.entry(key.clone()).or_insert_with(|| Group { label: key, contexts: vec![], items: vec![], count: 0 });
-                let ctx = (place.sop_class.clone(), store::proposable(&place.transfer_syntax));
+                let g = map.entry(key.clone()).or_insert_with(|| Group {
+                    label: key,
+                    contexts: vec![],
+                    items: vec![],
+                    count: 0,
+                });
+                let ctx = (
+                    place.sop_class.clone(),
+                    store::proposable(&place.transfer_syntax),
+                );
                 if !g.contexts.contains(&ctx) {
                     g.contexts.push(ctx);
                 }
@@ -553,7 +639,12 @@ impl Engine {
 
     /// C-STORE で送る。接続の数だけスレッドを立て、各スレッドがグループを 1 つずつ受け持って、
     /// アソシエーションを張り、複製を作りながら送り、送り切ったら解放する。
-    fn run_store(&self, tree: &tree::SourceTree, files: &[PathBuf], progress: &Progress) -> Result<u64> {
+    fn run_store(
+        &self,
+        tree: &tree::SourceTree,
+        files: &[PathBuf],
+        progress: &Progress,
+    ) -> Result<u64> {
         let groups = self.groups(tree, files);
         self.send_groups(groups, progress)
     }
@@ -565,24 +656,48 @@ impl Engine {
         let tree = tree::scan(&files, &AtomicBool::new(false), &AtomicU64::new(0));
         let c = tree.counts();
         progress.total.store(tree.files as u64, Ordering::Relaxed);
-        progress.say(format!("そのまま送る: {} 患者 / {} 検査 / {} シリーズ / {} 画像({} ファイル)", c.patients, c.studies, c.series, c.images, tree.files));
+        progress.say(format!(
+            "そのまま送る: {} 患者 / {} 検査 / {} シリーズ / {} 画像({} ファイル)",
+            c.patients, c.studies, c.series, c.images, tree.files
+        ));
         tree::log_skipped(&tree.skipped, |m| progress.say(m));
         // 複製の番号は使わないので、全部 0 のまま。単位の分け方(モダリティ・検査…)はそのまま効く
-        let one = Engine { cfg: Config { patients: 1, studies: 1, series: 1, images: 1, ..self.cfg.clone() }, ..self.shallow() };
+        let one = Engine {
+            cfg: Config {
+                patients: 1,
+                studies: 1,
+                series: 1,
+                images: 1,
+                ..self.cfg.clone()
+            },
+            ..self.shallow()
+        };
         let groups = one.groups(&tree, &files);
         one.send_groups_with(groups, progress, true)
     }
 
     /// 設定だけを引き継いだ Engine(規則・CSV は空)。そのまま送るときに、件数を 1 にしたものを作るため。
     fn shallow(&self) -> Engine {
-        Engine { cfg: self.cfg.clone(), ns: self.ns, rules: vec![], csv_columns: vec![], csv_rows: 0, tables: HashMap::new() }
+        Engine {
+            cfg: self.cfg.clone(),
+            ns: self.ns,
+            rules: vec![],
+            csv_columns: vec![],
+            csv_rows: 0,
+            tables: HashMap::new(),
+        }
     }
 
     fn send_groups(&self, groups: Vec<Group>, progress: &Progress) -> Result<u64> {
         self.send_groups_with(groups, progress, false)
     }
 
-    fn send_groups_with(&self, groups: Vec<Group>, progress: &Progress, as_is: bool) -> Result<u64> {
+    fn send_groups_with(
+        &self,
+        groups: Vec<Group>,
+        progress: &Progress,
+        as_is: bool,
+    ) -> Result<u64> {
         let cfg = &self.cfg.store;
         let n = cfg.connections.max(1) as usize;
         *progress.workers.lock().unwrap() = vec![WorkerStatus::default(); n];
@@ -612,7 +727,13 @@ impl Engine {
                     })
                 })
                 .collect();
-            workers.into_iter().map(|w| w.join().unwrap_or_else(|_| Err(anyhow::anyhow!("送信のスレッドが途中で止まった")))).collect()
+            workers
+                .into_iter()
+                .map(|w| {
+                    w.join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("送信のスレッドが途中で止まった")))
+                })
+                .collect()
         });
         let mut total = store::Stats::default();
         let mut first_err = None;
@@ -627,7 +748,10 @@ impl Engine {
                 }
             }
         }
-        progress.say(format!("送信 {} 個、受け側が拒否 {} 個", total.sent, total.rejected));
+        progress.say(format!(
+            "送信 {} 個、受け側が拒否 {} 個",
+            total.sent, total.rejected
+        ));
         if let Some(e) = first_err {
             return Err(e);
         }
@@ -636,12 +760,22 @@ impl Engine {
             return Ok(total.sent);
         }
         if total.rejected > 0 {
-            bail!("{} 個が受け側に拒否された(ログを見てほしい)", total.rejected);
+            bail!(
+                "{} 個が受け側に拒否された(ログを見てほしい)",
+                total.rejected
+            );
         }
         Ok(total.sent)
     }
 
-    fn store_worker(&self, k: usize, groups: &[Group], next: &std::sync::atomic::AtomicUsize, progress: &Progress, as_is: bool) -> Result<store::Stats> {
+    fn store_worker(
+        &self,
+        k: usize,
+        groups: &[Group],
+        next: &std::sync::atomic::AtomicUsize,
+        progress: &Progress,
+        as_is: bool,
+    ) -> Result<store::Stats> {
         let mut total = store::Stats::default();
         loop {
             if progress.cancel.load(Ordering::Relaxed) {
@@ -652,7 +786,12 @@ impl Engine {
             let started = std::time::Instant::now();
             let set_status = |done: u64| {
                 if let Some(w) = progress.workers.lock().unwrap().get_mut(k) {
-                    *w = WorkerStatus { group: Some(group.label.clone()), done, total: group.count, started: Some(started) };
+                    *w = WorkerStatus {
+                        group: Some(group.label.clone()),
+                        done,
+                        total: group.count,
+                        started: Some(started),
+                    };
                 }
             };
             set_status(0);
@@ -663,11 +802,25 @@ impl Engine {
             let secs = started.elapsed().as_secs_f64();
             match r {
                 Ok(st) => {
-                    progress.results.lock().unwrap().push(GroupResult { label: group.label.clone(), count: group.count, sent: st.sent, rejected: st.rejected, secs, error: None });
+                    progress.results.lock().unwrap().push(GroupResult {
+                        label: group.label.clone(),
+                        count: group.count,
+                        sent: st.sent,
+                        rejected: st.rejected,
+                        secs,
+                        error: None,
+                    });
                     total += st;
                 }
                 Err(e) => {
-                    progress.results.lock().unwrap().push(GroupResult { label: group.label.clone(), count: group.count, sent: 0, rejected: 0, secs, error: Some(format!("{e:#}")) });
+                    progress.results.lock().unwrap().push(GroupResult {
+                        label: group.label.clone(),
+                        count: group.count,
+                        sent: 0,
+                        rejected: 0,
+                        secs,
+                        error: Some(format!("{e:#}")),
+                    });
                     return Err(e);
                 }
             }
@@ -676,9 +829,24 @@ impl Engine {
     }
 
     /// 1 まとまりを、アソシエーションを 1 本張って送り切る。
-    fn send_group(&self, k: usize, group: &Group, progress: &Progress, as_is: bool, set_status: &dyn Fn(u64)) -> Result<store::Stats> {
+    fn send_group(
+        &self,
+        k: usize,
+        group: &Group,
+        progress: &Progress,
+        as_is: bool,
+        set_status: &dyn Fn(u64),
+    ) -> Result<store::Stats> {
         let cfg = &self.cfg.store;
-        progress.wlog(k, format!("A-ASSOCIATE-RQ {} ← {} : {}", cfg.target(), cfg.calling_ae.trim(), group.label));
+        progress.wlog(
+            k,
+            format!(
+                "A-ASSOCIATE-RQ {} ← {} : {}",
+                cfg.target(),
+                cfg.calling_ae.trim(),
+                group.label
+            ),
+        );
         for (sop, ts) in &group.contexts {
             progress.wlog(k, format!("  提案 {sop} [{}]", ts.join(", ")));
         }
@@ -690,17 +858,31 @@ impl Engine {
             }
         };
         progress.wlog(k, format!("A-ASSOCIATE-AC 受諾 ({} 個を送る)", group.count));
-        progress.say(format!("接続 {}: {} を張った({} 個、SOP Class {} 種)", k + 1, group.label, group.count, group.contexts.len()));
+        progress.say(format!(
+            "接続 {}: {} を張った({} 個、SOP Class {} 種)",
+            k + 1,
+            group.label,
+            group.count,
+            group.contexts.len()
+        ));
         for r in &refused {
             progress.wlog(k, format!("  拒否された抽象構文 {r}"));
         }
         if !refused.is_empty() {
-            progress.say(format!("接続 {}: 受け側が受けつけない SOP Class(送れない): {}", k + 1, refused.join(", ")));
+            progress.say(format!(
+                "接続 {}: 受け側が受けつけない SOP Class(送れない): {}",
+                k + 1,
+                refused.join(", ")
+            ));
         }
         let mut done = 0u64;
         for (path, place, ixs) in &group.items {
             // そのまま送るときは、読んだものを書き換えずに送る
-            let prepared = if as_is { None } else { self.prepare(path, place, progress)? };
+            let prepared = if as_is {
+                None
+            } else {
+                self.prepare(path, place, progress)?
+            };
             if !as_is && prepared.is_none() {
                 continue;
             }
@@ -713,7 +895,11 @@ impl Engine {
                     Some(p) => self.make(p, place, ix)?,
                     None => {
                         let ds = open_file(path).with_context(|| path.display().to_string())?;
-                        let sop = ds.meta().media_storage_sop_instance_uid().trim_end_matches(['\0', ' ']).to_string();
+                        let sop = ds
+                            .meta()
+                            .media_storage_sop_instance_uid()
+                            .trim_end_matches(['\0', ' '])
+                            .to_string();
                         (sop, ds)
                     }
                 };
@@ -721,8 +907,23 @@ impl Engine {
                     self.write(&ds, &sop, ix, path)?;
                 }
                 // ディスクを経由せず、データセットをそのまま送る
-                let inst = store::Instance { sop_class: place.sop_class.clone(), sop_instance: sop, object: ds.into_inner() };
-                let short = inst.sop_instance.rsplit('.').next().unwrap_or("").chars().rev().take(10).collect::<String>().chars().rev().collect::<String>();
+                let inst = store::Instance {
+                    sop_class: place.sop_class.clone(),
+                    sop_instance: sop,
+                    object: ds.into_inner(),
+                };
+                let short = inst
+                    .sop_instance
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .rev()
+                    .take(10)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>();
                 let outcome = match conn.store(&inst) {
                     Ok(o) => o,
                     Err(e) => {
@@ -731,18 +932,35 @@ impl Engine {
                     }
                 };
                 match outcome {
-                    store::Outcome::Sent => progress.wlog(k, format!("C-STORE-RQ …{short}  → RSP 0000 (成功)")),
+                    store::Outcome::Sent => {
+                        progress.wlog(k, format!("C-STORE-RQ …{short}  → RSP 0000 (成功)"))
+                    }
                     store::Outcome::Warned(st) => {
                         progress.wlog(k, format!("C-STORE-RQ …{short}  → RSP {st:04X} (警告)"));
-                        progress.say(format!("警告つきで受けつけた(status {st:04X}): {}", inst.sop_instance));
+                        progress.say(format!(
+                            "警告つきで受けつけた(status {st:04X}): {}",
+                            inst.sop_instance
+                        ));
                     }
                     store::Outcome::Rejected(st) => {
                         progress.wlog(k, format!("C-STORE-RQ …{short}  → RSP {st:04X} (失敗)"));
-                        progress.say(format!("受け側が拒否した(status {st:04X}): {}", inst.sop_instance));
+                        progress.say(format!(
+                            "受け側が拒否した(status {st:04X}): {}",
+                            inst.sop_instance
+                        ));
                     }
                     store::Outcome::Unsupported => {
-                        progress.wlog(k, format!("C-STORE-RQ …{short}  送れない: 抽象構文 {} が未受諾", inst.sop_class));
-                        progress.say(format!("送れない: SOP Class {} を受け側が受けつけない({})", inst.sop_class, inst.sop_instance));
+                        progress.wlog(
+                            k,
+                            format!(
+                                "C-STORE-RQ …{short}  送れない: 抽象構文 {} が未受諾",
+                                inst.sop_class
+                            ),
+                        );
+                        progress.say(format!(
+                            "送れない: SOP Class {} を受け側が受けつけない({})",
+                            inst.sop_class, inst.sop_instance
+                        ));
                     }
                 }
                 done += 1;
@@ -751,13 +969,17 @@ impl Engine {
             }
         }
         let st = conn.close().with_context(|| group.label.clone())?;
-        progress.wlog(k, format!("A-RELEASE 完了: 成功 {} / 拒否 {}", st.sent, st.rejected));
+        progress.wlog(
+            k,
+            format!("A-RELEASE 完了: 成功 {} / 拒否 {}", st.sent, st.rejected),
+        );
         Ok(st)
     }
 
     fn combos(&self) -> Vec<Idx> {
         let c = &self.cfg;
-        let mut combos = Vec::with_capacity((c.patients * c.studies * c.series * c.images) as usize);
+        let mut combos =
+            Vec::with_capacity((c.patients * c.studies * c.series * c.images) as usize);
         for p in 0..c.patients {
             for s in 0..c.studies {
                 for r in 0..c.series {
@@ -771,7 +993,13 @@ impl Engine {
     }
 
     /// 1 複製を書く。`出力先/P患者/S検査/Rシリーズ/SOPInstanceUID.dcm`。
-    fn write(&self, ds: &dicom_object::DefaultDicomObject, sop: &str, ix: Idx, path: &Path) -> Result<()> {
+    fn write(
+        &self,
+        ds: &dicom_object::DefaultDicomObject,
+        sop: &str,
+        ix: Idx,
+        path: &Path,
+    ) -> Result<()> {
         let dir = Path::new(self.cfg.output.trim())
             .join(format!("P{:06}", ix.p))
             .join(format!("S{:03}", ix.s))
@@ -779,7 +1007,8 @@ impl Engine {
         std::fs::create_dir_all(&dir)?;
         // ファイルへ直接書くと、符号化に失敗したとき途中で切れた壊れたファイルが残る
         let mut buf = Vec::new();
-        ds.write_all(&mut buf).with_context(|| path.display().to_string())?;
+        ds.write_all(&mut buf)
+            .with_context(|| path.display().to_string())?;
         std::fs::write(dir.join(format!("{sop}.dcm")), buf)?;
         Ok(())
     }
@@ -790,7 +1019,16 @@ impl Engine {
     fn preflight(&self) -> Result<()> {
         let flavor = (self.cfg.charset == Charset::Iso2022jp).then(Iso2022::japanese);
         let place = Place::default();
-        let ints = self.ints(Idx { p: 0, s: 0, r: 0, i: 0 }, &place, 1);
+        let ints = self.ints(
+            Idx {
+                p: 0,
+                s: 0,
+                r: 0,
+                i: 0,
+            },
+            &place,
+            1,
+        );
         let strs = Self::strs(&place);
         for rule in &self.rules {
             let Some(vr) = rule.vr else { continue };
@@ -800,14 +1038,21 @@ impl Engine {
             };
             for (k, row) in rows.into_iter().enumerate() {
                 let origin = match (&rule.table, row) {
-                    (Some(t), Some(_)) => format!("CSV の {} 行目(列: {})", k + 2, t.columns.join(" ")),
+                    (Some(t), Some(_)) => {
+                        format!("CSV の {} 行目(列: {})", k + 2, t.columns.join(" "))
+                    }
                     _ => "テンプレート".to_string(),
                 };
                 let text = rule
                     .tpl
-                    .render(&Vars { ints: &ints, strs: &strs, csv: row })
+                    .render(&Vars {
+                        ints: &ints,
+                        strs: &strs,
+                        csv: row,
+                    })
                     .with_context(|| format!("{} {}: {origin}", rule.name, rule.tag))?;
-                check_writable(vr, &text, flavor.as_ref()).with_context(|| format!("{} {}: {origin}: `{text}`", rule.name, rule.tag))?;
+                check_writable(vr, &text, flavor.as_ref())
+                    .with_context(|| format!("{} {}: {origin}: `{text}`", rule.name, rule.tag))?;
             }
         }
         Ok(())
@@ -815,7 +1060,9 @@ impl Engine {
 
     /// ファイルに書く経路。元を 1 回読み、複製を並列に作って書く。
     fn process_file(&self, path: &Path, place: &Place, progress: &Progress) -> Result<u64> {
-        let Some(prepared) = self.prepare(path, place, progress)? else { return Ok(0) };
+        let Some(prepared) = self.prepare(path, place, progress)? else {
+            return Ok(0);
+        };
         let combos = self.combos();
         combos.par_iter().try_for_each(|&ix| -> Result<()> {
             if progress.cancel.load(Ordering::Relaxed) {
@@ -830,7 +1077,12 @@ impl Engine {
     }
 
     /// 元ファイルを読み、複製ごとに同じ結果になる書き換えを済ませておく。読めなければ None(飛ばす)。
-    fn prepare(&self, path: &Path, _place: &Place, progress: &Progress) -> Result<Option<Prepared>> {
+    fn prepare(
+        &self,
+        path: &Path,
+        _place: &Place,
+        progress: &Progress,
+    ) -> Result<Option<Prepared>> {
         let c = &self.cfg;
         // 木を読めたファイルだけが来るが、念のため読めなければ飛ばす
         let mut src = match open_file(path) {
@@ -850,23 +1102,37 @@ impl Engine {
             .map(|v| scs_values(&v))
             .unwrap_or_default();
         let multi = is_multi_iso2022(&src_scs);
-        let spec: Option<Iso2022> = if multi { Iso2022::from_values(&src_scs) } else { None };
+        let spec: Option<Iso2022> = if multi {
+            Iso2022::from_values(&src_scs)
+        } else {
+            None
+        };
         // 日本語などを自前で符号化するときの文字セットの組
         let flavor: Option<Iso2022> = match c.charset {
             Charset::Iso2022jp => Some(Iso2022::japanese()),
-            Charset::Keep if multi => Some(spec.clone().with_context(|| unsupported_scs(path, &src_scs))?),
+            Charset::Keep if multi => Some(
+                spec.clone()
+                    .with_context(|| unsupported_scs(path, &src_scs))?,
+            ),
             _ => None,
         };
         // 触れない(Keep)ときに、新しい値が元ファイルの文字セットで書けるかを調べるための符号化器
         let keep_check = (c.charset == Charset::Keep && !multi).then(|| {
-            let code = src_scs.first().map(String::as_str).filter(|s| !s.is_empty()).unwrap_or("ISO_IR 6");
+            let code = src_scs
+                .first()
+                .map(String::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("ISO_IR 6");
             (code.to_string(), SpecificCharacterSet::from_code(code))
         });
         // dicom-rs は複数値の ISO 2022 を先頭の値だけで読み、ESC $ B などが文字列に残る。
         // 触れない(Keep)なら、そのバイト列のまま書き戻せば元どおりなので、読み直すのは書き換えるときだけ
         if multi && c.charset != Charset::Keep {
-            let spec = spec.as_ref().with_context(|| unsupported_scs(path, &src_scs))?;
-            decode_source_text(&mut src, spec).with_context(|| format!("元ファイルの文字列を読めない: {}", path.display()))?;
+            let spec = spec
+                .as_ref()
+                .with_context(|| unsupported_scs(path, &src_scs))?;
+            decode_source_text(&mut src, spec)
+                .with_context(|| format!("元ファイルの文字列を読めない: {}", path.display()))?;
         }
         // 複製ごとに同じ結果になる書き換えは、複製する前に元に対して 1 回だけ行う。
         // 触れない(Keep)の元ファイルの文字列は、dicom-rs が読んだ文字列をそのバイト列に書き戻すだけで元どおり
@@ -881,11 +1147,22 @@ impl Engine {
             .and_then(|e| e.to_str().ok())
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(1);
-        Ok(Some(Prepared { src, flavor, keep_check, src_inst_no, path: path.to_path_buf() }))
+        Ok(Some(Prepared {
+            src,
+            flavor,
+            keep_check,
+            src_inst_no,
+            path: path.to_path_buf(),
+        }))
     }
 
     /// `ix` の複製を作る。UID を振り直し、規則を当てる。(SOPInstanceUID, データセット) を返す。
-    fn make(&self, prepared: &Prepared, place: &Place, ix: Idx) -> Result<(String, dicom_object::DefaultDicomObject)> {
+    fn make(
+        &self,
+        prepared: &Prepared,
+        place: &Place,
+        ix: Idx,
+    ) -> Result<(String, dicom_object::DefaultDicomObject)> {
         let c = &self.cfg;
         let path = &prepared.path;
         let mut ds = prepared.src.clone();
@@ -897,8 +1174,15 @@ impl Engine {
         let ints = self.ints(ix, place, prepared.src_inst_no);
         let strs = Self::strs(place);
         for rule in &self.rules {
-            let vars = Vars { ints: &ints, strs: &strs, csv: self.csv_row(rule, ix, place) };
-            let text = rule.tpl.render(&vars).with_context(|| format!("{} ({})", rule.tag, path.display()))?;
+            let vars = Vars {
+                ints: &ints,
+                strs: &strs,
+                csv: self.csv_row(rule, ix, place),
+            };
+            let text = rule
+                .tpl
+                .render(&vars)
+                .with_context(|| format!("{} ({})", rule.tag, path.display()))?;
             // 元ファイルにある要素はその VR を、なければ辞書か規則の VR を使う。暗黙 VR のファイルでは
             // 辞書にないタグが UN で読まれるので、UN は「決まっていない」として扱う
             let source_vr = ds.get(rule.tag).map(|e| e.vr()).filter(|v| *v != VR::UN);
@@ -906,7 +1190,8 @@ impl Engine {
                 bail!("{} の VR が決まらない(元ファイルでは UN)。規則に /LO のように VR を添えてほしい", rule.tag)
             };
             if let Some((code, cs)) = &prepared.keep_check {
-                check_keep(vr, &text, code, cs.as_ref()).with_context(|| format!("{} {} ({})", rule.name, rule.tag, path.display()))?;
+                check_keep(vr, &text, code, cs.as_ref())
+                    .with_context(|| format!("{} {} ({})", rule.name, rule.tag, path.display()))?;
             }
             put_value(&mut ds, rule.tag, vr, &text, prepared.flavor.as_ref())
                 .with_context(|| format!("{} {} ({})", rule.name, rule.tag, path.display()))?;
@@ -975,7 +1260,9 @@ fn decode_source_text(obj: &mut InMemDicomObject, spec: &Iso2022) -> Result<()> 
                     .iter()
                     .map(|t| match spec.raw_bytes_of(t) {
                         // ESC がなければ、dicom-rs が先頭の値で読んだとおりで正しい
-                        Some(b) if b.contains(&0x1b) => spec.decode(&b).with_context(|| format!("{tag}")),
+                        Some(b) if b.contains(&0x1b) => {
+                            spec.decode(&b).with_context(|| format!("{tag}"))
+                        }
                         _ => Ok(t.clone()),
                     })
                     .collect();
@@ -1032,7 +1319,9 @@ fn reencode_existing(obj: &mut InMemDicomObject, flavor: &Iso2022) -> Result<()>
                 continue;
             };
             if !text.is_ascii() {
-                let bytes = flavor.encode(&text).with_context(|| format!("元ファイルの {tag}: `{text}`"))?;
+                let bytes = flavor
+                    .encode(&text)
+                    .with_context(|| format!("元ファイルの {tag}: `{text}`"))?;
                 obj.put(DataElement::new(tag, vr, PrimitiveValue::U8(bytes.into())));
             }
         }
@@ -1042,8 +1331,18 @@ fn reencode_existing(obj: &mut InMemDicomObject, flavor: &Iso2022) -> Result<()>
 
 /// 数値の VR は数として、日本語を ISO 2022 にするときは符号化したバイト列として、
 /// それ以外は文字列として入れる。
-fn put_value(obj: &mut InMemDicomObject, tag: Tag, vr: VR, v: &str, flavor: Option<&Iso2022>) -> Result<()> {
-    let num = |v: &str| -> Result<f64> { v.trim().parse::<f64>().with_context(|| format!("{tag} は数値が要る: `{v}`")) };
+fn put_value(
+    obj: &mut InMemDicomObject,
+    tag: Tag,
+    vr: VR,
+    v: &str,
+    flavor: Option<&Iso2022>,
+) -> Result<()> {
+    let num = |v: &str| -> Result<f64> {
+        v.trim()
+            .parse::<f64>()
+            .with_context(|| format!("{tag} は数値が要る: `{v}`"))
+    };
     let el = |value: PrimitiveValue| DataElement::new(tag, vr, value);
     match vr {
         VR::US => obj.put(el(PrimitiveValue::from(num(v)? as u16))),
@@ -1053,7 +1352,10 @@ fn put_value(obj: &mut InMemDicomObject, tag: Tag, vr: VR, v: &str, flavor: Opti
         VR::FL => obj.put(el(PrimitiveValue::from(num(v)? as f32))),
         VR::FD => obj.put(el(PrimitiveValue::from(num(v)?))),
         _ if flavor.is_some() && is_text_vr(vr) && !v.is_ascii() => {
-            let bytes = flavor.unwrap().encode(v).with_context(|| format!("値 `{v}`"))?;
+            let bytes = flavor
+                .unwrap()
+                .encode(v)
+                .with_context(|| format!("値 `{v}`"))?;
             obj.put(el(PrimitiveValue::U8(bytes.into())))
         }
         _ => obj.put_str(tag, vr, v),
@@ -1070,14 +1372,20 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
     };
     let given_vr = match vr_text {
         Some(v) => Some(
-            <[u8; 2]>::try_from(v.as_bytes()).ok().and_then(VR::from_binary).with_context(|| format!("VR が読めない: `{v}`(LO や PN のような 2 文字)"))?,
+            <[u8; 2]>::try_from(v.as_bytes())
+                .ok()
+                .and_then(VR::from_binary)
+                .with_context(|| format!("VR が読めない: `{v}`(LO や PN のような 2 文字)"))?,
         ),
         None => None,
     };
     let entry = StandardDataDictionary.by_expr(key);
     let tag = match entry {
         Some(e) => e.tag(),
-        None => key.parse::<Tag>().ok().with_context(|| format!("タグ `{key}` が読めない(辞書の名前か (gggg,eeee))"))?,
+        None => key
+            .parse::<Tag>()
+            .ok()
+            .with_context(|| format!("タグ `{key}` が読めない(辞書の名前か (gggg,eeee))"))?,
     };
     if UID_TAGS.iter().any(|(t, _)| *t == tag) || tag == tags::MEDIA_STORAGE_SOP_INSTANCE_UID {
         bail!("{key} は UID として自動で振り直すので、規則では指定できない");
@@ -1089,10 +1397,15 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
     if entry.is_none() && vr.is_none() {
         bail!("辞書にないタグ {key} は VR が要る。例: {key}/LO");
     }
-    let name = entry.map(|e| e.alias().to_string()).unwrap_or_else(|| tag.to_string());
+    let name = entry
+        .map(|e| e.alias().to_string())
+        .unwrap_or_else(|| tag.to_string());
     let level = spec.level;
     let tpl = Template::parse(&spec.value).with_context(|| key.to_string())?;
-    let allowed: Vec<&str> = vars_for(level).into_iter().chain(src_vars_for(level)).collect();
+    let allowed: Vec<&str> = vars_for(level)
+        .into_iter()
+        .chain(src_vars_for(level))
+        .collect();
     for n in tpl.names() {
         let in_csv = csv_cols.iter().any(|c| c == n);
         let builtin = BUILTIN_VARS.contains(&n) || SRC_VARS.contains(&n);
@@ -1105,13 +1418,28 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
         }
         if builtin && !allowed.contains(&n) {
             // 患者のタグが画像番号で変わると、同じ患者の画像で値がばらつく
-            bail!("{key} は{}レベルのタグなので、変数 `{n}` は使えない(使える変数: {})", level.label(), allowed.join(" "));
+            bail!(
+                "{key} は{}レベルのタグなので、変数 `{n}` は使えない(使える変数: {})",
+                level.label(),
+                allowed.join(" ")
+            );
         }
         if !builtin {
-            bail!("{key}: 変数 `{n}` がない(CSV の列名か {})", allowed.join(" "));
+            bail!(
+                "{key}: 変数 `{n}` がない(CSV の列名か {})",
+                allowed.join(" ")
+            );
         }
     }
-    Ok(Rule { tag, name, vr, tpl, value: spec.value.clone(), table, level })
+    Ok(Rule {
+        tag,
+        name,
+        vr,
+        tpl,
+        value: spec.value.clone(),
+        table,
+        level,
+    })
 }
 
 /// 元のディレクトリにあるファイル(再帰)。DICOM でないものや DICOMDIR も入る。読むときに飛ばして、ログに出す。
@@ -1149,27 +1477,44 @@ fn cached_table(cache: &mut TableCache, path: &str, enc: CsvEncoding) -> Result<
 /// 画面が、既定の規則が上書きされたかを、書き方の違いによらず判定するために使う。
 pub fn tag_of(key: &str) -> Option<Tag> {
     let key = key.trim().split('/').next()?.trim();
-    StandardDataDictionary.by_expr(key).map(|e| e.tag()).or_else(|| key.parse::<Tag>().ok())
+    StandardDataDictionary
+        .by_expr(key)
+        .map(|e| e.tag())
+        .or_else(|| key.parse::<Tag>().ok())
 }
 
 fn load_csv(path: &Path, enc: CsvEncoding) -> Result<(Vec<String>, Vec<Row>)> {
-    let bytes = std::fs::read(path).with_context(|| format!("CSV を開けない: {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("CSV を開けない: {}", path.display()))?;
     let text = match enc {
         CsvEncoding::Utf8 => String::from_utf8(bytes).context("CSV が UTF-8 として読めない")?,
-        CsvEncoding::ShiftJis => encoding_rs::SHIFT_JIS.decode_without_bom_handling(&bytes).0.into_owned(),
+        CsvEncoding::ShiftJis => encoding_rs::SHIFT_JIS
+            .decode_without_bom_handling(&bytes)
+            .0
+            .into_owned(),
         // Excel の「CSV」は Shift_JIS。UTF-8 として読めればそちらを優先する
         CsvEncoding::Auto => match String::from_utf8(bytes) {
             Ok(s) => s,
-            Err(e) => encoding_rs::SHIFT_JIS.decode_without_bom_handling(e.as_bytes()).0.into_owned(),
+            Err(e) => encoding_rs::SHIFT_JIS
+                .decode_without_bom_handling(e.as_bytes())
+                .0
+                .into_owned(),
         },
     };
     let text = text.trim_start_matches('\u{feff}');
-    let mut rd = csv::ReaderBuilder::new().trim(csv::Trim::All).from_reader(text.as_bytes());
+    let mut rd = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(text.as_bytes());
     let head: Vec<String> = rd.headers()?.iter().map(str::to_string).collect();
     let mut rows = Vec::new();
     for rec in rd.records() {
         let rec = rec?;
-        rows.push(head.iter().cloned().zip(rec.iter().map(str::to_string)).collect());
+        rows.push(
+            head.iter()
+                .cloned()
+                .zip(rec.iter().map(str::to_string))
+                .collect(),
+        );
     }
     if rows.is_empty() {
         bail!("CSV にデータ行がない: {}", path.display());
@@ -1192,15 +1537,24 @@ fn check_keep(vr: VR, text: &str, code: &str, cs: Option<&SpecificCharacterSet>)
     }
     // ISO_IR 13 は JIS X 0201(半角カナまで)。dicom-rs の符号化器は Shift_JIS なので漢字も通してしまうが、規格にない
     if code == "ISO_IR 13" {
-        if let Some(c) = text.chars().find(|c| !c.is_ascii() && !('\u{FF61}'..='\u{FF9F}').contains(c)) {
+        if let Some(c) = text
+            .chars()
+            .find(|c| !c.is_ascii() && !('\u{FF61}'..='\u{FF9F}').contains(c))
+        {
             bail!("元ファイルの文字セット `{code}` は半角カナまでで、`{c}` (U+{:04X}) は書けない。{hint}", c as u32);
         }
         return Ok(());
     }
     if let Some(cs) = cs {
         if cs.encode(text).is_err() {
-            let c = text.chars().find(|c| cs.encode(&c.to_string()).is_err()).unwrap_or('?');
-            bail!("元ファイルの文字セット `{code}` では `{c}` (U+{:04X}) が書けない。{hint}", c as u32);
+            let c = text
+                .chars()
+                .find(|c| cs.encode(&c.to_string()).is_err())
+                .unwrap_or('?');
+            bail!(
+                "元ファイルの文字セット `{code}` では `{c}` (U+{:04X}) が書けない。{hint}",
+                c as u32
+            );
         }
     }
     Ok(())
@@ -1209,7 +1563,10 @@ fn check_keep(vr: VR, text: &str, code: &str, cs: Option<&SpecificCharacterSet>)
 /// 値をその VR で書けるか。数値の VR は数として読めること、日本語を自前で符号化するときは符号化できること。
 fn check_writable(vr: VR, text: &str, flavor: Option<&Iso2022>) -> Result<()> {
     if matches!(vr, VR::US | VR::UL | VR::SS | VR::SL | VR::FL | VR::FD) {
-        text.trim().parse::<f64>().map(|_| ()).map_err(|_| anyhow::anyhow!("{vr} は数値が要る"))?;
+        text.trim()
+            .parse::<f64>()
+            .map(|_| ())
+            .map_err(|_| anyhow::anyhow!("{vr} は数値が要る"))?;
     }
     if let Some(f) = flavor {
         if is_text_vr(vr) && !text.is_ascii() {
@@ -1252,7 +1609,11 @@ pub fn check_value(vr: VR, v: &str) -> Vec<String> {
         }
         _ => {}
     }
-    if vr == VR::CS && !v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' ' || c == '_') {
+    if vr == VR::CS
+        && !v
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' ' || c == '_')
+    {
         w.push("CS は大文字・数字・空白・_ だけ".into());
     }
     if vr == VR::DA && !(v.len() == 8 && v.chars().all(|c| c.is_ascii_digit())) {
@@ -1279,62 +1640,177 @@ mod tests {
         let spec = RuleSpec::new("PatientName", Level::Patient, "X%(i)d");
         let err = parse_rule(&spec, None).err().unwrap().to_string();
         assert!(err.contains("患者レベル") && err.contains('i'), "{err}");
-        assert!(parse_rule(&RuleSpec::new("InstanceNumber", Level::Image, "%(i)d"), None).is_ok());
+        assert!(parse_rule(
+            &RuleSpec::new("InstanceNumber", Level::Image, "%(i)d"),
+            None
+        )
+        .is_ok());
     }
 
     #[test]
     fn csv_rows_advance_per_the_level_of_the_tag() {
         let table = Arc::new(Table {
             columns: vec!["v".into()],
-            rows: (0..100).map(|k| [("v".to_string(), k.to_string())].into()).collect(),
+            rows: (0..100)
+                .map(|k| [("v".to_string(), k.to_string())].into())
+                .collect(),
         });
-        let cfg = Config { patients: 3, studies: 2, series: 1, images: 1, ..Config::default() };
-        let rule = |level| parse_rule(&RuleSpec::new("StudyDescription", level, "%(v)s"), Some(table.clone())).unwrap();
+        let cfg = Config {
+            patients: 3,
+            studies: 2,
+            series: 1,
+            images: 1,
+            ..Config::default()
+        };
+        let rule = |level| {
+            parse_rule(
+                &RuleSpec::new("StudyDescription", level, "%(v)s"),
+                Some(table.clone()),
+            )
+            .unwrap()
+        };
         let eng = Engine::new(&cfg).unwrap();
-        let at = |r: &Rule, p, s| eng.csv_row(r, Idx { p, s, r: 0, i: 0 }, &Place::default()).unwrap()["v"].clone();
-        assert_eq!((at(&rule(Level::Patient), 2, 1), at(&rule(Level::Patient), 2, 0)), ("2".into(), "2".into()));
-        assert_eq!((at(&rule(Level::Study), 2, 1), at(&rule(Level::Study), 0, 1)), ("5".into(), "1".into()));
+        let at = |r: &Rule, p, s| {
+            eng.csv_row(r, Idx { p, s, r: 0, i: 0 }, &Place::default())
+                .unwrap()["v"]
+                .clone()
+        };
+        assert_eq!(
+            (
+                at(&rule(Level::Patient), 2, 1),
+                at(&rule(Level::Patient), 2, 0)
+            ),
+            ("2".into(), "2".into())
+        );
+        assert_eq!(
+            (at(&rule(Level::Study), 2, 1), at(&rule(Level::Study), 0, 1)),
+            ("5".into(), "1".into())
+        );
         // 元の 2 人目の患者は、1 人目の複製と別の行を読む
-        let second = Place { patient: 1, ..Place::default() };
-        let at2 = |p| eng.csv_row(&rule(Level::Patient), Idx { p, s: 0, r: 0, i: 0 }, &second).unwrap()["v"].clone();
+        let second = Place {
+            patient: 1,
+            ..Place::default()
+        };
+        let at2 = |p| {
+            eng.csv_row(
+                &rule(Level::Patient),
+                Idx {
+                    p,
+                    s: 0,
+                    r: 0,
+                    i: 0,
+                },
+                &second,
+            )
+            .unwrap()["v"]
+                .clone()
+        };
         assert_eq!((at2(0), at2(2)), ("3".into(), "5".into()));
     }
 
     #[test]
     fn source_patients_are_told_apart_by_the_default_rules() {
         let eng = Engine::new(&Config::default()).unwrap();
-        let ix = Idx { p: 0, s: 0, r: 0, i: 0 };
+        let ix = Idx {
+            p: 0,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
         let first = Place::default();
-        let second = Place { patient: 1, ordinal: 7, ..Place::default() };
-        assert_eq!(eng.render_rule(tags::PATIENT_ID, ix, &first).unwrap().unwrap(), "EVAL000-0000");
-        assert_eq!(eng.render_rule(tags::PATIENT_ID, ix, &second).unwrap().unwrap(), "EVAL001-0000");
-        assert_eq!((eng.serial_number(ix, &first), eng.serial_number(ix, &second)), (1, 8));
+        let second = Place {
+            patient: 1,
+            ordinal: 7,
+            ..Place::default()
+        };
+        assert_eq!(
+            eng.render_rule(tags::PATIENT_ID, ix, &first)
+                .unwrap()
+                .unwrap(),
+            "EVAL000-0000"
+        );
+        assert_eq!(
+            eng.render_rule(tags::PATIENT_ID, ix, &second)
+                .unwrap()
+                .unwrap(),
+            "EVAL001-0000"
+        );
+        assert_eq!(
+            (
+                eng.serial_number(ix, &first),
+                eng.serial_number(ix, &second)
+            ),
+            (1, 8)
+        );
     }
 
     #[test]
     fn source_values_are_available_as_string_variables() {
-        let place = Place { patient_id: "1001".into(), modality: "CT".into(), ..Place::default() };
-        let rule = parse_rule(&RuleSpec::new("PatientID", Level::Patient, "%(src_patient_id)s-%(p1)d"), None).unwrap();
+        let place = Place {
+            patient_id: "1001".into(),
+            modality: "CT".into(),
+            ..Place::default()
+        };
+        let rule = parse_rule(
+            &RuleSpec::new("PatientID", Level::Patient, "%(src_patient_id)s-%(p1)d"),
+            None,
+        )
+        .unwrap();
         let eng = Engine::new(&Config::default()).unwrap();
-        let ints = eng.ints(Idx { p: 1, s: 0, r: 0, i: 0 }, &place, 1);
+        let ints = eng.ints(
+            Idx {
+                p: 1,
+                s: 0,
+                r: 0,
+                i: 0,
+            },
+            &place,
+            1,
+        );
         let strs = Engine::strs(&place);
-        assert_eq!(rule.tpl.render(&Vars { ints: &ints, strs: &strs, csv: None }).unwrap(), "1001-2");
+        assert_eq!(
+            rule.tpl
+                .render(&Vars {
+                    ints: &ints,
+                    strs: &strs,
+                    csv: None
+                })
+                .unwrap(),
+            "1001-2"
+        );
         // シリーズの値は患者レベルでは使えない
-        let err = parse_rule(&RuleSpec::new("PatientID", Level::Patient, "%(src_modality)s"), None).err().unwrap().to_string();
+        let err = parse_rule(
+            &RuleSpec::new("PatientID", Level::Patient, "%(src_modality)s"),
+            None,
+        )
+        .err()
+        .unwrap()
+        .to_string();
         assert!(err.contains("患者レベル"), "{err}");
     }
 
     #[test]
     fn a_csv_column_named_like_a_builtin_variable_is_rejected() {
-        let table = Arc::new(Table { columns: vec!["n".into()], rows: vec![[("n".to_string(), "x".to_string())].into()] });
-        let err = parse_rule(&RuleSpec::new("PatientID", Level::Patient, "%(n)d"), Some(table)).err().unwrap().to_string();
+        let table = Arc::new(Table {
+            columns: vec!["n".into()],
+            rows: vec![[("n".to_string(), "x".to_string())].into()],
+        });
+        let err = parse_rule(
+            &RuleSpec::new("PatientID", Level::Patient, "%(n)d"),
+            Some(table),
+        )
+        .err()
+        .unwrap()
+        .to_string();
         assert!(err.contains("列名") && err.contains('n'), "{err}");
     }
 
     #[test]
     fn keep_rejects_non_ascii_when_the_source_declares_no_character_set() {
         let cs = SpecificCharacterSet::from_code("ISO_IR 6");
-        let err = check_keep(VR::PN, "Müller", "ISO_IR 6", cs.as_ref()).unwrap_err().to_string();
+        let err = check_keep(VR::PN, "Müller", "ISO_IR 6", cs.as_ref())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("ASCII") && err.contains('ü'), "{err}");
         assert!(check_keep(VR::PN, "Mueller", "ISO_IR 6", cs.as_ref()).is_ok());
         let latin = SpecificCharacterSet::from_code("ISO_IR 100");
@@ -1345,20 +1821,62 @@ mod tests {
     fn csv_line_numbers_count_the_header_and_wrap_around() {
         let table = Arc::new(Table {
             columns: vec!["v".into()],
-            rows: (0..3).map(|k| [("v".to_string(), k.to_string())].into()).collect(),
+            rows: (0..3)
+                .map(|k| [("v".to_string(), k.to_string())].into())
+                .collect(),
         });
-        let cfg = Config { patients: 5, ..Config::default() };
+        let cfg = Config {
+            patients: 5,
+            ..Config::default()
+        };
         let eng = Engine::new(&cfg).unwrap();
-        let rule = parse_rule(&RuleSpec::new("PatientName", Level::Patient, "%(v)s"), Some(table.clone())).unwrap();
-        let line = |p| eng.csv_line(&rule, Idx { p, s: 0, r: 0, i: 0 }, &Place::default());
+        let rule = parse_rule(
+            &RuleSpec::new("PatientName", Level::Patient, "%(v)s"),
+            Some(table.clone()),
+        )
+        .unwrap();
+        let line = |p| {
+            eng.csv_line(
+                &rule,
+                Idx {
+                    p,
+                    s: 0,
+                    r: 0,
+                    i: 0,
+                },
+                &Place::default(),
+            )
+        };
         assert_eq!((line(0), line(2), line(3)), (Some(2), Some(4), Some(2)));
-        let no_csv = parse_rule(&RuleSpec::new("PatientID", Level::Patient, "%(p)d"), Some(table)).unwrap();
-        assert_eq!(eng.csv_line(&no_csv, Idx { p: 0, s: 0, r: 0, i: 0 }, &Place::default()), None);
+        let no_csv = parse_rule(
+            &RuleSpec::new("PatientID", Level::Patient, "%(p)d"),
+            Some(table),
+        )
+        .unwrap();
+        assert_eq!(
+            eng.csv_line(
+                &no_csv,
+                Idx {
+                    p: 0,
+                    s: 0,
+                    r: 0,
+                    i: 0
+                },
+                &Place::default()
+            ),
+            None
+        );
     }
 
     #[test]
     fn a_zero_count_is_refused_before_anything_runs() {
-        let err = Engine::new(&Config { patients: 0, ..Config::default() }).err().unwrap().to_string();
+        let err = Engine::new(&Config {
+            patients: 0,
+            ..Config::default()
+        })
+        .err()
+        .unwrap()
+        .to_string();
         assert!(err.contains("1 以上"), "{err}");
     }
 

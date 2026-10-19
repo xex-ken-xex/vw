@@ -39,7 +39,9 @@ impl Level {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize, clap::ValueEnum,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CsvEncoding {
     /// UTF-8 として読め(BOM 付きも可)なければ Shift_JIS(Excel の「CSV」)として読む
@@ -80,7 +82,13 @@ pub struct RuleSpec {
 
 impl RuleSpec {
     pub fn new(tag: &str, level: Level, value: &str) -> RuleSpec {
-        RuleSpec { tag: tag.into(), level, value: value.into(), csv: String::new(), csv_encoding: None }
+        RuleSpec {
+            tag: tag.into(),
+            level,
+            value: value.into(),
+            csv: String::new(),
+            csv_encoding: None,
+        }
     }
 
     /// `タグ:レベル[@CSVのパス]=テンプレート`(レベルは patient / study / series / image)。
@@ -93,8 +101,12 @@ impl RuleSpec {
         let (tag, level) = head
             .split_once(':')
             .with_context(|| format!("レベルが要る(patient / study / series / image)。例: PatientName:patient=…  ({spec})"))?;
-        let level = Level::parse(level).with_context(|| format!("レベルは patient / study / series / image: {level}"))?;
-        Ok(RuleSpec { csv: csv.trim().to_string(), ..RuleSpec::new(tag.trim(), level, value) })
+        let level = Level::parse(level)
+            .with_context(|| format!("レベルは patient / study / series / image: {level}"))?;
+        Ok(RuleSpec {
+            csv: csv.trim().to_string(),
+            ..RuleSpec::new(tag.trim(), level, value)
+        })
     }
 }
 
@@ -117,7 +129,13 @@ pub enum AssocUnit {
 }
 
 impl AssocUnit {
-    pub const ALL: [AssocUnit; 5] = [AssocUnit::Modality, AssocUnit::Study, AssocUnit::Series, AssocUnit::Patient, AssocUnit::All];
+    pub const ALL: [AssocUnit; 5] = [
+        AssocUnit::Modality,
+        AssocUnit::Study,
+        AssocUnit::Series,
+        AssocUnit::Patient,
+        AssocUnit::All,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -191,16 +209,21 @@ pub fn load_destinations(dir: &Path) -> Result<Vec<Destination>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let text = std::fs::read_to_string(&path).with_context(|| format!("読めない: {}", path.display()))?;
-    let book: DestinationBook = toml::from_str(&text).with_context(|| format!("送り先の帳簿の書式が違う: {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("読めない: {}", path.display()))?;
+    let book: DestinationBook = toml::from_str(&text)
+        .with_context(|| format!("送り先の帳簿の書式が違う: {}", path.display()))?;
     Ok(book.destinations)
 }
 
 pub fn save_destinations(dir: &Path, destinations: &[Destination]) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    let book = DestinationBook { destinations: destinations.to_vec() };
+    let book = DestinationBook {
+        destinations: destinations.to_vec(),
+    };
     let path = dir.join(DESTINATIONS_FILE);
-    std::fs::write(&path, toml::to_string_pretty(&book)?).with_context(|| format!("書けない: {}", path.display()))
+    std::fs::write(&path, toml::to_string_pretty(&book)?)
+        .with_context(|| format!("書けない: {}", path.display()))
 }
 
 impl StoreConfig {
@@ -210,11 +233,15 @@ impl StoreConfig {
             Some((ae, addr)) => (Some(ae.trim()), addr.trim()),
             None => (None, s.trim()),
         };
-        let (host, port) = addr.rsplit_once(':').with_context(|| format!("送り先は AET@host:port の形: {s}"))?;
+        let (host, port) = addr
+            .rsplit_once(':')
+            .with_context(|| format!("送り先は AET@host:port の形: {s}"))?;
         if host.is_empty() {
             bail!("送り先のホストが空: {s}");
         }
-        self.port = port.parse().with_context(|| format!("送り先のポートが数でない: {port}"))?;
+        self.port = port
+            .parse()
+            .with_context(|| format!("送り先のポートが数でない: {port}"))?;
         self.host = host.to_string();
         if let Some(ae) = ae.filter(|a| !a.is_empty()) {
             self.called_ae = ae.to_string();
@@ -267,7 +294,8 @@ impl Default for Config {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Config> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("読めない: {}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("読めない: {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("プリセットの書式が違う: {}", path.display()))
     }
 
@@ -275,7 +303,8 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?).with_context(|| format!("書けない: {}", path.display()))
+        std::fs::write(path, toml::to_string_pretty(self)?)
+            .with_context(|| format!("書けない: {}", path.display()))
     }
 }
 
@@ -291,7 +320,10 @@ pub fn default_preset_dir() -> PathBuf {
 /// 名前で探すときのファイル名。パスの区切りなどが入った名前は受けつけない。
 pub fn preset_path(dir: &Path, name: &str) -> Result<PathBuf> {
     let name = name.trim();
-    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+    {
         bail!("プリセット名に使えない文字がある: `{name}`");
     }
     Ok(dir.join(format!("{name}.toml")))
@@ -330,7 +362,11 @@ mod tests {
             rules: vec![RuleSpec {
                 csv: "names.csv".into(),
                 csv_encoding: Some(CsvEncoding::ShiftJis),
-                ..RuleSpec::new("PatientName", Level::Patient, "%(name_alpha)s=%(name_kanji)s=%(name_kana)s")
+                ..RuleSpec::new(
+                    "PatientName",
+                    Level::Patient,
+                    "%(name_alpha)s=%(name_kanji)s=%(name_kana)s",
+                )
             }],
             ..Config::default()
         };
@@ -353,7 +389,10 @@ mod tests {
         assert!(preset_path(d, "../x").is_err());
         assert!(preset_path(d, "a/b").is_err());
         assert!(preset_path(d, ".hidden").is_err());
-        assert_eq!(preset_path(d, "日本人患者").unwrap(), d.join("日本人患者.toml"));
+        assert_eq!(
+            preset_path(d, "日本人患者").unwrap(),
+            d.join("日本人患者.toml")
+        );
     }
 
     #[test]
@@ -361,7 +400,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dicoamplio-dest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(load_destinations(&dir).unwrap().is_empty());
-        let list = vec![Destination { name: "評価 PACS".into(), host: "10.0.0.5".into(), port: 11112, called_ae: "PACS".into() }];
+        let list = vec![Destination {
+            name: "評価 PACS".into(),
+            host: "10.0.0.5".into(),
+            port: 11112,
+            called_ae: "PACS".into(),
+        }];
         save_destinations(&dir, &list).unwrap();
         assert_eq!(load_destinations(&dir).unwrap(), list);
         let _ = std::fs::remove_dir_all(&dir);
@@ -371,24 +415,38 @@ mod tests {
     fn store_target_parses_ae_title_host_and_port() {
         let mut s = StoreConfig::default();
         s.parse_target("PACS@10.0.0.5:11112").unwrap();
-        assert_eq!((s.called_ae.as_str(), s.host.as_str(), s.port, s.enabled), ("PACS", "10.0.0.5", 11112, true));
+        assert_eq!(
+            (s.called_ae.as_str(), s.host.as_str(), s.port, s.enabled),
+            ("PACS", "10.0.0.5", 11112, true)
+        );
         let mut s = StoreConfig::default();
         s.parse_target("localhost:104").unwrap();
-        assert_eq!((s.called_ae.as_str(), s.host.as_str()), ("ANY-SCP", "localhost"));
+        assert_eq!(
+            (s.called_ae.as_str(), s.host.as_str()),
+            ("ANY-SCP", "localhost")
+        );
         assert!(StoreConfig::default().parse_target("PACS@host").is_err());
-        assert!(StoreConfig::default().parse_target("PACS@host:abc").is_err());
+        assert!(StoreConfig::default()
+            .parse_target("PACS@host:abc")
+            .is_err());
     }
 
     #[test]
     fn rule_spec_splits_at_the_first_equals_only() {
         let r = RuleSpec::parse("PatientName:patient=%(a)s=%(b)s").unwrap();
-        assert_eq!((r.tag.as_str(), r.value.as_str()), ("PatientName", "%(a)s=%(b)s"));
+        assert_eq!(
+            (r.tag.as_str(), r.value.as_str()),
+            ("PatientName", "%(a)s=%(b)s")
+        );
     }
 
     #[test]
     fn rule_spec_takes_a_level_and_a_csv() {
         let r = RuleSpec::parse("PatientName:study@/data/names.csv=%(name)s").unwrap();
-        assert_eq!((r.tag.as_str(), r.csv.as_str(), r.value.as_str()), ("PatientName", "/data/names.csv", "%(name)s"));
+        assert_eq!(
+            (r.tag.as_str(), r.csv.as_str(), r.value.as_str()),
+            ("PatientName", "/data/names.csv", "%(name)s")
+        );
         assert_eq!(r.level, Level::Study);
         assert!(RuleSpec::parse("PatientSex:universe=x").is_err());
     }
@@ -396,15 +454,22 @@ mod tests {
     #[test]
     fn the_level_is_required_and_never_guessed() {
         assert!(RuleSpec::parse("PatientSex=%(sex)s").is_err());
-        let err = toml::from_str::<Config>("[[rule]]\ntag = \"PatientSex\"\nvalue = \"M\"\n").unwrap_err();
+        let err = toml::from_str::<Config>("[[rule]]\ntag = \"PatientSex\"\nvalue = \"M\"\n")
+            .unwrap_err();
         assert!(err.to_string().contains("level"), "{err}");
     }
 
     #[test]
     fn rule_without_its_own_csv_writes_only_tag_and_value() {
-        let c = Config { rules: vec![RuleSpec::new("StudyID", Level::Study, "%(s1)d")], ..Config::default() };
+        let c = Config {
+            rules: vec![RuleSpec::new("StudyID", Level::Study, "%(s1)d")],
+            ..Config::default()
+        };
         let text = toml::to_string_pretty(&c).unwrap();
         let rule = &text[text.find("[[rule]]").unwrap()..];
-        assert!(rule.contains("level = \"study\"") && !rule.contains("csv"), "{text}");
+        assert!(
+            rule.contains("level = \"study\"") && !rule.contains("csv"),
+            "{text}"
+        );
     }
 }

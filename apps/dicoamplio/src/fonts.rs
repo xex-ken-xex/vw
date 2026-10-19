@@ -102,4 +102,3 @@ fn baseline_shift(data: &FontData, sample: char) -> f32 {
     };
     (latin.pos.y - fallback.pos.y) / SIZE
 }
-

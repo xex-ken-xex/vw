@@ -56,15 +56,51 @@ struct SetInfo {
 /// G1 に割り当てられる 1 バイトの文字セット。IR 148(トルコ語)は、dicom-rs が先頭の値として
 /// 読めないので入れない。
 const SETS: &[SetInfo] = &[
-    SetInfo { ir: "IR 100", designator: b'A', encoding: None },
-    SetInfo { ir: "IR 101", designator: b'B', encoding: Some(encoding_rs::ISO_8859_2) },
-    SetInfo { ir: "IR 109", designator: b'C', encoding: Some(encoding_rs::ISO_8859_3) },
-    SetInfo { ir: "IR 110", designator: b'D', encoding: Some(encoding_rs::ISO_8859_4) },
-    SetInfo { ir: "IR 144", designator: b'L', encoding: Some(encoding_rs::ISO_8859_5) },
-    SetInfo { ir: "IR 127", designator: b'G', encoding: Some(encoding_rs::ISO_8859_6) },
-    SetInfo { ir: "IR 126", designator: b'F', encoding: Some(encoding_rs::ISO_8859_7) },
-    SetInfo { ir: "IR 138", designator: b'H', encoding: Some(encoding_rs::ISO_8859_8) },
-    SetInfo { ir: "IR 166", designator: b'T', encoding: Some(encoding_rs::WINDOWS_874) },
+    SetInfo {
+        ir: "IR 100",
+        designator: b'A',
+        encoding: None,
+    },
+    SetInfo {
+        ir: "IR 101",
+        designator: b'B',
+        encoding: Some(encoding_rs::ISO_8859_2),
+    },
+    SetInfo {
+        ir: "IR 109",
+        designator: b'C',
+        encoding: Some(encoding_rs::ISO_8859_3),
+    },
+    SetInfo {
+        ir: "IR 110",
+        designator: b'D',
+        encoding: Some(encoding_rs::ISO_8859_4),
+    },
+    SetInfo {
+        ir: "IR 144",
+        designator: b'L',
+        encoding: Some(encoding_rs::ISO_8859_5),
+    },
+    SetInfo {
+        ir: "IR 127",
+        designator: b'G',
+        encoding: Some(encoding_rs::ISO_8859_6),
+    },
+    SetInfo {
+        ir: "IR 126",
+        designator: b'F',
+        encoding: Some(encoding_rs::ISO_8859_7),
+    },
+    SetInfo {
+        ir: "IR 138",
+        designator: b'H',
+        encoding: Some(encoding_rs::ISO_8859_8),
+    },
+    SetInfo {
+        ir: "IR 166",
+        designator: b'T',
+        encoding: Some(encoding_rs::WINDOWS_874),
+    },
 ];
 
 fn set_encode(info: &SetInfo, ch: char) -> Option<u8> {
@@ -84,7 +120,11 @@ fn set_decode(info: &SetInfo, b: u8) -> Option<char> {
         Some(enc) => {
             let byte = [b];
             let (s, bad) = enc.decode_without_bom_handling(&byte);
-            if bad { None } else { s.chars().next() }
+            if bad {
+                None
+            } else {
+                s.chars().next()
+            }
         }
     }
 }
@@ -114,9 +154,18 @@ impl Iso2022 {
 
     /// 扱えない組(IR 149・IR 159・UTF-8 との混在など)は None。
     pub fn from_values(values: &[String]) -> Option<Iso2022> {
-        let mut spec = Iso2022 { g0_reset: [0x1b, b'(', b'B'], initial_g1: None, g1_sets: vec![], kanji: false, values: values.join("\\") };
+        let mut spec = Iso2022 {
+            g0_reset: [0x1b, b'(', b'B'],
+            initial_g1: None,
+            g1_sets: vec![],
+            kanji: false,
+            values: values.join("\\"),
+        };
         for (i, v) in values.iter().enumerate() {
-            let ir = v.strip_prefix("ISO 2022 ").or_else(|| v.strip_prefix("ISO_")).unwrap_or(v);
+            let ir = v
+                .strip_prefix("ISO 2022 ")
+                .or_else(|| v.strip_prefix("ISO_"))
+                .unwrap_or(v);
             let g1 = match ir {
                 "" | "IR 6" if i == 0 => None,
                 "IR 87" if i > 0 => {
@@ -150,7 +199,9 @@ impl Iso2022 {
 
     fn g1_encode(g1: G1, ch: char) -> Option<u8> {
         match g1 {
-            G1::Katakana => ('\u{FF61}'..='\u{FF9F}').contains(&ch).then(|| (ch as u32 - 0xFF61 + 0xA1) as u8),
+            G1::Katakana => ('\u{FF61}'..='\u{FF9F}')
+                .contains(&ch)
+                .then(|| (ch as u32 - 0xFF61 + 0xA1) as u8),
             G1::Set(i) => set_encode(&SETS[i], ch),
         }
     }
@@ -158,7 +209,9 @@ impl Iso2022 {
     fn g1_decode(g1: Option<G1>, b: u8) -> Option<char> {
         match g1 {
             // G1 を宣言していなくても、0xA1〜0xDF は半角カナとして読む(寛容に)
-            None | Some(G1::Katakana) => (0xA1..=0xDF).contains(&b).then(|| char::from_u32(0xFF61 + (b - 0xA1) as u32).unwrap()),
+            None | Some(G1::Katakana) => (0xA1..=0xDF)
+                .contains(&b)
+                .then(|| char::from_u32(0xFF61 + (b - 0xA1) as u32).unwrap()),
             Some(G1::Set(i)) => set_decode(&SETS[i], b),
         }
     }
@@ -193,7 +246,11 @@ impl Iso2022 {
             let current = g1.and_then(|g| Self::g1_encode(g, ch));
             if let Some(b) = current {
                 out.push(b);
-            } else if let Some((other, b)) = self.g1_sets.iter().find_map(|&o| Self::g1_encode(o, ch).map(|b| (o, b))) {
+            } else if let Some((other, b)) = self
+                .g1_sets
+                .iter()
+                .find_map(|&o| Self::g1_encode(o, ch).map(|b| (o, b)))
+            {
                 out.extend_from_slice(&Self::g1_designation(other));
                 g1 = Some(other);
                 out.push(b);
@@ -203,11 +260,20 @@ impl Iso2022 {
                 // EUC-JP は NEC・IBM の拡張(「髙」「﨑」「①」など)も 2 バイトで返すが、JIS X 0208 にあるのは
                 // 1〜8 区と 16〜84 区だけ。範囲を見ないと、規格にないバイト列を黙って書いてしまう
                 let ku = bytes.first().map(|b| b.wrapping_sub(0xA0)).unwrap_or(0);
-                if !self.kanji || bad || bytes.len() != 2 || bytes[1] < 0xA1 || !matches!(ku, 1..=8 | 16..=84) {
+                if !self.kanji
+                    || bad
+                    || bytes.len() != 2
+                    || bytes[1] < 0xA1
+                    || !matches!(ku, 1..=8 | 16..=84)
+                {
                     if self.kanji {
                         bail!("JIS X 0208 で表せない文字: `{ch}` (U+{:04X})", ch as u32);
                     }
-                    bail!("文字セット `{}` で表せない文字: `{ch}` (U+{:04X})", self.values, ch as u32);
+                    bail!(
+                        "文字セット `{}` で表せない文字: `{ch}` (U+{:04X})",
+                        self.values,
+                        ch as u32
+                    );
                 }
                 if !kanji {
                     out.extend_from_slice(&ESC_KANJI);
@@ -276,7 +342,9 @@ impl Iso2022 {
                 out.push(b as char);
                 i += 1;
             } else if b < 0x80 && g0 == G0::Kanji && b > 0x20 {
-                let Some(&b2) = bytes.get(i + 1) else { bail!("漢字の 2 バイト目がない") };
+                let Some(&b2) = bytes.get(i + 1) else {
+                    bail!("漢字の 2 バイト目がない")
+                };
                 let pair = [b | 0x80, b2 | 0x80];
                 let (s, _, bad) = encoding_rs::EUC_JP.decode(&pair);
                 if bad || b2 <= 0x20 {
@@ -318,7 +386,10 @@ impl Iso2022 {
 
 /// (0008,0005) の値の並び。空の値(先頭の空)は ASCII を表すので、残す。
 pub fn scs_values(raw: &str) -> Vec<String> {
-    raw.trim_end_matches(['\0', ' ']).split('\\').map(|v| v.trim().to_string()).collect()
+    raw.trim_end_matches(['\0', ' '])
+        .split('\\')
+        .map(|v| v.trim().to_string())
+        .collect()
 }
 
 /// dicom-rs が正しく読めない、複数値の ISO 2022 の組か。
@@ -338,14 +409,30 @@ mod tests {
 
     #[test]
     fn ascii_is_plain() {
-        assert_eq!(Iso2022::japanese().encode("Yamada^Taro").unwrap(), b"Yamada^Taro ");
+        assert_eq!(
+            Iso2022::japanese().encode("Yamada^Taro").unwrap(),
+            b"Yamada^Taro "
+        );
     }
 
     #[test]
     fn kanji_resets_to_romaji_before_delimiters_when_ir13_leads() {
         let b = spec(JAHIS).encode("山田^太郎").unwrap();
         let romaji = [0x1b, b'(', b'J'];
-        assert_eq!(b, [&ESC_KANJI[..], &[0x3b, 0x33, 0x45, 0x44], &romaji, b"^", &ESC_KANJI[..], &[0x42, 0x40, 0x4f, 0x3a], &romaji, b" "].concat());
+        assert_eq!(
+            b,
+            [
+                &ESC_KANJI[..],
+                &[0x3b, 0x33, 0x45, 0x44],
+                &romaji,
+                b"^",
+                &ESC_KANJI[..],
+                &[0x42, 0x40, 0x4f, 0x3a],
+                &romaji,
+                b" "
+            ]
+            .concat()
+        );
     }
 
     #[test]
@@ -358,12 +445,24 @@ mod tests {
 
     #[test]
     fn halfwidth_kana_needs_ir13_and_other_characters_name_the_missing_set() {
-        assert_eq!(Iso2022::japanese().encode("ﾔﾏﾀﾞ").unwrap(), [0xD4, 0xCF, 0xC0, 0xDE]);
-        let err = spec("\\ISO 2022 IR 87").encode("ﾔ").unwrap_err().to_string();
+        assert_eq!(
+            Iso2022::japanese().encode("ﾔﾏﾀﾞ").unwrap(),
+            [0xD4, 0xCF, 0xC0, 0xDE]
+        );
+        let err = spec("\\ISO 2022 IR 87")
+            .encode("ﾔ")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("ﾔ") && err.contains("FF94"), "{err}");
         let err = Iso2022::japanese().encode("髙橋").unwrap_err().to_string();
-        assert!(err.contains("JIS X 0208") && err.contains('髙') && err.contains("9AD9"), "{err}");
-        let err = spec("ISO 2022 IR 100\\ISO 2022 IR 144").encode("山").unwrap_err().to_string();
+        assert!(
+            err.contains("JIS X 0208") && err.contains('髙') && err.contains("9AD9"),
+            "{err}"
+        );
+        let err = spec("ISO 2022 IR 100\\ISO 2022 IR 144")
+            .encode("山")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("IR 100") && err.contains('山'), "{err}");
     }
 
@@ -383,18 +482,30 @@ mod tests {
         let cases = [
             (JAHIS, "Yamada^Tarou=山田^太郎=ヤマダ^タロウ 頭部CT"),
             ("\\ISO 2022 IR 87", "Yamada^Tarou=山田^太郎=ヤマダ^タロウ"),
-            ("ISO 2022 IR 100\\ISO 2022 IR 87", "Müller^Jörg=山田^太郎 Kopf-CT"),
+            (
+                "ISO 2022 IR 100\\ISO 2022 IR 87",
+                "Müller^Jörg=山田^太郎 Kopf-CT",
+            ),
             ("ISO 2022 IR 144\\ISO 2022 IR 87", "Иванов^Пётр=山田^太郎"),
             ("ISO 2022 IR 126\\ISO 2022 IR 87", "Παπαδόπουλος 山田"),
             ("ISO 2022 IR 100\\ISO 2022 IR 144", "Müller Иванов Müller"),
-            ("ISO 2022 IR 100\\ISO 2022 IR 144\\ISO 2022 IR 87", "Müller=Иванов=山田"),
+            (
+                "ISO 2022 IR 100\\ISO 2022 IR 144\\ISO 2022 IR 87",
+                "Müller=Иванов=山田",
+            ),
         ];
         for (raw, text) in cases {
             let s = spec(raw);
-            assert_eq!(s.decode(&s.encode(text).unwrap()).unwrap().trim_end(), text, "{raw}");
+            assert_eq!(
+                s.decode(&s.encode(text).unwrap()).unwrap().trim_end(),
+                text,
+                "{raw}"
+            );
         }
         assert_eq!(Iso2022::japanese().decode(&[0xD4, 0xCF]).unwrap(), "ﾔﾏ");
-        assert!(Iso2022::japanese().decode(&[0x1b, b'$', b'(', b'D']).is_err());
+        assert!(Iso2022::japanese()
+            .decode(&[0x1b, b'$', b'(', b'D'])
+            .is_err());
     }
 
     #[test]
@@ -406,7 +517,11 @@ mod tests {
             let b = s.encode(&format!("Иван{delim}Müller")).unwrap();
             assert_eq!(b[..3], cyrillic);
             let at = b.iter().position(|&x| x == delim as u8).unwrap();
-            assert_eq!(b[at - 3..at], latin, "{delim:?} の前に先頭の G1(IR 100)へ戻す");
+            assert_eq!(
+                b[at - 3..at],
+                latin,
+                "{delim:?} の前に先頭の G1(IR 100)へ戻す"
+            );
         }
         // 戻したあとの Latin は、同じセットなので割り当てを繰り返さない
         let b = s.encode("Иван^Müller").unwrap();
@@ -417,16 +532,27 @@ mod tests {
     fn a_kanji_run_ends_at_a_g1_designation_as_pydicom_writes_it() {
         // pydicom は漢字のあとを ESC ( B ではなく ESC - A で戻す
         let bytes = b"\x1b-AKopf-CT \x1b$BF,It\x1b-A M\xfcller";
-        assert_eq!(spec("ISO 2022 IR 100\\ISO 2022 IR 87").decode(bytes).unwrap(), "Kopf-CT 頭部 Müller");
+        assert_eq!(
+            spec("ISO 2022 IR 100\\ISO 2022 IR 87")
+                .decode(bytes)
+                .unwrap(),
+            "Kopf-CT 頭部 Müller"
+        );
     }
 
     #[test]
     fn raw_bytes_are_recovered_from_what_dicom_rs_read_with_the_first_value() {
         let latin = spec("ISO 2022 IR 100\\ISO 2022 IR 87");
-        assert_eq!(latin.raw_bytes_of("a\u{1b}$B;3ü").unwrap(), [b'a', 0x1b, b'$', b'B', b';', b'3', 0xFC]);
+        assert_eq!(
+            latin.raw_bytes_of("a\u{1b}$B;3ü").unwrap(),
+            [b'a', 0x1b, b'$', b'B', b';', b'3', 0xFC]
+        );
         assert!(latin.raw_bytes_of("山").is_none());
         let jahis = spec(JAHIS);
-        assert_eq!(jahis.raw_bytes_of("a\u{1b}$B;3ﾔ").unwrap(), [b'a', 0x1b, b'$', b'B', b';', b'3', 0xD4]);
+        assert_eq!(
+            jahis.raw_bytes_of("a\u{1b}$B;3ﾔ").unwrap(),
+            [b'a', 0x1b, b'$', b'B', b';', b'3', 0xD4]
+        );
         let cyrillic = spec("ISO 2022 IR 144\\ISO 2022 IR 87");
         assert_eq!(cyrillic.raw_bytes_of("И").unwrap(), [0xB8]);
     }
@@ -441,7 +567,12 @@ mod tests {
 
     #[test]
     fn unsupported_sets_are_rejected() {
-        for raw in ["ISO 2022 IR 149\\ISO 2022 IR 87", "ISO 2022 IR 100\\ISO 2022 IR 159", "ISO_IR 192\\ISO 2022 IR 87", "ISO 2022 IR 87\\ISO 2022 IR 13"] {
+        for raw in [
+            "ISO 2022 IR 149\\ISO 2022 IR 87",
+            "ISO 2022 IR 100\\ISO 2022 IR 159",
+            "ISO_IR 192\\ISO 2022 IR 87",
+            "ISO 2022 IR 87\\ISO 2022 IR 13",
+        ] {
             assert!(Iso2022::from_values(&scs_values(raw)).is_none(), "{raw}");
         }
         assert!(is_multi_iso2022(&scs_values(JAHIS)));

@@ -1,6 +1,27 @@
 # vw 開発ガイド
 
 Linux / Windows 向けの高速画像ビューワ。設計は [docs/architecture.md](docs/architecture.md) を参照。
+返答とコミットは日本語の平叙体。
+
+## 構成
+
+1 つの Cargo ワークスペースに、共有のクレート(`crates/`)と実行ファイルになるアプリ(`apps/`)を置く。
+
+| 場所 | 中身 |
+| --- | --- |
+| `crates/` | 画像の読み込み、DICOM、見た目(`vw-ui`)など。アプリから共有する |
+| `apps/vw/` | ビューア本体 |
+| `apps/dicoamplio/` | DICOM の評価データを水増しするツール(決まりは `apps/dicoamplio/CLAUDE.md`) |
+
+- 新しいツールは `apps/` にディレクトリを 1 つ足す。見た目は `vw-ui` を使い、ワークスペースの `version`・`license` を継ぐ。
+- 版はワークスペースで 1 つ。Release は `apps/` の全アプリを同じ版で一緒に出す(`.github/workflows/ci.yml`)。
+- 新しい依存を足したら `packaging/about.toml` のライセンスの一覧にあるか確かめる。アプリごとに `cargo about` で第三者ライセンスの一覧を作る。
+
+## よそへ書き込む前に許可を取る
+
+GitHub の Issue・PR・コメント・Release など、このセッションの外に残る書き込みは、どのリポジトリでも、
+書く前に文面を見せて ken の許可を取る。「やって」と言われた作業の途中でも同じ。
+自分の作業ブランチへの commit と push だけは許可なしでよい。
 
 ## コーディングポリシー
 
