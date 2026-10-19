@@ -329,6 +329,8 @@ pub struct SlotResponse {
     pub face: Option<(PathBuf, FaceAction)>,
     /// 色導出から知らせること（ログに出す）。
     pub derive: Option<derive::Event>,
+    /// 画像をドラッグしている（並べ替えやフォルダへの移動の元）。
+    pub dragging: bool,
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -1149,6 +1151,7 @@ impl Slot {
                 }
             } else if !roi_tool && self.folder.is_none() {
                 response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
+                out.dragging |= response.dragged_by(egui::PointerButton::Primary);
             }
             if response.dragged_by(ZOOM_BUTTON) {
                 let factor = (-response.drag_delta().y * DRAG_ZOOM_RATE).exp();
@@ -1612,6 +1615,7 @@ impl Slot {
         }
         if let Some(shown) = self.shown.as_ref().filter(|_| self.folder.is_none()) {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
+            out.dragging |= header_response.dragged();
         }
         // ボタンはマウスを乗せたスロットにだけ出す。並んだスロットのすべてに出すと、
         // 画像のヘッダがボタンで埋まって名前が読みにくくなるため。
