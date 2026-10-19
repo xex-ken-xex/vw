@@ -36,6 +36,7 @@ vw でできることは、大きく分けて 3 つです。
 | カメラ RAW | Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF（Canon CR2 / CR3、DNG も読めます）。まずカメラが埋め込んだプレビューを表示し、続けて裏でセンサーのデータを現像して、精細な画像に差し替えます |
 | ZIP / 7z | 中の画像を、フォルダと同じように開けます。パスワード付き（ZIP は ZipCrypto と AES、7z は AES）も可 |
 | TIFF | 1〜16bit の整数と 32bit の実数、グレー / RGB / アルファ / パレット / CMYK、白黒の FAX 圧縮（CCITT G3 / G4）、LZW / Deflate / PackBits / JPEG 圧縮、タイル、BigTIFF。複数ページは全ページを 1 つのスロットに並べ、ホイールでページを送る（縮小版のページは除く）。向きのタグを反映し、カメラや作成ソフトの情報を表示 |
+| FITS（天体の画像） | `.fits` `.fit` `.fts`、tile 圧縮の `.fz`（RICE / GZIP）、全体を gzip した `.fits.gz`。8〜64bit の整数と実数、`BSCALE` / `BZERO`、欠損（`BLANK` と NaN）。データのない Primary の後ろの画像（JWST など）も開きます。キューブや 3 面の画像は 1 つのスロットに並べてホイールで送り、カラーカメラの Bayer のモザイク（`BAYERPAT`）はカラーにします。天体の画像は暗いので、最初の黒と白を 0.5%〜99.5% の画素で決めます（設定の「天体の画像 (FITS)」で zscale などに変えられます）。上下は `ROWORDER` に従い、なければファイルの並びのまま（設定で返せます）。全ヘッダをメタデータに出し、データセットの検索にも使えます |
 
 ---
 
@@ -132,7 +133,7 @@ cd vw
 `install.sh` は次のことを行います（管理者権限は使いません）。
 
 - `vw` を `~/.local/bin/vw` に置く
-- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・GIF・BMP・TIFF・カメラ RAW の「別のアプリケーションで開く」に出るようにする
+- アプリ一覧に「vw」をアイコン付きで登録し、PNG・JPEG・WebP・GIF・BMP・TIFF・FITS・カメラ RAW の「別のアプリケーションで開く」に出るようにする
 
 インストールせずに、展開したフォルダで `./vw` を実行して使うこともできます。
 
@@ -1088,6 +1089,7 @@ crates/
   vw-webp/   WebP プラグイン
   vw-gif/    GIF プラグイン
   vw-tiff/   TIFF プラグイン
+  vw-fits/   FITS（天体の画像）プラグイン
   vw-raw/    カメラ RAW プラグイン（rawler、LGPL-2.1）
   vw-dicom/  DICOM の読み込みと文字コード
   vw-ui/     見た目（配色・メニュー・パネル・フォント）。apps/ のアプリで共有する

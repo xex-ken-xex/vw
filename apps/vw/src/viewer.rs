@@ -820,7 +820,7 @@ impl Slot {
             }
             let sample = self.mark_sample(mark);
             let swatch = sample.as_ref().and_then(|(_, s)| *s);
-            let value = sample.map(|(text, _)| text);
+            let value = sample.map(|(text, _)| crate::i18n::tr_text(lang, &text));
             let galley = painter.layout_no_wrap(
                 probe::mark_label(mark.x, mark.y, value.as_deref()),
                 egui::FontId::proportional(12.0),
@@ -1341,7 +1341,7 @@ impl Slot {
                         y,
                     });
                     let text = match value {
-                        Some(v) => format!("x {x}, y {y}   {v}"),
+                        Some(v) => format!("x {x}, y {y}   {}", crate::i18n::tr_text(lang, &v)),
                         None => format!("x {x}, y {y}"),
                     };
                     let galley = painter.layout_no_wrap(

@@ -17,6 +17,7 @@ vw-bmp = { path = "crates/vw-bmp" }
 vw-webp = { path = "crates/vw-webp" }
 vw-gif = { path = "crates/vw-gif" }
 vw-tiff = { path = "crates/vw-tiff" }
+vw-fits = { path = "crates/vw-fits" }
 vw-raw = { path = "crates/vw-raw" }
 vw-dicom = { path = "crates/vw-dicom" }
 vw-quality = { path = "crates/vw-quality" }

@@ -29,6 +29,7 @@ impl VwApp {
         theme::apply(ctx, &self.settings().appearance);
         self.tree.set_order(self.settings().tree.order());
         self.apply_probe_extensions();
+        self.apply_fits_options();
         self.apply_texture_options();
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
@@ -52,6 +53,27 @@ impl VwApp {
         self.tree.forget_peeks();
         for dir in self.tree.open_paths() {
             self.tree.refresh(&dir, &registry);
+        }
+    }
+
+    /// 天体の画像の表示の決め方が変わったら、表示中の FITS を読み直してすぐ反映する。
+    /// 黒と白や上下、色はデコードのときに決まるので、読み直すほかない。
+    pub(super) fn apply_fits_options(&mut self) {
+        let options = self.settings().fits.options();
+        if options == self.fits.get() {
+            return;
+        }
+        self.fits.set(options);
+        let full = self.cell_needs_full();
+        let fits: Vec<(usize, PathBuf)> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.shown.as_ref().is_some_and(|d| d.info.plugin == "FITS"))
+            .filter_map(|(i, s)| Some((i, s.path.clone()?)))
+            .collect();
+        for (index, path) in fits {
+            self.start_load(index, path, full);
         }
     }
 
@@ -92,6 +114,7 @@ impl VwApp {
                 theme::apply(ctx, &self.settings().appearance);
                 self.tree.set_order(self.settings().tree.order());
                 self.apply_probe_extensions();
+                self.apply_fits_options();
                 self.apply_texture_options();
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),

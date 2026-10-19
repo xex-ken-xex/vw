@@ -85,7 +85,8 @@ use std::time::Instant;
 use vw_core::Registry;
 
 /// 組み込みのデコーダプラグインを登録する。新しい形式はここに 1 行足す。
-fn registry() -> Registry {
+/// `fits` は FITS のプラグインと共有する、設定画面で変える表示の決め方。
+fn registry(fits: &vw_fits::SharedOptions) -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
     registry.register(Arc::new(vw_jpeg::JpegPlugin));
@@ -93,6 +94,7 @@ fn registry() -> Registry {
     registry.register(Arc::new(vw_webp::WebpPlugin::default()));
     registry.register(Arc::new(vw_gif::GifPlugin::default()));
     registry.register(Arc::new(vw_tiff::TiffPlugin));
+    registry.register(Arc::new(vw_fits::FitsPlugin::new(fits.clone())));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry
@@ -128,7 +130,16 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "vw",
         options,
-        Box::new(move |cc| Ok(Box::new(app::VwApp::new(cc, registry(), initial, started)))),
+        Box::new(move |cc| {
+            let fits = vw_fits::SharedOptions::default();
+            Ok(Box::new(app::VwApp::new(
+                cc,
+                registry(&fits),
+                fits,
+                initial,
+                started,
+            )))
+        }),
     )
 }
 

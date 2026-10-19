@@ -686,6 +686,103 @@ impl Dicom {
     }
 }
 
+/// 天体の画像（[`vw_fits`]）の、最初の黒と白の決め方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitsStretch {
+    MinMax,
+    #[default]
+    Percentile,
+    Zscale,
+}
+
+impl FitsStretch {
+    pub const ALL: [FitsStretch; 3] = [
+        FitsStretch::Percentile,
+        FitsStretch::Zscale,
+        FitsStretch::MinMax,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FitsStretch::MinMax => "Minimum to maximum",
+            FitsStretch::Percentile => "Percentiles",
+            FitsStretch::Zscale => "zscale",
+        }
+    }
+}
+
+/// 天体の画像（FITS）の表示。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fits {
+    pub stretch: FitsStretch,
+    /// [`FitsStretch::Percentile`] で黒にする位置（％）。
+    pub low_percent: f32,
+    /// [`FitsStretch::Percentile`] で白にする位置（％）。
+    pub high_percent: f32,
+    /// `ROWORDER` のないファイルの上下を返す。
+    pub flip_rows: bool,
+    /// `BAYERPAT` のモザイクをカラーにする。
+    pub demosaic: bool,
+}
+
+impl Default for Fits {
+    fn default() -> Self {
+        let d = vw_fits::Options::default();
+        Self {
+            stretch: FitsStretch::Percentile,
+            low_percent: d.low_percent,
+            high_percent: d.high_percent,
+            flip_rows: d.flip_rows,
+            demosaic: d.demosaic,
+        }
+    }
+}
+
+impl Fits {
+    pub const PERCENT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("fits");
+        let percent = |v: &f32| Fits::PERCENT_RANGE.contains(v);
+        let mut low_percent = r
+            .get_valid("low_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.low_percent);
+        let mut high_percent = r
+            .get_valid("high_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.high_percent);
+        if low_percent >= high_percent {
+            r.problem(
+                "high_percent",
+                "must be larger than low_percent (both reset)".to_owned(),
+            );
+            (low_percent, high_percent) = (d.low_percent, d.high_percent);
+        }
+        Self {
+            stretch: r.get("stretch").unwrap_or(d.stretch),
+            low_percent,
+            high_percent,
+            flip_rows: r.get("flip_rows").unwrap_or(d.flip_rows),
+            demosaic: r.get("demosaic").unwrap_or(d.demosaic),
+        }
+    }
+
+    pub fn options(&self) -> vw_fits::Options {
+        vw_fits::Options {
+            stretch: match self.stretch {
+                FitsStretch::MinMax => vw_fits::Stretch::MinMax,
+                FitsStretch::Percentile => vw_fits::Stretch::Percentile,
+                FitsStretch::Zscale => vw_fits::Stretch::ZScale,
+            },
+            low_percent: self.low_percent,
+            high_percent: self.high_percent,
+            flip_rows: self.flip_rows,
+            demosaic: self.demosaic,
+        }
+    }
+}
+
 /// 他の機器への送信（[`crate::dicom_send`]）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DicomSend {
@@ -1115,6 +1212,7 @@ pub struct Settings {
     pub roi: RoiSettings,
     pub labels: Labels,
     pub dicom: Dicom,
+    pub fits: Fits,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
@@ -1141,6 +1239,7 @@ impl Settings {
         let roi = RoiSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
+        let fits = Fits::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
@@ -1168,6 +1267,7 @@ impl Settings {
                 roi,
                 labels,
                 dicom,
+                fits,
                 dicom_send,
                 dataset,
                 fullscreen,
@@ -2087,5 +2187,33 @@ mod quality_tests {
         assert_eq!(s.quality.ssim, Metric::Ssim.default_thresholds());
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("quality.ssim:"), "{}", problems[0]);
+    }
+}
+
+#[cfg(test)]
+mod fits_tests {
+    use super::*;
+
+    #[test]
+    fn fits_settings_become_decoder_options() {
+        let text = "[fits]\nstretch = \"zscale\"\nflip_rows = true\ndemosaic = false\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let o = s.fits.options();
+        assert_eq!(o.stretch, vw_fits::Stretch::ZScale);
+        assert!(o.flip_rows && !o.demosaic);
+    }
+
+    #[test]
+    fn black_percentile_above_white_resets_both() {
+        let text = "[fits]\nlow_percent = 90.0\nhigh_percent = 10.0\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.fits, Fits::default());
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].starts_with("fits.high_percent:"),
+            "{}",
+            problems[0]
+        );
     }
 }

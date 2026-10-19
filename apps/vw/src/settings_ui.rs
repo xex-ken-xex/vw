@@ -12,9 +12,9 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, ColorFormat, Fullscreen, FullscreenMode, HeaderClick, HeadingStyle, Labels,
-    Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup, Settings,
-    ThemeChoice, Tree, Viewer,
+    parse_hex_color, ColorFormat, FitsStretch, Fullscreen, FullscreenMode, HeaderClick,
+    HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay,
+    SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -30,6 +30,7 @@ enum Section {
     Labels,
     Datasets,
     Fullscreen,
+    Fits,
     Dicom,
     DicomSend,
     Log,
@@ -40,7 +41,7 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 15] = [
+    const ALL: [Section; 16] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -49,6 +50,7 @@ impl Section {
         Section::Labels,
         Section::Datasets,
         Section::Fullscreen,
+        Section::Fits,
         Section::Dicom,
         Section::DicomSend,
         Section::Log,
@@ -68,6 +70,7 @@ impl Section {
             Section::Labels => "Flags and tags",
             Section::Datasets => "Datasets",
             Section::Fullscreen => "Fullscreen slideshow",
+            Section::Fits => "Astronomy images (FITS)",
             Section::Dicom => "Medical images (DICOM)",
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
@@ -89,7 +92,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 68] = [
+const ITEMS: [Item; 73] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -516,6 +519,41 @@ const ITEMS: [Item; 68] = [
         title: "Path text size",
         description: "Size of the path text.",
         widget: path_size_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.stretch",
+        title: "First black and white",
+        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black. Adjust them afterwards with the usual window drag.",
+        widget: fits_stretch_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.low_percent",
+        title: "Black percentile",
+        description: "With Percentiles, this percent of the pixels are drawn black (%).",
+        widget: fits_low_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.high_percent",
+        title: "White percentile",
+        description: "With Percentiles, pixels above this percent are drawn white (%).",
+        widget: fits_high_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.flip_rows",
+        title: "Turn upside down",
+        description: "Show the first row of the file at the bottom, as the FITS standard and ds9 do. Only for files without ROWORDER; files that say TOP-DOWN or BOTTOM-UP are always shown that way.",
+        widget: fits_flip_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.demosaic",
+        title: "Color from the Bayer pattern",
+        description: "Turn images from color cameras (with BAYERPAT) into color. When off, they are shown as the gray mosaic stored in the file.",
+        widget: fits_demosaic_widget,
     },
     Item {
         section: Section::Dicom,
@@ -1016,6 +1054,48 @@ fn scale_filter_radios(value: &mut ScaleFilter, ui: &mut egui::Ui, lang: Languag
         }
     });
     *value != before
+}
+
+fn fits_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fits.stretch;
+    ui.horizontal(|ui| {
+        for stretch in FitsStretch::ALL {
+            ui.radio_value(&mut s.fits.stretch, stretch, tr(lang, stretch.title()));
+        }
+    });
+    s.fits.stretch != before
+}
+
+/// 黒は白より小さく、白は黒より大きくしか動かせない。
+fn fits_low_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let high = s.fits.high_percent;
+    percent_widget(&mut s.fits.low_percent, 0.0..=(high - 0.1).max(0.0), ui)
+}
+
+fn fits_high_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let low = s.fits.low_percent;
+    percent_widget(&mut s.fits.high_percent, (low + 0.1).min(100.0)..=100.0, ui)
+}
+
+fn percent_widget(v: &mut f32, range: std::ops::RangeInclusive<f32>, ui: &mut egui::Ui) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(v)
+            .range(range)
+            .speed(0.1)
+            .fixed_decimals(1)
+            .suffix(" %"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn fits_flip_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.flip_rows, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn fits_demosaic_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.demosaic, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

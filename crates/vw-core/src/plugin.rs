@@ -193,11 +193,18 @@ impl Registry {
                 .matches(path)
     }
 
+    /// 拡張子は `.fits.gz` のように 2 つ重なったものも当てる（プラグインの拡張子が
+    /// `fits.gz` なら）。`.gz` だけで選ぶと、画像でない gzip のファイルまで一覧に並ぶため。
     fn by_extension(&self, path: &Path) -> Option<&Arc<dyn DecoderPlugin>> {
-        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-        self.plugins
-            .iter()
-            .find(|p| p.extensions().contains(&ext.as_str()))
+        path.extension()?;
+        let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+        self.plugins.iter().find(|p| {
+            p.extensions().iter().any(|ext| {
+                name.len() > ext.len() + 1
+                    && name.ends_with(ext)
+                    && name.as_bytes()[name.len() - ext.len() - 1] == b'.'
+            })
+        })
     }
 
     /// 中身（マジックナンバー）で選び、どれも当てはまらなければ拡張子で選ぶ。
@@ -311,6 +318,21 @@ mod tests {
         assert!(r.supports_path(Path::new("x.BB")));
         assert!(!r.supports_path(Path::new("x.ccc")));
         assert!(!r.supports_path(Path::new("no_extension")));
+    }
+
+    #[test]
+    fn double_extensions_match_only_plugins_that_list_them() {
+        let mut r = registry();
+        r.register(Arc::new(Fake {
+            name: "GZ",
+            ext: &["ccc.gz"],
+            magic: b"GZ",
+            value: 3,
+        }));
+        assert!(r.supports_path(Path::new("x.CCC.gz")));
+        assert!(!r.supports_path(Path::new("x.gz")));
+        assert!(!r.supports_path(Path::new("x.ddd.gz")));
+        assert!(!r.supports_path(Path::new(".aaa")));
     }
 
     #[test]

@@ -147,6 +147,8 @@ pub struct VwApp {
     tree: FolderTree,
     /// レジストリに渡した、DICOM か調べる拡張子の式。変わったときだけフォルダを読み直すため。
     probe_extensions: String,
+    /// 天体の画像のプラグインと共有する表示の決め方。変わったら表示中の FITS を読み直す。
+    fits: vw_fits::SharedOptions,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
     texture_options: TextureOptions,
     /// 画像フィールドの枠。常に 1 つ以上ある。
@@ -486,6 +488,7 @@ impl VwApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         registry: Registry,
+        fits: vw_fits::SharedOptions,
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
@@ -564,6 +567,7 @@ impl VwApp {
         });
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
+        fits.set(settings.settings.fits.options());
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 
@@ -593,6 +597,7 @@ impl VwApp {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
+            fits,
             texture_options: settings.settings.viewer.texture_options(),
             slots: vec![Slot::new(0)],
             active: 0,
