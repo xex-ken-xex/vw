@@ -286,7 +286,7 @@ impl Action {
             Action::ToggleImages => "Show/hide images",
             Action::ToggleLog => "Show/hide log",
             Action::ToggleSettings => "Open/close settings",
-            Action::ToggleDatasets => "Open/close datasets",
+            Action::ToggleDatasets => "Open/close datasets window",
             Action::CloseAllSlots => "Close all slots",
             Action::Quit => "Quit",
             Action::PreviousSlot => "Previous slot",

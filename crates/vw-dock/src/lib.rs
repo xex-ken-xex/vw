@@ -1133,7 +1133,7 @@ impl Labels {
 
     pub const JAPANESE: Labels = Labels {
         float: "別ウインドウで開く",
-        dock: "本体に戻す",
+        dock: "メインウインドウに戻す",
         dock_key: "Ctrl+ダブルクリック",
         hide: "隠す",
         reset: "レイアウトを元に戻す",

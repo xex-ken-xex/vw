@@ -50,7 +50,7 @@ impl VwApp {
                         chosen = Some(action);
                     }
                 }
-                vw_ui::menu::submenu(ui, tr(lang, "Panes"), |ui| self.panes_menu(ui));
+                vw_ui::menu::submenu(ui, tr(lang, "Window layout"), |ui| self.panes_menu(ui));
                 ui.separator();
                 let pipeline = self.pipeline.open;
                 if self.menu_item(ui, Action::TogglePixelPipeline, Some(pipeline)) {
@@ -375,14 +375,6 @@ impl VwApp {
                 .clicked()
             {
                 self.toggle_settings();
-            }
-            let tip = self.with_key(tr(lang, "Datasets"), Action::ToggleDatasets);
-            if tool_button(ui, self.show_datasets, true, big(icon::DATABASE))
-                .on_hover_text(tip)
-                .clicked()
-            {
-                let ctx = ui.ctx().clone();
-                self.toggle_datasets(&ctx);
             }
         });
     }

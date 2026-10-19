@@ -946,7 +946,7 @@ impl Setup {
                 {
                     action = Some(SetupAction::Close);
                 }
-                ui.heading(tr(lang, "Fullscreen slideshow"));
+                ui.heading(tr(lang, "Slideshow setup"));
                 // 項目が多く下まで流れるので、開始のボタンは見出しの横に置いていつでも押せるようにする。
                 ui.add_space(16.0);
                 let start = ui.add_enabled(

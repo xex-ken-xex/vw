@@ -104,7 +104,7 @@ fn read_dock(table: &toml::Table, problems: &mut Vec<String>) -> Option<vw_dock:
     match value.try_into::<vw_dock::Layout>() {
         Ok(layout) => Some(layout),
         Err(e) => {
-            problems.push(format!("dock: {e} (the default pane layout is used)"));
+            problems.push(format!("dock: {e} (the default window layout is used)"));
             None
         }
     }

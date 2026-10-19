@@ -274,6 +274,15 @@ impl VwApp {
         self.close_hidden_tools();
     }
 
+    /// 前回出したまま終えた道具を開き直す。開いているかは道具の `open` が持つので、合わせないと
+    /// 最初のフレームで隠され、ドッキングした場所に出ない。
+    pub(super) fn reopen_tools(&mut self) {
+        let tools = self.dock.as_ref().map(tools_to_reopen).unwrap_or_default();
+        for tool in tools {
+            *self.tool_open(tool) = true;
+        }
+    }
+
     fn tool_open(&mut self, tool: &str) -> &mut bool {
         match tool {
             ANALYSIS => &mut self.histogram.open,
@@ -435,6 +444,15 @@ impl VwApp {
     }
 }
 
+/// 並びに出ている道具。データセットは開き直さない。開くたびにカタログを探し直すので、
+/// ネットワークのドライブでは起動が遅くなるため。
+fn tools_to_reopen(dock: &Dock) -> Vec<&'static str> {
+    TOOLS
+        .into_iter()
+        .filter(|t| *t != DATASETS && dock.is_shown(t))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +491,21 @@ mod tests {
         };
         let dock = restored_dock(&saved, false);
         assert_eq!(dock.window_of(MAP), Some(vw_dock::Window::Main));
+    }
+
+    #[test]
+    fn tools_left_shown_at_exit_open_again_except_datasets() {
+        let mut first = restored_dock(&AppState::default(), false);
+        for tool in [PIPELINE, ANALYSIS, DATASETS] {
+            first.set_shown(tool, true);
+            first.dock(tool);
+        }
+        first.set_shown(ZOOM_MAP, true);
+        let saved = AppState {
+            dock: Some(first.layout()),
+            ..AppState::default()
+        };
+        let dock = restored_dock(&saved, false);
+        assert_eq!(tools_to_reopen(&dock), [ANALYSIS, ZOOM_MAP, PIPELINE]);
     }
 }
