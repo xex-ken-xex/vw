@@ -105,7 +105,7 @@ pub fn hdus(data: &[u8]) -> Result<Vec<Hdu>, DecodeError> {
     Ok(out)
 }
 
-fn hdu_at(data: &[u8], start: usize) -> Result<Hdu, DecodeError> {
+pub(crate) fn hdu_at(data: &[u8], start: usize) -> Result<Hdu, DecodeError> {
     let mut lines: Vec<&[u8]> = Vec::new();
     let mut at = start;
     loop {

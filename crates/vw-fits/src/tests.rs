@@ -441,3 +441,86 @@ fn truncated_compressed_file_is_invalid() {
     file.truncate(file.len() - 2880);
     assert!(FitsPlugin::default().decode(&file).is_err());
 }
+
+/// Primary に 1 次元のデータ（画像でない）を置き、後ろの画像の拡張に WCS、Primary に架台の
+/// 向きを書いたファイル。データ部を読み飛ばして 2 つ目のヘッダに行き着くかを見る。
+fn file_with_wcs_after_data() -> Vec<u8> {
+    let mut primary = image_cards(8, &[5000]);
+    primary.push(card("RA", "10.0"));
+    primary.push(card("DEC", "20.0"));
+    let mut file = fits(&primary, &[1; 5000]);
+    let mut ext = vec![card("XTENSION", "'IMAGE   '")];
+    ext.extend(image_cards(8, &[4, 2]));
+    for (k, v) in [
+        ("CTYPE1", "'RA---TAN'"),
+        ("CTYPE2", "'DEC--TAN'"),
+        ("CRPIX1", "2.5"),
+        ("CRPIX2", "1.5"),
+        ("CRVAL1", "83.8221"),
+        ("CRVAL2", "-5.3911"),
+        ("CDELT1", "-0.1"),
+        ("CDELT2", "0.1"),
+    ] {
+        ext.push(card(k, v));
+    }
+    file.extend(hdu_bytes(&ext, &[], &[0; 8]));
+    file
+}
+
+fn sky_of_bytes(name: &str, bytes: &[u8]) -> Option<Sky> {
+    let path = std::env::temp_dir().join(format!("vw-fits-{}-{name}", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let header = header_of_file(&path);
+    std::fs::remove_file(&path).unwrap();
+    header.unwrap().and_then(|h| h.sky())
+}
+
+#[test]
+fn sky_is_read_from_the_headers_of_plain_and_gzipped_files() {
+    use std::io::Write;
+    let file = file_with_wcs_after_data();
+    let plain = sky_of_bytes("plain.fits", &file).unwrap();
+    assert!(plain.certain);
+    assert!((plain.center[0] - 83.8221).abs() < 1e-9 && (plain.center[1] + 5.3911).abs() < 1e-9);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&file).unwrap();
+    let gzipped = sky_of_bytes("gz.fits.gz", &gz.finish().unwrap()).unwrap();
+    assert_eq!(gzipped, plain);
+}
+
+#[test]
+fn header_values_come_from_the_image_then_the_primary() {
+    let path = std::env::temp_dir().join(format!("vw-fits-{}-cards.fits", std::process::id()));
+    std::fs::write(&path, file_with_wcs_after_data()).unwrap();
+    let header = header_of_file(&path).unwrap().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(header.get("CTYPE1"), Some("RA---TAN"));
+    assert_eq!(header.get("RA"), Some("10.0"));
+    assert_eq!(header.get("NAXIS1"), Some("4"));
+}
+
+#[test]
+fn sky_falls_back_to_the_pointing_in_the_primary() {
+    let mut cards = image_cards(8, &[4, 2]);
+    cards.push(card("RA", "10.0"));
+    cards.push(card("DEC", "20.0"));
+    let sky = sky_of_bytes("pointing.fits", &fits(&cards, &[0; 8])).unwrap();
+    assert!(!sky.certain);
+    assert_eq!(sky.center, [10.0, 20.0]);
+}
+
+#[test]
+fn sky_of_a_file_without_position_or_image_is_none() {
+    assert_eq!(
+        sky_of_bytes("none.fits", &fits(&image_cards(8, &[4, 2]), &[0; 8])),
+        None
+    );
+    assert_eq!(
+        sky_of_bytes("table.fits", &fits(&image_cards(8, &[]), &[])),
+        None
+    );
+    let path = std::env::temp_dir().join(format!("vw-fits-{}-not.fits", std::process::id()));
+    std::fs::write(&path, b"not a fits file at all").unwrap();
+    assert!(header_of_file(&path).is_err());
+    std::fs::remove_file(&path).unwrap();
+}

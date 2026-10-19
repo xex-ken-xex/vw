@@ -280,6 +280,9 @@ impl VwApp {
         {
             self.active = i;
             self.select_when_loaded = None;
+            if self.slots[i].loading {
+                self.loader.prioritize(self.slots[i].request);
+            }
         } else if self.folder_load.is_none() {
             // 読み込みを終えても出てこない（対応していない形式など）。
             self.select_when_loaded = None;

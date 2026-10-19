@@ -12,6 +12,7 @@
 
 mod bayer;
 mod header;
+mod sky;
 pub mod stretch;
 mod tile;
 
@@ -24,6 +25,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 
 pub use header::is_fits;
 use header::Hdu;
+pub use sky::{header_of_file, sky, ImageHeader, Sky};
 pub use stretch::Stretch;
 
 /// 表示の決め方。設定画面で変える。

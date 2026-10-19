@@ -171,6 +171,7 @@ pub struct VwApp {
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
     map: crate::map_window::MapWindow,
+    sky: crate::sky_window::SkyWindow,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -637,6 +638,7 @@ impl VwApp {
             place_names: None,
             place_names_load: None,
             map: Default::default(),
+            sky: Default::default(),
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -788,6 +790,9 @@ impl VwApp {
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
+            Action::ToggleSkyChart => {
+                self.sky.open = !self.sky.open && self.settings().sky.enabled;
+            }
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowAiModels => self.ai_models.open = true,
@@ -991,6 +996,7 @@ impl eframe::App for VwApp {
         self.send_ui(&ctx);
         self.update_evaluation(&ctx);
         self.map_tick(&ctx);
+        self.sky_tick();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         let lang = self.lang();
@@ -1159,6 +1165,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleMap => "Map",
+        Action::ToggleSkyChart => "Sky chart",
         other => other.title(),
     }
 }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke, TextureHandle};
+use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke};
 use egui_phosphor::regular as icon;
 use vw_core::exif::Gps;
 use vw_core::Registry;
@@ -98,20 +98,6 @@ impl Drop for Scan {
     }
 }
 
-enum Thumb {
-    Loading(PathBuf, Receiver<Option<egui::ColorImage>>),
-    Ready(PathBuf, TextureHandle),
-    Failed(PathBuf),
-}
-
-impl Thumb {
-    fn path(&self) -> &Path {
-        match self {
-            Thumb::Loading(p, _) | Thumb::Ready(p, _) | Thumb::Failed(p) => p,
-        }
-    }
-}
-
 /// 点をクリックして選んだもの。
 #[derive(Debug, Clone, PartialEq)]
 enum Selected {
@@ -166,7 +152,7 @@ pub struct MapWindow {
     /// 読み終えたら、点が全部入るように合わせる。
     fit_when_done: bool,
     selected: Option<Selected>,
-    thumb: Option<Thumb>,
+    thumb: crate::popup_thumb::PopupThumb,
     problems: Vec<String>,
     /// 地名の検索欄と、その候補。
     query: String,
@@ -196,7 +182,7 @@ impl Default for MapWindow {
             scan: None,
             fit_when_done: true,
             selected: None,
-            thumb: None,
+            thumb: Default::default(),
             problems: Vec::new(),
             query: String::new(),
             names: Vec::new(),
@@ -648,21 +634,8 @@ impl MapWindow {
         place: &Place,
     ) -> Option<Command> {
         let lang = inputs.lang;
-        self.load_thumb(ui.ctx(), inputs.registry, &place.path);
-        let side = 180.0;
-        match &self.thumb {
-            Some(Thumb::Ready(_, texture)) => {
-                let size = texture.size_vec2();
-                let fit = (side / size.x).min(side / size.y).min(1.0);
-                ui.image((texture.id(), size * fit));
-            }
-            Some(Thumb::Failed(_)) => {
-                ui.weak(tr(lang, "Failed to load"));
-            }
-            _ => {
-                ui.add_sized([side, side * 0.66], egui::Spinner::new());
-            }
-        }
+        self.thumb
+            .show(ui, lang, inputs.registry, &place.path, 180.0);
         ui.strong(file_name(&place.path));
         if let Some(t) = &place.taken {
             ui.weak(t);
@@ -692,33 +665,6 @@ impl MapWindow {
             }
         })
         .inner
-    }
-
-    fn load_thumb(&mut self, ctx: &egui::Context, registry: &Registry, path: &Path) {
-        if self.thumb.as_ref().is_none_or(|t| t.path() != path) {
-            let (tx, rx) = channel();
-            let (registry, file, ctx2) = (registry.clone(), path.to_path_buf(), ctx.clone());
-            std::thread::spawn(move || {
-                let thumb = crate::loader::load_fit(&registry, &file, true, false, None)
-                    .ok()
-                    .and_then(|l| l.thumb);
-                let _ = tx.send(thumb);
-                ctx2.request_repaint();
-            });
-            self.thumb = Some(Thumb::Loading(path.to_path_buf(), rx));
-        }
-        if let Some(Thumb::Loading(p, rx)) = &self.thumb {
-            if let Ok(image) = rx.try_recv() {
-                let p = p.clone();
-                self.thumb = Some(match image {
-                    Some(image) => Thumb::Ready(
-                        p,
-                        ctx.load_texture("map_thumb", image, egui::TextureOptions::LINEAR),
-                    ),
-                    None => Thumb::Failed(p),
-                });
-            }
-        }
     }
 
     /// 地図の絵の出典。提供元の条件で、いつも見える所に出す。

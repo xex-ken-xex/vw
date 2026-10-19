@@ -37,11 +37,12 @@ enum Section {
     Quality,
     Ai,
     Map,
+    Sky,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 16] = [
+    const ALL: [Section; 17] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -57,6 +58,7 @@ impl Section {
         Section::Quality,
         Section::Ai,
         Section::Map,
+        Section::Sky,
         Section::Keys,
     ];
 
@@ -77,6 +79,7 @@ impl Section {
             Section::Quality => "Quality evaluation",
             Section::Ai => "AI tags",
             Section::Map => "Map",
+            Section::Sky => "Sky chart",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -92,7 +95,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 74] = [
+const ITEMS: [Item; 79] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -451,6 +454,20 @@ const ITEMS: [Item; 74] = [
         widget: ai_threads_widget,
     },
     Item {
+        section: Section::Ai,
+        key: "ai.face_known_color",
+        title: "Frame color of known faces",
+        description: "Color of the frame and name of faces matched to a registered person (#RRGGBB).",
+        widget: face_known_color_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.face_unknown_color",
+        title: "Frame color of unknown faces",
+        description: "Color of the frame of faces not matched to anyone (#RRGGBB).",
+        widget: face_unknown_color_widget,
+    },
+    Item {
         section: Section::Fullscreen,
         key: "fullscreen.mode",
         title: "Mode",
@@ -610,6 +627,27 @@ const ITEMS: [Item; 74] = [
         title: "Map credit link",
         description: "Page opened by clicking the credit.",
         widget: map_attribution_url_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.enabled",
+        title: "Use the sky chart",
+        description: "Show the sky chart (View > Sky chart), which draws where astronomy images (FITS) point on a chart of the stars. It uses no network.",
+        widget: sky_enabled_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.certain_color",
+        title: "Frame color of known ranges",
+        description: "Solid frame of images whose header has a WCS, so the range is known (#RRGGBB).",
+        widget: sky_certain_color_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.approximate_color",
+        title: "Frame color of estimated ranges",
+        description: "Dotted frame of images with only the mount position (RA and DEC), sized from FOCALLEN and XPIXSZ with north up, and the cross of images without them (#RRGGBB).",
+        widget: sky_approximate_color_widget,
     },
 ];
 
@@ -777,18 +815,42 @@ fn show_path_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool
 }
 
 fn path_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.fullscreen.path_color, Color32::GRAY, ui)
+}
+
+fn face_known_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.ai.face_known_color, Color32::GREEN, ui)
+}
+
+fn face_unknown_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.ai.face_unknown_color, Color32::YELLOW, ui)
+}
+
+fn sky_enabled_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.sky.enabled, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn sky_certain_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.sky.certain_color, Color32::YELLOW, ui)
+}
+
+fn sky_approximate_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.sky.approximate_color, Color32::RED, ui)
+}
+
+/// `#RRGGBB` の色を、色の見本のボタンと文字の欄で変える。
+fn hex_color_widget(value: &mut String, fallback: Color32, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let mut color = parse_hex_color(&s.fullscreen.path_color).unwrap_or(Color32::GRAY);
+        let mut color = parse_hex_color(value).unwrap_or(fallback);
         if ui.color_edit_button_srgba(&mut color).changed() {
-            s.fullscreen.path_color =
-                format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+            *value = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
             changed = true;
         }
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut s.fullscreen.path_color).desired_width(80.0));
+        let r = ui.add(egui::TextEdit::singleline(value).desired_width(80.0));
         // 打ちかけの値（"#80" など）は保存しない。読み直したときに既定値へ戻されてしまうため。
-        if r.changed() && parse_hex_color(&s.fullscreen.path_color).is_some() {
+        if r.changed() && parse_hex_color(value).is_some() {
             changed = true;
         }
     });

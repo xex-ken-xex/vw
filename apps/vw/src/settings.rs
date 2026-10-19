@@ -1150,6 +1150,10 @@ pub struct Ai {
     pub face_threshold: f32,
     /// 検出されても付けないタグ。
     pub excluded_tags: Vec<String>,
+    /// 人物が分かった顔の枠の色（`#RRGGBB`）。
+    pub face_known_color: String,
+    /// 人物が分からない顔の枠の色。
+    pub face_unknown_color: String,
 }
 
 impl Default for Ai {
@@ -1162,6 +1166,8 @@ impl Default for Ai {
             // SFace の作者が示す、同じ人とみなすコサイン類似度の目安。
             face_threshold: 0.363,
             excluded_tags: Vec::new(),
+            face_known_color: "#50DC78".into(),
+            face_unknown_color: "#F0C83C".into(),
         }
     }
 }
@@ -1191,7 +1197,17 @@ impl Ai {
                 .get_valid("face_threshold", unit, "must be between 0 and 1")
                 .unwrap_or(d.face_threshold),
             excluded_tags: r.get("excluded_tags").unwrap_or(d.excluded_tags),
+            face_known_color: read_color(&mut r, "face_known_color", d.face_known_color),
+            face_unknown_color: read_color(&mut r, "face_unknown_color", d.face_unknown_color),
         }
+    }
+
+    pub fn face_known(&self) -> Color32 {
+        parse_hex_color(&self.face_known_color).unwrap_or(Color32::GREEN)
+    }
+
+    pub fn face_unknown(&self) -> Color32 {
+        parse_hex_color(&self.face_unknown_color).unwrap_or(Color32::YELLOW)
     }
 
     pub fn thresholds(&self) -> crate::tagger::Thresholds {
@@ -1200,6 +1216,57 @@ impl Ai {
             character: self.character_threshold,
         }
     }
+}
+
+/// 星図のウインドウ（天体の画像の写った範囲を枠で出す）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SkySettings {
+    /// メニューに星図を出す。星図はネットを使わないので、既定で出しておく。
+    pub enabled: bool,
+    /// ヘッダの WCS から分かった範囲の枠の色（`#RRGGBB`）。
+    pub certain_color: String,
+    /// 架台の向きから見積もった範囲の枠の色。
+    pub approximate_color: String,
+}
+
+impl Default for SkySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            certain_color: "#F0C83C".into(),
+            approximate_color: "#EA4335".into(),
+        }
+    }
+}
+
+impl SkySettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("sky");
+        Self {
+            enabled: r.get("enabled").unwrap_or(d.enabled),
+            certain_color: read_color(&mut r, "certain_color", d.certain_color),
+            approximate_color: read_color(&mut r, "approximate_color", d.approximate_color),
+        }
+    }
+
+    pub fn certain(&self) -> Color32 {
+        parse_hex_color(&self.certain_color).unwrap_or(Color32::YELLOW)
+    }
+
+    pub fn approximate(&self) -> Color32 {
+        parse_hex_color(&self.approximate_color).unwrap_or(Color32::RED)
+    }
+}
+
+/// `#RRGGBB` の色の設定。読めなければ問題を記して既定の色にする。
+fn read_color(r: &mut crate::toml_reader::Section<'_, '_>, key: &str, default: String) -> String {
+    r.get_valid(
+        key,
+        |v: &String| parse_hex_color(v).is_some(),
+        "must be #RRGGBB",
+    )
+    .unwrap_or(default)
 }
 
 /// 地図のウインドウ（撮影地点を点で出す）。
@@ -1262,6 +1329,7 @@ pub struct Settings {
     pub quality: Quality,
     pub ai: Ai,
     pub map: MapSettings,
+    pub sky: SkySettings,
     pub keys: Keymap,
 }
 
@@ -1289,6 +1357,7 @@ impl Settings {
         let quality = Quality::read(&mut r);
         let ai = Ai::read(&mut r);
         let map = MapSettings::read(&mut r);
+        let sky = SkySettings::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -1317,6 +1386,7 @@ impl Settings {
                 quality,
                 ai,
                 map,
+                sky,
                 keys,
             },
             problems,
@@ -2238,12 +2308,39 @@ mod fits_tests {
 
     #[test]
     fn fits_settings_become_decoder_options() {
-        let text = "[fits]\nstretch = \"zscale\"\nflip_rows = true\ndemosaic = false\n";
+        let text =
+            "[fits]\nstretch = \"zscale\"\ncurve = \"asinh\"\nflip_rows = true\ndemosaic = false\n";
         let (s, problems) = Settings::from_toml(text).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         let o = s.fits.options();
         assert_eq!(o.stretch, vw_fits::Stretch::ZScale);
+        assert_eq!(o.curve, vw_core::Curve::Asinh);
         assert!(o.flip_rows && !o.demosaic);
+    }
+
+    #[test]
+    fn frame_colors_are_read_and_bad_ones_fall_back() {
+        let text = "[sky]\ncertain_color = \"#102030\"\napproximate_color = \"red\"\n\
+                    [ai]\nface_known_color = \"#00ff00\"\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.sky.certain(), Color32::from_rgb(0x10, 0x20, 0x30));
+        assert_eq!(
+            s.sky.approximate_color,
+            SkySettings::default().approximate_color
+        );
+        assert_eq!(s.ai.face_known(), Color32::from_rgb(0, 255, 0));
+        assert_eq!(s.ai.face_unknown_color, Ai::default().face_unknown_color);
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].starts_with("sky.approximate_color:"),
+            "{}",
+            problems[0]
+        );
+    }
+
+    #[test]
+    fn sky_chart_is_on_by_default() {
+        assert!(Settings::default().sky.enabled);
     }
 
     #[test]

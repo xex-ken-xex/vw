@@ -274,11 +274,15 @@ pub struct SlotLook<'a> {
     pub colors: Colors,
 }
 
-/// 色の値の書き方。十字（`metadata.color_format`）と ROI（`roi.color_format`）。
+/// 色の値の書き方（十字は `metadata.color_format`、ROI は `roi.color_format`）と、顔の枠の色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Colors {
     pub probe: ColorFormat,
     pub roi: ColorFormat,
+    /// 人物が分かった顔の枠。
+    pub face_known: Color32,
+    /// 人物が分からない顔の枠。
+    pub face_unknown: Color32,
 }
 
 /// 顔の枠の右クリックで選ばれた操作。番号は表示中の画像の枠の番号。
@@ -1324,7 +1328,7 @@ impl Slot {
                     })
                     .map(|i| (shown.path.clone(), i));
             }
-            draw_faces(ui, body, lang, faces, &face_rect);
+            draw_faces(ui, body, lang, faces, &face_rect, &self.colors);
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
@@ -1773,51 +1777,29 @@ impl Slot {
     }
 }
 
-/// 顔の枠を描く。人物が分かった顔は緑で名前を添え、分からない顔は黄色。
+/// 顔の枠を描く。人物が分かった顔と分からない顔で色を分け（設定の色）、名札を添える。
 fn draw_faces(
     ui: &egui::Ui,
     body: Rect,
     lang: Language,
     faces: &[FaceMark],
     face_rect: &dyn Fn(&FaceMark) -> Rect,
+    colors: &Colors,
 ) {
     let painter = ui.painter_at(body);
     for (i, m) in faces.iter().enumerate() {
         let rect = face_rect(m);
         let color = if m.person.is_some() {
-            Color32::from_rgb(80, 220, 120)
+            colors.face_known
         } else {
-            Color32::from_rgb(240, 200, 60)
+            colors.face_unknown
         };
-        // 明るい画像でも暗い画像でも見えるよう、黒い縁の上に描く。
-        painter.rect_stroke(
-            rect,
-            0.0,
-            egui::Stroke::new(3.0, Color32::from_black_alpha(140)),
-            egui::StrokeKind::Middle,
-        );
-        painter.rect_stroke(
-            rect,
-            0.0,
-            egui::Stroke::new(1.5, color),
-            egui::StrokeKind::Middle,
-        );
+        crate::marks::rect_outline(&painter, rect, color, 1.5, false);
         let text = match &m.person {
             Some(name) => name.clone(),
             None => format!("{} {}", tr(lang, "Face"), i + 1),
         };
-        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), color);
-        let pad = vec2(4.0, 1.0);
-        let size = galley.size() + 2.0 * pad;
-        let y = if rect.bottom() + size.y + 2.0 <= body.bottom() {
-            rect.bottom() + 2.0
-        } else {
-            rect.bottom() - size.y - 2.0
-        };
-        let x = rect.left().max(body.left()).min(body.right() - size.x);
-        let pill = Rect::from_min_size(pos2(x, y), size);
-        painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
-        painter.galley(pill.min + pad, galley, color);
+        crate::marks::name_tag(&painter, rect, body, &text, color);
     }
 }
 

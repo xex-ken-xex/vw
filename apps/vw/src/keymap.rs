@@ -81,6 +81,7 @@ pub enum Action {
     ToggleHistogram,
     ToggleZoomMap,
     ToggleMap,
+    ToggleSkyChart,
     UndoPosition,
     ShowAbout,
     ShowAiModels,
@@ -105,7 +106,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 78] = [
+    pub const ALL: [Action; 79] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -137,6 +138,7 @@ impl Action {
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
         Action::ToggleMap,
+        Action::ToggleSkyChart,
         Action::UndoPosition,
         Action::ToggleTagging,
         Action::FlagGood,
@@ -244,6 +246,7 @@ impl Action {
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleMap => "toggle_map",
+            Action::ToggleSkyChart => "toggle_sky_chart",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
             Action::ShowAiModels => "show_ai_models",
@@ -331,6 +334,7 @@ impl Action {
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleMap => "Show/hide map",
+            Action::ToggleSkyChart => "Show/hide sky chart",
             Action::UndoPosition => "Undo the last position change",
             Action::ShowAbout => "About vw",
             Action::ShowAiModels => "AI models...",
@@ -509,6 +513,7 @@ impl Action {
             Action::ToggleHistogram => vec![],
             Action::ToggleZoomMap => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
+            Action::ToggleSkyChart => vec![],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
             Action::ShowAiModels => vec![],
