@@ -46,7 +46,7 @@ CI（GitHub Actions）が Linux と Windows で同じチェックを行います
 | コードコメント | なぜ他のやり方を選ばなかったか |
 
 - 新しい振る舞いには、それを表すテストを付けてください
-- 画面の文言を足したら、日本語の訳も `crates/vw-app/src/i18n.rs` に足してください
+- 画面の文言を足したら、日本語の訳も `apps/vw/src/i18n.rs` に足してください
 - 新しい依存クレートを足すときは、ライセンスが [packaging/about.toml](packaging/about.toml) の一覧にあるか確かめてください。ないとビルドが失敗します
 - 設計の全体像は [docs/architecture.md](docs/architecture.md) にあります
 

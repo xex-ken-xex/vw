@@ -1,5 +1,9 @@
-//! フォルダツリー。フォルダ（ZIP や DICOM の検査・シリーズといった仮想のフォルダを含む）だけを
-//! 表示する。ファイルはツリーに出さず、クリックで cd したフォルダの中身としてスロットに並べる。
+//! フォルダツリー。基底（`vw-tree`）に、ビューア固有の項目を足す。
+//!
+//! 基底が持つのは、ルート・遅延読み込み・隠しフォルダ・開閉・復元・読み直し。
+//! ここで足すのは、画像ファイルの一覧（ツリーには出さないがスロットとシリーズに要る）、
+//! ZIP（クリックで展開して別のルートになる）、DICOM の検査・シリーズ、右クリックメニュー
+//! （コピー・ファイラ・AI タグ・データセット・送信）、フォルダの下に項目があるかの先読み。
 //!
 //! フォルダの中身は初めて開いたときに読む。起動時にドライブ全体を走査すると
 //! 起動が遅くなるうえ、ネットワークドライブで固まることがあるため。
@@ -11,6 +15,8 @@ use std::time::SystemTime;
 
 use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
+pub use vw_tree::{display_name, entry_is_dir, is_hidden_name, is_recycle_bin};
+use vw_tree::{without_toggle, Hooks};
 
 use crate::i18n::tr;
 use crate::series::{Scan, Series, SeriesIndex, Study};
@@ -18,33 +24,25 @@ use crate::settings::Language;
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 use crate::viewer::DraggedFile;
 
-/// ツリーの 1 項目（フォルダまたはファイル）。
-pub struct Node {
-    pub path: PathBuf,
-    name: String,
-    is_dir: bool,
-    /// フォルダを初めて開くまでは `None`。一度読んだら閉じても保持する。
-    /// ファイルも持っておくのは、DICOM のシリーズを作るのにフォルダの中のファイルが要るため。
-    children: Option<Vec<Node>>,
-    /// 開いているか。egui の内部状態に任せず自分で持つのは、終了時に保存して次回復元するため。
-    open: bool,
-    /// 更新日時。更新日時順で並べるときだけ取る（[`list_dir`]）。
-    modified: Option<SystemTime>,
+/// ビューアが項目に付ける印。
+#[derive(Default)]
+pub struct Mark {
     /// ZIP ファイル。クリックで展開して別のルートとして開く（[`crate::archive`]）。
-    archive: bool,
+    pub archive: bool,
     /// ZIP を展開したルート。右クリックでアンマウントできる。
-    mounted: bool,
+    pub mounted: bool,
 }
 
-/// ツリーを描くときに全項目で共通の情報。
+/// ツリーの 1 項目（フォルダまたはファイル）。
+pub type Node = vw_tree::Node<Mark>;
+
+/// ツリーを描くときに全項目で共通の情報と、描きながら集めるもの。基底の [`Hooks`] の実装。
 struct View<'a> {
     registry: &'a Registry,
     /// cd しているフォルダ。ハイライトする。
     current: Option<&'a Path>,
     /// アクティブなスロットの画像。それを含むシリーズをハイライトする。
     active_image: Option<&'a Path>,
-    /// 見える位置までスクロールするフォルダ。
-    reveal: Option<&'a Path>,
     lang: Language,
     order: SortOrder,
     series: &'a SeriesIndex,
@@ -56,8 +54,10 @@ struct View<'a> {
     destinations: &'a [String],
     /// AI のモデルが全部揃っているか。
     ai_ready: bool,
-    /// フォルダ名のクリックでフォルダも開く。
-    click_expands: bool,
+    /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
+    scans: Vec<(PathBuf, Vec<PathBuf>)>,
+    /// 下に項目があるか先読みしてほしいフォルダ。
+    peeks_wanted: Vec<PathBuf>,
 }
 
 impl View<'_> {
@@ -65,6 +65,21 @@ impl View<'_> {
     /// ヘッダを読んで確かめる。
     fn may_be_dicom(&self, path: &Path) -> bool {
         may_be_dicom(self.registry, self.dicom_extensions, path)
+    }
+
+    /// データセット（検索カタログのあるフォルダ）か。先読みで調べ、分かるまでは違うとする。
+    fn is_dataset(&mut self, node: &Node) -> bool {
+        if node.ext.mounted {
+            return false;
+        }
+        match self.peeks.get(&node.path) {
+            Some(Peek::Done { dataset, .. }) => *dataset,
+            Some(Peek::Asked) => false,
+            None => {
+                self.peeks_wanted.push(node.path.clone());
+                false
+            }
+        }
     }
 }
 
@@ -86,16 +101,6 @@ pub fn dicom_extensions(registry: &Registry) -> &[&str] {
         .iter()
         .find(|p| p.name() == "DICOM")
         .map_or(&[][..], |p| p.extensions())
-}
-
-/// ツリーを描いた結果。
-#[derive(Default)]
-struct Out {
-    action: Option<TreeAction>,
-    /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
-    scans: Vec<(PathBuf, Vec<PathBuf>)>,
-    /// 下に項目があるか先読みしてほしいフォルダ。
-    peeks: Vec<PathBuf>,
 }
 
 /// ツリーの操作の要求。
@@ -132,303 +137,158 @@ pub enum TreeAction {
     },
 }
 
-impl Node {
-    /// フォルダの項目を作る。`name` を省くとパスの末尾を表示名にする。
-    pub fn dir(path: PathBuf, name: Option<String>, open: bool) -> Self {
-        let name = name.unwrap_or_else(|| display_name(&path));
-        Self {
-            path,
-            name,
-            is_dir: true,
-            children: None,
-            open,
-            modified: None,
-            archive: false,
-            mounted: false,
-        }
+impl Hooks<Mark> for View<'_> {
+    type Action = TreeAction;
+
+    fn list_dir(&self, dir: &Path) -> Vec<Node> {
+        list_dir(dir, self.registry, self.order)
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, view: &View, out: &mut Out) {
-        let lang = view.lang;
-        let is_current = view.current == Some(self.path.as_path());
-        if self.archive {
-            let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
-            let r = without_toggle(ui, |ui| ui.selectable_label(false, text));
-            if r.clicked() {
-                out.action = Some(TreeAction::Mount(self.path.clone()));
+    fn shows(&self, node: &Node) -> bool {
+        node.is_dir || node.ext.archive
+    }
+
+    fn is_current(&self, node: &Node) -> bool {
+        self.current == Some(node.path.as_path())
+    }
+
+    /// 先読みの結果を使う。分かるまでは ▶ を出しておく（基底の既定）。
+    fn may_have_children(&mut self, node: &Node) -> Option<bool> {
+        match self.peeks.get(&node.path) {
+            Some(Peek::Done { children, .. }) => Some(*children),
+            Some(Peek::Asked) => None,
+            None => {
+                self.peeks_wanted.push(node.path.clone());
+                None
             }
-            vw_ui::menu::context(&r, |ui| {
-                if ui.button(tr(lang, "Copy")).clicked() {
-                    out.action = Some(TreeAction::Copy(self.path.clone()));
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Open in file manager")).clicked() {
-                    let folder = self.path.parent().unwrap_or(&self.path).to_owned();
-                    out.action = Some(TreeAction::OpenInFileManager(folder));
-                    ui.close();
-                }
-                send_menu(ui, &self.path, view, &mut out.action);
-            });
-            return;
         }
-        let dataset = self.is_dataset(view, out);
-        if !self.shows_children(view, out) {
-            let label = without_toggle(ui, |ui| self.label(ui, is_current, dataset));
-            self.label_actions(&label, view, out);
-            return;
-        }
-        // CollapsingHeader を使わないのは、見出しに選択状態を出せず、右クリックメニューも
-        // 付けられないため。開閉の ▶ と見出しの文字を別の部品にして組み立てる。
-        let id = ui.make_persistent_id(&self.path);
-        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, self.open);
-        state.set_open(self.open);
-        let (toggle, header, _) = state
-            .show_header(ui, |ui| self.label(ui, is_current, dataset))
-            .body(|ui| {
-                let children = self
-                    .children
-                    .get_or_insert_with(|| list_dir(&self.path, view.registry, view.order));
-                let studies = dicom_studies(&self.path, children, view, out);
-                for child in children.iter_mut().filter(|c| c.is_dir || c.archive) {
-                    child.ui(ui, view, out);
-                }
-                for study in &studies {
-                    study_ui(ui, &self.path, study, view, out);
-                }
-                if studies.is_empty() && matches!(view.series.scan(&self.path), Scan::Reading) {
-                    ui.weak(tr(lang, "Reading DICOM headers…"));
-                }
-            });
-        if toggle.clicked() {
-            self.open = !self.open;
-        } else if view.click_expands && header.inner.clicked() {
-            // 開いているフォルダをもう一度押しても閉じない。エクスプローラも閉じず、
-            // cd し直すたびに開閉が切り替わると見ていた中身が消えてしまうため。
-            self.open = true;
-        }
-        self.label_actions(&header.inner, view, out);
     }
 
-    fn label(&self, ui: &mut egui::Ui, is_current: bool, dataset: bool) -> egui::Response {
-        if self.mounted {
-            let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, self.name);
+    /// DICOM の検査があるか。ヘッダを読んでいる間と、まだ読んでいない DICOM らしいファイルが
+    /// あるときも「ある」として ▶ を残す。
+    fn has_extra_children(&mut self, dir: &Path, children: &[Node]) -> bool {
+        match self.series.scan(dir) {
+            Scan::Done(studies) => !studies.is_empty(),
+            Scan::Reading => true,
+            Scan::NotStarted => children
+                .iter()
+                .any(|c| !c.is_dir && self.may_be_dicom(&c.path)),
+        }
+    }
+
+    fn extra_children(
+        &mut self,
+        ui: &mut egui::Ui,
+        dir: &Path,
+        children: &[Node],
+        out: &mut Vec<TreeAction>,
+    ) {
+        let studies = self.dicom_studies(dir, children);
+        for study in &studies {
+            study_ui(ui, dir, study, self, out);
+        }
+        if studies.is_empty() && matches!(self.series.scan(dir), Scan::Reading) {
+            ui.weak(tr(self.lang, "Reading DICOM headers…"));
+        }
+    }
+
+    fn label(&mut self, ui: &mut egui::Ui, node: &Node, is_current: bool) -> egui::Response {
+        if node.ext.mounted {
+            let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, node.name);
             ui.selectable_label(is_current, text)
-        } else if dataset {
-            let text = egui::RichText::new(self.name.as_str()).color(crate::theme::DATASET);
+        } else if self.is_dataset(node) {
+            let text = egui::RichText::new(node.name.as_str()).color(crate::theme::DATASET);
             ui.selectable_label(is_current, text)
         } else {
-            ui.selectable_label(is_current, self.name.as_str())
+            ui.selectable_label(is_current, node.name.as_str())
         }
     }
 
-    /// データセット（検索カタログのあるフォルダ）か。先読みで調べ、分かるまでは違うとする。
-    fn is_dataset(&self, view: &View, out: &mut Out) -> bool {
-        if self.mounted {
-            return false;
-        }
-        match view.peeks.get(&self.path) {
-            Some(Peek::Done { dataset, .. }) => *dataset,
-            Some(Peek::Asked) => false,
-            None => {
-                out.peeks.push(self.path.clone());
-                false
-            }
-        }
-    }
-
-    /// 見出しのクリック（cd）・スクロール・右クリックメニュー。
-    fn label_actions(&self, label: &egui::Response, view: &View, out: &mut Out) {
-        let lang = view.lang;
+    /// ドロップの受け付けと右クリックメニュー。クリック（cd）とスクロールは基底が扱う。
+    fn after_label(&mut self, label: &egui::Response, node: &Node, out: &mut Vec<TreeAction>) {
+        let lang = self.lang;
         // 展開した ZIP の中は書き込めないので、ドロップ先にしない。
-        if !self.mounted {
+        if !node.ext.mounted {
             if label.dnd_hover_payload::<DraggedFile>().is_some() {
                 label.clone().highlight();
             }
             if let Some(file) = label.dnd_release_payload::<DraggedFile>() {
-                out.action = Some(TreeAction::Drop {
+                out.push(TreeAction::Drop {
                     file: file.0.clone(),
-                    dir: self.path.clone(),
+                    dir: node.path.clone(),
                 });
             }
         }
-        if label.clicked() {
-            out.action = Some(TreeAction::Cd(self.path.clone()));
-        }
-        if view.reveal == Some(self.path.as_path()) {
-            label.scroll_to_me(Some(egui::Align::Center));
-        }
-        if self.mounted {
+        if node.ext.mounted {
             vw_ui::menu::context(label, |ui| {
                 if ui.button(tr(lang, "Copy")).clicked() {
-                    out.action = Some(TreeAction::Copy(self.path.clone()));
+                    out.push(TreeAction::Copy(node.path.clone()));
                     ui.close();
                 }
                 if ui.button(tr(lang, "Open in file manager")).clicked() {
-                    out.action = Some(TreeAction::OpenInFileManager(self.path.clone()));
+                    out.push(TreeAction::OpenInFileManager(node.path.clone()));
                     ui.close();
                 }
                 if ui.button(tr(lang, "Close ZIP")).clicked() {
-                    out.action = Some(TreeAction::Unmount(self.path.clone()));
+                    out.push(TreeAction::Unmount(node.path.clone()));
                     ui.close();
                 }
-                send_menu(ui, &self.path, view, &mut out.action);
+                send_menu(ui, &node.path, self, out);
             });
         } else {
-            folder_menu(label, &self.path, view, &mut out.action);
+            folder_menu(label, &node.path, self, out);
         }
     }
 
-    /// 開いたときに下へ出す項目（サブフォルダ・ZIP・DICOM の検査）があるか。▶ を出すかを決める。
-    ///
-    /// 読み込み済みなら中身で決める。まだなら先読みの結果を使い、分かるまでは ▶ を出しておく。
-    /// 分からないうちに ▶ を消さないのは、遅いドライブで中身のあるフォルダを開けなくなるより、
-    /// 末端に ▶ が残るほうが害が小さいため。
-    fn shows_children(&self, view: &View, out: &mut Out) -> bool {
-        let Some(children) = &self.children else {
-            return match view.peeks.get(&self.path) {
-                Some(Peek::Done { children, .. }) => *children,
-                Some(Peek::Asked) => true,
-                None => {
-                    out.peeks.push(self.path.clone());
-                    true
-                }
-            };
-        };
-        children.iter().any(|c| c.is_dir || c.archive)
-            || match view.series.scan(&self.path) {
-                Scan::Done(studies) => !studies.is_empty(),
-                Scan::Reading => true,
-                Scan::NotStarted => children
-                    .iter()
-                    .any(|c| !c.is_dir && view.may_be_dicom(&c.path)),
+    /// ZIP ファイル。クリックで展開する（基底の `clicked` から [`FolderTree::ui`] が Mount にする）。
+    fn leaf(
+        &mut self,
+        ui: &mut egui::Ui,
+        node: &Node,
+        out: &mut Vec<TreeAction>,
+    ) -> egui::Response {
+        let lang = self.lang;
+        let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, node.name);
+        let r = without_toggle(ui, |ui| ui.selectable_label(false, text));
+        vw_ui::menu::context(&r, |ui| {
+            if ui.button(tr(lang, "Copy")).clicked() {
+                out.push(TreeAction::Copy(node.path.clone()));
+                ui.close();
             }
-    }
-
-    /// `path` の項目。読み込み済みの子だけを辿る。
-    #[cfg(test)]
-    fn find(&self, path: &Path) -> Option<&Node> {
-        if self.path == path {
-            return Some(self);
-        }
-        if !path.starts_with(&self.path) {
-            return None;
-        }
-        self.children.iter().flatten().find_map(|c| c.find(path))
-    }
-
-    /// `path` までの親フォルダを開く（中身を読みながら）。`path` 自体は開閉を変えない。
-    /// `path` が見つかったら true。
-    fn open_towards(&mut self, path: &Path, registry: &Registry, order: SortOrder) -> bool {
-        if self.path == path {
-            return true;
-        }
-        if !self.is_dir || !path.starts_with(&self.path) {
-            return false;
-        }
-        self.open = true;
-        let children = self
-            .children
-            .get_or_insert_with(|| list_dir(&self.path, registry, order));
-        children
-            .iter_mut()
-            .any(|c| c.open_towards(path, registry, order))
-    }
-
-    fn collect_open(&self, out: &mut Vec<PathBuf>) {
-        if !self.open {
-            return;
-        }
-        out.push(self.path.clone());
-        for child in self.children.iter().flatten() {
-            child.collect_open(out);
-        }
-    }
-
-    /// `paths` に含まれるフォルダを開き、その中身を読んで子にも同じことをする。
-    /// 含まれないフォルダは読まないので、復元にかかる時間は開いていたフォルダの数で決まる。
-    fn restore_open(&mut self, paths: &[PathBuf], registry: &Registry, order: SortOrder) {
-        if !self.is_dir || !paths.contains(&self.path) {
-            return;
-        }
-        self.open = true;
-        let children = self
-            .children
-            .get_or_insert_with(|| list_dir(&self.path, registry, order));
-        for child in children {
-            child.restore_open(paths, registry, order);
-        }
-    }
-    /// 読み込み済みのフォルダ `dir` の中身を読み直す。前からある項目は残すので、
-    /// サブフォルダの開閉状態と、読み込み済みの孫はそのまま保たれる。
-    fn refresh(&mut self, dir: &Path, registry: &Registry, order: SortOrder) {
-        if !dir.starts_with(&self.path) {
-            return;
-        }
-        let Some(children) = &mut self.children else {
-            return;
-        };
-        if self.path != dir {
-            for child in children.iter_mut() {
-                child.refresh(dir, registry, order);
+            if ui.button(tr(lang, "Open in file manager")).clicked() {
+                let folder = node.path.parent().unwrap_or(&node.path).to_owned();
+                out.push(TreeAction::OpenInFileManager(folder));
+                ui.close();
             }
-            return;
-        }
-        let mut old: Vec<Node> = std::mem::take(children);
-        *children = list_dir(dir, registry, order)
-            .into_iter()
-            .map(
-                |fresh| match old.iter().position(|o| o.path == fresh.path) {
-                    Some(i) => {
-                        let mut kept = old.swap_remove(i);
-                        kept.modified = fresh.modified;
-                        kept
-                    }
-                    None => fresh,
-                },
-            )
-            .collect();
-        sort_nodes(children, order);
-    }
-
-    /// 読み込み済みの子を `order` で並べ直す。フォルダを読み直さないのは、開閉状態と
-    /// まだ読んでいない孫の状態を保ったまま、設定の変更をすぐ見せるため。
-    fn resort(&mut self, order: SortOrder) {
-        let Some(children) = &mut self.children else {
-            return;
-        };
-        if order.key == SortKey::Modified {
-            for c in children.iter_mut().filter(|c| c.modified.is_none()) {
-                c.modified = modified(&c.path);
-            }
-        }
-        sort_nodes(children, order);
-        for c in children {
-            c.resort(order);
-        }
+            send_menu(ui, &node.path, self, out);
+        });
+        r
     }
 }
 
-/// フォルダ `dir` の DICOM の検査。まだヘッダを読んでいなければ読むよう `out` に頼む。
-fn dicom_studies(dir: &Path, children: &[Node], view: &View, out: &mut Out) -> Vec<Study> {
-    match view.series.scan(dir) {
-        Scan::Done(studies) => studies.to_vec(),
-        Scan::Reading => Vec::new(),
-        Scan::NotStarted => {
-            let files: Vec<PathBuf> = children
-                .iter()
-                .filter(|c| !c.is_dir && view.may_be_dicom(&c.path))
-                .map(|c| c.path.clone())
-                .collect();
-            if !files.is_empty() {
-                out.scans.push((dir.to_path_buf(), files));
+impl View<'_> {
+    /// フォルダ `dir` の DICOM の検査。まだヘッダを読んでいなければ読むよう頼む。
+    fn dicom_studies(&mut self, dir: &Path, children: &[Node]) -> Vec<Study> {
+        match self.series.scan(dir) {
+            Scan::Done(studies) => studies.to_vec(),
+            Scan::Reading => Vec::new(),
+            Scan::NotStarted => {
+                let files: Vec<PathBuf> = children
+                    .iter()
+                    .filter(|c| !c.is_dir && self.may_be_dicom(&c.path))
+                    .map(|c| c.path.clone())
+                    .collect();
+                if !files.is_empty() {
+                    self.scans.push((dir.to_path_buf(), files));
+                }
+                Vec::new()
             }
-            Vec::new()
         }
     }
 }
 
 /// 検査の見出しと、その下のシリーズ。
-fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut Out) {
+fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut Vec<TreeAction>) {
     let id = ui.make_persistent_id((dir, &study.uid));
     let (_, header, _) = CollapsingState::load_with_default_open(ui.ctx(), id, true)
         .show_header(ui, |ui| ui.label(study.title()))
@@ -438,49 +298,40 @@ fn study_ui(ui: &mut egui::Ui, dir: &Path, study: &Study, view: &View, out: &mut
             }
         });
     let files = study.series.iter().flat_map(|s| s.files.clone()).collect();
-    files_menu(&header.inner, files, view, &mut out.action);
+    files_menu(&header.inner, files, view, out);
 }
 
-fn series_ui(ui: &mut egui::Ui, dir: &Path, series: &Series, view: &View, out: &mut Out) {
+fn series_ui(
+    ui: &mut egui::Ui,
+    dir: &Path,
+    series: &Series,
+    view: &View,
+    out: &mut Vec<TreeAction>,
+) {
     let selected = view
         .active_image
         .is_some_and(|p| series.files.iter().any(|f| f == p));
     let r = ui.selectable_label(selected, series.title());
     if r.clicked() {
-        out.action = Some(TreeAction::Series {
+        out.push(TreeAction::Series {
             folder: dir.to_path_buf(),
             files: series.files.clone(),
         });
     }
-    files_menu(&r, series.files.clone(), view, &mut out.action);
-}
-
-/// ▶ を出さない項目。▶ の幅だけ空けて、▶ のある兄弟と名前の位置を揃える。
-fn without_toggle(
-    ui: &mut egui::Ui,
-    label: impl FnOnce(&mut egui::Ui) -> egui::Response,
-) -> egui::Response {
-    ui.horizontal(|ui| {
-        let spacing = ui.spacing().item_spacing;
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.allocate_space(egui::vec2(ui.spacing().indent, ui.spacing().icon_width));
-        ui.spacing_mut().item_spacing = spacing;
-        label(ui)
-    })
-    .inner
+    files_menu(&r, series.files.clone(), view, out);
 }
 
 /// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
-fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<TreeAction>) {
+fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Vec<TreeAction>) {
     use crate::dataset_ui::Request;
     let lang = view.lang;
     vw_ui::menu::context(r, |ui| {
         if ui.button(tr(lang, "Copy")).clicked() {
-            *out = Some(TreeAction::Copy(path.to_owned()));
+            out.push(TreeAction::Copy(path.to_owned()));
             ui.close();
         }
         if ui.button(tr(lang, "Open in file manager")).clicked() {
-            *out = Some(TreeAction::OpenInFileManager(path.to_owned()));
+            out.push(TreeAction::OpenInFileManager(path.to_owned()));
             ui.close();
         }
         let ai = [
@@ -499,7 +350,7 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
                 .on_disabled_hover_text(tr(lang, crate::ai_models::NOT_READY))
                 .clicked()
             {
-                *out = Some(action);
+                out.push(action);
                 ui.close();
             }
         }
@@ -507,7 +358,7 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
             .button(tr(lang, "Remove AI tags from this folder..."))
             .clicked()
         {
-            *out = Some(TreeAction::RemoveAiTags(path.to_owned()));
+            out.push(TreeAction::RemoveAiTags(path.to_owned()));
             ui.close();
         }
         ui.separator();
@@ -523,7 +374,7 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
         };
         for (request, label) in requests {
             if ui.button(tr(lang, label)).clicked() {
-                *out = Some(TreeAction::Dataset(request));
+                out.push(TreeAction::Dataset(request));
                 ui.close();
             }
         }
@@ -532,10 +383,10 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Option<Tr
 }
 
 /// フォルダや ZIP の右クリックメニューの「送信 ▸」。中の DICOM ファイルを送る。
-fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Option<TreeAction>) {
+fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Vec<TreeAction>) {
     ui.separator();
     if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
-        *out = Some(TreeAction::Send {
+        out.push(TreeAction::Send {
             choice,
             targets: vec![path.to_owned()],
         });
@@ -543,10 +394,10 @@ fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Option<TreeA
 }
 
 /// 検査・シリーズの右クリックメニュー。その全ファイルを送る。
-fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Option<TreeAction>) {
+fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Vec<TreeAction>) {
     vw_ui::menu::context(r, |ui| {
         if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
-            *out = Some(TreeAction::Send {
+            out.push(TreeAction::Send {
                 choice,
                 targets: files.clone(),
             });
@@ -655,16 +506,6 @@ pub fn has_tree_children(dir: &Path, registry: &Registry) -> bool {
     false
 }
 
-/// 種別は DirEntry::file_type() で取る。path.is_dir() は項目ごとに stat を発行し、
-/// 数万件のフォルダで目に見えて遅くなる。シンボリックリンクのときだけ辿って確かめる。
-fn entry_is_dir(e: &std::fs::DirEntry) -> bool {
-    match e.file_type() {
-        Ok(t) if t.is_symlink() => e.path().is_dir(),
-        Ok(t) => t.is_dir(),
-        Err(_) => false,
-    }
-}
-
 /// ツリーで描くときに外から渡すもの。
 pub struct Context<'a> {
     pub registry: &'a Registry,
@@ -685,44 +526,45 @@ pub struct Drawn {
     pub scans: Vec<(PathBuf, Vec<PathBuf>)>,
 }
 
-/// ツリー全体。ルートは、起動時に渡されたフォルダ、ホーム、ドライブ（Windows）または / の順。
+/// ツリー全体。基底のツリーに、並び順と先読みを足したもの。
 pub struct FolderTree {
-    pub roots: Vec<Node>,
+    base: vw_tree::FolderTree<Mark>,
     order: SortOrder,
-    /// 次に描くときに、見える位置までスクロールするフォルダ。
-    reveal: Option<PathBuf>,
     /// 初めて描くときに始める。スレッドを起こすのに egui の Context が要るため。
     peeker: Option<Peeker>,
 }
 
+/// 並び順 `order` で `registry` の対応ファイルも含めて読む関数（基底に渡す）。
+fn lister(registry: &Registry, order: SortOrder) -> impl Fn(&Path) -> Vec<Node> + '_ {
+    move |dir| list_dir(dir, registry, order)
+}
+
+fn comparer(order: SortOrder) -> impl Fn(&Node, &Node) -> std::cmp::Ordering {
+    move |a, b| sort::compare(order, &sort_item(a), &sort_item(b))
+}
+
 impl FolderTree {
+    /// ルートは、起動時に渡されたフォルダ、ホーム、ドライブ（Windows）または / の順。
     pub fn new(extra_root: Option<PathBuf>, order: SortOrder) -> Self {
-        let mut roots = Vec::new();
-        if let Some(p) = extra_root {
-            roots.push(Node::dir(p, None, true));
-        }
-        if let Some(home) = home_dir() {
-            roots.push(Node::dir(home, Some("Home".into()), false));
-        }
-        #[cfg(windows)]
-        for letter in b'A'..=b'Z' {
-            let drive = PathBuf::from(format!("{}:\\", letter as char));
-            if drive.exists() {
-                roots.push(Node::dir(
-                    drive.clone(),
-                    Some(drive.display().to_string()),
-                    false,
-                ));
-            }
-        }
-        #[cfg(not(windows))]
-        roots.push(Node::dir(PathBuf::from("/"), Some("/".into()), false));
+        Self::from_base(vw_tree::FolderTree::new(extra_root), order)
+    }
+
+    #[cfg(test)]
+    pub fn with_roots(roots: Vec<Node>, order: SortOrder) -> Self {
+        Self::from_base(vw_tree::FolderTree::with_roots(roots), order)
+    }
+
+    fn from_base(base: vw_tree::FolderTree<Mark>, order: SortOrder) -> Self {
         Self {
-            roots,
+            base,
             order,
-            reveal: None,
             peeker: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn roots(&self) -> &[Node] {
+        &self.base.roots
     }
 
     /// 並び順を変え、表示中のフォルダもすぐ並べ直す。
@@ -731,34 +573,30 @@ impl FolderTree {
             return;
         }
         self.order = order;
-        for root in &mut self.roots {
-            root.resort(order);
-        }
+        // 更新日時順にしたときは、まだ取っていない項目の更新日時をここで取る。
+        let prepare = move |n: &mut Node| {
+            if order.key == SortKey::Modified && n.modified.is_none() {
+                n.modified = modified(&n.path);
+            }
+        };
+        self.base.resort(&prepare, &comparer(order));
     }
 
     /// 開いているフォルダのパス（親が開いているものだけ）。
     pub fn open_paths(&self) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        for root in &self.roots {
-            root.collect_open(&mut out);
-        }
-        out
+        self.base.open_paths()
     }
 
     /// 前回開いていたフォルダを開き直す。もうないフォルダは閉じたままになる。
     pub fn restore_open(&mut self, paths: &[PathBuf], registry: &Registry) {
-        for root in &mut self.roots {
-            root.restore_open(paths, registry, self.order);
-        }
+        self.base.restore_open(paths, &lister(registry, self.order));
     }
 
     /// フォルダ `dir` の中身を読み直す（フォルダの監視で変化を知ったとき）。
-    /// 同じフォルダが Home と / の両方の下に出ていることがあるので、すべてのルートを辿る。
     pub fn refresh(&mut self, dir: &Path, registry: &Registry) {
         self.forget_peek(dir);
-        for root in &mut self.roots {
-            root.refresh(dir, registry, self.order);
-        }
+        self.base
+            .refresh(dir, &lister(registry, self.order), &comparer(self.order));
     }
 
     /// `dir` の先読みの結果を捨て、次に描くときに調べ直す。データセットとして登録したときにも使う。
@@ -776,26 +614,19 @@ impl FolderTree {
     }
 
     /// `path` が見えるよう親フォルダを開き、次に描くときにそこまでスクロールする。
-    ///
-    /// 含むルートのうち先頭の 1 つだけで開く。Home の下のフォルダを / の下でも開くと、
-    /// 同じフォルダが 2 か所に出てどちらを見ればよいか分からなくなるため。
     pub fn reveal(&mut self, path: &Path, registry: &Registry) {
-        let order = self.order;
-        if let Some(root) = self.roots.iter_mut().find(|r| path.starts_with(&r.path)) {
-            root.open_towards(path, registry, order);
-        }
-        self.reveal = Some(path.to_path_buf());
+        self.base.reveal(path, &lister(registry, self.order));
     }
 
     /// 展開した ZIP をツリーの先頭にルートとして開く。
     pub fn add_mounted_root(&mut self, dir: PathBuf, name: String) {
         let mut node = Node::dir(dir, Some(name), true);
-        node.mounted = true;
-        self.roots.insert(0, node);
+        node.ext.mounted = true;
+        self.base.add_root_first(node);
     }
 
     pub fn remove_root(&mut self, dir: &Path) {
-        self.roots.retain(|r| r.path != dir);
+        self.base.remove_root(dir);
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: Context) -> Drawn {
@@ -804,11 +635,10 @@ impl FolderTree {
             Peeker::start(cx.registry.clone(), move || wake.request_repaint())
         });
         peeker.receive();
-        let view = View {
+        let mut view = View {
             registry: cx.registry,
             current: cx.current,
             active_image: cx.active_image,
-            reveal: self.reveal.as_deref(),
             lang: cx.lang,
             order: self.order,
             series: cx.series,
@@ -816,33 +646,34 @@ impl FolderTree {
             peeks: &peeker.known,
             destinations: cx.destinations,
             ai_ready: cx.ai_ready,
-            click_expands: cx.click_expands,
+            scans: Vec::new(),
+            peeks_wanted: Vec::new(),
         };
-        let mut out = Out::default();
-        for root in &mut self.roots {
-            root.ui(ui, &view, &mut out);
-        }
-        peeker.ask(out.peeks);
-        self.reveal = None;
-        Drawn {
-            action: out.action,
-            scans: out.scans,
-        }
+        self.base.click_expands = cx.click_expands;
+        let drawn = self.base.ui(ui, &mut view);
+        let View {
+            scans,
+            peeks_wanted,
+            ..
+        } = view;
+        peeker.ask(peeks_wanted);
+        // メニューの操作を優先する。見出しのクリックは、ZIP なら展開、フォルダなら cd。
+        let action = drawn.actions.into_iter().next().or_else(|| {
+            let p = drawn.clicked?;
+            let archive = self
+                .base
+                .roots
+                .iter()
+                .find_map(|r| r.find(&p))
+                .is_some_and(|n| n.ext.archive);
+            Some(if archive {
+                TreeAction::Mount(p)
+            } else {
+                TreeAction::Cd(p)
+            })
+        });
+        Drawn { action, scans }
     }
-}
-
-/// ツリーとスロットに出さない名前。ドットで始まる隠しファイル・フォルダと、ゴミ箱。
-pub fn is_hidden_name(name: &str) -> bool {
-    name.starts_with('.') || is_recycle_bin(name)
-}
-
-/// Windows がドライブごとに作るゴミ箱のフォルダ。中身は消したファイルの残骸で、
-/// 名前も元と違う（$R1A2B3C.png など）ため、見せても探しても役に立たない。
-/// Linux のゴミ箱（.Trash-1000 や ~/.local/share/Trash）はドットで始まるので隠しとして除かれる。
-pub fn is_recycle_bin(name: &str) -> bool {
-    ["$RECYCLE.BIN", "RECYCLER", "RECYCLED"]
-        .iter()
-        .any(|bin| name.eq_ignore_ascii_case(bin))
 }
 
 /// フォルダの直下を、フォルダ → ファイルの順、それぞれ `order` の順で返す。
@@ -870,16 +701,9 @@ fn list_dir(path: &Path, registry: &Registry, order: SortOrder) -> Vec<Node> {
             let modified = (order.key == SortKey::Modified)
                 .then(|| e.metadata().ok()?.modified().ok())
                 .flatten();
-            Some(Node {
-                path,
-                name,
-                is_dir,
-                children: None,
-                open: false,
-                modified,
-                archive,
-                mounted: false,
-            })
+            let mut node = Node::entry(path, name, is_dir, modified);
+            node.ext.archive = archive;
+            Some(node)
         })
         .collect();
     sort_nodes(&mut nodes, order);
@@ -899,7 +723,7 @@ pub fn list_folder(path: &Path, registry: &Registry, order: SortOrder) -> Listin
     for n in list_dir(path, registry, order) {
         if n.is_dir {
             out.folders.push(n.path);
-        } else if n.archive {
+        } else if n.ext.archive {
             out.archives.push(n.path);
         } else {
             out.images.push(n.path);
@@ -909,16 +733,14 @@ pub fn list_folder(path: &Path, registry: &Registry, order: SortOrder) -> Listin
 }
 
 fn sort_nodes(nodes: &mut [Node], order: SortOrder) {
-    nodes.sort_by(|a, b| sort::compare(order, &a.sort_item(), &b.sort_item()));
+    nodes.sort_by(comparer(order));
 }
 
-impl Node {
-    fn sort_item(&self) -> SortItem<'_> {
-        SortItem {
-            name: &self.name,
-            is_dir: self.is_dir,
-            modified: self.modified,
-        }
+fn sort_item(n: &Node) -> SortItem<'_> {
+    SortItem {
+        name: &n.name,
+        is_dir: n.is_dir,
+        modified: n.modified,
     }
 }
 
@@ -936,35 +758,17 @@ pub fn sibling_images(path: &Path, registry: &Registry, order: SortOrder) -> Vec
             rd.flatten()
                 .map(|e| e.path())
                 .filter(|p| registry.supports_file(p) && p.is_file())
-                .map(|path| Node {
-                    name: display_name(&path),
-                    is_dir: false,
-                    children: None,
-                    open: false,
-                    modified: (order.key == SortKey::Modified)
+                .map(|path| {
+                    let modified = (order.key == SortKey::Modified)
                         .then(|| modified(&path))
-                        .flatten(),
-                    archive: false,
-                    mounted: false,
-                    path,
+                        .flatten();
+                    Node::entry(path.clone(), display_name(&path), false, modified)
                 })
                 .collect()
         })
         .unwrap_or_default();
     sort_nodes(&mut files, order);
     files.into_iter().map(|n| n.path).collect()
-}
-
-/// パスの末尾。ルート（`/` や `C:\\`）のように末尾がないときはパス全体。
-fn display_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
-/// ホームフォルダ。`dirs` クレートを使わないのは、環境変数 1 つで足りるため。
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -1063,7 +867,7 @@ mod tests {
         tree.restore_open(&[dir.path().to_path_buf()], &png_registry());
         tree.set_order(by(SortKey::Modified, false));
         assert_eq!(
-            names(tree.roots[0].children.as_ref().unwrap()),
+            names(tree.roots()[0].children.as_ref().unwrap()),
             ["b.png", "a.png"]
         );
         assert_eq!(tree.open_paths(), [dir.path().to_path_buf()]);
@@ -1105,9 +909,9 @@ mod tests {
     fn extra_root_comes_first_and_is_open() {
         let dir = TempDir::new();
         let tree = FolderTree::new(Some(dir.path().to_path_buf()), SortOrder::default());
-        assert_eq!(tree.roots[0].path, dir.path());
-        assert!(tree.roots[0].open);
-        assert!(tree.roots.len() >= 2, "home or filesystem roots follow");
+        assert_eq!(tree.roots()[0].path, dir.path());
+        assert!(tree.roots()[0].open);
+        assert!(tree.roots().len() >= 2, "home or filesystem roots follow");
     }
 
     #[test]
@@ -1120,7 +924,7 @@ mod tests {
         dir.touch("b.png");
         std::fs::remove_file(dir.path().join("a.png")).unwrap();
         tree.refresh(dir.path(), &png_registry());
-        let children = tree.roots[0].children.as_ref().unwrap();
+        let children = tree.roots()[0].children.as_ref().unwrap();
         assert_eq!(names(children), ["sub", "b.png"]);
         assert!(children[0].open && children[0].children.is_some());
     }
@@ -1131,16 +935,14 @@ mod tests {
         dir.touch("a.png");
         let mut tree = tree_at(dir.path());
         tree.refresh(dir.path(), &png_registry());
-        assert!(tree.roots[0].children.is_none());
+        assert!(tree.roots()[0].children.is_none());
     }
 
     fn tree_at(root: &Path) -> FolderTree {
-        FolderTree {
-            roots: vec![Node::dir(root.to_path_buf(), None, false)],
-            order: SortOrder::default(),
-            reveal: None,
-            peeker: None,
-        }
+        FolderTree::with_roots(
+            vec![Node::dir(root.to_path_buf(), None, false)],
+            SortOrder::default(),
+        )
     }
 
     #[test]
@@ -1227,25 +1029,23 @@ mod tests {
             tree.open_paths(),
             [dir.path().to_path_buf(), dir.path().join("a")]
         );
-        assert!(tree.roots[0].find(&sub).is_some_and(|n| !n.open));
+        assert!(tree.roots()[0].find(&sub).is_some_and(|n| !n.open));
     }
 
     #[test]
     fn revealing_opens_only_the_first_root_that_holds_the_folder() {
         let dir = TempDir::new();
         let sub = dir.mkdir("a");
-        let mut tree = FolderTree {
-            roots: vec![
+        let mut tree = FolderTree::with_roots(
+            vec![
                 Node::dir(dir.path().to_path_buf(), None, false),
                 Node::dir(dir.path().parent().unwrap().to_path_buf(), None, false),
             ],
-            order: SortOrder::default(),
-            reveal: None,
-            peeker: None,
-        };
+            SortOrder::default(),
+        );
         tree.reveal(&sub, &png_registry());
-        assert!(tree.roots[0].open);
-        assert!(!tree.roots[1].open);
+        assert!(tree.roots()[0].open);
+        assert!(!tree.roots()[1].open);
     }
 
     #[test]
@@ -1264,7 +1064,7 @@ mod tests {
         let paths = vec![dir.path().to_path_buf(), a.clone(), b.clone()];
         tree.restore_open(&paths, &png_registry());
         assert_eq!(tree.open_paths(), paths);
-        let b_node = &tree.roots[0].children.as_ref().unwrap()[0]
+        let b_node = &tree.roots()[0].children.as_ref().unwrap()[0]
             .children
             .as_ref()
             .unwrap()[0];
@@ -1280,7 +1080,7 @@ mod tests {
         tree.restore_open(&[a.join("b")], &png_registry());
         assert!(tree.open_paths().is_empty());
         assert!(
-            tree.roots[0].children.is_none(),
+            tree.roots()[0].children.is_none(),
             "closed folders are not read"
         );
     }

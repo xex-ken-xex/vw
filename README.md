@@ -69,6 +69,8 @@ vw でできることは、大きく分けて 3 つです。
 | `vw-windows-x64.zip` | Windows 10 / 11（64bit） |
 | `vw-linux-x64.tar.gz` | Ubuntu 22.04 以降など、x86_64 の Linux |
 
+同じ Release に、DICOM の評価データを水増しするツール [DicoAmplio](apps/dicoamplio/README.md) の `dicoamplio-windows-x64.zip` / `dicoamplio-linux-x64.tar.gz` も並びます。vw だけ使うなら要りません。
+
 Releases には 2 種類あります。
 
 - **vX.Y.Z**（例: v0.3.0）: 正式版です。通常はこちらを使ってください
@@ -1088,7 +1090,12 @@ crates/
   vw-gif/    GIF プラグイン
   vw-tiff/   TIFF プラグイン
   vw-raw/    カメラ RAW プラグイン（rawler、LGPL-2.1）
-  vw-app/    アプリ本体（実行ファイル vw）
+  vw-dicom/  DICOM の読み込みと文字コード
+  vw-ui/     見た目（配色・メニュー・パネル・フォント）。apps/ のアプリで共有する
+  vw-tree/   フォルダツリーの基底と、それでフォルダやファイルを選ぶ窓。apps/ のアプリで共有する
+apps/
+  vw/          ビューア本体（実行ファイル vw）
+  dicoamplio/  DICOM の評価データを水増しするツール（実行ファイル dicoamplio。apps/dicoamplio/README.md）
 docs/        設計資料と README の画像
 scripts/     開発環境の構築スクリプト
 packaging/   配布物に同梱するファイル
@@ -1102,8 +1109,7 @@ packaging/   配布物に同梱するファイル
 1. `crates/vw-<形式名>` を作り、`vw_core::DecoderPlugin` を実装します
    - `probe` でファイル先頭のマジックナンバーを判定し、`decode` で `VwImage` を返します
    - 階調は落とさずに返します（16bit なら `PixelData::U16`）
-2. ルートの `Cargo.toml` の `members` に追加します
-3. `crates/vw-app/src/main.rs` の `registry()` に 1 行追加して登録します
+2. `apps/vw/src/main.rs` の `registry()` に 1 行追加して登録します
 
 `crates/vw-png` が実装例です。
 

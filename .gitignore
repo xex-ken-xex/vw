@@ -1,1 +1,3 @@
 /target
+# DicoAmplio が終了時に書く直前の設定。個人のパスが入るので、リポジトリには入れない
+/apps/dicoamplio/presets/_last.toml
