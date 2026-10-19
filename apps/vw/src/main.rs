@@ -39,7 +39,6 @@ mod histogram_view;
 mod i18n;
 mod keymap;
 mod labels;
-mod launch;
 mod layout;
 mod loader;
 use vw_log::log;

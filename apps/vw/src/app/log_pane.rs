@@ -134,7 +134,7 @@ impl VwApp {
             }
             LogAction::OpenFile => {
                 if let Some(path) = self.log.file_path().map(Path::to_path_buf) {
-                    if let Err(e) = crate::launch::open_file(&path) {
+                    if let Err(e) = vw_launch::open_file(&path) {
                         self.log.error(format!("{}: {e}", path.display()));
                     }
                 }
@@ -159,7 +159,7 @@ impl VwApp {
         let Some(dir) = dir else {
             return;
         };
-        if let Err(e) = crate::launch::open_folder(&dir) {
+        if let Err(e) = vw_launch::open_folder(&dir) {
             self.log.error(format!("{}: {e}", dir.display()));
         }
     }

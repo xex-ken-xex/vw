@@ -271,6 +271,11 @@ pub struct Config {
     pub store: StoreConfig,
     #[serde(rename = "rule")]
     pub rules: Vec<RuleSpec>,
+    /// 使わない既定の規則のタグ(`PatientID` など)。そのタグは元の値のまま写す。
+    /// 既定を規則の一覧に実体として並べないのは、古いプリセット(既定を書いていない)が
+    /// 読み込まれたときに、患者の ID が振り直されずに複製どうしで潰れるのを防ぐため。
+    #[serde(rename = "drop_default", skip_serializing_if = "Vec::is_empty")]
+    pub drop_defaults: Vec<String>,
 }
 
 impl Default for Config {
@@ -288,6 +293,7 @@ impl Default for Config {
             csv_encoding: CsvEncoding::default(),
             store: StoreConfig::default(),
             rules: Vec::new(),
+            drop_defaults: Vec::new(),
         }
     }
 }
@@ -373,6 +379,20 @@ mod tests {
         let text = toml::to_string_pretty(&c).unwrap();
         assert!(text.contains("[[rule]]"), "{text}");
         assert_eq!(toml::from_str::<Config>(&text).unwrap(), c);
+    }
+
+    #[test]
+    fn dropped_defaults_roundtrip_and_are_omitted_when_empty() {
+        let c = Config {
+            drop_defaults: vec!["PatientID".into(), "(0010,0010)".into()],
+            ..Config::default()
+        };
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert!(text.contains("drop_default = ["), "{text}");
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), c);
+        assert!(!toml::to_string_pretty(&Config::default())
+            .unwrap()
+            .contains("drop_default"));
     }
 
     #[test]

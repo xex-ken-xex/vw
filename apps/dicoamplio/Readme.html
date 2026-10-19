@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DicoAmplio の使い方</title>
+<style>
+:root {
+  --bg: #1b1b1d; --bg2: #232326; --bg3: #2b2b2f; --line: #3a3a40; --fg: #e4e4e8; --fg2: #a7a7b0; --fg3: #77777f;
+  --accent: #4fb3ff; --accent2: #38d39f; --warn: #e0a040; --err: #e06060;
+  --p: #4fb3ff; --s: #38d39f; --r: #e0a040; --i: #d57ae8;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK JP", "BIZ UDGothic", monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f6f8; --bg2: #ffffff; --bg3: #eceef2; --line: #d4d6dc; --fg: #1c1c22; --fg2: #50505a; --fg3: #8a8a94; --accent: #0b74d1; --accent2: #0f9d70; --p: #0b74d1; --s: #0f9d70; --r: #b8761a; --i: #9b3fb0; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif; }
+a { color: var(--accent); }
+code, pre, kbd, .mono { font-family: var(--mono); font-size: 0.92em; }
+code { background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+pre { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow: auto; line-height: 1.5; }
+pre code { background: none; border: 0; padding: 0; }
+header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header .in { max-width: 1100px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+header .brand { font-weight: 700; letter-spacing: .02em; }
+header nav a { color: var(--fg2); text-decoration: none; margin-right: 14px; font-size: 13.5px; }
+header nav a:hover { color: var(--fg); }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+h1 { font-size: 30px; margin: 10px 0 6px; }
+h1 small { font-size: 15px; color: var(--fg2); font-weight: 400; margin-left: 10px; }
+h2 { font-size: 21px; margin: 56px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 16px; margin: 26px 0 8px; color: var(--fg); }
+p { margin: 6px 0 10px; }
+.lead { color: var(--fg2); font-size: 16px; }
+.card { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 14px; }
+th, td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--fg2); font-weight: 600; background: var(--bg3); }
+td.c, th.c { text-align: center; }
+td.mono { white-space: pre; }
+.ok { color: var(--accent2); } .no { color: var(--fg3); }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--fg2); }
+.lv-p { color: var(--p); border-color: var(--p); } .lv-s { color: var(--s); border-color: var(--s); } .lv-r { color: var(--r); border-color: var(--r); } .lv-i { color: var(--i); border-color: var(--i); }
+.note { border-left: 3px solid var(--accent); padding: 6px 12px; background: var(--bg2); color: var(--fg2); border-radius: 0 6px 6px 0; margin: 10px 0; }
+.note.warn { border-color: var(--warn); }
+button, select, input[type=number], input[type=text] { font: inherit; color: var(--fg); background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+button { cursor: pointer; } button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
+input[type=number] { width: 64px; } input[type=text] { width: 100%; font-family: var(--mono); }
+label { color: var(--fg2); font-size: 13.5px; }
+.controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.controls .g { display: flex; gap: 6px; align-items: center; }
+.kbd { font-size: 12px; color: var(--fg2); }
+
+/* ---- 動きを見る ---- */
+.stage { display: grid; grid-template-columns: 300px 1fr; gap: 14px; }
+@media (max-width: 860px) { .stage { grid-template-columns: 1fr; } }
+.tree { font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+.tree .n { padding: 2px 6px; border-radius: 4px; transition: background .25s, color .25s; white-space: nowrap; }
+.tree .n.on { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--fg); }
+.tree .d1 { margin-left: 16px; } .tree .d2 { margin-left: 32px; } .tree .d3 { margin-left: 48px; }
+.hud { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.hud .v { background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; text-align: center; }
+.hud .v b { display: block; font-family: var(--mono); font-size: 22px; line-height: 1.2; transition: transform .15s; }
+.hud .v small { color: var(--fg2); font-size: 11.5px; }
+.hud .v.flash b { transform: scale(1.25); }
+.hud .v.p b { color: var(--p); } .hud .v.s b { color: var(--s); } .hud .v.r b { color: var(--r); } .hud .v.i b { color: var(--i); }
+.out { display: flex; flex-wrap: wrap; gap: 6px; min-height: 120px; align-content: flex-start; }
+.chip { font-family: var(--mono); font-size: 11.5px; line-height: 1.35; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg3);
+  animation: pop .35s cubic-bezier(.2,1.4,.4,1) both; box-shadow: 0 0 0 0 transparent; min-width: 150px; }
+.chip.new { box-shadow: 0 0 14px 2px color-mix(in srgb, var(--accent) 60%, transparent); }
+.chip .k { color: var(--fg3); }
+@keyframes pop { from { transform: scale(.5) translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.path { font-family: var(--mono); font-size: 12.5px; color: var(--fg2); margin: 4px 0 10px; min-height: 1.4em; }
+.csvbox { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+@media (max-width: 860px) { .csvbox { grid-template-columns: 1fr; } }
+.csv table { font-family: var(--mono); font-size: 12.5px; margin: 0; }
+.csv td, .csv th { padding: 2px 8px; transition: background .25s; }
+.csv tr.hp td { background: color-mix(in srgb, var(--p) 30%, transparent); }
+.csv tr.hs td { background: color-mix(in srgb, var(--s) 30%, transparent); }
+.csv tr.hp.hs td { background: linear-gradient(90deg, color-mix(in srgb, var(--p) 30%, transparent), color-mix(in srgb, var(--s) 30%, transparent)); }
+.legend span { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+
+/* ---- 試す ---- */
+.play { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 860px) { .play { grid-template-columns: 1fr; } }
+.vars { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.vars label { display: flex; flex-direction: column; font-family: var(--mono); font-size: 12px; }
+.vars input { width: 100%; }
+.result { font-family: var(--mono); font-size: 20px; padding: 10px 12px; background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; min-height: 2.4em; white-space: pre; overflow: auto; }
+.result.err { color: var(--err); font-size: 14px; white-space: normal; }
+.examples button { font-family: var(--mono); font-size: 12.5px; margin: 2px 2px 2px 0; }
+
+/* ---- レベルの絵 ---- */
+.lvdemo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 700px) { .lvdemo { grid-template-columns: repeat(2, 1fr); } }
+.lvdemo .cell { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-family: var(--mono); font-size: 12px; background: var(--bg3); transition: background .3s, border-color .3s; }
+.lvdemo .cell.g0 { background: color-mix(in srgb, var(--p) 22%, transparent); border-color: var(--p); }
+.lvdemo .cell.g1 { background: color-mix(in srgb, var(--s) 22%, transparent); border-color: var(--s); }
+.lvdemo .cell.g2 { background: color-mix(in srgb, var(--r) 22%, transparent); border-color: var(--r); }
+.lvdemo .cell.g3 { background: color-mix(in srgb, var(--i) 22%, transparent); border-color: var(--i); }
+.lvdemo .cell.g4 { background: color-mix(in srgb, #ff6b6b 22%, transparent); border-color: #ff6b6b; }
+.lvdemo .cell.g5 { background: color-mix(in srgb, #ffd166 22%, transparent); border-color: #ffd166; }
+.lvdemo .cell.g6 { background: color-mix(in srgb, #06d6a0 22%, transparent); border-color: #06d6a0; }
+.lvdemo .cell.g7 { background: color-mix(in srgb, #8ecae6 22%, transparent); border-color: #8ecae6; }
+.toc { columns: 2; column-gap: 24px; font-size: 14px; }
+@media (max-width: 700px) { .toc { columns: 1; } }
+</style>
+</head>
+<body>
+<header><div class="in">
+  <span class="brand">DicoAmplio</span>
+  <nav>
+    <a href="#what">なにをする道具か</a>
+    <a href="#anim">動きを見る</a>
+    <a href="#scenarios">シナリオ</a>
+    <a href="#vars">変数</a>
+    <a href="#try">試す</a>
+    <a href="#csv">CSV</a>
+    <a href="#defaults">既定の規則</a>
+    <a href="#cli">コマンドライン</a>
+  </nav>
+</div></header>
+<main>
+
+<h1>DicoAmplio の使い方 <small>ヘルプ！わかんないよ！ の答え</small></h1>
+<p class="lead">元の DICOM を 1 組として、患者・検査・シリーズ・画像の 4 つの単位で <b>n 倍に水増し</b>し、UID と識別タグを振り直して書き出す(または PACS へ送る)道具です。
+このページは、変数が何を意味するのか、どう組み合わせると何ができるのかを、動く絵と例で説明します。</p>
+
+<h2 id="what">1. なにをする道具か</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">30 秒で分かる仕組み</h3>
+    <ol style="margin:0; padding-left: 20px;">
+      <li>元のディレクトリを読み、<b>患者 → 検査 → シリーズ → 画像</b>の木を作る(ヘッダだけ読むので速い)。</li>
+      <li>「患者 ×a、検査 ×b、シリーズ ×c、画像 ×d」の件数ぶん、元の各画像を複製する。総数は <code>元の画像数 × a × b × c × d</code>。</li>
+      <li>複製ごとに <b>複製の番号 <span class="lv-p mono">p</span> <span class="lv-s mono">s</span> <span class="lv-r mono">r</span> <span class="lv-i mono">i</span></b> が決まり、タグの規則(テンプレート)に差し込まれて値になる。</li>
+      <li>StudyInstanceUID・SeriesInstanceUID・SOPInstanceUID(と参照)は、元の UID と番号から<b>決定的に</b>作り直す。同じ設定なら何度でも同じ UID。</li>
+      <li><code>出力先/P000000/S000/R000/SOPInstanceUID.dcm</code> に並列で書く。PixelData など規則にないタグは、元のバイト列をそのまま写す。</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">いちばん大事な考え方: レベル</h3>
+    <p>規則には必ず<b>レベル</b>(<span class="tag lv-p">patient</span> <span class="tag lv-s">study</span> <span class="tag lv-r">series</span> <span class="tag lv-i">image</span>)を付けます。
+    「このタグの値は、どの単位で 1 つに決まるか」です。</p>
+    <ul style="margin:0; padding-left:20px;">
+      <li>患者レベルのタグは、同じ患者の全画像で同じ値。</li>
+      <li>使える番号は、そのレベルと<b>それより粗い</b>レベルだけ。患者のタグに画像番号 <code>i</code> は使えない(エラー)。</li>
+      <li>CSV の行も、そのレベルの単位で 1 行ずつ進む。</li>
+    </ul>
+    <p style="margin-top:8px">下の「動きを見る」で、色分けを切り替えると、どの複製が同じ値を共有するかが見えます。</p>
+  </div>
+</div>
+
+<h2 id="anim">2. 動きを見る</h2>
+<p>件数を決めて<b>再生</b>を押すと、元の木が複製されていく様子と、そのときの変数の値、CSV のどの行が読まれるかが動きます。
+<b>色分け</b>を変えると、同じ色のものが「そのレベルで同じ値になる」まとまりです。</p>
+<div class="card">
+  <div class="controls">
+    <div class="g"><label>患者</label><input type="number" id="np" min="1" max="3" value="2"></div>
+    <div class="g"><label>患者あたりの検査</label><input type="number" id="ns" min="1" max="3" value="2"></div>
+    <div class="g"><label>検査あたりのシリーズ</label><input type="number" id="nr" min="1" max="3" value="1"></div>
+    <div class="g"><label>シリーズあたりの画像</label><input type="number" id="ni" min="1" max="3" value="2"></div>
+    <div class="g"><label>色分け</label>
+      <select id="colorBy"><option value="p">患者レベル</option><option value="s">検査レベル</option><option value="r">シリーズレベル</option><option value="i">画像(1 枚ずつ)</option></select></div>
+    <div class="g"><label>速さ</label><select id="speed"><option value="260">ゆっくり</option><option value="130" selected>ふつう</option><option value="45">速い</option></select></div>
+    <button class="primary" id="play">▶ 再生</button>
+    <button id="reset">はじめから</button>
+    <span id="total" class="kbd"></span>
+  </div>
+  <div class="stage">
+    <div>
+      <div class="kbd" style="margin-bottom:4px">元のディレクトリ(例)</div>
+      <div class="tree" id="tree"></div>
+      <div class="kbd" style="margin-top:12px">大文字 <span class="mono">P S R I</span> は「元の木での位置」、小文字 <span class="mono">p s r i</span> は「何回目の複製か」。</div>
+    </div>
+    <div>
+      <div class="hud" id="hud"></div>
+      <div class="path" id="path"></div>
+      <div class="out" id="out"></div>
+    </div>
+  </div>
+  <div class="csvbox">
+    <div class="csv">
+      <div class="kbd" style="margin-bottom:4px">CSV(例: people.csv)— 読まれている行</div>
+      <table id="csv"></table>
+    </div>
+    <div>
+      <div class="kbd legend" style="margin-bottom:6px"><span style="background:var(--p)"></span>患者レベルのタグ(例: <code>PatientName:patient=%(name)s</code>)が読む行 &nbsp; <span style="background:var(--s)"></span>検査レベルのタグ(例: <code>StudyDescription:study=%(desc)s</code>)が読む行</div>
+      <p class="kbd">患者レベルのタグは、同じ患者の複製が続く間ずっと同じ行を読みます。検査レベルのタグは検査が変わるたびに次の行へ。
+      同じ CSV から患者レベルのタグを複数読めば(名前と体重など)、1 人ぶんの行がそろって来ます。行数を超えたら先頭へ戻ります。</p>
+      <div id="csvnote" class="kbd"></div>
+    </div>
+  </div>
+</div>
+
+<h2 id="levels">3. レベルで何が変わるか</h2>
+<p>同じテンプレートでも、レベルを変えると値のばらつき方が変わります。4 × 2 の複製(患者 2 × 検査 2、画像 2 枚)で、<code>%(n)d</code> ではなく「そのレベルで 1 つの値」になることを見ます。</p>
+<div class="card">
+  <div class="controls">
+    <label>タグのレベル</label>
+    <select id="lvsel"><option value="p">patient(患者ごとに 1 つ)</option><option value="s">study(検査ごとに 1 つ)</option><option value="i">image(画像ごとに 1 つ)</option></select>
+    <span class="kbd">同じ色 = 同じ値</span>
+  </div>
+  <div class="lvdemo" id="lvdemo"></div>
+</div>
+
+<h2 id="scenarios">4. 想定されるシナリオ</h2>
+<p>規則は <code>タグ:レベル=テンプレート</code> の形で書きます(画面では、レベルごとの枠にタグと値を入れるだけ)。</p>
+
+<div class="card">
+  <h3 style="margin-top:0">A. PACS の負荷試験: 1 検査を 1000 人ぶんに</h3>
+  <p>元は 1 人 1 検査 1 シリーズ 200 枚。患者を 1000 に増やし、ID と名前だけ振り直す(既定の規則で足りる)。</p>
+<pre><code>患者 1000 / 検査 1 / シリーズ 1 / 画像 1   → 200,000 枚
+PatientID:patient=EVAL%(P)03d-%(p)04d        ← 既定のまま
+PatientName:patient=EVAL^%(P)03d-%(p)04d     ← 既定のまま</code></pre>
+  <p class="kbd">送信タブで「モダリティごと」に 1 アソシエーションで送るか、出力先に書いてから別の道具で送る。</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">B. 日本語の患者名をビューアで確かめる</h3>
+  <p>CSV の名前(字形=表意=表音)を差し込み、UTF-8 と JIS(ISO 2022 IR 13/87)の両方で出す。<code>presets/日本人患者-UTF8.toml</code> がこの例。</p>
+<pre><code>CSV: name_alpha,name_kanji,name_kana,sex,weight
+PatientName:patient=%(name_alpha)s=%(name_kanji)s=%(name_kana)s
+PatientSex:patient=%(sex)s
+PatientWeight:patient=%(weight).1f
+文字コード: utf8 または iso2022jp</code></pre>
+  <p class="kbd">JIS X 0208 にない字(髙・﨑・①)は iso2022jp では書けないので、実行前に行番号つきでエラーになる。</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">C. 同じ患者の経過観察(検査を増やす)</h3>
+  <p>患者はそのまま、検査を 5 回に。検査日と検査の説明を検査レベルで変える。</p>
+<pre><code>患者 1 / 検査 5 / シリーズ 1 / 画像 1
+StudyDescription:study=頭部CT %(s1)d回目
+StudyDate:study@dates.csv=%(date)s        ← 検査ごとに CSV の行が進む
+StudyID:study=%(s1)d                      ← 既定</code></pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">D. 元の患者が何人もいるデータを、区別を保ったまま増やす</h3>
+  <p>複製の番号 <code>p</code> だけでは、元の A さんの 1 人目と B さんの 1 人目が同じ ID に潰れる。元の位置 <code>P</code> と元の値 <code>src_*</code> を使う。</p>
+<pre><code>PatientID:patient=%(src_patient_id)s-%(p1)02d        → 1001-01, 1001-02, 1002-01 …
+PatientName:patient=%(src_patient_name)s^COPY%(p1)d
+StudyDescription:study=%(src_study_description)s (%(s1)d)</code></pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">E. ビューアの一覧(サムネイル・シリーズ切り替え)を試す</h3>
+  <p>1 検査の中にシリーズを 6 本、シリーズごとに画像 3 倍。シリーズの説明と番号を振る。</p>
+<pre><code>患者 1 / 検査 1 / シリーズ 6 / 画像 3
+SeriesDescription:series=%(src_modality)s %(src_series_description)s #%(r1)d
+SeriesNumber:series=%(r1)d                ← 既定
+InstanceNumber:image=%(inst)d             ← 既定。元の番号 + 複製番号 × 10000</code></pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">F. 受付番号や私用タグに通し番号を入れる</h3>
+  <p><code>n</code> は全出力で一意。辞書にないタグは <code>(gggg,eeee)/VR</code> で書く(私用の持ち主 <code>(0029,0010)</code> は自動で足す)。</p>
+<pre><code>AccessionNumber:study=ACC%(n)08d
+(0029,1010)/LO:study=EVAL-SET-%(s1)d
+ImageComments:image=copy %(i1)d of src %(I)d (serial %(n)d)</code></pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">G. 患者の ID は元のまま、検査だけ増やしたい</h3>
+  <p>既定の PatientID・PatientName の規則を<b>消す</b>(タグの規則の既定の行の ×)。すると元の値のまま写り、複製どうしで同じ患者になる。</p>
+<pre><code>患者 1 / 検査 3
+既定を消す: PatientID, PatientName  (プリセットでは drop_default = ["PatientID", "PatientName"])
+StudyDescription:study=再検 %(s1)d</code></pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">H. 手元の DICOM をそのまま PACS へ送る(水増しなし)</h3>
+  <p>送信タブの「フォルダの DICOM をそのまま送る」(コマンドラインは <code>--send-only DIR</code>)。storescu と同じで、単位ごとにアソシエーションを分ける。</p>
+</div>
+
+<h2 id="vars">5. 変数で何ができるか(全部)</h2>
+<p>テンプレートは printf 風で、変数は <code>%(名前)</code> で指定します。変数には 3 種類あります。</p>
+
+<h3>5.1 番号の変数(整数)</h3>
+<table>
+<tr><th>変数</th><th>意味</th><th class="c">patient</th><th class="c">study</th><th class="c">series</th><th class="c">image</th><th>例(テンプレート → 値)</th></tr>
+<tr><td class="mono">p / p1</td><td>患者の複製番号(0 始まり / 1 始まり)。元の各患者を「患者」の数だけ複製した、その何回目か</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">EVAL%(p1)04d → EVAL0001</td></tr>
+<tr><td class="mono">P</td><td>元の木での患者の番号(0 始まり)。元に患者が複数いるとき、どの患者から複製したか</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">EVAL%(P)03d-%(p)04d → EVAL001-0000</td></tr>
+<tr><td class="mono">s / s1</td><td>検査の複製番号(0 / 1 始まり)</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">CT %(s1)02d回目 → CT 01回目</td></tr>
+<tr><td class="mono">S</td><td>元の木での検査の番号(その患者の中で 0 始まり)</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">ST%(S)d-%(s)d → ST0-1</td></tr>
+<tr><td class="mono">r / r1</td><td>シリーズの複製番号(0 / 1 始まり)</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(r1)d → 1</td></tr>
+<tr><td class="mono">R</td><td>元の木でのシリーズの番号(その検査の中で 0 始まり)</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">SER%(R)02d%(r)02d → SER0001</td></tr>
+<tr><td class="mono">i / i1</td><td>画像の複製番号(0 / 1 始まり)。<b>元の何枚目かではない</b></td><td class="c no">×</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">copy %(i1)d → copy 1</td></tr>
+<tr><td class="mono">I</td><td>元の木での画像の番号(そのシリーズの中で InstanceNumber 順に 0 始まり)</td><td class="c no">×</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(I)03d → 007</td></tr>
+<tr><td class="mono">n</td><td>通し番号(1 始まり)。元の画像 → 患者 → 検査 → シリーズ → 画像の複製の順に振る。全出力で一意</td><td class="c no">×</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">IMG%(n)08d → IMG00000042</td></tr>
+<tr><td class="mono">inst</td><td>元の InstanceNumber + 画像の複製番号 × 10000。元の画像どうしの区別はこれが引き受ける</td><td class="c no">×</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(inst)d → 10007(元 7 の 2 回目)</td></tr>
+</table>
+<div class="note">「✓」は、そのレベルの規則で使えること。粗いレベルのタグに細かい番号を使うとエラーになります(患者のタグに <code>i</code> を使うと、同じ患者の中で値がばらつくため)。</div>
+
+<h3>5.2 元ファイルの値の変数(文字列)</h3>
+<table>
+<tr><th>変数</th><th>意味</th><th class="c">patient</th><th class="c">study</th><th class="c">series / image</th><th>例</th></tr>
+<tr><td class="mono">src_patient_id</td><td>元の PatientID</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_id)s-%(p1)d → 1001-2</td></tr>
+<tr><td class="mono">src_patient_name</td><td>元の PatientName</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_name)s^C%(p1)d</td></tr>
+<tr><td class="mono">src_study_id</td><td>元の StudyID</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_study_id)s/%(s1)d</td></tr>
+<tr><td class="mono">src_study_description</td><td>元の StudyDescription</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_study_description)s (%(s1)d)</td></tr>
+<tr><td class="mono">src_series_number</td><td>元の SeriesNumber</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(src_series_number)s0%(r)d</td></tr>
+<tr><td class="mono">src_series_description</td><td>元の SeriesDescription</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(src_series_description).16s</td></tr>
+<tr><td class="mono">src_modality</td><td>元の Modality</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(src_modality)s-%(r1)d</td></tr>
+</table>
+
+<h3>5.3 CSV の列(文字列)</h3>
+<p>CSV の 1 行目の列名が、そのまま変数名になります(<code>name</code>, <code>weight</code> など)。全体の CSV と、タグごとの CSV(規則の行の「CSV」)があり、タグごとの CSV が優先です。
+行は<b>そのタグのレベルの単位</b>で 1 行ずつ進み、行数を超えると先頭に戻ります(上の「動きを見る」の表)。数字の列は <code>%(weight).1f</code> や <code>%(age)d</code> のように数としても使えます。</p>
+<div class="note warn">列名を組み込みの変数(<code>n</code>, <code>i</code>, <code>P</code> …)と同じにするとエラーになります。</div>
+
+<h3>5.4 書式(printf 風)</h3>
+<table>
+<tr><th>書き方</th><th>意味</th><th>例</th></tr>
+<tr><td class="mono">%(x)d</td><td>整数。文字列の変数でも数なら使える(四捨五入)</td><td class="mono">%(p)d → 3</td></tr>
+<tr><td class="mono">%(x)05d</td><td>幅 5、ゼロ埋め</td><td class="mono">EVAL%(p1)05d → EVAL00004</td></tr>
+<tr><td class="mono">%(x)-6d</td><td>幅 6、左寄せ(右を空白で埋める)</td><td class="mono">[%(s1)-6d] → [1     ]</td></tr>
+<tr><td class="mono">%(x)+d</td><td>正の数にも符号</td><td class="mono">%(i)+d → +0</td></tr>
+<tr><td class="mono">%(x)x / %(x)X</td><td>16 進(小文字 / 大文字)</td><td class="mono">%(n)04X → 002A</td></tr>
+<tr><td class="mono">%(x).1f</td><td>実数、小数 1 桁(省略時 6 桁)</td><td class="mono">%(weight).1f → 62.5</td></tr>
+<tr><td class="mono">%(x)s</td><td>文字列</td><td class="mono">%(name)s → Yamada^Tarou</td></tr>
+<tr><td class="mono">%(x)-12s</td><td>幅 12、左寄せ</td><td class="mono">%(sex)-3s| → M  |</td></tr>
+<tr><td class="mono">%(x).8s</td><td>先頭 8 文字だけ</td><td class="mono">%(src_study_description).8s</td></tr>
+<tr><td class="mono">%%</td><td><code>%</code> そのもの</td><td class="mono">100%% → 100%</td></tr>
+</table>
+<p>PN(人名)の成分グループは <code>=</code> でつなぎます: <code>%(alpha)s=%(kanji)s=%(kana)s</code>(字形=表意=表音)。姓名の区切りは <code>^</code>。</p>
+
+<h2 id="try">6. 試す</h2>
+<p>テンプレートと変数の値を入れると、この場で値が出ます(本体と同じ書式の決まり)。</p>
+<div class="card">
+  <div class="play">
+    <div>
+      <label>テンプレート</label>
+      <input type="text" id="tpl" value="EVAL%(P)03d-%(p)04d">
+      <div class="examples" style="margin:8px 0">
+        <span class="kbd">例を入れる:</span>
+        <button data-t="EVAL%(P)03d-%(p)04d">PatientID の既定</button>
+        <button data-t="%(name_alpha)s=%(name_kanji)s=%(name_kana)s">日本語の PN</button>
+        <button data-t="%(src_patient_id)s-%(p1)02d">元の ID を残す</button>
+        <button data-t="頭部CT %(s1)02d回目">検査の説明</button>
+        <button data-t="%(weight).1f">体重</button>
+        <button data-t="IMG%(n)08d">通し番号</button>
+        <button data-t="%(inst)d">inst</button>
+        <button data-t="ACC%(P)03d%(p)04d%(s)02d">AccessionNumber の既定</button>
+        <button data-t="%(src_modality)s-%(r1)d-%(i1)d">モダリティ+番号</button>
+        <button data-t="%(x)d">変数がない(エラー)</button>
+      </div>
+      <label>結果</label>
+      <div class="result" id="result"></div>
+      <div class="kbd" id="hint" style="margin-top:6px"></div>
+    </div>
+    <div>
+      <label>番号の変数</label>
+      <div class="vars" id="intvars"></div>
+      <label style="margin-top:8px; display:block">文字列の変数(元ファイルの値と CSV の列)</label>
+      <div class="vars" id="strvars"></div>
+    </div>
+  </div>
+</div>
+
+<h2 id="csv">7. CSV の決まり</h2>
+<ul>
+  <li>1 行目が列名。文字コードは <code>auto</code>(UTF-8 → だめなら Shift_JIS。Excel の CSV も読める)。</li>
+  <li>全体の CSV(設定の「CSV」)と、タグごとの CSV(規則の行の「CSV」ボタン)。タグごとの CSV があれば、そのタグはそれを読む。</li>
+  <li>行は<b>タグのレベルの単位</b>で進む。患者レベルなら「元の患者 × 複製の患者」ごとに 1 行、検査レベルなら検査ごとに 1 行、画像レベルなら通し番号 <code>n</code> の順。行数を超えたら先頭へ戻る。</li>
+  <li>同じ CSV から同じレベルのタグを複数読むと、同じ行から来る(名前と体重が別人にならない)。</li>
+  <li>書けない字(JIS にない漢字など)は、実行前に全行を調べて「何行目の何列」までエラーに出す。</li>
+</ul>
+
+<h2 id="defaults">8. 既定の規則と、その消し方</h2>
+<p>何も書かなくても、次の 6 つは振り直されます(同じタグを自分で書けば、そちらが勝ちます)。</p>
+<table>
+<tr><th>タグ</th><th>レベル</th><th>既定の値</th><th>なぜ</th></tr>
+<tr><td class="mono">PatientID</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL%(P)03d-%(p)04d</td><td>元の患者が複数いても、複製どうしが同じ ID に潰れないよう <code>P</code> と <code>p</code> の両方で区別する</td></tr>
+<tr><td class="mono">PatientName</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL^%(P)03d-%(p)04d</td><td>同上</td></tr>
+<tr><td class="mono">StudyID</td><td><span class="tag lv-s">study</span></td><td class="mono">%(s1)d</td><td>検査の順番が見えるように</td></tr>
+<tr><td class="mono">AccessionNumber</td><td><span class="tag lv-s">study</span></td><td class="mono">ACC%(P)03d%(p)04d%(s)02d</td><td>受付番号は検査ごとに一意であるべきなので</td></tr>
+<tr><td class="mono">SeriesNumber</td><td><span class="tag lv-r">series</span></td><td class="mono">%(r1)d</td><td>シリーズの順番が見えるように</td></tr>
+<tr><td class="mono">InstanceNumber</td><td><span class="tag lv-i">image</span></td><td class="mono">%(inst)d</td><td>複製どうしで番号が重ならないように(元の番号 + 複製番号 × 10000)</td></tr>
+</table>
+<p><b>消すには</b>: 画面の「タグの規則」で、既定の行の右端の <b>×</b> を押します。行は取り消し線になり「元の値のまま写す」と出ます。「戻す」で元に戻ります。
+消した設定はプリセットに <code>drop_default = ["PatientID", "PatientName"]</code> として保存され、コマンドラインでは <code>--drop-default PatientID</code> です。</p>
+<div class="note warn">PatientID を消して患者を 2 以上に増やすと、複製は<b>同じ患者の別の検査</b>として PACS に入ります(UID は振り直されるので重複エラーにはなりません)。それが狙いのとき(シナリオ G)だけ消してください。</div>
+
+<h2 id="uid">9. UID・出力・文字コード</h2>
+<ul>
+  <li><b>UID</b>: 元の UID と複製の番号から UUID v5 で作り、<code>2.25.&lt;数値&gt;</code> の形にする(接頭辞は設定の「UID の接頭辞」)。Study/FrameOfReference は <code>(p, s)</code>、Series は <code>(p, s, r)</code>、SOP は <code>(p, s, r, i)</code> で決まる。シーケンス内の参照(ReferencedSOPInstanceUID など)も同じ複製の中で張り替わる。</li>
+  <li><b>出力</b>: <code>出力先/P000000/S000/R000/SOPInstanceUID.dcm</code>。フォルダ名は複製の番号。</li>
+  <li><b>文字コード</b>: <code>utf8</code>(ISO_IR 192)/ <code>iso2022jp</code>(ISO 2022 IR 13\IR 87、JAHIS 向け)/ <code>keep</code>(元のまま。元が日本語を表せるときだけ)。</li>
+  <li><b>送信</b>: C-STORE。単位(モダリティ / 検査 / シリーズ / 患者 / 全部)ごとに 1 アソシエーション、接続数まで同時。提案する SOP Class は元ファイルのものそのままなので、私用の SOP Class も送れる。</li>
+  <li><b>読めないもの</b>: DICOM でないファイル、DICOMDIR、壊れたファイル、Deflated 転送構文は飛ばして、理由つきでログに出す。</li>
+</ul>
+
+<h2 id="cli">10. コマンドライン</h2>
+<pre><code>dicoamplio 元のディレクトリ 出力先 --patients 100 --studies 3 --series 2 --images 4 \
+  --csv people.csv \
+  --set 'PatientName:patient=%(name)s' --set 'PatientSex:patient=%(sex)s' \
+  --set 'PatientWeight:patient=%(weight).1f' --set 'StudyDescription:study=CT %(s1)02d回目'
+
+dicoamplio 元 出力 --preset 日本人患者-UTF8          # プリセットを使う
+dicoamplio 元 出力 --rules rules.txt                 # 1 行 1 規則のファイル
+dicoamplio 元 出力 --drop-default PatientID          # 既定の規則を使わない
+dicoamplio 元 --send PACS@10.0.0.5:11112 --patients 100 --assoc-unit modality --connections 4
+dicoamplio --send PACS@10.0.0.5:11112 --echo         # C-ECHO
+dicoamplio --send PACS@10.0.0.5:11112 --send-only ./dicom   # そのまま送る
+dicoamplio --help</code></pre>
+<p class="kbd">Windows では、引数つきで起動すると起動元のコンソールに出力がつながります(コマンドプロンプトの入力待ちがすぐ戻ってから流れるので、<code>start /wait</code> か PowerShell の <code>| Out-Host</code> で待てます)。</p>
+
+<p class="kbd" style="margin-top:40px">DicoAmplio は <a href="https://github.com/xex-ken-xex/vw">vw</a> のリポジトリ(<code>apps/dicoamplio</code>)にあります。詳しい設計は同じフォルダの README.md。</p>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+
+  // ---- 本体と同じ printf 風テンプレート(apps/dicoamplio/src/template.rs の写し) ----
+  function parseTpl(src) {
+    const cs = Array.from(src); const pieces = []; let lit = ''; let k = 0;
+    const flush = () => { if (lit) { pieces.push({ lit }); lit = ''; } };
+    while (k < cs.length) {
+      if (cs[k] !== '%') { lit += cs[k++]; continue; }
+      k++;
+      if (k < cs.length && cs[k] === '%') { lit += '%'; k++; continue; }
+      if (k >= cs.length || cs[k] !== '(') throw new Error('`%` の次は `(名前)` か `%` が必要: ' + src);
+      const close = cs.indexOf(')', k); if (close < 0) throw new Error('`)` がない');
+      const name = cs.slice(k + 1, close).join(''); k = close + 1;
+      let left = false, zero = false, plus = false;
+      while (k < cs.length && '-0+'.includes(cs[k])) { if (cs[k] === '-') left = true; else if (cs[k] === '0') zero = true; else plus = true; k++; }
+      let width = 0; while (k < cs.length && /[0-9]/.test(cs[k])) { width = width * 10 + +cs[k]; k++; }
+      let prec = null;
+      if (k < cs.length && cs[k] === '.') { k++; prec = 0; while (k < cs.length && /[0-9]/.test(cs[k])) { prec = prec * 10 + +cs[k]; k++; } }
+      if (k >= cs.length) throw new Error('変換(d s f x X)がない: ' + src);
+      const conv = cs[k++];
+      if (!'dsfxX'.includes(conv)) throw new Error('使える変換は d s f x X: ' + conv);
+      flush(); pieces.push({ name, left, zero, plus, width, prec, conv });
+    }
+    flush(); return pieces;
+  }
+  function pad(s, w, left) { const n = Array.from(s).length; if (n >= w) return s; const f = ' '.repeat(w - n); return left ? s + f : f + s; }
+  function padNum(sign, digits, w, left, zero) {
+    const n = sign.length + digits.length; if (n >= w) return sign + digits; const k = w - n;
+    return left ? sign + digits + ' '.repeat(k) : zero ? sign + '0'.repeat(k) + digits : ' '.repeat(k) + sign + digits;
+  }
+  function render(pieces, ints, strs) {
+    let out = '';
+    for (const p of pieces) {
+      if (p.lit !== undefined) { out += p.lit; continue; }
+      const int = ints[p.name]; const text = strs[p.name];
+      if (p.conv === 'd' || p.conv === 'x' || p.conv === 'X') {
+        let n;
+        if (int !== undefined) n = int; else if (text !== undefined) { n = Number(text.trim()); if (Number.isNaN(n)) throw new Error('`' + p.name + '` が数でない: ' + text); n = Math.round(n); }
+        else throw new Error('変数 `' + p.name + '` がない');
+        const a = Math.abs(n); const digits = p.conv === 'x' ? a.toString(16) : p.conv === 'X' ? a.toString(16).toUpperCase() : String(a);
+        out += padNum(n < 0 ? '-' : p.plus ? '+' : '', digits, p.width, p.left, p.zero);
+      } else if (p.conv === 'f') {
+        let x;
+        if (int !== undefined) x = int; else if (text !== undefined) { x = Number(text.trim()); if (Number.isNaN(x)) throw new Error('`' + p.name + '` が数でない: ' + text); }
+        else throw new Error('変数 `' + p.name + '` がない');
+        out += padNum(x < 0 ? '-' : p.plus ? '+' : '', Math.abs(x).toFixed(p.prec === null ? 6 : p.prec), p.width, p.left, p.zero);
+      } else {
+        let s;
+        if (text !== undefined) s = text; else if (int !== undefined) s = String(int); else throw new Error('変数 `' + p.name + '` がない');
+        if (p.prec !== null) s = Array.from(s).slice(0, p.prec).join('');
+        out += pad(s, p.width, p.left);
+      }
+    }
+    return out;
+  }
+
+  // ---- 例の元データ: 2 人の患者。ordinal は元の画像の通し番号(InstanceNumber 順) ----
+  const SRC = [
+    { P: 0, id: '1001', name: 'Yamada^Tarou', studies: [{ S: 0, sid: 'ST1', desc: '頭部CT', series: [{ R: 0, mod: 'CT', sno: '1', sdesc: 'Axial 5mm', images: [{ I: 0, inst: 1 }, { I: 1, inst: 2 }] }] }] },
+    { P: 1, id: '1002', name: 'Sato^Hanako', studies: [{ S: 0, sid: 'ST7', desc: '胸部MR', series: [{ R: 0, mod: 'MR', sno: '3', sdesc: 'T2 sag', images: [{ I: 0, inst: 12 }] }] }] },
+  ];
+  const CSV = { cols: ['name', 'sex', 'weight', 'desc'], rows: [['Yamada^Tarou', 'M', '68.4', '初回'], ['Sato^Hanako', 'F', '52.1', '再検'], ['Suzuki^Ichiro', 'M', '75.0', '術前'], ['Takahashi^Yui', 'F', '49.8', '術後'], ['Tanaka^Ken', 'M', '81.2', '経過']] };
+  // 元の画像・検査・シリーズの通し番号(木の順)
+  const places = [];
+  { let ord = 0, sOrd = 0, rOrd = 0;
+    for (const pt of SRC) for (const st of pt.studies) { for (const se of st.series) { for (const im of se.images) places.push({ pt, st, se, im, ordinal: ord++, sOrd, rOrd }); rOrd++; } sOrd++; } }
+
+  const RULES = [['PatientID', 'EVAL%(P)03d-%(p)04d'], ['StudyID', '%(s1)d'], ['SeriesNumber', '%(r1)d'], ['InstanceNumber', '%(inst)d']].map(([t, v]) => [t, parseTpl(v)]);
+
+  function counts() { return { np: +$('#np').value || 1, ns: +$('#ns').value || 1, nr: +$('#nr').value || 1, ni: +$('#ni').value || 1 }; }
+  function serial(c, ix, ordinal) { return (((ordinal * c.np + ix.p) * c.ns + ix.s) * c.nr + ix.r) * c.ni + ix.i; }
+  function csvIndex(c, level, ix, pl) {
+    switch (level) {
+      case 'p': return pl.pt.P * c.np + ix.p;
+      case 's': return (pl.sOrd * c.np + ix.p) * c.ns + ix.s;
+      case 'r': return ((pl.rOrd * c.np + ix.p) * c.ns + ix.s) * c.nr + ix.r;
+      default: return serial(c, ix, pl.ordinal);
+    }
+  }
+  function intsOf(c, ix, pl) {
+    return { p: ix.p, p1: ix.p + 1, P: pl.pt.P, s: ix.s, s1: ix.s + 1, S: pl.st.S, r: ix.r, r1: ix.r + 1, R: pl.se.R, i: ix.i, i1: ix.i + 1, I: pl.im.I, n: serial(c, ix, pl.ordinal) + 1, inst: pl.im.inst + ix.i * 10000 };
+  }
+  // 複製の順: 元の画像 → p → s → r → i(通し番号 n の順)
+  function* steps(c) {
+    for (const pl of places) for (let p = 0; p < c.np; p++) for (let s = 0; s < c.ns; s++) for (let r = 0; r < c.nr; r++) for (let i = 0; i < c.ni; i++) yield { pl, ix: { p, s, r, i } };
+  }
+
+  // ---- 元の木 ----
+  function drawTree() {
+    const t = $('#tree'); t.innerHTML = '';
+    for (const pt of SRC) {
+      t.insertAdjacentHTML('beforeend', `<div class="n" data-k="p${pt.P}">👤 ${pt.name} (ID ${pt.id})  <span class="k">P=${pt.P}</span></div>`);
+      for (const st of pt.studies) {
+        t.insertAdjacentHTML('beforeend', `<div class="n d1" data-k="s${pt.P}.${st.S}">📁 ${st.desc} (${st.sid})  <span class="k">S=${st.S}</span></div>`);
+        for (const se of st.series) {
+          t.insertAdjacentHTML('beforeend', `<div class="n d2" data-k="r${pt.P}.${st.S}.${se.R}">📚 ${se.mod} ${se.sdesc} (#${se.sno})  <span class="k">R=${se.R}</span></div>`);
+          for (const im of se.images) t.insertAdjacentHTML('beforeend', `<div class="n d3" data-k="i${pt.P}.${st.S}.${se.R}.${im.I}">🖼 InstanceNumber ${im.inst}  <span class="k">I=${im.I}</span></div>`);
+        }
+      }
+    }
+  }
+  function markTree(pl) {
+    document.querySelectorAll('#tree .n').forEach((n) => n.classList.remove('on'));
+    for (const k of [`p${pl.pt.P}`, `s${pl.pt.P}.${pl.st.S}`, `r${pl.pt.P}.${pl.st.S}.${pl.se.R}`, `i${pl.pt.P}.${pl.st.S}.${pl.se.R}.${pl.im.I}`]) {
+      const n = document.querySelector(`#tree .n[data-k="${k}"]`); if (n) n.classList.add('on');
+    }
+  }
+  const HUD = [['P', 'p', '元の患者'], ['p', 'p', '患者の複製'], ['S', 's', '元の検査'], ['s', 's', '検査の複製'], ['R', 'r', '元のシリーズ'], ['r', 'r', 'シリーズの複製'], ['I', 'i', '元の画像'], ['i', 'i', '画像の複製'], ['n', '', '通し番号'], ['inst', '', 'inst']];
+  function drawHud(ints) {
+    const h = $('#hud');
+    if (!h.children.length) for (const [k, cls, label] of HUD) h.insertAdjacentHTML('beforeend', `<div class="v ${cls}" data-k="${k}"><b>–</b><small>${k} <span style="opacity:.7">${label}</span></small></div>`);
+    for (const [k] of HUD) {
+      const v = h.querySelector(`.v[data-k="${k}"]`); const b = v.querySelector('b'); const txt = ints ? String(ints[k]) : '–';
+      if (b.textContent !== txt) { b.textContent = txt; v.classList.add('flash'); setTimeout(() => v.classList.remove('flash'), 160); }
+    }
+  }
+  function drawCsv(ixP, ixS) {
+    const t = $('#csv');
+    if (!t.rows.length) {
+      t.insertAdjacentHTML('beforeend', '<tr><th>行</th>' + CSV.cols.map((c) => `<th>${c}</th>`).join('') + '</tr>');
+      CSV.rows.forEach((r, k) => t.insertAdjacentHTML('beforeend', `<tr data-r="${k}"><td class="k">${k + 2}</td>` + r.map((c) => `<td>${c}</td>`).join('') + '</tr>'));
+    }
+    t.querySelectorAll('tr[data-r]').forEach((tr) => { tr.classList.toggle('hp', +tr.dataset.r === ixP); tr.classList.toggle('hs', +tr.dataset.r === ixS); });
+  }
+  const GROUP_HUES = [205, 160, 38, 285, 0, 48, 120, 330, 250];
+  function groupKey(level, ix, pl) {
+    switch (level) {
+      case 'p': return `${pl.pt.P}-${ix.p}`;
+      case 's': return `${pl.pt.P}-${ix.p}-${pl.st.S}-${ix.s}`;
+      case 'r': return `${pl.pt.P}-${ix.p}-${pl.st.S}-${ix.s}-${pl.se.R}-${ix.r}`;
+      default: return `${pl.ordinal}-${ix.p}-${ix.s}-${ix.r}-${ix.i}`;
+    }
+  }
+  let timer = null, gen = null, groups = new Map(), count = 0;
+  function reset() {
+    clearInterval(timer); timer = null; gen = null; groups = new Map(); count = 0;
+    $('#out').innerHTML = ''; $('#path').textContent = ''; drawHud(null); drawCsv(-1, -1); $('#csvnote').textContent = '';
+    document.querySelectorAll('#tree .n').forEach((n) => n.classList.remove('on'));
+    const c = counts(); const total = places.length * c.np * c.ns * c.nr * c.ni;
+    $('#total').textContent = `元 ${places.length} 枚 × ${c.np} × ${c.ns} × ${c.nr} × ${c.ni} = 出力 ${total} 枚`;
+    $('#play').textContent = '▶ 再生';
+  }
+  function step() {
+    if (!gen) gen = steps(counts());
+    const nx = gen.next();
+    if (nx.done) { clearInterval(timer); timer = null; $('#play').textContent = '▶ もう一度'; gen = null; return; }
+    const { pl, ix } = nx.value; const c = counts(); const ints = intsOf(c, ix, pl);
+    markTree(pl); drawHud(ints);
+    const level = $('#colorBy').value; const gk = groupKey(level, ix, pl);
+    if (!groups.has(gk)) groups.set(gk, groups.size);
+    const hue = GROUP_HUES[groups.get(gk) % GROUP_HUES.length];
+    const strs = { src_patient_id: pl.pt.id, src_patient_name: pl.pt.name, src_modality: pl.se.mod };
+    const vals = RULES.map(([t, tp]) => `<span class="k">${t}</span> ${render(tp, ints, strs)}`).join('<br>');
+    const chip = document.createElement('div'); chip.className = 'chip new'; chip.style.borderColor = `hsl(${hue} 70% 55%)`; chip.style.background = `hsl(${hue} 60% 50% / .18)`;
+    chip.innerHTML = vals + `<br><span class="k">n=${ints.n}  元 ${pl.pt.name.split('^')[0]} #${pl.im.inst}</span>`;
+    chip.title = `P${String(ix.p).padStart(6, '0')}/S${String(ix.s).padStart(3, '0')}/R${String(ix.r).padStart(3, '0')}/<SOPInstanceUID>.dcm`;
+    $('#out').appendChild(chip); setTimeout(() => chip.classList.remove('new'), 450);
+    $('#path').textContent = `書く場所: 出力先/${chip.title}`;
+    const kp = csvIndex(c, 'p', ix, pl) % CSV.rows.length, ks = csvIndex(c, 's', ix, pl) % CSV.rows.length;
+    drawCsv(kp, ks);
+    $('#csvnote').textContent = `いまの複製: 患者レベルのタグは ${kp + 2} 行目(${CSV.rows[kp][0]})、検査レベルのタグは ${ks + 2} 行目(${CSV.rows[ks][3]})を読む`;
+    count++;
+  }
+  $('#play').addEventListener('click', () => {
+    if (timer) { clearInterval(timer); timer = null; $('#play').textContent = '▶ 続き'; return; }
+    if (!gen && count) reset();
+    timer = setInterval(step, +$('#speed').value); step(); $('#play').textContent = '❚❚ 一時停止';
+  });
+  $('#reset').addEventListener('click', reset);
+  for (const id of ['#np', '#ns', '#nr', '#ni', '#colorBy']) $(id).addEventListener('change', reset);
+  $('#speed').addEventListener('change', () => { if (timer) { clearInterval(timer); timer = setInterval(step, +$('#speed').value); } });
+  drawTree(); reset();
+
+  // ---- レベルで何が変わるか ----
+  function drawLv() {
+    const lv = $('#lvsel').value; const box = $('#lvdemo'); box.innerHTML = ''; const keys = new Map(); let n = 1;
+    for (let p = 0; p < 2; p++) for (let s = 0; s < 2; s++) for (let i = 0; i < 2; i++) {
+      const key = lv === 'p' ? `${p}` : lv === 's' ? `${p}-${s}` : `${p}-${s}-${i}`;
+      if (!keys.has(key)) keys.set(key, keys.size);
+      const g = keys.get(key);
+      const val = lv === 'p' ? `EVAL${String(p + 1).padStart(4, '0')}` : lv === 's' ? `CT ${s + 1}回目` : `IMG${String(n).padStart(4, '0')}`;
+      box.insertAdjacentHTML('beforeend', `<div class="cell g${g}"><span class="k" style="color:var(--fg3)">p=${p} s=${s} i=${i}</span><br><b>${val}</b></div>`); n++;
+    }
+  }
+  $('#lvsel').addEventListener('change', drawLv); drawLv();
+
+  // ---- 試す ----
+  const INTS = [['p', 1], ['p1', 2], ['P', 1], ['s', 0], ['s1', 1], ['S', 0], ['r', 0], ['r1', 1], ['R', 0], ['i', 1], ['i1', 2], ['I', 6], ['n', 42], ['inst', 10007]];
+  const STRS = [['src_patient_id', '1001'], ['src_patient_name', 'Yamada^Tarou'], ['src_study_id', 'ST1'], ['src_study_description', '頭部CT 造影あり'], ['src_series_number', '3'], ['src_series_description', 'Axial 5mm'], ['src_modality', 'CT'], ['name_alpha', 'Yamada^Tarou'], ['name_kanji', '山田^太郎'], ['name_kana', 'ﾔﾏﾀﾞ^ﾀﾛｳ'], ['name', 'Yamada^Tarou'], ['sex', 'M'], ['weight', '68.4'], ['height_cm', '172']];
+  for (const [k, v] of INTS) $('#intvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="number" data-int="${k}" value="${v}"></label>`);
+  for (const [k, v] of STRS) $('#strvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="text" data-str="${k}" value="${v}"></label>`);
+  function tryRender() {
+    const ints = {}, strs = {};
+    document.querySelectorAll('[data-int]').forEach((e) => { ints[e.dataset.int] = Math.trunc(+e.value || 0); });
+    document.querySelectorAll('[data-str]').forEach((e) => { strs[e.dataset.str] = e.value; });
+    const r = $('#result'); const tpl = $('#tpl').value;
+    try {
+      const pieces = parseTpl(tpl); r.textContent = render(pieces, ints, strs); r.classList.remove('err');
+      const used = pieces.filter((p) => p.name).map((p) => p.name);
+      const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series' };
+      const order = ['patient', 'study', 'series', 'image'];
+      const need = used.reduce((m, v) => Math.max(m, order.indexOf(lv[v] || (ints[v] !== undefined ? 'image' : 'patient'))), 0);
+      const where = need === 0 ? 'どのレベルにも付けられる' : `この規則に付けられるレベルは ${order.slice(need).join(' / ')}(${order[need]} より粗いレベルには付けられない)`;
+      $('#hint').textContent = used.length ? `使った変数: ${used.join(', ')} → ${where}` : '';
+    } catch (e) { r.textContent = '✗ ' + e.message; r.classList.add('err'); $('#hint').textContent = ''; }
+  }
+  document.querySelectorAll('#tpl, [data-int], [data-str]').forEach((e) => e.addEventListener('input', tryRender));
+  document.querySelectorAll('.examples button').forEach((b) => b.addEventListener('click', () => { $('#tpl').value = b.dataset.t; tryRender(); }));
+  tryRender();
+})();
+</script>
+</body>
+</html>

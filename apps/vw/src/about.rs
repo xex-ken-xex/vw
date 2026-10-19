@@ -76,7 +76,7 @@ impl About {
                     ));
                 if button.clicked() {
                     if let Some(path) = path {
-                        if let Err(e) = crate::launch::open_file(&path) {
+                        if let Err(e) = vw_launch::open_file(&path) {
                             error = Some(format!("{}: {e}", path.display()));
                         }
                     }

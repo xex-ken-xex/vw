@@ -315,6 +315,7 @@ impl Engine {
         // 既定 → 設定の順に積み、同じタグは後のものが勝つ
         let mut specs: Vec<RuleSpec> = DEFAULT_RULES
             .iter()
+            .filter(|(t, _, _)| !cfg.drops_default(t))
             .map(|(t, l, v)| RuleSpec::new(t, *l, v))
             .collect();
         specs.extend(
@@ -1475,6 +1476,14 @@ fn cached_table(cache: &mut TableCache, path: &str, enc: CsvEncoding) -> Result<
 
 /// 規則のタグの書き方(`PatientName`、`(0010,0010)`、`(0029,1010)/LO`)からタグだけを取り出す。
 /// 画面が、既定の規則が上書きされたかを、書き方の違いによらず判定するために使う。
+impl Config {
+    /// 既定の規則 `tag` を使わない設定か。`(0010,0020)` のような書き方でも同じタグなら当たる。
+    pub fn drops_default(&self, tag: &str) -> bool {
+        let t = tag_of(tag);
+        t.is_some() && self.drop_defaults.iter().any(|d| tag_of(d) == t)
+    }
+}
+
 pub fn tag_of(key: &str) -> Option<Tag> {
     let key = key.trim().split('/').next()?.trim();
     StandardDataDictionary
@@ -1742,6 +1751,30 @@ mod tests {
             ),
             (1, 8)
         );
+    }
+
+    #[test]
+    fn a_dropped_default_rule_leaves_the_source_value_untouched() {
+        let cfg = Config {
+            // 辞書の名前でなくタグで書いても、同じタグなら当たる
+            drop_defaults: vec!["(0010,0020)".into()],
+            ..Config::default()
+        };
+        assert!(cfg.drops_default("PatientID"));
+        assert!(!cfg.drops_default("PatientName"));
+        let eng = Engine::new(&cfg).unwrap();
+        let ix = Idx {
+            p: 1,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        assert!(eng
+            .render_rule(tags::PATIENT_ID, ix, &Place::default())
+            .is_none());
+        assert!(eng
+            .render_rule(tags::PATIENT_NAME, ix, &Place::default())
+            .is_some());
     }
 
     #[test]

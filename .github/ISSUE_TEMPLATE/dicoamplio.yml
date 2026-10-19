@@ -1,0 +1,53 @@
+name: DicoAmplio の不具合・要望 / DicoAmplio bug or request
+description: DicoAmplio(apps/dicoamplio)で動かない・こうなるとよい
+labels: [dicoamplio]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        脆弱性は、ここではなく [SECURITY.md](https://github.com/xex-ken-xex/vw/blob/main/SECURITY.md) の方法で非公開で知らせてください。
+        患者情報の入った DICOM やその画面は貼らないでください。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 種類 / Kind
+      options:
+        - 不具合 / Bug
+        - 要望 / Request
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版 / Version
+      description: "vw と同じ版です(例: 0.7.0、最新ビルド (main))"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows 11
+        - Windows 10
+        - Ubuntu
+        - そのほかの Linux / Other Linux
+  - type: textarea
+    id: detail
+    attributes:
+      label: 内容 / Details
+      description: 不具合なら手順と、期待した結果・実際の結果。要望なら、困っていることと、こうなるとよいこと
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: ログ / Log
+      description: ログ欄のエラーや、送信の端末風ログの該当部分
+      render: text
+  - type: textarea
+    id: rules
+    attributes:
+      label: 規則・プリセット / Rules or preset
+      description: 関係するタグの規則やプリセット(TOML)。患者情報は伏せてください
+      render: toml

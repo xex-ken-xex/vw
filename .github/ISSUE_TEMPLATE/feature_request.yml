@@ -1,6 +1,6 @@
-name: 改良・機能追加の要望 / Feature request
+name: vw の改良・機能追加の要望 / vw feature request
 description: こうなると便利、こういう機能がほしい
-labels: [enhancement]
+labels: [enhancement, vw]
 body:
   - type: textarea
     id: problem

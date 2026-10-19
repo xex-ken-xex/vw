@@ -835,6 +835,7 @@ dependencies = [
  "serde",
  "toml 1.1.8+spec-1.1.0",
  "uuid",
+ "vw-launch",
  "vw-tree",
  "vw-ui",
  "walkdir",
@@ -4534,6 +4535,7 @@ dependencies = [
  "vw-dock",
  "vw-gif",
  "vw-jpeg",
+ "vw-launch",
  "vw-log",
  "vw-png",
  "vw-quality",
@@ -4609,6 +4611,13 @@ dependencies = [
  "vw-core",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "vw-launch"
+version = "0.7.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

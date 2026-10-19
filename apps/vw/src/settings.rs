@@ -1331,7 +1331,7 @@ impl SettingsStore {
         if !path.exists() {
             self.save()?;
         }
-        crate::launch::open_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+        vw_launch::open_file(&path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// テスト用: 次の [`Self::reload_if_changed`] で必ずファイルを確かめる。

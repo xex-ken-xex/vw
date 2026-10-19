@@ -733,7 +733,7 @@ impl Dialog {
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, "Open folder")).clicked() {
                         let _ = std::fs::create_dir_all(&store.dir);
-                        let _ = crate::launch::open_folder(&store.dir);
+                        let _ = vw_launch::open_folder(&store.dir);
                     }
                     ui.label(tr(
                         lang,

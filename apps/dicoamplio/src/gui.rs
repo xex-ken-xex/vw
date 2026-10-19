@@ -606,6 +606,7 @@ impl App {
         let mut load = None;
         let mut delete = None;
         let mut start = false;
+        let mut help = false;
         vw_ui::menu::bar(ui, |ui| {
             vw_ui::menu::bar_menu(ui, "ファイル", |ui| {
                 if ui
@@ -756,7 +757,23 @@ impl App {
                     }
                 }
             });
+            vw_ui::menu::bar_menu(ui, "ヘルプ", |ui| {
+                if ui
+                    .add(vw_ui::menu::item(
+                        false,
+                        "Readme.html を開く(変数の一覧と例)",
+                        "",
+                    ))
+                    .clicked()
+                {
+                    help = true;
+                    ui.close();
+                }
+            });
         });
+        if help {
+            self.open_readme();
+        }
         if let Some(n) = load {
             self.load_preset(&n, &ctx);
         }
@@ -784,6 +801,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let mut start = false;
         let mut cancel = false;
+        let mut help = false;
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             match &self.job {
@@ -870,6 +888,13 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
+                help = ui
+                    .button(RichText::new("ヘルプ！わかんないよ！").strong())
+                    .on_hover_text(
+                        "同梱の Readme.html をブラウザで開く(変数の一覧・例・動きの説明)",
+                    )
+                    .clicked();
+                ui.add_space(8.0);
                 match &self.current_preset {
                     Some(n) => {
                         ui.label(RichText::new(n).strong());
@@ -886,6 +911,9 @@ impl App {
         }
         if start {
             self.start(&ctx);
+        }
+        if help {
+            self.open_readme();
         }
     }
 
@@ -1145,6 +1173,8 @@ impl App {
 
         let mut remove = None;
         let mut add: Option<RuleSpec> = None;
+        let mut drop_default: Option<&'static str> = None;
+        let mut restore_default: Option<&'static str> = None;
         let csv_columns = self
             .engine
             .as_ref()
@@ -1192,30 +1222,49 @@ impl App {
                         });
                         ui.add_space(4.0);
 
-                        // 既定の規則。同じタグを足すと上書きされるので、見えているだけにする
+                        // 既定の規則。同じタグを足すと上書きされるので、値は見えているだけにし、
+                        // 消す(元の値のまま写す)か戻すかだけを操作できるようにする
                         for (tag, l, value) in DEFAULT_RULES {
                             // 規則は (0010,0010) や /VR つきでも書けるので、文字ではなくタグで比べる
                             let default_tag = tag_of(tag);
                             let overridden =
                                 self.cfg.rules.iter().any(|r| tag_of(&r.tag) == default_tag);
-                            if *l == level && !overridden {
-                                ui.horizontal(|ui| {
-                                    // add_sized は中身を中央に置くので、幅だけ決めて左から並べる
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(TAG_W, 18.0),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            ui.set_min_width(TAG_W);
-                                            ui.add_space(4.0);
-                                            ui.label(RichText::new(*tag).weak());
-                                        },
-                                    );
+                            if *l != level || overridden {
+                                continue;
+                            }
+                            let dropped = self.cfg.drops_default(tag);
+                            ui.horizontal(|ui| {
+                                // add_sized は中身を中央に置くので、幅だけ決めて左から並べる
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(TAG_W, 18.0),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(TAG_W);
+                                        ui.add_space(4.0);
+                                        let text = RichText::new(*tag).weak();
+                                        ui.label(if dropped { text.strikethrough() } else { text });
+                                    },
+                                );
+                                if dropped {
+                                    ui.weak(RichText::new("元の値のまま写す").small())
+                                        .on_hover_text("既定の規則を消したので、このタグは元ファイルの値のまま。複製どうしで同じ値になる");
+                                    if ui.button("戻す").on_hover_text("既定の規則に戻す").clicked() {
+                                        restore_default = Some(tag);
+                                    }
+                                } else {
                                     ui.add(egui::Label::new(
                                         RichText::new(*value).weak().monospace(),
                                     ));
                                     ui.weak(RichText::new("既定").small());
-                                });
-                            }
+                                    if ui
+                                        .button("×")
+                                        .on_hover_text("この既定の規則を消す(元の値のまま写す)")
+                                        .clicked()
+                                    {
+                                        drop_default = Some(tag);
+                                    }
+                                }
+                            });
                         }
                         for i in 0..self.cfg.rules.len() {
                             if self.cfg.rules[i].level == level {
@@ -1250,6 +1299,37 @@ impl App {
         }
         if let Some(r) = add {
             self.cfg.rules.push(r);
+        }
+        if let Some(t) = drop_default {
+            self.cfg.drop_defaults.push(t.to_string());
+        }
+        if let Some(t) = restore_default {
+            self.cfg.drop_defaults.retain(|d| tag_of(d) != tag_of(t));
+        }
+    }
+
+    // ---- ヘルプ ----------------------------------------------------------------------------
+
+    /// 同梱の Readme.html。配布では実行ファイルの隣、開発中はソースの apps/dicoamplio/ にある。
+    fn readme_path() -> Option<PathBuf> {
+        let beside_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("Readme.html")));
+        let in_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Readme.html");
+        [beside_exe, Some(in_source)]
+            .into_iter()
+            .flatten()
+            .find(|p| p.is_file())
+    }
+
+    fn open_readme(&mut self) {
+        match Self::readme_path() {
+            Some(p) => {
+                if let Err(e) = vw_launch::open_file(&p) {
+                    self.note(format!("エラー: Readme.html を開けない: {e}"));
+                }
+            }
+            None => self.note("エラー: Readme.html が見つからない(実行ファイルの隣に置いてほしい)"),
         }
     }
 
