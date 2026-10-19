@@ -89,7 +89,7 @@ jobs:
           mkdir -p dist/vw dist/dicoamplio
           cp target/release/vw README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
-          cp target/release/dicoamplio apps/dicoamplio/README.md LICENSE-MIT LICENSE-APACHE dist/dicoamplio/
+          cp target/release/dicoamplio apps/dicoamplio/README.md apps/dicoamplio/Readme.html LICENSE-MIT LICENSE-APACHE dist/dicoamplio/
           cp THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
           cp -r apps/dicoamplio/presets apps/dicoamplio/examples dist/dicoamplio/
           tar -C dist -czf dist/${{ matrix.dicoamplio_package }} dicoamplio
@@ -100,7 +100,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/vw, dist/dicoamplio | Out-Null
           Copy-Item target/release/vw.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt dist/vw/
           Compress-Archive -Path dist/vw -DestinationPath dist/${{ matrix.package }}
-          Copy-Item target/release/dicoamplio.exe, apps/dicoamplio/README.md, LICENSE-MIT, LICENSE-APACHE dist/dicoamplio/
+          Copy-Item target/release/dicoamplio.exe, apps/dicoamplio/README.md, apps/dicoamplio/Readme.html, LICENSE-MIT, LICENSE-APACHE dist/dicoamplio/
           Copy-Item THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
           Copy-Item -Recurse apps/dicoamplio/presets, apps/dicoamplio/examples dist/dicoamplio/
           Compress-Archive -Path dist/dicoamplio -DestinationPath dist/${{ matrix.dicoamplio_package }}

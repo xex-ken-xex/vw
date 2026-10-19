@@ -62,6 +62,12 @@ printf 風で、変数は `%(名前)` で指定する: `EVAL%(p1)05d`、`%(weigh
 
 何も指定しないときの既定の規則(`src/engine.rs` の `DEFAULT_RULES`): PatientID・PatientName(患者)、StudyID・AccessionNumber(検査)、SeriesNumber(シリーズ)、InstanceNumber(画像)。
 
+既定の規則を使わない(そのタグは元の値のまま写す)には、画面では既定の行の × を押す(「戻す」で戻る)。プリセットでは `drop_default = ["PatientID", "PatientName"]`、コマンドラインでは `--drop-default PatientID`。患者の ID を元のまま検査だけ増やす、といった使い方のため。PatientID を消して患者を 2 以上にすると、複製は同じ患者の別の検査になる。
+
+### ヘルプ
+
+変数の意味と例、動きの説明は、同梱の [Readme.html](Readme.html)(画面の帯の「ヘルプ！わかんないよ！」か、メニューの「ヘルプ」で開く)。実行ファイルの隣に置く(Release の書庫には入っている。開発中はソースの `apps/dicoamplio/Readme.html` を開く)。外部のファイルやネットワークには頼らない 1 ファイルで、変数の一覧、書式、シナリオ、複製の様子のアニメーション、テンプレートをその場で試す欄がある。
+
 ## C-STORE で送る
 
 ```

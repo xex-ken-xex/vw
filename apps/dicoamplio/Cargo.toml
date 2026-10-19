@@ -9,7 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:vw-ui", "dep:vw-tree"]
+gui = ["dep:eframe", "dep:vw-ui", "dep:vw-tree", "dep:vw-launch"]
 
 [dependencies]
 dicom-core = "0.8"
@@ -27,6 +27,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 vw-ui = { workspace = true, optional = true }
 vw-tree = { workspace = true, optional = true }
+vw-launch = { workspace = true, optional = true }
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"], optional = true }
 dicom-ul = "0.8"
 dicom-transfer-syntax-registry = "0.8"

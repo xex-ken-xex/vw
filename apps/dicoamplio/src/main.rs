@@ -84,6 +84,9 @@ struct Args {
     /// 規則のファイル。1 行に 1 つ `タグ:レベル=テンプレート`、`#` で始まる行は注釈
     #[arg(long)]
     rules: Option<PathBuf>,
+    /// 既定の規則を使わないタグ(PatientID など。元の値のまま写す)。複数指定可
+    #[arg(long = "drop-default", value_name = "TAG")]
+    drop_defaults: Vec<String>,
     /// 日本語などの文字コード。utf8 = ISO_IR 192、iso2022jp = ISO 2022 IR 13\ISO 2022 IR 87、keep = 触れない
     #[arg(long, value_enum)]
     charset: Option<Charset>,
@@ -180,6 +183,11 @@ fn build_config(a: &Args, dir: &Path) -> Result<Config> {
     }
     for s in &a.sets {
         c.rules.push(RuleSpec::parse(s)?);
+    }
+    for t in &a.drop_defaults {
+        if !c.drops_default(t) {
+            c.drop_defaults.push(t.trim().to_string());
+        }
     }
     Ok(c)
 }
