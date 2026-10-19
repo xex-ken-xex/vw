@@ -1,6 +1,6 @@
-name: 不具合の報告 / Bug report
+name: vw の不具合の報告 / vw bug report
 description: 動かない・落ちる・表示がおかしいなど
-labels: [bug]
+labels: [bug, vw]
 body:
   - type: markdown
     attributes:
@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: vw の版 / Version
-      description: 「ヘルプ」→「vw について」に出ています（例: 0.5.0、最新ビルド (main)）
+      description: "「ヘルプ」→「vw について」に出ています（例: 0.7.0、最新ビルド (main)）"
     validations:
       required: true
   - type: dropdown
