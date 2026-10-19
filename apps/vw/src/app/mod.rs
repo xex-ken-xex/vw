@@ -689,6 +689,7 @@ impl VwApp {
             transfer_jobs: Vec::new(),
             tally: Default::default(),
         };
+        app.reopen_tools();
         // 引数のフォルダか、前回 cd していたフォルダへ移る。ファイルが渡されたときは
         // ファイルを開くのが目的なので、前回のフォルダには移らない。
         let start_dir = match (&first_dir, files.is_empty()) {
@@ -1146,7 +1147,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleMetadata => "Metadata",
         Action::ToggleImages => "Images",
         Action::ToggleLog => "Log",
-        Action::ToggleSettings => "Settings screen",
+        Action::ToggleSettings => "Open settings",
         Action::ToggleDatasets => "Datasets",
         Action::ToggleMaximize => "Maximize slot",
         Action::TogglePixelPipeline => "Pixel pipeline",
