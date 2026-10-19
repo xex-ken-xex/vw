@@ -838,7 +838,7 @@ impl VwApp {
             return;
         };
         let _ = std::fs::create_dir_all(&dir);
-        if let Err(e) = crate::launch::open_folder(&dir) {
+        if let Err(e) = vw_launch::open_folder(&dir) {
             self.log
                 .error(format!("Cannot open {}: {e}", dir.display()));
         }
@@ -849,7 +849,7 @@ impl VwApp {
             Some(m) => m.zip.parent().unwrap_or(dir).to_path_buf(),
             None => dir.to_path_buf(),
         };
-        if let Err(e) = crate::launch::open_folder(&target) {
+        if let Err(e) = vw_launch::open_folder(&target) {
             self.log
                 .error(format!("Cannot open {}: {e}", target.display()));
         }

@@ -24,6 +24,7 @@ vw-ui = { path = "crates/vw-ui" }
 vw-tree = { path = "crates/vw-tree" }
 vw-dock = { path = "crates/vw-dock" }
 vw-log = { path = "crates/vw-log" }
+vw-launch = { path = "crates/vw-launch" }
 
 [profile.release]
 lto = "thin"
