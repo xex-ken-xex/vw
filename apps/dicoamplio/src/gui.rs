@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Duration;
+use vw_tree::picker::{self, Picker};
 
 /// 「タグを選んで足す」に出す、そのレベルの典型的なタグ。辞書にあるどの名前でも書ける。
 fn typical_tags(level: Level) -> &'static [&'static str] {
@@ -200,6 +201,20 @@ struct App {
     destinations: Vec<Destination>,
     /// 帳簿に保存するときの名前
     dest_name: String,
+    /// 開いている「選ぶ窓」と、選んだ結果の入れ先
+    picker: Option<(PickTarget, Picker)>,
+}
+
+/// 「参照」で選んだパスの入れ先。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickTarget {
+    Input,
+    Output,
+    AsIsDir,
+    Csv,
+    RuleCsv(usize),
+    OpenPreset,
+    SavePreset,
 }
 
 impl App {
@@ -257,6 +272,7 @@ impl App {
             tab: RightTab::Preview,
             destinations: vec![],
             dest_name: String::new(),
+            picker: None,
         };
         match config::load_destinations(&app.preset_dir) {
             Ok(d) => app.destinations = d,
@@ -560,14 +576,6 @@ impl App {
         }
     }
 
-    fn browse_dir(current: &str) -> Option<String> {
-        let mut d = rfd::FileDialog::new();
-        if Path::new(current).is_dir() {
-            d = d.set_directory(current);
-        }
-        d.pick_folder().map(|p| p.display().to_string())
-    }
-
     /// 窓にドロップされたフォルダ(ファイルならその親)を、元のディレクトリにする。
     fn take_dropped(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -605,35 +613,35 @@ impl App {
                     .clicked()
                 {
                     ui.close();
-                    if let Some(p) = rfd::FileDialog::new()
-                        .add_filter("設定", &["toml"])
-                        .pick_file()
-                    {
-                        match Config::load(&p) {
-                            Ok(c) => {
-                                self.cfg = c;
-                                self.current_preset = None;
-                                self.note(format!("設定を読んだ: {}", p.display()));
-                            }
-                            Err(e) => self.note(format!("エラー: {e:#}")),
-                        }
-                    }
+                    let near = self.preset_dir.display().to_string();
+                    self.picker = Some((
+                        PickTarget::OpenPreset,
+                        Self::file_picker(
+                            "設定ファイルを開く",
+                            picker::Mode::OpenFile {
+                                extensions: vec!["toml".into()],
+                            },
+                            &near,
+                        ),
+                    ));
                 }
                 if ui
                     .add(vw_ui::menu::item(false, "設定ファイルに保存…", ""))
                     .clicked()
                 {
                     ui.close();
-                    if let Some(p) = rfd::FileDialog::new()
-                        .add_filter("設定", &["toml"])
-                        .set_file_name("preset.toml")
-                        .save_file()
-                    {
-                        match self.cfg.save(&p) {
-                            Ok(()) => self.note(format!("設定を保存した: {}", p.display())),
-                            Err(e) => self.note(format!("エラー: {e:#}")),
-                        }
-                    }
+                    let near = self.preset_dir.display().to_string();
+                    self.picker = Some((
+                        PickTarget::SavePreset,
+                        Self::file_picker(
+                            "設定ファイルに保存",
+                            picker::Mode::SaveFile {
+                                extensions: vec!["toml".into()],
+                                name: "preset.toml".into(),
+                            },
+                            &near,
+                        ),
+                    ));
                 }
                 ui.separator();
                 if ui.add(vw_ui::menu::item(false, "終了", "")).clicked() {
@@ -897,7 +905,8 @@ impl App {
         ui: &mut egui::Ui,
         label: &str,
         value: &mut String,
-        browse: impl FnOnce(&str) -> Option<String>,
+        target: PickTarget,
+        picker: &mut Option<(PickTarget, Picker)>,
     ) -> bool {
         ui.label(label);
         let mut committed = false;
@@ -910,13 +919,83 @@ impl App {
             );
             committed |= r.lost_focus();
             if ui.button("参照").clicked() {
-                if let Some(p) = browse(value) {
-                    *value = p;
-                    committed = true;
-                }
+                *picker = Some((target, Self::folder_picker("フォルダを選ぶ", value)));
             }
         });
         committed
+    }
+
+    /// 窓の文言(日本語)。
+    fn picker_labels() -> picker::Labels {
+        picker::Labels {
+            choose: "選ぶ".into(),
+            cancel: "やめる".into(),
+            name: "名前".into(),
+            nothing: "(フォルダを選んでいない)".into(),
+        }
+    }
+
+    fn folder_picker(title: &str, current: &str) -> Picker {
+        Picker::folder(
+            title,
+            (!current.trim().is_empty()).then_some(Path::new(current)),
+            Self::picker_labels(),
+        )
+    }
+
+    fn file_picker(title: &str, mode: picker::Mode, near: &str) -> Picker {
+        let start = Path::new(near);
+        Picker::new(
+            title,
+            mode,
+            (!near.trim().is_empty()).then_some(start),
+            Self::picker_labels(),
+        )
+    }
+
+    /// 選ぶ窓を描き、決まったら入れ先に入れる。
+    fn picker_ui(&mut self, ctx: &egui::Context) {
+        let Some((target, picker)) = &mut self.picker else {
+            return;
+        };
+        let target = *target;
+        let chosen = match picker.show(ctx) {
+            picker::Outcome::Open => return,
+            picker::Outcome::Cancelled => None,
+            picker::Outcome::Chosen(p) => Some(p),
+        };
+        self.picker = None;
+        let Some(p) = chosen else {
+            return;
+        };
+        let text = p.display().to_string();
+        match target {
+            PickTarget::Input => {
+                self.cfg.input = text;
+                self.refresh_engine();
+                self.count_sources(ctx);
+            }
+            PickTarget::Output => self.cfg.output = text,
+            PickTarget::AsIsDir => self.cfg.store.as_is_dir = text,
+            PickTarget::Csv => self.cfg.csv = text,
+            PickTarget::RuleCsv(i) => {
+                if let Some(r) = self.cfg.rules.get_mut(i) {
+                    r.csv = text;
+                }
+            }
+            PickTarget::OpenPreset => match Config::load(&p) {
+                Ok(c) => {
+                    self.cfg = c;
+                    self.current_preset = None;
+                    self.note(format!("設定を読んだ: {}", p.display()));
+                }
+                Err(e) => self.note(format!("エラー: {e:#}")),
+            },
+            PickTarget::SavePreset => match self.cfg.save(&p) {
+                Ok(()) => self.note(format!("設定を保存した: {}", p.display())),
+                Err(e) => self.note(format!("エラー: {e:#}")),
+            },
+        }
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -924,7 +1003,7 @@ impl App {
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             Self::section(ui, "入出力");
-            let recount = Self::path_row(ui, "元のディレクトリ(再帰的に探す)", &mut self.cfg.input, Self::browse_dir);
+            let recount = Self::path_row(ui, "元のディレクトリ(再帰的に探す)", &mut self.cfg.input, PickTarget::Input, &mut self.picker);
             match (self.sources, &self.scan, &self.tree) {
                 (Some(n), Some(s), _) => {
                     ui.colored_label(OK, format!("✓ ファイル {n} 個。構成を読んでいる… {} / {}", s.done.load(Ordering::Relaxed), s.total));
@@ -974,7 +1053,7 @@ impl App {
             }
             if self.writes_files() {
                 ui.add_space(6.0);
-                Self::path_row(ui, "出力先", &mut self.cfg.output, Self::browse_dir);
+                Self::path_row(ui, "出力先", &mut self.cfg.output, PickTarget::Output, &mut self.picker);
                 ui.weak("出力は 出力先/P患者/S検査/Rシリーズ/SOPInstanceUID.dcm");
             }
 
@@ -1017,9 +1096,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.cfg.csv).hint_text("(使わない)").desired_width(ui.available_width() - 104.0));
                 if ui.button("参照").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("CSV", &["csv", "txt"]).pick_file() {
-                        self.cfg.csv = p.display().to_string();
-                    }
+                    self.picker = Some((PickTarget::Csv, Self::file_picker("CSV を選ぶ", csv_mode(), &self.cfg.csv)));
                 }
                 if ui.button("消す").clicked() {
                     self.cfg.csv.clear();
@@ -1218,12 +1295,10 @@ impl App {
                     .desired_width((ui.available_width() - 260.0).max(120.0)),
             );
             if ui.button("参照").clicked() {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv", "txt"])
-                    .pick_file()
-                {
-                    r.csv = p.display().to_string();
-                }
+                self.picker = Some((
+                    PickTarget::RuleCsv(i),
+                    Self::file_picker("CSV を選ぶ", csv_mode(), &r.csv),
+                ));
             }
             if ui.button("消す").clicked() {
                 r.csv.clear();
@@ -1454,7 +1529,8 @@ impl App {
                 ui,
                 "そのまま送るディレクトリ(再帰的に探す)",
                 &mut store.as_is_dir,
-                Self::browse_dir,
+                PickTarget::AsIsDir,
+                &mut self.picker,
             );
             ui.weak("複製も書き換えもしない。UID も元のまま");
         } else if !store.enabled {
@@ -2040,5 +2116,13 @@ impl eframe::App for App {
             .show(ui, |ui| self.right_panel_ui(ui));
         egui::CentralPanel::default().show(ui, |ui| self.rules_ui(ui));
         self.save_dialog_ui(&ctx);
+        self.picker_ui(&ctx);
+    }
+}
+
+/// CSV の選ぶ窓。.txt も見せるのは、タブ区切りや別の拡張子で渡されることがあるため。
+fn csv_mode() -> picker::Mode {
+    picker::Mode::OpenFile {
+        extensions: vec!["csv".into(), "txt".into()],
     }
 }

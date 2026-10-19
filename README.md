@@ -1092,6 +1092,7 @@ crates/
   vw-raw/    カメラ RAW プラグイン（rawler、LGPL-2.1）
   vw-dicom/  DICOM の読み込みと文字コード
   vw-ui/     見た目（配色・メニュー・パネル・フォント）。apps/ のアプリで共有する
+  vw-tree/   フォルダツリーの基底と、それでフォルダやファイルを選ぶ窓。apps/ のアプリで共有する
 apps/
   vw/          ビューア本体（実行ファイル vw）
   dicoamplio/  DICOM の評価データを水増しするツール（実行ファイル dicoamplio。apps/dicoamplio/README.md）

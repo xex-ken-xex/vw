@@ -1,0 +1,12 @@
+[package]
+name = "vw-tree"
+description = "vw's folder tree: lazy loading, roots, hidden names, and a picker window built on it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egui = { version = "0.36", default-features = false }
+vw-ui.workspace = true
