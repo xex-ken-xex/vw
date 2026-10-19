@@ -219,6 +219,7 @@ impl VwApp {
     pub(super) fn drag_preview(&mut self, ctx: &egui::Context) {
         let Some(file) = egui::DragAndDrop::payload::<DraggedFile>(ctx) else {
             self.drag_copy = false;
+            self.reorder_hover = false;
             return;
         };
         self.drag_copy = ctx.input(|i| i.modifiers.command);
@@ -230,7 +231,9 @@ impl VwApp {
         if self.map.drop_hover.is_some() {
             return;
         }
-        let (icon, verb) = if self.drag_copy {
+        let (icon, verb) = if self.reorder_hover {
+            (icon::SQUARES_FOUR, tr(lang, "Place here"))
+        } else if self.drag_copy {
             (icon::COPY, tr(lang, "Copy"))
         } else {
             (icon::ARROW_RIGHT, tr(lang, "Move"))

@@ -269,6 +269,10 @@ pub struct VwApp {
     select_when_loaded: Option<PathBuf>,
     /// 画像領域いっぱいに出しているスロットの番号。
     maximized: Option<u64>,
+    /// ドラッグ中の画像スロットの番号。画像領域の中で離したら、スロットを並べ替える。
+    slot_drag: Option<u64>,
+    /// ドラッグ中の画像が並べ替えの先の上にある。マウスの横の表示を「並べ替え」にする。
+    reorder_hover: bool,
     /// 読み込み中のフォルダの入れ方。
     load_into: LoadInto,
     /// 読み込み中のフォルダのために作った最初のスロットの番号。これ以降の番号のスロットにだけ
@@ -662,6 +666,8 @@ impl VwApp {
             drag_copy: false,
             select_when_loaded: None,
             maximized: None,
+            slot_drag: None,
+            reorder_hover: false,
             load_into: LoadInto::Images,
             load_slots_from: 0,
             playback: None,

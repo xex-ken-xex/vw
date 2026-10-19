@@ -565,6 +565,7 @@ impl VwApp {
         let ai_ready = self.ai_ready();
         let people = self.people.names();
         let mut send = None;
+        let mut cells: Vec<(Rect, usize)> = Vec::new();
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
             if !view.range.contains(&i) {
@@ -611,6 +612,10 @@ impl VwApp {
                     colors,
                 },
             );
+            cells.push((rect, i));
+            if resp.dragging && self.slot_drag.is_none() {
+                self.slot_drag = Some(self.slots[i].id);
+            }
             if let Some(event) = resp.derive {
                 self.log_derive(event);
             }
@@ -727,6 +732,7 @@ impl VwApp {
                         colors,
                     },
                 );
+                cells.push((rect, view.range.start + cell_index));
                 if resp.clicked {
                     filler_clicked = Some(view.range.start + cell_index);
                 }
@@ -739,6 +745,7 @@ impl VwApp {
             self.active = index;
             self.set_focus(ui.ctx(), Focus::Images);
         }
+        self.drag_to_reorder(ui, &cells);
         if view.pages > 1 {
             if let Some(delta) = self.page_bar(ui.ctx(), area, &view) {
                 self.step_page(delta);
@@ -778,6 +785,73 @@ impl VwApp {
         }
         self.manage_full_images();
         ui.allocate_rect(whole, egui::Sense::hover());
+    }
+
+    /// 画像スロットのドラッグを、離した位置のマスへの配置にする。置いた先のスロットとは入れ替え、
+    /// 空きマスへ置いたら元の場所は空きのまま残す。フォルダのスロットの上は画像の移動・コピーの
+    /// 落とし先なので、配置の先にしない。
+    ///
+    /// 空きマスを、スロットごとのマスの番号ではなく空のスロットで表すのは、ページ分けや ← → の
+    /// 辿り方を、スロットの並びのまま使えるようにするため（空のスロットは ← → で飛ばされる）。
+    fn drag_to_reorder(&mut self, ui: &egui::Ui, cells: &[(Rect, usize)]) {
+        self.reorder_hover = false;
+        let Some(id) = self.slot_drag else {
+            return;
+        };
+        // 別のウインドウで離されたドラッグは、ここでは離したことが届かない。持ち物が消えたら終える。
+        let carrying =
+            egui::DragAndDrop::has_payload_of_type::<crate::viewer::DraggedFile>(ui.ctx());
+        let Some(from) = self
+            .slots
+            .iter()
+            .position(|s| s.id == id)
+            .filter(|_| carrying)
+        else {
+            self.slot_drag = None;
+            return;
+        };
+        let (pos, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+        let target = pos
+            .and_then(|p| cells.iter().find(|(rect, _)| rect.contains(p)))
+            .filter(|(_, to)| {
+                *to != from && self.slots.get(*to).is_none_or(|s| s.folder.is_none())
+            });
+        if let Some((rect, to)) = target {
+            self.reorder_hover = true;
+            let color = ui.visuals().selection.stroke.color;
+            ui.ctx()
+                .layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    ui.id().with("reorder"),
+                ))
+                .rect_stroke(
+                    *rect,
+                    0.0,
+                    egui::Stroke::new(2.0, color),
+                    egui::StrokeKind::Inside,
+                );
+            if released {
+                self.place_slot(from, *to);
+            }
+        }
+        if released {
+            self.slot_drag = None;
+        }
+    }
+
+    /// `from` 番目のスロットを `to` 番目のマスに置く。
+    fn place_slot(&mut self, from: usize, to: usize) {
+        let active = self.slots[self.active].id;
+        while self.slots.len() <= to {
+            self.slots.push(Slot::new(self.next_id));
+            self.next_id += 1;
+        }
+        self.slots.swap(from, to);
+        // 末尾の空きは並びの終わりと見分けがつかないので、ページ数を増やさないよう捨てる。
+        while self.slots.len() > 1 && self.slots.last().is_some_and(is_blank) {
+            self.slots.pop();
+        }
+        self.active = self.slots.iter().position(|s| s.id == active).unwrap_or(0);
     }
 
     /// スロットがページに分かれているときに、画像フィールドの右下に出すページの帯。
