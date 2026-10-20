@@ -49,6 +49,8 @@ pub struct Study {
 pub struct Patient {
     pub id: String,
     pub name: String,
+    pub birth_date: String,
+    pub sex: String,
     pub studies: Vec<Study>,
 }
 
@@ -67,6 +69,8 @@ pub struct Place {
     pub series_ordinal: u64,
     pub patient_id: String,
     pub patient_name: String,
+    pub patient_birth_date: String,
+    pub patient_sex: String,
     pub study_id: String,
     pub study_description: String,
     pub series_number: String,
@@ -75,6 +79,8 @@ pub struct Place {
     /// 送信の提示コンテキストに要る
     pub sop_class: String,
     pub transfer_syntax: String,
+    /// 前に読んだファイルと SOPInstanceUID が同じなら、その何個目か(1 始まり)。重ならなければ 0
+    pub duplicate: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -84,6 +90,8 @@ pub struct SourceTree {
     pub files: usize,
     /// 読めなかったファイル(DICOM でないものなど)
     pub skipped: Vec<String>,
+    /// SOPInstanceUID が前に読んだファイルと同じだったもの(ログに出す 1 行ずつ)
+    pub duplicates: Vec<String>,
     /// ファイル → 木での位置
     pub places: HashMap<PathBuf, Place>,
 }
@@ -145,6 +153,8 @@ impl SourceTree {
             series_ordinal: r.ordinal,
             patient_id: p.id.clone(),
             patient_name: p.name.clone(),
+            patient_birth_date: p.birth_date.clone(),
+            patient_sex: p.sex.clone(),
             study_id: s.id.clone(),
             study_description: s.description.clone(),
             series_number: r.number.clone(),
@@ -152,6 +162,7 @@ impl SourceTree {
             modality: r.modality.clone(),
             sop_class: String::new(),
             transfer_syntax: String::new(),
+            duplicate: 0,
         })
     }
 }
@@ -160,6 +171,8 @@ impl SourceTree {
 struct Record {
     patient_id: String,
     patient_name: String,
+    patient_birth_date: String,
+    patient_sex: String,
     study_uid: String,
     study_id: String,
     study_date: String,
@@ -171,6 +184,7 @@ struct Record {
     inst: Option<i64>,
     sop_class: String,
     transfer_syntax: String,
+    sop_instance: String,
 }
 
 fn text(obj: &InMemDicomObject, tag: Tag, iso: Option<&Iso2022>) -> String {
@@ -257,14 +271,18 @@ fn read(path: &Path) -> Result<Record> {
         }
         _ => {}
     }
-    if t(tags::SOP_INSTANCE_UID).is_empty() {
+    let sop_instance = t(tags::SOP_INSTANCE_UID);
+    if sop_instance.is_empty() {
         bail!("SOPInstanceUID がない(DICOM のデータセットとして読めない)");
     }
     Ok(Record {
+        sop_instance,
         sop_class,
         transfer_syntax,
         patient_id: t(tags::PATIENT_ID),
         patient_name: t(tags::PATIENT_NAME),
+        patient_birth_date: t(tags::PATIENT_BIRTH_DATE),
+        patient_sex: t(tags::PATIENT_SEX),
         study_uid: t(tags::STUDY_INSTANCE_UID),
         study_id: t(tags::STUDY_ID),
         study_date: t(tags::STUDY_DATE),
@@ -297,6 +315,26 @@ pub fn log_skipped(skipped: &[String], mut say: impl FnMut(String)) {
 }
 
 /// ファイルを並列に読んで木にする。`done` は読んだ数(進み具合の表示用)、`cancel` で途中でやめる。
+/// SOPInstanceUID が重なったファイルを 1 行ずつ出す。飛ばしたファイルと同じく、多すぎるときは数だけ。
+pub fn log_duplicates(duplicates: &[String], mut say: impl FnMut(String)) {
+    if duplicates.is_empty() {
+        return;
+    }
+    say(format!(
+        "⚠ SOPInstanceUID が前のファイルと同じ元ファイル {} 個(元が壊れている。複製では別の UID を振る):",
+        duplicates.len()
+    ));
+    for s in duplicates.iter().take(SKIPPED_LOG_LINES) {
+        say(format!("  {s}"));
+    }
+    if duplicates.len() > SKIPPED_LOG_LINES {
+        say(format!(
+            "  …ほか {} 個",
+            duplicates.len() - SKIPPED_LOG_LINES
+        ));
+    }
+}
+
 pub fn scan(files: &[PathBuf], cancel: &AtomicBool, done: &AtomicU64) -> SourceTree {
     let records: Vec<(PathBuf, Result<Record>)> = files
         .par_iter()
@@ -310,15 +348,22 @@ pub fn scan(files: &[PathBuf], cancel: &AtomicBool, done: &AtomicU64) -> SourceT
     build(records)
 }
 
-fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
+fn build(mut records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
+    // ディレクトリを辿る順は OS 次第なので、SOPInstanceUID が重なったときにどれを「後のほう」と
+    // するかが実行ごとに変わらないよう、パスの順に並べる
+    records.sort_by(|a, b| a.0.cmp(&b.0));
     // 患者 → 検査 → シリーズの順に、UID で寄せる。患者は ID と名前の組で分ける
     struct SeriesAcc {
         series: Series,
-        files: Vec<(Option<i64>, PathBuf, String, String)>,
+        files: Vec<(Option<i64>, PathBuf, String, String, u32)>,
     }
     type SeriesMap = BTreeMap<String, SeriesAcc>;
     type StudyMap = BTreeMap<String, (Study, SeriesMap)>;
     let mut patients: BTreeMap<(String, String), StudyMap> = BTreeMap::new();
+    // 生年月日と性別は患者の中で最初に読めた値(患者を分ける鍵には入れない)
+    let mut birth_and_sex: HashMap<(String, String), (String, String)> = HashMap::new();
+    // SOPInstanceUID → 最初に読んだファイルと、それまでに重なった数
+    let mut seen: HashMap<String, (PathBuf, u32)> = HashMap::new();
     let mut tree = SourceTree::default();
     for (path, r) in records {
         let r = match r {
@@ -329,6 +374,31 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
             }
         };
         tree.files += 1;
+        let duplicate = match seen.get_mut(&r.sop_instance) {
+            Some((first, n)) => {
+                *n += 1;
+                tree.duplicates.push(format!(
+                    "{}(SOPInstanceUID {} が {} と同じ)",
+                    path.display(),
+                    r.sop_instance,
+                    first.display()
+                ));
+                *n
+            }
+            None => {
+                seen.insert(r.sop_instance.clone(), (path.clone(), 0));
+                0
+            }
+        };
+        let extra = birth_and_sex
+            .entry((r.patient_id.clone(), r.patient_name.clone()))
+            .or_default();
+        if extra.0.is_empty() {
+            extra.0 = r.patient_birth_date.clone();
+        }
+        if extra.1.is_empty() {
+            extra.1 = r.patient_sex.clone();
+        }
         let studies = patients
             .entry((r.patient_id.clone(), r.patient_name.clone()))
             .or_default();
@@ -368,13 +438,18 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
             });
         }
         acc.files
-            .push((r.inst, path, r.sop_class, r.transfer_syntax));
+            .push((r.inst, path, r.sop_class, r.transfer_syntax, duplicate));
     }
     let (mut ordinal, mut study_ordinal, mut series_ordinal): (u64, u64, u64) = (0, 0, 0);
     for (pi, ((id, name), studies)) in patients.into_iter().enumerate() {
+        let (birth_date, sex) = birth_and_sex
+            .remove(&(id.clone(), name.clone()))
+            .unwrap_or_default();
         let mut p = Patient {
             id,
             name,
+            birth_date,
+            sex,
             studies: vec![],
         };
         let mut studies: Vec<(Study, SeriesMap)> = studies.into_values().collect();
@@ -398,11 +473,12 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
             });
             for (ri, mut acc) in list.into_iter().enumerate() {
                 acc.files
-                    .sort_by_key(|(inst, path, _, _)| (inst.unwrap_or(i64::MAX), path.clone()));
+                    .sort_by_key(|(inst, path, ..)| (inst.unwrap_or(i64::MAX), path.clone()));
                 acc.series.first_ordinal = ordinal;
                 acc.series.ordinal = series_ordinal;
                 series_ordinal += 1;
-                for (ii, (_, path, sop_class, transfer_syntax)) in acc.files.into_iter().enumerate()
+                for (ii, (_, path, sop_class, transfer_syntax, duplicate)) in
+                    acc.files.into_iter().enumerate()
                 {
                     tree.places.insert(
                         path,
@@ -416,6 +492,8 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
                             series_ordinal: acc.series.ordinal,
                             patient_id: p.id.clone(),
                             patient_name: p.name.clone(),
+                            patient_birth_date: p.birth_date.clone(),
+                            patient_sex: p.sex.clone(),
                             study_id: study.id.clone(),
                             study_description: study.description.clone(),
                             series_number: acc.series.number.clone(),
@@ -423,6 +501,7 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
                             modality: acc.series.modality.clone(),
                             sop_class,
                             transfer_syntax,
+                            duplicate,
                         },
                     );
                     ordinal += 1;
@@ -446,6 +525,8 @@ mod tests {
             Ok(Record {
                 patient_id: pid.into(),
                 patient_name: format!("{pid}^N"),
+                patient_birth_date: "19700101".into(),
+                patient_sex: "O".into(),
                 study_uid: study.into(),
                 study_id: "1".into(),
                 study_date: "20240501".into(),
@@ -457,8 +538,29 @@ mod tests {
                 inst: Some(inst),
                 sop_class: "1.2.840.10008.5.1.4.1.1.2".into(),
                 transfer_syntax: "1.2.840.10008.1.2.1".into(),
+                sop_instance: format!("1.2.3.{pid}.{study}.{series}.{inst}"),
             }),
         )
+    }
+
+    #[test]
+    fn files_repeating_a_sop_instance_uid_are_numbered_and_reported() {
+        let mut copy = rec("A", "s1", "r1", "1", 1);
+        copy.0 = PathBuf::from("z-copy");
+        let t = build(vec![
+            copy,
+            rec("A", "s1", "r1", "1", 1),
+            rec("A", "s1", "r1", "1", 2),
+        ]);
+        assert_eq!(t.files, 3, "重なっても飛ばさない");
+        let dup = |p: &str| t.places[&PathBuf::from(p)].duplicate;
+        assert_eq!(
+            (dup("A-s1-r1-1"), dup("A-s1-r1-2"), dup("z-copy")),
+            (0, 0, 1),
+            "パスの順で後のほうが重なりとして数えられる"
+        );
+        assert_eq!(t.duplicates.len(), 1);
+        assert!(t.duplicates[0].contains("z-copy") && t.duplicates[0].contains("A-s1-r1-1"));
     }
 
     #[test]
