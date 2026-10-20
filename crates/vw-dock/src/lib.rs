@@ -14,8 +14,8 @@ pub mod tree;
 use std::collections::BTreeMap;
 
 use egui::{
-    vec2, CursorIcon, Id, LayerId, Order, Pos2, Rect, Sense, Ui, UiBuilder, Vec2, ViewportBuilder,
-    ViewportCommand, ViewportId,
+    pos2, vec2, CursorIcon, Id, LayerId, Order, Pos2, Rect, Sense, Ui, UiBuilder, Vec2,
+    ViewportBuilder, ViewportCommand, ViewportId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -62,13 +62,21 @@ pub enum Window {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Back {
     Main(Target),
-    /// 別ウインドウ。画面の `[左, 上, 幅, 高さ]`（中身の範囲、ポイント）。
+    /// 別ウインドウ。[`FloatSaved::rect`] と同じ `[左, 上, 幅, 高さ]`。
     Float([f32; 4]),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FloatSaved {
     pub root: Node,
+    /// 外枠の左上（画面の座標、物理ピクセル）と中身の幅・高さ（ポイント）。
+    ///
+    /// 左上を中身でなく外枠で持つのは、ウインドウを置く命令が外枠の位置をとるから
+    /// （中身の位置で置くと、開くたびに OS の題名の帯の分だけ右下へずれる）。
+    /// 物理ピクセルで持つのは、ポイントへの換算がウインドウのいるモニタの拡大率で変わり、
+    /// 作られた直後のウインドウは前回と違うモニタにいることがあるから。
+    /// 大きさをポイントで持つのは、拡大率の違うモニタへ移るとき OS と winit が
+    /// ポイントでの大きさを保つから。
     pub rect: [f32; 4],
 }
 
@@ -97,20 +105,34 @@ impl Layout {
 struct Float {
     id: u64,
     root: Option<Node>,
-    /// 開くときに渡す位置と大きさ。動かした後の値は渡し直さない（egui は渡した値が
-    /// 前のフレームと変わるとウインドウを動かし、利用者が動かしている最中と取り合いになるため）。
+    /// 開くときの位置と大きさ（[`FloatSaved::rect`] と同じ）。動かした後の値は渡し直さない
+    /// （egui は渡した値が前のフレームと変わるとウインドウを動かし、利用者が動かしている
+    /// 最中と取り合いになるため）。
     initial: [f32; 4],
+    /// 開くときに egui へ渡した位置の換算に使った拡大率。毎フレーム同じ値を渡すために覚える。
+    opened_ppp: Option<f32>,
+    /// 作られたウインドウを `initial` の位置へ置き直し終えた（ドラッグで引き出したものは
+    /// カーソルに追わせるので置き直さない）。egui が開くときの位置を換算する拡大率は、
+    /// できたウインドウのいるモニタのもので、前もっては分からないため。
+    placed: bool,
     /// 今の中身の範囲（画面の座標）。
     inner: Option<Rect>,
-    /// 外枠の左上から中身の左上までのずれ（OS の題名の帯の分）。
+    /// 外枠の左上から中身の左上までのずれ（OS の題名の帯の分、物理ピクセル）。
     frame: Vec2,
+    /// 今いるモニタでの 1 ポイントの物理ピクセル数。
+    ppp: f32,
     close: bool,
 }
 
 impl Float {
     fn rect(&self) -> [f32; 4] {
-        match self.inner {
-            Some(r) => [r.left(), r.top(), r.width(), r.height()],
+        match self.inner.filter(|_| self.placed) {
+            Some(r) => [
+                r.left() * self.ppp - self.frame.x,
+                r.top() * self.ppp - self.frame.y,
+                r.width(),
+                r.height(),
+            ],
             None => self.initial,
         }
     }
@@ -118,16 +140,39 @@ impl Float {
     fn viewport(&self) -> ViewportId {
         ViewportId::from_hash_of(("vw-dock-float", self.id))
     }
+
+    /// 画面の点（物理ピクセル）を、このウインドウに送る座標（ポイント）にする。
+    fn points(&self, screen: Pos2) -> Pos2 {
+        pos2(screen.x / self.ppp, screen.y / self.ppp)
+    }
+}
+
+/// ウインドウの中の点 `local`（ポイント）を、画面の座標（物理ピクセル）にする。
+fn to_screen(inner: Rect, local: Pos2, ppp: f32) -> Pos2 {
+    ((inner.min + local.to_vec2()).to_vec2() * ppp).to_pos2()
 }
 
 /// 前のフレームで並べた結果。ほかのウインドウからのドラッグの当たりを調べるのに使う。
+///
+/// 画面の座標は物理ピクセルで持つ。egui のポイントはウインドウごとに今いるモニタの拡大率で
+/// 割った値なので、拡大率の違うモニタにまたがると同じ点がウインドウごとに違う値になり、
+/// 比べたり、あるウインドウで測った点へ別のウインドウを動かしたりできないため。
 #[derive(Clone)]
 struct Geometry {
-    /// 中身の範囲（画面の座標）。
+    /// 中身の範囲（画面の座標、物理ピクセル）。
     inner: Rect,
+    /// このウインドウでの 1 ポイントの物理ピクセル数。
+    ppp: f32,
     /// ペインを並べた範囲（ウインドウの中の座標）。
     area: Rect,
     panes: Vec<tree::Placed>,
+}
+
+impl Geometry {
+    /// 画面の点（物理ピクセル）の、このウインドウの中での位置（ポイント）。
+    fn local(&self, screen: Pos2) -> Pos2 {
+        ((screen - self.inner.min) / self.ppp).to_pos2()
+    }
 }
 
 struct Drag {
@@ -140,7 +185,7 @@ struct Drag {
     float: Option<u64>,
     /// 引き出す前にいた場所。Esc で取り消すと戻す。
     origin: Option<Back>,
-    /// 最後に分かったカーソルの位置（画面の座標）。放したフレームでは位置が取れない
+    /// 最後に分かったカーソルの位置（画面の座標、物理ピクセル）。放したフレームでは位置が取れない
     /// ことがある（X11）ので、前の値を使う。
     screen: Pos2,
     under: Option<Window>,
@@ -225,8 +270,11 @@ impl Dock {
                     id,
                     root: Some(f.root),
                     initial: f.rect,
+                    opened_ppp: None,
+                    placed: false,
                     inner: None,
                     frame: Vec2::ZERO,
+                    ppp: 1.0,
                     close: false,
                 }
             })
@@ -372,20 +420,24 @@ impl Dock {
         match back {
             Back::Main(t) => tree::insert(&mut self.main, pane, &t),
             Back::Float(rect) => {
-                self.new_float(pane, rect);
+                self.new_float(pane, rect, false);
             }
         }
     }
 
-    fn new_float(&mut self, pane: &str, rect: [f32; 4]) -> u64 {
+    /// `follows` なら、ドラッグでカーソルに追わせるので置き直さない。
+    fn new_float(&mut self, pane: &str, rect: [f32; 4], follows: bool) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.floats.push(Float {
             id,
             root: Some(Node::Pane(pane.to_owned())),
             initial: rect,
+            opened_ppp: None,
+            placed: follows,
             inner: None,
             frame: Vec2::ZERO,
+            ppp: 1.0,
             close: false,
         });
         self.note(format!("new window #{id} for {pane} at {rect:?}"));
@@ -395,22 +447,25 @@ impl Dock {
     /// ペインを別ウインドウへ出す。前に別ウインドウでいた位置があればそこへ。
     pub fn float(&mut self, pane: &str) {
         let size = self.geometry.iter().find_map(|(w, g)| {
-            g.panes
-                .iter()
-                .find(|p| p.pane == pane)
-                .map(|p| (g.inner.min + p.rect.min.to_vec2(), p.rect.size(), *w))
+            g.panes.iter().find(|p| p.pane == pane).map(|p| {
+                (
+                    g.inner.min + (p.rect.min.to_vec2() + vec2(40.0, 40.0)) * g.ppp,
+                    p.rect.size(),
+                    *w,
+                )
+            })
         });
         let rect = self.floated.get(pane).copied().or_else(|| {
             size.map(|(min, size, _)| {
                 let size = size.max(MIN_FLOAT);
-                [min.x + 40.0, min.y + 40.0, size.x, size.y]
+                [min.x, min.y, size.x, size.y]
             })
         });
         let rect = rect.unwrap_or([200.0, 200.0, 360.0, 280.0]);
         let back = self.take(pane);
         self.hidden.remove(pane);
         self.event(format!("float {pane} (was {back:?})"));
-        self.new_float(pane, rect);
+        self.new_float(pane, rect, false);
     }
 
     /// ペインを本体の、最後にいた場所へ戻す。
@@ -570,6 +625,9 @@ impl Dock {
         };
         let viewport = f.viewport();
         let [x, y, w, h] = f.initial;
+        let opened_ppp = f
+            .opened_ppp
+            .unwrap_or_else(|| ctx.input(|i| i.pixels_per_point));
         let title = f
             .root
             .as_ref()
@@ -583,21 +641,30 @@ impl Dock {
             .unwrap_or_default();
         let builder = ViewportBuilder::default()
             .with_title(format!("{title} - vw"))
-            .with_position([x, y])
+            .with_position([x / opened_ppp, y / opened_ppp])
             .with_inner_size([w, h]);
+        if let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
+            f.opened_ppp = Some(opened_ppp);
+        }
         ctx.show_viewport_immediate(viewport, builder, |ctx, _class| {
-            let (inner, outer, close) = ctx.input(|i| {
+            let (inner, outer, close, ppp) = ctx.input(|i| {
                 (
                     i.viewport().inner_rect,
                     i.viewport().outer_rect,
                     i.viewport().close_requested(),
+                    i.pixels_per_point,
                 )
             });
             if let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
+                f.ppp = ppp;
+                if !f.placed && inner.is_some() {
+                    f.placed = true;
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x / ppp, y / ppp)));
+                }
                 if let Some(inner) = inner {
                     f.inner = Some(inner);
                     if let Some(outer) = outer {
-                        f.frame = inner.min - outer.min;
+                        f.frame = (inner.min - outer.min) * ppp;
                     }
                 }
                 if close {
@@ -644,14 +711,19 @@ impl Dock {
             .root(window)
             .map(|n| tree::arrange(n, area))
             .unwrap_or_default();
-        let inner = ui
-            .ctx()
-            .input(|i| i.viewport().inner_rect)
-            .unwrap_or(Rect::from_min_size(Pos2::ZERO, area.size()));
+        let (inner, ppp) = ui.ctx().input(|i| {
+            (
+                i.viewport()
+                    .inner_rect
+                    .unwrap_or(Rect::from_min_size(Pos2::ZERO, area.size())),
+                i.pixels_per_point,
+            )
+        });
         self.geometry.insert(
             window,
             Geometry {
-                inner,
+                inner: inner * ppp,
+                ppp,
                 area,
                 panes: arranged.panes.clone(),
             },
@@ -774,8 +846,13 @@ impl Dock {
         let Some(local) = ctx.input(|i| i.pointer.press_origin()) else {
             return;
         };
-        let inner = ctx.input(|i| i.viewport().inner_rect).unwrap_or(Rect::ZERO);
-        let screen = inner.min + local.to_vec2();
+        let (inner, ppp) = ctx.input(|i| {
+            (
+                i.viewport().inner_rect.unwrap_or(Rect::ZERO),
+                i.pixels_per_point,
+            )
+        });
+        let screen = to_screen(inner, local, ppp);
         let grab = local - placed.rect.min;
         let source = ctx.viewport_id();
         self.note(format!(
@@ -792,9 +869,9 @@ impl Dock {
             }
             _ => {
                 let size = placed.rect.size().max(MIN_FLOAT);
-                let min = screen - grab;
+                let min = screen - grab * ppp;
                 let back = self.take(&placed.pane);
-                let id = self.new_float(&placed.pane, [min.x, min.y, size.x, size.y]);
+                let id = self.new_float(&placed.pane, [min.x, min.y, size.x, size.y], true);
                 self.note(format!(
                     "  pulled out of {window:?} into window #{id}; origin {back:?}"
                 ));
@@ -826,18 +903,19 @@ impl Dock {
             return;
         };
         let source = drag.source;
-        let (local, down, ctrl, esc, inner) = ctx.input_for(source, |i| {
+        let (local, down, ctrl, esc, inner, ppp) = ctx.input_for(source, |i| {
             (
                 i.pointer.latest_pos(),
                 i.pointer.primary_down(),
                 i.modifiers.ctrl,
                 i.key_pressed(egui::Key::Escape),
                 i.viewport().inner_rect,
+                i.pixels_per_point,
             )
         });
         let drag = self.drag.as_mut().expect("checked above");
         if let (Some(local), Some(inner)) = (local, inner) {
-            drag.screen = inner.min + local.to_vec2();
+            drag.screen = to_screen(inner, local, ppp);
         }
         if ctrl != drag.ctrl {
             drag.ctrl = ctrl;
@@ -868,7 +946,7 @@ impl Dock {
         } else {
             under.and_then(|w| {
                 let g = self.geometry.get(&w)?;
-                let local = screen - g.inner.min.to_vec2();
+                let local = g.local(screen);
                 let buttons = guides::buttons(g.area, &g.panes, local);
                 guides::hit(&buttons, local).cloned().map(|b| (w, b))
             })
@@ -929,11 +1007,11 @@ impl Dock {
             }
         }
         let to = if drag.shrunk.is_some() {
-            drag.screen + CHIP_OFFSET - f.frame
+            drag.screen + CHIP_OFFSET * f.ppp - f.frame
         } else {
-            drag.screen - drag.grab - f.frame
+            drag.screen - drag.grab * f.ppp - f.frame
         };
-        ctx.send_viewport_cmd_to(viewport, ViewportCommand::OuterPosition(to));
+        ctx.send_viewport_cmd_to(viewport, ViewportCommand::OuterPosition(f.points(to)));
         if let Some(line) = line {
             self.note(line);
         }
@@ -968,7 +1046,7 @@ impl Dock {
                 drag.float
                     .and_then(|id| self.floats.iter().find(|f| f.id == id)),
             ) {
-                let to = drag.screen - drag.grab - f.frame;
+                let to = f.points(drag.screen - drag.grab * f.ppp - f.frame);
                 ctx.send_viewport_cmd_to(f.viewport(), ViewportCommand::OuterPosition(to));
                 self.note(format!("  move window #{} to {to:?}", f.id));
             }
@@ -979,7 +1057,7 @@ impl Dock {
                     let size = unshrunk
                         .or(f.inner.map(|r| r.size()))
                         .unwrap_or(vec2(f.initial[2], f.initial[3]));
-                    let inner = Rect::from_min_size(drag.screen - drag.grab, size);
+                    let inner = Rect::from_min_size(f.points(drag.screen) - drag.grab, size);
                     f.inner = Some(inner);
                     let rect = f.rect();
                     self.floated.insert(drag.pane.clone(), rect);
@@ -1047,7 +1125,7 @@ impl Dock {
         let Some(g) = self.geometry.get(&window) else {
             return;
         };
-        let local = drag.screen - g.inner.min.to_vec2();
+        let local = g.local(drag.screen);
         let buttons = guides::buttons(g.area, &g.panes, local);
         let hot = guides::hit(&buttons, local);
         let painter = ui
@@ -1155,6 +1233,38 @@ mod tests {
         d.set_shown("map", true);
         assert!(matches!(d.window_of("map"), Some(Window::Float(_))));
         assert_eq!(d.layout().floats[0].rect, [10.0, 20.0, 300.0, 200.0]);
+    }
+
+    #[test]
+    fn saved_float_rect_is_the_outer_corner_in_physical_pixels() {
+        let f = Float {
+            id: 0,
+            root: None,
+            initial: [0.0; 4],
+            opened_ppp: Some(1.5),
+            placed: true,
+            inner: Some(Rect::from_min_size(pos2(100.0, 50.0), vec2(300.0, 200.0))),
+            frame: vec2(12.0, 45.0),
+            ppp: 1.5,
+            close: false,
+        };
+        assert_eq!(f.rect(), [138.0, 30.0, 300.0, 200.0]);
+    }
+
+    #[test]
+    fn a_float_not_placed_yet_keeps_its_saved_rect() {
+        let f = Float {
+            id: 0,
+            root: None,
+            initial: [-1500.0, 200.0, 300.0, 200.0],
+            opened_ppp: None,
+            placed: false,
+            inner: Some(Rect::from_min_size(pos2(7.0, 52.0), vec2(300.0, 200.0))),
+            frame: vec2(12.0, 45.0),
+            ppp: 1.5,
+            close: false,
+        };
+        assert_eq!(f.rect(), [-1500.0, 200.0, 300.0, 200.0]);
     }
 
     #[test]

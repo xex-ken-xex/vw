@@ -70,6 +70,12 @@ impl VwApp {
                         chosen = Some(Action::ToggleMap);
                     }
                 }
+                if self.settings().sky.enabled {
+                    let sky = self.sky.open;
+                    if self.menu_item(ui, Action::ToggleSkyChart, Some(sky)) {
+                        chosen = Some(Action::ToggleSkyChart);
+                    }
+                }
                 ui.separator();
                 let maximized = self.maximized.is_some();
                 if self.menu_item(ui, Action::ToggleMaximize, Some(maximized)) {

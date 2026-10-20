@@ -209,6 +209,19 @@ impl Loader {
         }
     }
 
+    /// まだ始まっていない要求 `request` を、待ち行列の先頭に移す。
+    pub fn prioritize(&self, request: u64) {
+        for queue in [&self.queue, &self.develop_queue] {
+            let mut q = queue.0.lock().unwrap();
+            if let Some(i) = q.jobs.iter().position(|j| j.request == request) {
+                if let Some(job) = q.jobs.remove(i) {
+                    q.jobs.push_front(job);
+                }
+                return;
+            }
+        }
+    }
+
     /// まだ始まっていない要求を取り消す。始まったものは最後まで読むが、結果は要求番号で捨てられる。
     pub fn cancel(&self, request: u64) {
         for queue in [&self.queue, &self.develop_queue] {

@@ -4533,6 +4533,7 @@ dependencies = [
  "vw-core",
  "vw-dicom",
  "vw-dock",
+ "vw-fits",
  "vw-gif",
  "vw-jpeg",
  "vw-launch",
@@ -4593,6 +4594,14 @@ dependencies = [
  "serde",
  "serde_json",
  "vw-ui",
+]
+
+[[package]]
+name = "vw-fits"
+version = "0.7.0"
+dependencies = [
+ "flate2",
+ "vw-core",
 ]
 
 [[package]]

@@ -557,6 +557,8 @@ impl VwApp {
         let colors = crate::viewer::Colors {
             probe: self.settings().metadata.color_format,
             roi: self.settings().roi.color_format,
+            face_known: self.settings().ai.face_known(),
+            face_unknown: self.settings().ai.face_unknown(),
         };
         let background = self.canvas_color(ui.ctx());
         let lang = self.lang();

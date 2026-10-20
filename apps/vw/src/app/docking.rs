@@ -24,10 +24,11 @@ pub(super) const PIPELINE: &str = "pixel_pipeline";
 pub(super) const CHARTS: &str = "relationship_charts";
 pub(super) const MAP: &str = "map";
 pub(super) const DATASETS: &str = "datasets";
+pub(super) const SKY: &str = "sky_chart";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 6] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS];
+pub(super) const TOOLS: [&str; 7] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
 fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
@@ -37,6 +38,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         PIPELINE => ([1560.0, 560.0], None),
         CHARTS => ([1000.0, 680.0], None),
         DATASETS => ([1100.0, 700.0], None),
+        SKY => ([900.0, 640.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -117,6 +119,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         PIPELINE => "Pixel pipeline",
         CHARTS => "Relationship charts",
         MAP => "Map",
+        SKY => "Sky chart",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -222,6 +225,7 @@ impl Panes for AppPanes<'_> {
             PIPELINE => self.app.pipeline_pane(ui),
             CHARTS => self.app.people_graph_pane(ui),
             MAP => self.app.map_pane(ui),
+            SKY => self.app.sky_pane(ui),
             DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
@@ -290,6 +294,7 @@ impl VwApp {
             PIPELINE => &mut self.pipeline.open,
             CHARTS => &mut self.graph_window.open,
             DATASETS => &mut self.show_datasets,
+            SKY => &mut self.sky.open,
             _ => &mut self.map.open,
         }
     }

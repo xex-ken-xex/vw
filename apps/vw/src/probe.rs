@@ -56,6 +56,9 @@ fn inverted(meta: &Metadata) -> bool {
         .is_some_and(|p| p.trim() == "MONOCHROME1")
 }
 
+/// 欠損の画素（FITS の BLANK や NaN）の値の代わりに出す文字。画面では訳して出す。
+pub const MISSING: &str = "missing";
+
 /// 画素の値を画面とコピーに出す文字にする。カラーは `format` の書き方にする（`bits` は 1 色のビット数）。
 pub fn value_text(
     color: ColorModel,
@@ -72,10 +75,11 @@ pub fn value_text(
             .unwrap_or_default()
     };
     match color {
-        ColorModel::Gray => values
-            .first()
-            .map(|&v| Quantity::of(meta).text(v))
-            .unwrap_or_default(),
+        ColorModel::Gray => match values.first() {
+            Some(v) if v.is_nan() => MISSING.to_owned(),
+            Some(&v) => Quantity::of(meta).text(v),
+            None => String::new(),
+        },
         ColorModel::GrayAlpha => format!("{} A {}", n(0), n(1)),
         ColorModel::Rgb | ColorModel::Rgba => crate::color_text::text(values, bits, format),
     }
@@ -184,6 +188,20 @@ mod tests {
         assert_eq!(
             value_text(ColorModel::Gray, &meta(&[]), &[7.0], ColorFormat::Rgb, 16),
             "7"
+        );
+    }
+
+    #[test]
+    fn missing_pixels_say_so_instead_of_a_number() {
+        assert_eq!(
+            value_text(
+                ColorModel::Gray,
+                &meta(&[]),
+                &[f64::NAN],
+                ColorFormat::Rgb,
+                32
+            ),
+            MISSING
         );
     }
 

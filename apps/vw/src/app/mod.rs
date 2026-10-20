@@ -147,6 +147,8 @@ pub struct VwApp {
     tree: FolderTree,
     /// レジストリに渡した、DICOM か調べる拡張子の式。変わったときだけフォルダを読み直すため。
     probe_extensions: String,
+    /// 天体の画像のプラグインと共有する表示の決め方。変わったら表示中の FITS を読み直す。
+    fits: vw_fits::SharedOptions,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
     texture_options: TextureOptions,
     /// 画像フィールドの枠。常に 1 つ以上ある。
@@ -169,6 +171,7 @@ pub struct VwApp {
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
     map: crate::map_window::MapWindow,
+    sky: crate::sky_window::SkyWindow,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -486,6 +489,7 @@ impl VwApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         registry: Registry,
+        fits: vw_fits::SharedOptions,
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
@@ -537,6 +541,9 @@ impl VwApp {
         };
         // 別ウインドウに出したペインの前の位置は、モニタの構成が変わると画面の外かもしれない。
         let monitors_changed = saved.window.is_some() && restoring.is_none();
+        if monitors_changed {
+            log.info("Window: the displays changed since last time, so the window opens where the OS puts it");
+        }
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
@@ -564,6 +571,7 @@ impl VwApp {
         });
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
+        fits.set(settings.settings.fits.options());
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 
@@ -593,6 +601,7 @@ impl VwApp {
             loader: Loader::new(registry, cc.egui_ctx.clone()),
             tree,
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
+            fits,
             texture_options: settings.settings.viewer.texture_options(),
             slots: vec![Slot::new(0)],
             active: 0,
@@ -632,6 +641,7 @@ impl VwApp {
             place_names: None,
             place_names_load: None,
             map: Default::default(),
+            sky: Default::default(),
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -783,6 +793,9 @@ impl VwApp {
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
+            Action::ToggleSkyChart => {
+                self.sky.open = !self.sky.open && self.settings().sky.enabled;
+            }
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowAiModels => self.ai_models.open = true,
@@ -946,8 +959,8 @@ impl eframe::App for VwApp {
                 ms(self.started.elapsed())
             ));
         }
-        self.restore_window(&ctx);
-        self.track_window(&ctx);
+        self.restore_window(&ctx, frame);
+        self.track_window(&ctx, frame);
         self.receive(&ctx);
         self.receive_archives(&ctx);
         self.pump_folder_load();
@@ -986,6 +999,7 @@ impl eframe::App for VwApp {
         self.send_ui(&ctx);
         self.update_evaluation(&ctx);
         self.map_tick(&ctx);
+        self.sky_tick();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         let lang = self.lang();
@@ -1154,6 +1168,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleMap => "Map",
+        Action::ToggleSkyChart => "Sky chart",
         other => other.title(),
     }
 }

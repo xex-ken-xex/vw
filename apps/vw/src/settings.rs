@@ -686,6 +686,145 @@ impl Dicom {
     }
 }
 
+/// 天体の画像（[`vw_fits`]）の、最初の黒と白の決め方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitsStretch {
+    MinMax,
+    #[default]
+    Percentile,
+    Zscale,
+}
+
+impl FitsStretch {
+    pub const ALL: [FitsStretch; 3] = [
+        FitsStretch::Percentile,
+        FitsStretch::Zscale,
+        FitsStretch::MinMax,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FitsStretch::MinMax => "Minimum to maximum",
+            FitsStretch::Percentile => "Percentiles",
+            FitsStretch::Zscale => "zscale",
+        }
+    }
+}
+
+/// 天体の画像の、黒と白の間の明るさの付け方（[`vw_core::Curve`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitsCurve {
+    #[default]
+    Linear,
+    Sqrt,
+    Log,
+    Asinh,
+}
+
+impl FitsCurve {
+    pub const ALL: [FitsCurve; 4] = [
+        FitsCurve::Linear,
+        FitsCurve::Asinh,
+        FitsCurve::Log,
+        FitsCurve::Sqrt,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            FitsCurve::Linear => "Linear",
+            FitsCurve::Sqrt => "Square root",
+            FitsCurve::Log => "Logarithm",
+            FitsCurve::Asinh => "asinh",
+        }
+    }
+
+    fn curve(self) -> vw_core::Curve {
+        match self {
+            FitsCurve::Linear => vw_core::Curve::Linear,
+            FitsCurve::Sqrt => vw_core::Curve::Sqrt,
+            FitsCurve::Log => vw_core::Curve::Log,
+            FitsCurve::Asinh => vw_core::Curve::Asinh,
+        }
+    }
+}
+
+/// 天体の画像（FITS）の表示。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fits {
+    pub stretch: FitsStretch,
+    /// [`FitsStretch::Percentile`] で黒にする位置（％）。
+    pub low_percent: f32,
+    /// [`FitsStretch::Percentile`] で白にする位置（％）。
+    pub high_percent: f32,
+    pub curve: FitsCurve,
+    /// `ROWORDER` のないファイルの上下を返す。
+    pub flip_rows: bool,
+    /// `BAYERPAT` のモザイクをカラーにする。
+    pub demosaic: bool,
+}
+
+impl Default for Fits {
+    fn default() -> Self {
+        let d = vw_fits::Options::default();
+        Self {
+            stretch: FitsStretch::Percentile,
+            low_percent: d.low_percent,
+            high_percent: d.high_percent,
+            curve: FitsCurve::Linear,
+            flip_rows: d.flip_rows,
+            demosaic: d.demosaic,
+        }
+    }
+}
+
+impl Fits {
+    pub const PERCENT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("fits");
+        let percent = |v: &f32| Fits::PERCENT_RANGE.contains(v);
+        let mut low_percent = r
+            .get_valid("low_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.low_percent);
+        let mut high_percent = r
+            .get_valid("high_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.high_percent);
+        if low_percent >= high_percent {
+            r.problem(
+                "high_percent",
+                "must be larger than low_percent (both reset)".to_owned(),
+            );
+            (low_percent, high_percent) = (d.low_percent, d.high_percent);
+        }
+        Self {
+            stretch: r.get("stretch").unwrap_or(d.stretch),
+            low_percent,
+            high_percent,
+            curve: r.get("curve").unwrap_or(d.curve),
+            flip_rows: r.get("flip_rows").unwrap_or(d.flip_rows),
+            demosaic: r.get("demosaic").unwrap_or(d.demosaic),
+        }
+    }
+
+    pub fn options(&self) -> vw_fits::Options {
+        vw_fits::Options {
+            stretch: match self.stretch {
+                FitsStretch::MinMax => vw_fits::Stretch::MinMax,
+                FitsStretch::Percentile => vw_fits::Stretch::Percentile,
+                FitsStretch::Zscale => vw_fits::Stretch::ZScale,
+            },
+            low_percent: self.low_percent,
+            high_percent: self.high_percent,
+            curve: self.curve.curve(),
+            flip_rows: self.flip_rows,
+            demosaic: self.demosaic,
+        }
+    }
+}
+
 /// 他の機器への送信（[`crate::dicom_send`]）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DicomSend {
@@ -1011,6 +1150,10 @@ pub struct Ai {
     pub face_threshold: f32,
     /// 検出されても付けないタグ。
     pub excluded_tags: Vec<String>,
+    /// 人物が分かった顔の枠の色（`#RRGGBB`）。
+    pub face_known_color: String,
+    /// 人物が分からない顔の枠の色。
+    pub face_unknown_color: String,
 }
 
 impl Default for Ai {
@@ -1023,6 +1166,8 @@ impl Default for Ai {
             // SFace の作者が示す、同じ人とみなすコサイン類似度の目安。
             face_threshold: 0.363,
             excluded_tags: Vec::new(),
+            face_known_color: "#50DC78".into(),
+            face_unknown_color: "#F0C83C".into(),
         }
     }
 }
@@ -1052,7 +1197,17 @@ impl Ai {
                 .get_valid("face_threshold", unit, "must be between 0 and 1")
                 .unwrap_or(d.face_threshold),
             excluded_tags: r.get("excluded_tags").unwrap_or(d.excluded_tags),
+            face_known_color: read_color(&mut r, "face_known_color", d.face_known_color),
+            face_unknown_color: read_color(&mut r, "face_unknown_color", d.face_unknown_color),
         }
+    }
+
+    pub fn face_known(&self) -> Color32 {
+        parse_hex_color(&self.face_known_color).unwrap_or(Color32::GREEN)
+    }
+
+    pub fn face_unknown(&self) -> Color32 {
+        parse_hex_color(&self.face_unknown_color).unwrap_or(Color32::YELLOW)
     }
 
     pub fn thresholds(&self) -> crate::tagger::Thresholds {
@@ -1061,6 +1216,57 @@ impl Ai {
             character: self.character_threshold,
         }
     }
+}
+
+/// 星図のウインドウ（天体の画像の写った範囲を枠で出す）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SkySettings {
+    /// メニューに星図を出す。星図はネットを使わないので、既定で出しておく。
+    pub enabled: bool,
+    /// ヘッダの WCS から分かった範囲の枠の色（`#RRGGBB`）。
+    pub certain_color: String,
+    /// 架台の向きから見積もった範囲の枠の色。
+    pub approximate_color: String,
+}
+
+impl Default for SkySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            certain_color: "#F0C83C".into(),
+            approximate_color: "#EA4335".into(),
+        }
+    }
+}
+
+impl SkySettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("sky");
+        Self {
+            enabled: r.get("enabled").unwrap_or(d.enabled),
+            certain_color: read_color(&mut r, "certain_color", d.certain_color),
+            approximate_color: read_color(&mut r, "approximate_color", d.approximate_color),
+        }
+    }
+
+    pub fn certain(&self) -> Color32 {
+        parse_hex_color(&self.certain_color).unwrap_or(Color32::YELLOW)
+    }
+
+    pub fn approximate(&self) -> Color32 {
+        parse_hex_color(&self.approximate_color).unwrap_or(Color32::RED)
+    }
+}
+
+/// `#RRGGBB` の色の設定。読めなければ問題を記して既定の色にする。
+fn read_color(r: &mut crate::toml_reader::Section<'_, '_>, key: &str, default: String) -> String {
+    r.get_valid(
+        key,
+        |v: &String| parse_hex_color(v).is_some(),
+        "must be #RRGGBB",
+    )
+    .unwrap_or(default)
 }
 
 /// 地図のウインドウ（撮影地点を点で出す）。
@@ -1115,6 +1321,7 @@ pub struct Settings {
     pub roi: RoiSettings,
     pub labels: Labels,
     pub dicom: Dicom,
+    pub fits: Fits,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
@@ -1122,6 +1329,7 @@ pub struct Settings {
     pub quality: Quality,
     pub ai: Ai,
     pub map: MapSettings,
+    pub sky: SkySettings,
     pub keys: Keymap,
 }
 
@@ -1141,6 +1349,7 @@ impl Settings {
         let roi = RoiSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
+        let fits = Fits::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
@@ -1148,6 +1357,7 @@ impl Settings {
         let quality = Quality::read(&mut r);
         let ai = Ai::read(&mut r);
         let map = MapSettings::read(&mut r);
+        let sky = SkySettings::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -1168,6 +1378,7 @@ impl Settings {
                 roi,
                 labels,
                 dicom,
+                fits,
                 dicom_send,
                 dataset,
                 fullscreen,
@@ -1175,6 +1386,7 @@ impl Settings {
                 quality,
                 ai,
                 map,
+                sky,
                 keys,
             },
             problems,
@@ -2087,5 +2299,60 @@ mod quality_tests {
         assert_eq!(s.quality.ssim, Metric::Ssim.default_thresholds());
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("quality.ssim:"), "{}", problems[0]);
+    }
+}
+
+#[cfg(test)]
+mod fits_tests {
+    use super::*;
+
+    #[test]
+    fn fits_settings_become_decoder_options() {
+        let text =
+            "[fits]\nstretch = \"zscale\"\ncurve = \"asinh\"\nflip_rows = true\ndemosaic = false\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let o = s.fits.options();
+        assert_eq!(o.stretch, vw_fits::Stretch::ZScale);
+        assert_eq!(o.curve, vw_core::Curve::Asinh);
+        assert!(o.flip_rows && !o.demosaic);
+    }
+
+    #[test]
+    fn frame_colors_are_read_and_bad_ones_fall_back() {
+        let text = "[sky]\ncertain_color = \"#102030\"\napproximate_color = \"red\"\n\
+                    [ai]\nface_known_color = \"#00ff00\"\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.sky.certain(), Color32::from_rgb(0x10, 0x20, 0x30));
+        assert_eq!(
+            s.sky.approximate_color,
+            SkySettings::default().approximate_color
+        );
+        assert_eq!(s.ai.face_known(), Color32::from_rgb(0, 255, 0));
+        assert_eq!(s.ai.face_unknown_color, Ai::default().face_unknown_color);
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].starts_with("sky.approximate_color:"),
+            "{}",
+            problems[0]
+        );
+    }
+
+    #[test]
+    fn sky_chart_is_on_by_default() {
+        assert!(Settings::default().sky.enabled);
+    }
+
+    #[test]
+    fn black_percentile_above_white_resets_both() {
+        let text = "[fits]\nlow_percent = 90.0\nhigh_percent = 10.0\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.fits, Fits::default());
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].starts_with("fits.high_percent:"),
+            "{}",
+            problems[0]
+        );
     }
 }

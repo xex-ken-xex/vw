@@ -318,16 +318,7 @@ impl VwApp {
         }
         for command in commands {
             match command {
-                crate::map_window::Command::Open(path) => {
-                    let Some(dir) = path.parent().map(Path::to_path_buf) else {
-                        continue;
-                    };
-                    // 今のフォルダなら読み直さずに選ぶ（スロットの表示や拡大を崩さないため）。
-                    if self.current.as_deref() != Some(dir.as_path()) {
-                        self.open_folder(&ctx, dir);
-                    }
-                    self.select_when_loaded = Some(path);
-                }
+                crate::map_window::Command::Open(path) => self.open_and_select(&ctx, path),
                 crate::map_window::Command::ShowDownloads => self.ai_models.open = true,
                 crate::map_window::Command::ClearPosition(path) => {
                     self.set_position(&path, None, true)
@@ -335,6 +326,57 @@ impl VwApp {
                 crate::map_window::Command::Undo => self.undo_position(),
             }
         }
+    }
+
+    /// 星図の欄が閉じていても毎フレームすること。
+    pub(super) fn sky_tick(&mut self) {
+        if !self.settings.settings.sky.enabled {
+            self.sky.open = false;
+        }
+        self.sky.forget_while_closed();
+    }
+
+    /// 星図の欄。枠から開いた画像は、地図と同じくそのフォルダへ移って選ぶ。
+    pub(super) fn sky_pane(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let settings = &self.settings.settings;
+        let registry = self.loader.registry().clone();
+        let active = self
+            .slots
+            .get(self.active)
+            .and_then(|s| s.shown.as_ref())
+            .map(|s| s.path.clone());
+        let inputs = crate::sky_window::Inputs {
+            lang: self.lang(),
+            settings: &settings.sky,
+            folder: self.current.as_deref(),
+            roots: &settings.dataset.roots,
+            registry: &registry,
+            order: settings.tree.order(),
+            active: active.as_deref(),
+        };
+        let commands = self.sky.ui(ui, &inputs);
+        for problem in self.sky.take_problems() {
+            self.log.error(format!("Sky chart: {problem}"));
+        }
+        for command in commands {
+            match command {
+                crate::sky_window::Command::Open(path) => self.open_and_select(&ctx, path),
+            }
+        }
+    }
+
+    /// 地図や星図から開いた画像のフォルダへ移り、その画像を選ぶ。読み込みの列ではその画像を
+    /// 先にする（数百枚のフォルダで、選んだ画像が最後に読まれるのを待たないように）。
+    fn open_and_select(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let Some(dir) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        // 今のフォルダなら読み直さずに選ぶ（スロットの表示や拡大を崩さないため）。
+        if self.current.as_deref() != Some(dir.as_path()) {
+            self.open_folder(ctx, dir);
+        }
+        self.select_when_loaded = Some(path);
     }
 
     /// 地図を使う設定で地名の表があれば読み込み、使わなくなったら手放す。

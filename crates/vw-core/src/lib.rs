@@ -19,5 +19,5 @@ pub mod image;
 pub mod plugin;
 
 pub use display::{DisplayImage, DisplayParams};
-pub use image::{ColorModel, Metadata, PixelData, VwImage};
+pub use image::{ColorModel, Curve, Metadata, PixelData, VwImage};
 pub use plugin::{DecodeError, DecoderPlugin, ProbeExtensions, Registry};

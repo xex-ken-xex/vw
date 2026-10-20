@@ -12,9 +12,9 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, ColorFormat, Fullscreen, FullscreenMode, HeaderClick, HeadingStyle, Labels,
-    Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup, Settings,
-    ThemeChoice, Tree, Viewer,
+    parse_hex_color, ColorFormat, FitsCurve, FitsStretch, Fullscreen, FullscreenMode, HeaderClick,
+    HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay,
+    SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -30,17 +30,19 @@ enum Section {
     Labels,
     Datasets,
     Fullscreen,
+    Fits,
     Dicom,
     DicomSend,
     Log,
     Quality,
     Ai,
     Map,
+    Sky,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 15] = [
+    const ALL: [Section; 17] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -49,12 +51,14 @@ impl Section {
         Section::Labels,
         Section::Datasets,
         Section::Fullscreen,
+        Section::Fits,
         Section::Dicom,
         Section::DicomSend,
         Section::Log,
         Section::Quality,
         Section::Ai,
         Section::Map,
+        Section::Sky,
         Section::Keys,
     ];
 
@@ -68,12 +72,14 @@ impl Section {
             Section::Labels => "Flags and tags",
             Section::Datasets => "Datasets",
             Section::Fullscreen => "Fullscreen slideshow",
+            Section::Fits => "Astronomy images (FITS)",
             Section::Dicom => "Medical images (DICOM)",
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
             Section::Quality => "Quality evaluation",
             Section::Ai => "AI tags",
             Section::Map => "Map",
+            Section::Sky => "Sky chart",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -89,7 +95,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 68] = [
+const ITEMS: [Item; 79] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -448,6 +454,20 @@ const ITEMS: [Item; 68] = [
         widget: ai_threads_widget,
     },
     Item {
+        section: Section::Ai,
+        key: "ai.face_known_color",
+        title: "Frame color of known faces",
+        description: "Color of the frame and name of faces matched to a registered person (#RRGGBB).",
+        widget: face_known_color_widget,
+    },
+    Item {
+        section: Section::Ai,
+        key: "ai.face_unknown_color",
+        title: "Frame color of unknown faces",
+        description: "Color of the frame of faces not matched to anyone (#RRGGBB).",
+        widget: face_unknown_color_widget,
+    },
+    Item {
         section: Section::Fullscreen,
         key: "fullscreen.mode",
         title: "Mode",
@@ -518,6 +538,48 @@ const ITEMS: [Item; 68] = [
         widget: path_size_widget,
     },
     Item {
+        section: Section::Fits,
+        key: "fits.stretch",
+        title: "First black and white",
+        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black.",
+        widget: fits_stretch_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.low_percent",
+        title: "Black percentile",
+        description: "With Percentiles, this percent of the pixels are drawn black (%).",
+        widget: fits_low_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.high_percent",
+        title: "White percentile",
+        description: "With Percentiles, pixels above this percent are drawn white (%).",
+        widget: fits_high_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.curve",
+        title: "Curve between black and white",
+        description: "How the values between black and white are brightened. Linear keeps them in proportion; asinh, Logarithm and Square root lift faint parts such as nebulae while keeping bright stars from turning white (strongest first).",
+        widget: fits_curve_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.flip_rows",
+        title: "Turn upside down",
+        description: "Show the first row of the file at the bottom, as the FITS standard and ds9 do. Only for files without ROWORDER; files that say TOP-DOWN or BOTTOM-UP are always shown that way.",
+        widget: fits_flip_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.demosaic",
+        title: "Color from the Bayer pattern",
+        description: "Turn images from color cameras (with BAYERPAT) into color. When off, they are shown as the gray mosaic stored in the file.",
+        widget: fits_demosaic_widget,
+    },
+    Item {
         section: Section::Dicom,
         key: "dicom.probe_extensions",
         title: "Extensions to check for DICOM",
@@ -565,6 +627,27 @@ const ITEMS: [Item; 68] = [
         title: "Map credit link",
         description: "Page opened by clicking the credit.",
         widget: map_attribution_url_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.enabled",
+        title: "Use the sky chart",
+        description: "Show the sky chart (View > Sky chart), which draws where astronomy images (FITS) point on a chart of the stars. It uses no network.",
+        widget: sky_enabled_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.certain_color",
+        title: "Frame color of known ranges",
+        description: "Solid frame of images whose header has a WCS, so the range is known (#RRGGBB).",
+        widget: sky_certain_color_widget,
+    },
+    Item {
+        section: Section::Sky,
+        key: "sky.approximate_color",
+        title: "Frame color of estimated ranges",
+        description: "Dotted frame of images with only the mount position (RA and DEC), sized from FOCALLEN and XPIXSZ with north up, and the cross of images without them (#RRGGBB).",
+        widget: sky_approximate_color_widget,
     },
 ];
 
@@ -732,18 +815,42 @@ fn show_path_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool
 }
 
 fn path_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.fullscreen.path_color, Color32::GRAY, ui)
+}
+
+fn face_known_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.ai.face_known_color, Color32::GREEN, ui)
+}
+
+fn face_unknown_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.ai.face_unknown_color, Color32::YELLOW, ui)
+}
+
+fn sky_enabled_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.sky.enabled, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn sky_certain_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.sky.certain_color, Color32::YELLOW, ui)
+}
+
+fn sky_approximate_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.sky.approximate_color, Color32::RED, ui)
+}
+
+/// `#RRGGBB` の色を、色の見本のボタンと文字の欄で変える。
+fn hex_color_widget(value: &mut String, fallback: Color32, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let mut color = parse_hex_color(&s.fullscreen.path_color).unwrap_or(Color32::GRAY);
+        let mut color = parse_hex_color(value).unwrap_or(fallback);
         if ui.color_edit_button_srgba(&mut color).changed() {
-            s.fullscreen.path_color =
-                format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+            *value = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
             changed = true;
         }
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut s.fullscreen.path_color).desired_width(80.0));
+        let r = ui.add(egui::TextEdit::singleline(value).desired_width(80.0));
         // 打ちかけの値（"#80" など）は保存しない。読み直したときに既定値へ戻されてしまうため。
-        if r.changed() && parse_hex_color(&s.fullscreen.path_color).is_some() {
+        if r.changed() && parse_hex_color(value).is_some() {
             changed = true;
         }
     });
@@ -1016,6 +1123,58 @@ fn scale_filter_radios(value: &mut ScaleFilter, ui: &mut egui::Ui, lang: Languag
         }
     });
     *value != before
+}
+
+fn fits_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fits.stretch;
+    ui.horizontal(|ui| {
+        for stretch in FitsStretch::ALL {
+            ui.radio_value(&mut s.fits.stretch, stretch, tr(lang, stretch.title()));
+        }
+    });
+    s.fits.stretch != before
+}
+
+fn fits_curve_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fits.curve;
+    ui.horizontal(|ui| {
+        for curve in FitsCurve::ALL {
+            ui.radio_value(&mut s.fits.curve, curve, tr(lang, curve.title()));
+        }
+    });
+    s.fits.curve != before
+}
+
+/// 黒は白より小さく、白は黒より大きくしか動かせない。
+fn fits_low_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let high = s.fits.high_percent;
+    percent_widget(&mut s.fits.low_percent, 0.0..=(high - 0.1).max(0.0), ui)
+}
+
+fn fits_high_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let low = s.fits.low_percent;
+    percent_widget(&mut s.fits.high_percent, (low + 0.1).min(100.0)..=100.0, ui)
+}
+
+fn percent_widget(v: &mut f32, range: std::ops::RangeInclusive<f32>, ui: &mut egui::Ui) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(v)
+            .range(range)
+            .speed(0.1)
+            .fixed_decimals(1)
+            .suffix(" %"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn fits_flip_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.flip_rows, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn fits_demosaic_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.demosaic, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

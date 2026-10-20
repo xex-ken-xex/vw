@@ -2,7 +2,7 @@
 //!
 //! 階調変換（ウィンドウ幅/レベル）と、GPU のテクスチャ上限に収めるための縮小をここで行う。
 
-use crate::image::{ColorModel, PixelData, VwImage};
+use crate::image::{ColorModel, Curve, PixelData, VwImage};
 
 /// GPU に転送する RGBA8 画像。行優先、アルファは乗算済みでない（ストレート）。
 #[derive(Clone, Debug)]
@@ -38,29 +38,55 @@ impl Default for DisplayParams {
 /// 画素ごとに浮動小数点で計算するより速く、16bit 画像でも表は 64KB で済むため。
 pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
     let window = params.window.or(img.window);
+    let curve = img.curve;
     match &img.data {
         PixelData::U8(v) => match window {
-            None => convert(img, params, |i| v[i], |i| v[i]),
-            Some(win) => {
-                let lut = build_lut(256, win);
+            None if curve == Curve::Linear => convert(img, params, |i| v[i], |i| v[i]),
+            _ => {
+                let lut = build_lut(256, window.unwrap_or((0.0, 255.0)), curve);
                 convert(img, params, |i| lut[v[i] as usize], |i| v[i])
             }
         },
         PixelData::U16(v) => {
             let max = ((1u32 << img.significant_bits.clamp(1, 16)) - 1) as f32;
-            let lut = build_lut(65536, window.unwrap_or((0.0, max)));
+            let lut = build_lut(65536, window.unwrap_or((0.0, max)), curve);
             convert(img, params, |i| lut[v[i] as usize], |i| (v[i] >> 8) as u8)
         }
         PixelData::F32(v) => {
-            let (lo, hi) = window.unwrap_or_else(|| min_max(v));
-            let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
+            let shade = Shade::new(window.unwrap_or_else(|| min_max(v)), curve);
             convert(
                 img,
                 params,
-                |i| ((v[i] - lo) * scale).round().clamp(0.0, 255.0) as u8,
+                |i| shade.of(v[i]),
                 |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
             )
         }
+    }
+}
+
+/// 黒 `lo`〜白 `hi` の値を 0〜255 に写す。範囲外は 0 / 255 に張り付き、NaN（欠損）は黒。
+struct Shade {
+    lo: f32,
+    /// 値 1 あたりの明るさ（0〜255）。
+    scale: f32,
+    curve: Curve,
+}
+
+impl Shade {
+    fn new((lo, hi): (f32, f32), curve: Curve) -> Self {
+        let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
+        Self { lo, scale, curve }
+    }
+
+    fn of(&self, v: f32) -> u8 {
+        let x = (v - self.lo) * self.scale;
+        // 直線は曲線を通さずに丸める。0〜1 に直してから戻すと浮動小数点の誤差で 1 段ずれる
+        // 値があり、画素の変換の表示が標準の表示と食い違ってしまうため。
+        let x = match self.curve {
+            Curve::Linear => x,
+            curve => curve.apply(x / 255.0) * 255.0,
+        };
+        x.round().clamp(0.0, 255.0) as u8
     }
 }
 
@@ -179,12 +205,10 @@ pub fn shrink(img: &DisplayImage, max_side: u32) -> DisplayImage {
     }
 }
 
-/// 0..size の値を、`lo` → 0、`hi` → 255 の直線で写す変換表。範囲外は 0 / 255 に張り付く。
-fn build_lut(size: usize, (lo, hi): (f32, f32)) -> Vec<u8> {
-    let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
-    (0..size)
-        .map(|v| ((v as f32 - lo) * scale).round().clamp(0.0, 255.0) as u8)
-        .collect()
+/// 0..size の値を、`lo` → 0、`hi` → 255 の間を `curve` で写す変換表。範囲外は 0 / 255 に張り付く。
+fn build_lut(size: usize, window: (f32, f32), curve: Curve) -> Vec<u8> {
+    let shade = Shade::new(window, curve);
+    (0..size).map(|v| shade.of(v as f32)).collect()
 }
 
 /// NaN や無限大を除いた最小値と最大値。
@@ -330,6 +354,51 @@ mod tests {
         let d = to_display(&img, &DisplayParams::default());
         let grays: Vec<u8> = d.rgba.iter().step_by(4).copied().collect();
         assert_eq!(&grays[..3], &[0, 128, 255]);
+    }
+
+    fn grays_with(curve: Curve, data: PixelData, window: (f32, f32)) -> Vec<u8> {
+        let mut img = VwImage::new(data.len() as u32, 1, ColorModel::Gray, data).unwrap();
+        img.window = Some(window);
+        img.curve = curve;
+        to_display(&img, &DisplayParams::default())
+            .rgba
+            .iter()
+            .step_by(4)
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn curves_keep_black_and_white_and_lift_the_quarter_point() {
+        let quarter = |curve| {
+            let g = grays_with(curve, PixelData::U16(vec![0, 250, 1000]), (0.0, 1000.0));
+            assert_eq!((g[0], g[2]), (0, 255), "{curve:?}");
+            g[1]
+        };
+        assert_eq!(quarter(Curve::Linear), 64);
+        assert_eq!(quarter(Curve::Sqrt), 128);
+        let (log, asinh) = (quarter(Curve::Log), quarter(Curve::Asinh));
+        assert!(log > 128 && asinh > 128, "log {log}, asinh {asinh}");
+    }
+
+    #[test]
+    fn curves_apply_to_every_sample_type() {
+        let window = (0.0, 100.0);
+        let u8 = grays_with(Curve::Sqrt, PixelData::U8(vec![25]), window);
+        let u16 = grays_with(Curve::Sqrt, PixelData::U16(vec![25]), window);
+        let f32 = grays_with(Curve::Sqrt, PixelData::F32(vec![25.0]), window);
+        assert_eq!((u8[0], u16[0], f32[0]), (128, 128, 128));
+    }
+
+    #[test]
+    fn curved_u8_without_a_window_uses_the_full_range() {
+        let mut img = gray8(&[0, 64, 255]);
+        img.curve = Curve::Sqrt;
+        let d = to_display(&img, &DisplayParams::default());
+        assert_eq!(
+            d.rgba.iter().step_by(4).copied().collect::<Vec<_>>(),
+            [0, 128, 255]
+        );
     }
 
     #[test]
