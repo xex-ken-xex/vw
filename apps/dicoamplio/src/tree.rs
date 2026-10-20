@@ -49,6 +49,8 @@ pub struct Study {
 pub struct Patient {
     pub id: String,
     pub name: String,
+    pub birth_date: String,
+    pub sex: String,
     pub studies: Vec<Study>,
 }
 
@@ -67,6 +69,8 @@ pub struct Place {
     pub series_ordinal: u64,
     pub patient_id: String,
     pub patient_name: String,
+    pub patient_birth_date: String,
+    pub patient_sex: String,
     pub study_id: String,
     pub study_description: String,
     pub series_number: String,
@@ -145,6 +149,8 @@ impl SourceTree {
             series_ordinal: r.ordinal,
             patient_id: p.id.clone(),
             patient_name: p.name.clone(),
+            patient_birth_date: p.birth_date.clone(),
+            patient_sex: p.sex.clone(),
             study_id: s.id.clone(),
             study_description: s.description.clone(),
             series_number: r.number.clone(),
@@ -160,6 +166,8 @@ impl SourceTree {
 struct Record {
     patient_id: String,
     patient_name: String,
+    patient_birth_date: String,
+    patient_sex: String,
     study_uid: String,
     study_id: String,
     study_date: String,
@@ -265,6 +273,8 @@ fn read(path: &Path) -> Result<Record> {
         transfer_syntax,
         patient_id: t(tags::PATIENT_ID),
         patient_name: t(tags::PATIENT_NAME),
+        patient_birth_date: t(tags::PATIENT_BIRTH_DATE),
+        patient_sex: t(tags::PATIENT_SEX),
         study_uid: t(tags::STUDY_INSTANCE_UID),
         study_id: t(tags::STUDY_ID),
         study_date: t(tags::STUDY_DATE),
@@ -319,6 +329,8 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
     type SeriesMap = BTreeMap<String, SeriesAcc>;
     type StudyMap = BTreeMap<String, (Study, SeriesMap)>;
     let mut patients: BTreeMap<(String, String), StudyMap> = BTreeMap::new();
+    // 生年月日と性別は患者の中で最初に読めた値(患者を分ける鍵には入れない)
+    let mut birth_and_sex: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut tree = SourceTree::default();
     for (path, r) in records {
         let r = match r {
@@ -329,6 +341,15 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
             }
         };
         tree.files += 1;
+        let extra = birth_and_sex
+            .entry((r.patient_id.clone(), r.patient_name.clone()))
+            .or_default();
+        if extra.0.is_empty() {
+            extra.0 = r.patient_birth_date.clone();
+        }
+        if extra.1.is_empty() {
+            extra.1 = r.patient_sex.clone();
+        }
         let studies = patients
             .entry((r.patient_id.clone(), r.patient_name.clone()))
             .or_default();
@@ -372,9 +393,14 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
     }
     let (mut ordinal, mut study_ordinal, mut series_ordinal): (u64, u64, u64) = (0, 0, 0);
     for (pi, ((id, name), studies)) in patients.into_iter().enumerate() {
+        let (birth_date, sex) = birth_and_sex
+            .remove(&(id.clone(), name.clone()))
+            .unwrap_or_default();
         let mut p = Patient {
             id,
             name,
+            birth_date,
+            sex,
             studies: vec![],
         };
         let mut studies: Vec<(Study, SeriesMap)> = studies.into_values().collect();
@@ -416,6 +442,8 @@ fn build(records: Vec<(PathBuf, Result<Record>)>) -> SourceTree {
                             series_ordinal: acc.series.ordinal,
                             patient_id: p.id.clone(),
                             patient_name: p.name.clone(),
+                            patient_birth_date: p.birth_date.clone(),
+                            patient_sex: p.sex.clone(),
                             study_id: study.id.clone(),
                             study_description: study.description.clone(),
                             series_number: acc.series.number.clone(),
@@ -446,6 +474,8 @@ mod tests {
             Ok(Record {
                 patient_id: pid.into(),
                 patient_name: format!("{pid}^N"),
+                patient_birth_date: "19700101".into(),
+                patient_sex: "O".into(),
                 study_uid: study.into(),
                 study_id: "1".into(),
                 study_date: "20240501".into(),

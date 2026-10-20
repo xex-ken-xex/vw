@@ -268,9 +268,9 @@ ImageComments:image=copy %(i1)d of src %(I)d (serial %(n)d)</code></pre>
 
 <div class="card">
   <h3 style="margin-top:0">G. 患者の ID は元のまま、検査だけ増やしたい</h3>
-  <p>既定の PatientID・PatientName の規則を<b>消す</b>(タグの規則の既定の行の ×)。すると元の値のまま写り、複製どうしで同じ患者になる。</p>
+  <p>最初から入っている PatientID・PatientName の規則を × で<b>消す</b>。すると元の値のまま写り、複製どうしで同じ患者になる。</p>
 <pre><code>患者 1 / 検査 3
-既定を消す: PatientID, PatientName  (プリセットでは drop_default = ["PatientID", "PatientName"])
+PatientID・PatientName の行を消す  (コマンドラインでは --drop-default PatientID --drop-default PatientName)
 StudyDescription:study=再検 %(s1)d</code></pre>
 </div>
 
@@ -303,6 +303,8 @@ StudyDescription:study=再検 %(s1)d</code></pre>
 <tr><th>変数</th><th>意味</th><th class="c">patient</th><th class="c">study</th><th class="c">series / image</th><th>例</th></tr>
 <tr><td class="mono">src_patient_id</td><td>元の PatientID</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_id)s-%(p1)d → 1001-2</td></tr>
 <tr><td class="mono">src_patient_name</td><td>元の PatientName</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_name)s^C%(p1)d</td></tr>
+<tr><td class="mono">src_patient_birth_date</td><td>元の PatientBirthDate</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_birth_date)s → 19800102</td></tr>
+<tr><td class="mono">src_patient_sex</td><td>元の PatientSex</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_patient_sex)s → F</td></tr>
 <tr><td class="mono">src_study_id</td><td>元の StudyID</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_study_id)s/%(s1)d</td></tr>
 <tr><td class="mono">src_study_description</td><td>元の StudyDescription</td><td class="c no">×</td><td class="c ok">✓</td><td class="c ok">✓</td><td class="mono">%(src_study_description)s (%(s1)d)</td></tr>
 <tr><td class="mono">src_series_number</td><td>元の SeriesNumber</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(src_series_number)s0%(r)d</td></tr>
@@ -373,20 +375,27 @@ StudyDescription:study=再検 %(s1)d</code></pre>
   <li>書けない字(JIS にない漢字など)は、実行前に全行を調べて「何行目の何列」までエラーに出す。</li>
 </ul>
 
-<h2 id="defaults">8. 既定の規則と、その消し方</h2>
-<p>何も書かなくても、次の 6 つは振り直されます(同じタグを自分で書けば、そちらが勝ちます)。</p>
+<h2 id="defaults">8. 最初から入っている規則(既定)</h2>
+<p>新しく開くと、タグの規則に次の 10 行が最初から入っています。どれも<b>普通の規則</b>なので、値を書き換えても、× で消してもかまいません。消したタグは元ファイルの値のまま写ります。
+消した既定は、そのレベルの枠の「既定を足し直す」で戻せます。「タグを選んで足す」で既定にあるタグを選ぶと、既定の値が入った状態で足されます。</p>
 <table>
 <tr><th>タグ</th><th>レベル</th><th>既定の値</th><th>なぜ</th></tr>
-<tr><td class="mono">PatientID</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL%(P)03d-%(p)04d</td><td>元の患者が複数いても、複製どうしが同じ ID に潰れないよう <code>P</code> と <code>p</code> の両方で区別する</td></tr>
-<tr><td class="mono">PatientName</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL^%(P)03d-%(p)04d</td><td>同上</td></tr>
+<tr><td class="mono">PatientID</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL%(P)03d-%(p)04d</td><td>患者四属性。元の患者が複数いても、複製どうしが同じ ID に潰れないよう <code>P</code> と <code>p</code> の両方で区別する</td></tr>
+<tr><td class="mono">PatientName</td><td><span class="tag lv-p">patient</span></td><td class="mono">EVAL^%(P)03d-%(p)04d</td><td>患者四属性。同上</td></tr>
+<tr><td class="mono">PatientBirthDate</td><td><span class="tag lv-p">patient</span></td><td class="mono">%(src_patient_birth_date)s</td><td>患者四属性。元の値のまま。CSV の列(<code>%(birth)s</code> など)に書き換えて使う</td></tr>
+<tr><td class="mono">PatientSex</td><td><span class="tag lv-p">patient</span></td><td class="mono">%(src_patient_sex)s</td><td>患者四属性。元の値のまま。<code>%(sex)s</code> などに書き換えて使う</td></tr>
 <tr><td class="mono">StudyID</td><td><span class="tag lv-s">study</span></td><td class="mono">%(s1)d</td><td>検査の順番が見えるように</td></tr>
 <tr><td class="mono">AccessionNumber</td><td><span class="tag lv-s">study</span></td><td class="mono">ACC%(P)03d%(p)04d%(s)02d</td><td>受付番号は検査ごとに一意であるべきなので</td></tr>
+<tr><td class="mono">StudyDescription</td><td><span class="tag lv-s">study</span></td><td class="mono">%(src_study_description)s</td><td>元の値のまま。<code>%(src_study_description)s %(s1)d回目</code> などに書き換えて使う</td></tr>
 <tr><td class="mono">SeriesNumber</td><td><span class="tag lv-r">series</span></td><td class="mono">%(r1)d</td><td>シリーズの順番が見えるように</td></tr>
+<tr><td class="mono">SeriesDescription</td><td><span class="tag lv-r">series</span></td><td class="mono">%(src_series_description)s</td><td>元の値のまま。<code>%(src_series_description)s #%(r1)d</code> などに書き換えて使う</td></tr>
 <tr><td class="mono">InstanceNumber</td><td><span class="tag lv-i">image</span></td><td class="mono">%(inst)d</td><td>複製どうしで番号が重ならないように(元の番号 + 複製番号 × 10000)</td></tr>
 </table>
-<p><b>消すには</b>: 画面の「タグの規則」で、既定の行の右端の <b>×</b> を押します。行は取り消し線になり「元の値のまま写す」と出ます。「戻す」で元に戻ります。
-消した設定はプリセットに <code>drop_default = ["PatientID", "PatientName"]</code> として保存され、コマンドラインでは <code>--drop-default PatientID</code> です。</p>
-<div class="note warn">PatientID を消して患者を 2 以上に増やすと、複製は<b>同じ患者の別の検査</b>として PACS に入ります(UID は振り直されるので重複エラーにはなりません)。それが狙いのとき(シナリオ G)だけ消してください。</div>
+<p>値が空になり、元ファイルにもその要素がないときは、要素を作りません(元に生年月日がなければ、複製にも生年月日は入らない)。
+コマンドラインで既定の規則を外すには <code>--drop-default PatientID</code>。</p>
+<div class="note warn">PatientID を消して患者を 2 以上に増やすと、複製は<b>同じ患者の別の検査</b>として PACS に入ります(UID は振り直されるので重複エラーにはなりません)。それが狙いのとき(シナリオ G)だけ消してください。
+AccessionNumber や InstanceNumber を消すと、複製どうしで番号が重なり、PACS によっては取り違えや上書きが起きます。</div>
+<div class="note">前の版で保存したプリセット(既定の規則を書いていないもの)は、読むときに、当時暗黙に使っていた 6 つの既定を書き足します。出力は前と同じです。</div>
 
 <h2 id="uid">9. UID・出力・文字コード</h2>
 <ul>
@@ -405,7 +414,7 @@ StudyDescription:study=再検 %(s1)d</code></pre>
 
 dicoamplio 元 出力 --preset 日本人患者-UTF8          # プリセットを使う
 dicoamplio 元 出力 --rules rules.txt                 # 1 行 1 規則のファイル
-dicoamplio 元 出力 --drop-default PatientID          # 既定の規則を使わない
+dicoamplio 元 出力 --drop-default PatientID          # 既定の規則を外す(元の値のまま写す)
 dicoamplio 元 --send PACS@10.0.0.5:11112 --patients 100 --assoc-unit modality --connections 4
 dicoamplio --send PACS@10.0.0.5:11112 --echo         # C-ECHO
 dicoamplio --send PACS@10.0.0.5:11112 --send-only ./dicom   # そのまま送る
@@ -569,7 +578,7 @@ dicoamplio --help</code></pre>
     const level = $('#colorBy').value; const gk = groupKey(level, ix, pl);
     if (!groups.has(gk)) groups.set(gk, groups.size);
     const hue = GROUP_HUES[groups.get(gk) % GROUP_HUES.length];
-    const strs = { src_patient_id: pl.pt.id, src_patient_name: pl.pt.name, src_modality: pl.se.mod };
+    const strs = { src_patient_id: pl.pt.id, src_patient_name: pl.pt.name, src_study_description: pl.st.desc, src_series_description: pl.se.sdesc, src_modality: pl.se.mod };
     const vals = RULES.map(([t, tp]) => `<span class="k">${t}</span> ${render(tp, ints, strs)}`).join('<br>');
     const chip = document.createElement('div'); chip.className = 'chip new'; chip.style.borderColor = `hsl(${hue} 70% 55%)`; chip.style.background = `hsl(${hue} 60% 50% / .18)`;
     chip.innerHTML = vals + `<br><span class="k">n=${ints.n}  元 ${pl.pt.name.split('^')[0]} #${pl.im.inst}</span>`;
@@ -606,7 +615,7 @@ dicoamplio --help</code></pre>
 
   // ---- 試す ----
   const INTS = [['p', 1], ['p1', 2], ['P', 1], ['s', 0], ['s1', 1], ['S', 0], ['r', 0], ['r1', 1], ['R', 0], ['i', 1], ['i1', 2], ['I', 6], ['n', 42], ['inst', 10007]];
-  const STRS = [['src_patient_id', '1001'], ['src_patient_name', 'Yamada^Tarou'], ['src_study_id', 'ST1'], ['src_study_description', '頭部CT 造影あり'], ['src_series_number', '3'], ['src_series_description', 'Axial 5mm'], ['src_modality', 'CT'], ['name_alpha', 'Yamada^Tarou'], ['name_kanji', '山田^太郎'], ['name_kana', 'ﾔﾏﾀﾞ^ﾀﾛｳ'], ['name', 'Yamada^Tarou'], ['sex', 'M'], ['weight', '68.4'], ['height_cm', '172']];
+  const STRS = [['src_patient_id', '1001'], ['src_patient_name', 'Yamada^Tarou'], ['src_patient_birth_date', '19800102'], ['src_patient_sex', 'M'], ['src_study_id', 'ST1'], ['src_study_description', '頭部CT 造影あり'], ['src_series_number', '3'], ['src_series_description', 'Axial 5mm'], ['src_modality', 'CT'], ['name_alpha', 'Yamada^Tarou'], ['name_kanji', '山田^太郎'], ['name_kana', 'ﾔﾏﾀﾞ^ﾀﾛｳ'], ['name', 'Yamada^Tarou'], ['sex', 'M'], ['weight', '68.4'], ['height_cm', '172']];
   for (const [k, v] of INTS) $('#intvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="number" data-int="${k}" value="${v}"></label>`);
   for (const [k, v] of STRS) $('#strvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="text" data-str="${k}" value="${v}"></label>`);
   function tryRender() {
@@ -617,7 +626,7 @@ dicoamplio --help</code></pre>
     try {
       const pieces = parseTpl(tpl); r.textContent = render(pieces, ints, strs); r.classList.remove('err');
       const used = pieces.filter((p) => p.name).map((p) => p.name);
-      const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series' };
+      const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', src_patient_birth_date: 'patient', src_patient_sex: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series' };
       const order = ['patient', 'study', 'series', 'image'];
       const need = used.reduce((m, v) => Math.max(m, order.indexOf(lv[v] || (ints[v] !== undefined ? 'image' : 'patient'))), 0);
       const where = need === 0 ? 'どのレベルにも付けられる' : `この規則に付けられるレベルは ${order.slice(need).join(' / ')}(${order[need]} より粗いレベルには付けられない)`;

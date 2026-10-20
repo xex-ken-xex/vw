@@ -60,9 +60,18 @@ printf 風で、変数は `%(名前)` で指定する: `EVAL%(p1)05d`、`%(weigh
 
 `--csv` は全体の CSV。タグごとに別の CSV を読むときは `タグ:レベル@CSVのパス=テンプレート`(プリセットでは `csv` と `csv_encoding`)。そのタグの変数には、そのタグの CSV の列が使える。行数を超えたら先頭へ戻る。
 
-何も指定しないときの既定の規則(`src/engine.rs` の `DEFAULT_RULES`): PatientID・PatientName(患者)、StudyID・AccessionNumber(検査)、SeriesNumber(シリーズ)、InstanceNumber(画像)。
+新しい設定に最初から入っている規則(`src/config.rs` の `DEFAULT_RULES`)。どれも普通の規則なので、直しても消してもよい(消したタグは元の値のまま写る)。
 
-既定の規則を使わない(そのタグは元の値のまま写す)には、画面では既定の行の × を押す(「戻す」で戻る)。プリセットでは `drop_default = ["PatientID", "PatientName"]`、コマンドラインでは `--drop-default PatientID`。患者の ID を元のまま検査だけ増やす、といった使い方のため。PatientID を消して患者を 2 以上にすると、複製は同じ患者の別の検査になる。
+| レベル | タグ | 値 |
+|---|---|---|
+| 患者(患者四属性) | PatientID / PatientName / PatientBirthDate / PatientSex | `EVAL%(P)03d-%(p)04d` / `EVAL^%(P)03d-%(p)04d` / `%(src_patient_birth_date)s` / `%(src_patient_sex)s` |
+| 検査 | StudyID / AccessionNumber / StudyDescription | `%(s1)d` / `ACC%(P)03d%(p)04d%(s)02d` / `%(src_study_description)s` |
+| シリーズ | SeriesNumber / SeriesDescription | `%(r1)d` / `%(src_series_description)s` |
+| 画像 | InstanceNumber | `%(inst)d` |
+
+生年月日・性別・説明は元の値のままで、どこを書き換えられるかが見えるように並べてある。値が空で元ファイルにもない要素は作らない。画面では各レベルの枠の「既定を足し直す」で消した既定を戻せ、「タグを選んで足す」で既定にあるタグを選ぶと既定の値が入る。コマンドラインで外すには `--drop-default PatientID`。PatientID を消して患者を 2 以上にすると、複製は同じ患者の別の検査になる。
+
+前の版のプリセット(`rules_version` がなく、既定の規則を書いていないもの)は、読むときに当時暗黙に足していた 6 つ(PatientID・PatientName・StudyID・AccessionNumber・SeriesNumber・InstanceNumber)を書き足すので、出力は変わらない。`drop_default` に書いたタグは足さない。
 
 ### ヘルプ
 
