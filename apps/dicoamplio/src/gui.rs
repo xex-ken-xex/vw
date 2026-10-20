@@ -2,10 +2,10 @@
 //! パネルの並びも vw に合わせる: メニュー → 道具の帯 → ログ(下)→ 設定(左)→ 構成とプレビュー(右)→ タグの規則(中央)。
 
 use crate::charset::Charset;
-use crate::config::{self, Config, CsvEncoding, Destination, Level, RuleSpec};
+use crate::config::{self, Config, CsvEncoding, Destination, Level, RuleSpec, DEFAULT_RULES};
 use crate::engine::{
     self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, PreviewRow, Progress,
-    TableCache, WorkerStatus, DEFAULT_RULES,
+    TableCache, WorkerStatus,
 };
 use crate::tree::{self, Counts, Place, SourceTree};
 use anyhow::Result;
@@ -78,6 +78,24 @@ fn level_note(level: Level) -> &'static str {
     }
 }
 
+/// 既定の規則にあるタグなら、その値(「タグを選んで足す」で最初から入れておく)。
+fn default_value(tag: &str) -> &'static str {
+    DEFAULT_RULES
+        .iter()
+        .find(|(t, _, _)| *t == tag)
+        .map_or("", |(_, _, v)| v)
+}
+
+/// そのレベルの既定の規則のうち、いまの規則にないタグ。
+/// 規則は (0010,0010) や /VR つきでも書けるので、文字ではなくタグで比べる
+fn missing_defaults(rules: &[RuleSpec], level: Level) -> Vec<&'static str> {
+    DEFAULT_RULES
+        .iter()
+        .filter(|(t, l, _)| *l == level && !rules.iter().any(|r| tag_of(&r.tag) == tag_of(t)))
+        .map(|(t, _, _)| *t)
+        .collect()
+}
+
 /// 変数の説明(変数名に乗せたときの吹き出し)。
 fn var_help(name: &str) -> &'static str {
     match name {
@@ -97,6 +115,8 @@ fn var_help(name: &str) -> &'static str {
         "inst" => "元の InstanceNumber + 画像の複製番号 × 10000。元の画像どうしの区別はこれが引き受ける",
         "src_patient_id" => "元ファイルの PatientID",
         "src_patient_name" => "元ファイルの PatientName",
+        "src_patient_birth_date" => "元ファイルの PatientBirthDate",
+        "src_patient_sex" => "元ファイルの PatientSex",
         "src_study_id" => "元ファイルの StudyID",
         "src_study_description" => "元ファイルの StudyDescription",
         "src_series_number" => "元ファイルの SeriesNumber",
@@ -203,6 +223,7 @@ struct App {
     dest_name: String,
     /// 開いている「選ぶ窓」と、選んだ結果の入れ先
     picker: Option<(PickTarget, Picker)>,
+    about: crate::about::About,
 }
 
 /// 「参照」で選んだパスの入れ先。
@@ -273,6 +294,7 @@ impl App {
             destinations: vec![],
             dest_name: String::new(),
             picker: None,
+            about: Default::default(),
         };
         match config::load_destinations(&app.preset_dir) {
             Ok(d) => app.destinations = d,
@@ -369,6 +391,7 @@ impl App {
         match s.rx.try_recv() {
             Ok(t) => {
                 tree::log_skipped(&t.skipped, |m| self.log.push(m));
+                tree::log_duplicates(&t.duplicates, |m| self.log.push(m));
                 // 「元 N 個」は読めたファイルの数にする(DICOM でないものや DICOMDIR を除く)
                 self.sources = Some(t.files);
                 self.tree = Some(Arc::new(t));
@@ -769,6 +792,13 @@ impl App {
                     help = true;
                     ui.close();
                 }
+                if ui
+                    .add(vw_ui::menu::item(false, "バージョン情報", ""))
+                    .clicked()
+                {
+                    self.about.open = true;
+                    ui.close();
+                }
             });
         });
         if help {
@@ -1039,6 +1069,9 @@ impl App {
                 (Some(n), None, Some(t)) => {
                     let c = t.counts();
                     ui.colored_label(OK, format!("✓ ファイル {n} 個: {} 患者 / {} 検査 / {} シリーズ / {} 画像", c.patients, c.studies, c.series, c.images));
+                    if !t.duplicates.is_empty() {
+                        ui.colored_label(WARN, format!("⚠ SOPInstanceUID が重なる元ファイル {} 個(複製では別の UID を振る。ログに一覧)", t.duplicates.len()));
+                    }
                 }
                 (Some(n), None, None) => {
                     ui.colored_label(OK, format!("✓ ファイル {n} 個"));
@@ -1173,8 +1206,7 @@ impl App {
 
         let mut remove = None;
         let mut add: Option<RuleSpec> = None;
-        let mut drop_default: Option<&'static str> = None;
-        let mut restore_default: Option<&'static str> = None;
+        let mut restore_level: Option<Level> = None;
         let csv_columns = self
             .engine
             .as_ref()
@@ -1222,50 +1254,6 @@ impl App {
                         });
                         ui.add_space(4.0);
 
-                        // 既定の規則。同じタグを足すと上書きされるので、値は見えているだけにし、
-                        // 消す(元の値のまま写す)か戻すかだけを操作できるようにする
-                        for (tag, l, value) in DEFAULT_RULES {
-                            // 規則は (0010,0010) や /VR つきでも書けるので、文字ではなくタグで比べる
-                            let default_tag = tag_of(tag);
-                            let overridden =
-                                self.cfg.rules.iter().any(|r| tag_of(&r.tag) == default_tag);
-                            if *l != level || overridden {
-                                continue;
-                            }
-                            let dropped = self.cfg.drops_default(tag);
-                            ui.horizontal(|ui| {
-                                // add_sized は中身を中央に置くので、幅だけ決めて左から並べる
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(TAG_W, 18.0),
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    |ui| {
-                                        ui.set_min_width(TAG_W);
-                                        ui.add_space(4.0);
-                                        let text = RichText::new(*tag).weak();
-                                        ui.label(if dropped { text.strikethrough() } else { text });
-                                    },
-                                );
-                                if dropped {
-                                    ui.weak(RichText::new("元の値のまま写す").small())
-                                        .on_hover_text("既定の規則を消したので、このタグは元ファイルの値のまま。複製どうしで同じ値になる");
-                                    if ui.button("戻す").on_hover_text("既定の規則に戻す").clicked() {
-                                        restore_default = Some(tag);
-                                    }
-                                } else {
-                                    ui.add(egui::Label::new(
-                                        RichText::new(*value).weak().monospace(),
-                                    ));
-                                    ui.weak(RichText::new("既定").small());
-                                    if ui
-                                        .button("×")
-                                        .on_hover_text("この既定の規則を消す(元の値のまま写す)")
-                                        .clicked()
-                                    {
-                                        drop_default = Some(tag);
-                                    }
-                                }
-                            });
-                        }
                         for i in 0..self.cfg.rules.len() {
                             if self.cfg.rules[i].level == level {
                                 self.rule_ui(ui, i, &mut remove);
@@ -1279,11 +1267,23 @@ impl App {
                             vw_ui::menu::button(ui, "タグを選んで足す ▼", |ui| {
                                 for name in typical_tags(level) {
                                     if ui.button(*name).clicked() {
-                                        add = Some(RuleSpec::new(name, level, ""));
+                                        add = Some(RuleSpec::new(name, level, default_value(name)));
                                         ui.close();
                                     }
                                 }
                             });
+                            let missing = missing_defaults(&self.cfg.rules, level);
+                            if !missing.is_empty()
+                                && ui
+                                    .button("既定を足し直す")
+                                    .on_hover_text(format!(
+                                        "消した既定の規則を、既定の値で足し直す: {}",
+                                        missing.join(" ")
+                                    ))
+                                    .clicked()
+                            {
+                                restore_level = Some(level);
+                            }
                         });
                     });
                     ui.add_space(6.0);
@@ -1300,11 +1300,12 @@ impl App {
         if let Some(r) = add {
             self.cfg.rules.push(r);
         }
-        if let Some(t) = drop_default {
-            self.cfg.drop_defaults.push(t.to_string());
-        }
-        if let Some(t) = restore_default {
-            self.cfg.drop_defaults.retain(|d| tag_of(d) != tag_of(t));
+        if let Some(level) = restore_level {
+            for tag in missing_defaults(&self.cfg.rules, level) {
+                self.cfg
+                    .rules
+                    .push(RuleSpec::new(tag, level, default_value(tag)));
+            }
         }
     }
 
@@ -2128,6 +2129,8 @@ fn sample_value(name: &str, ix: Idx, place: &Place, serial: u64) -> Option<Strin
         "inst" => 1 + ix.i as i64 * 10000,
         "src_patient_id" => return Some(format!("`{}`", place.patient_id)),
         "src_patient_name" => return Some(format!("`{}`", place.patient_name)),
+        "src_patient_birth_date" => return Some(format!("`{}`", place.patient_birth_date)),
+        "src_patient_sex" => return Some(format!("`{}`", place.patient_sex)),
         "src_study_id" => return Some(format!("`{}`", place.study_id)),
         "src_study_description" => return Some(format!("`{}`", place.study_description)),
         "src_series_number" => return Some(format!("`{}`", place.series_number)),
@@ -2197,6 +2200,9 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| self.rules_ui(ui));
         self.save_dialog_ui(&ctx);
         self.picker_ui(&ctx);
+        if let Some(e) = self.about.ui(&ctx) {
+            self.note(format!("エラー: ライセンスの一覧を開けない: {e}"));
+        }
     }
 }
 

@@ -269,13 +269,68 @@ pub struct Config {
     pub csv: String,
     pub csv_encoding: CsvEncoding,
     pub store: StoreConfig,
-    #[serde(rename = "rule")]
+    /// 規則の書き方の版。版 0 は既定の規則を書かずに暗黙に足していた(読むときに書き足す)。
+    /// 欄がなければ 0 と読むため、構造体の既定(いまの版)を使わない
+    #[serde(default)]
+    pub rules_version: u32,
+    /// 既定の規則も含めた全部。画面では最初から並び、普通の規則として直せる・消せる。
+    /// 欄がなければ空と読む(版 0 のファイルは load で書き足す)
+    #[serde(rename = "rule", default)]
     pub rules: Vec<RuleSpec>,
-    /// 使わない既定の規則のタグ(`PatientID` など)。そのタグは元の値のまま写す。
-    /// 既定を規則の一覧に実体として並べないのは、古いプリセット(既定を書いていない)が
-    /// 読み込まれたときに、患者の ID が振り直されずに複製どうしで潰れるのを防ぐため。
-    #[serde(rename = "drop_default", skip_serializing_if = "Vec::is_empty")]
+    /// 版 0 のプリセットで「この既定は使わない」と書いたタグ。読むときに既定を書き足さないためだけに読む
+    #[serde(rename = "drop_default", default, skip_serializing)]
     pub drop_defaults: Vec<String>,
+}
+
+/// 規則の書き方の、いまの版。
+pub const RULES_VERSION: u32 = 1;
+
+/// 新しい設定に最初から入っている規則。どれも普通の規則なので、直しても消してもよい。
+/// - 患者: 患者四属性(ID・氏名・生年月日・性別)。ID には元の患者の番号 `P` も入れる。
+///   複製の番号 `p` だけでは、元の患者が複数いるときに別の患者が同じ ID に潰れるため
+/// - 検査・シリーズ・画像: 複製どうしで番号が重ならないための番号と、説明
+///
+/// 生年月日・性別・説明は元の値のまま。どこを書き換えられるかが見えるように並べておく
+pub const DEFAULT_RULES: &[(&str, Level, &str)] = &[
+    ("PatientID", Level::Patient, "EVAL%(P)03d-%(p)04d"),
+    ("PatientName", Level::Patient, "EVAL^%(P)03d-%(p)04d"),
+    (
+        "PatientBirthDate",
+        Level::Patient,
+        "%(src_patient_birth_date)s",
+    ),
+    ("PatientSex", Level::Patient, "%(src_patient_sex)s"),
+    ("StudyID", Level::Study, "%(s1)d"),
+    ("AccessionNumber", Level::Study, "ACC%(P)03d%(p)04d%(s)02d"),
+    (
+        "StudyDescription",
+        Level::Study,
+        "%(src_study_description)s",
+    ),
+    ("SeriesNumber", Level::Series, "%(r1)d"),
+    (
+        "SeriesDescription",
+        Level::Series,
+        "%(src_series_description)s",
+    ),
+    ("InstanceNumber", Level::Image, "%(inst)d"),
+];
+
+/// 版 0 のプリセットに暗黙に足していた規則。同じ出力になるよう、読むときにこれを書き足す。
+const IMPLICIT_RULES_V0: &[(&str, Level, &str)] = &[
+    ("PatientID", Level::Patient, "EVAL%(P)03d-%(p)04d"),
+    ("PatientName", Level::Patient, "EVAL^%(P)03d-%(p)04d"),
+    ("StudyID", Level::Study, "%(s1)d"),
+    ("AccessionNumber", Level::Study, "ACC%(P)03d%(p)04d%(s)02d"),
+    ("SeriesNumber", Level::Series, "%(r1)d"),
+    ("InstanceNumber", Level::Image, "%(inst)d"),
+];
+
+pub fn default_rules() -> Vec<RuleSpec> {
+    DEFAULT_RULES
+        .iter()
+        .map(|(t, l, v)| RuleSpec::new(t, *l, v))
+        .collect()
 }
 
 impl Default for Config {
@@ -292,7 +347,8 @@ impl Default for Config {
             csv: String::new(),
             csv_encoding: CsvEncoding::default(),
             store: StoreConfig::default(),
-            rules: Vec::new(),
+            rules_version: RULES_VERSION,
+            rules: default_rules(),
             drop_defaults: Vec::new(),
         }
     }
@@ -302,7 +358,41 @@ impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("読めない: {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("プリセットの書式が違う: {}", path.display()))
+        let c: Config = toml::from_str(&text)
+            .with_context(|| format!("プリセットの書式が違う: {}", path.display()))?;
+        Ok(c.upgraded())
+    }
+
+    /// 版 0 のプリセットを、同じ出力になるいまの形にする。暗黙だった既定の規則のうち、
+    /// 上書きされていない・使わないと書かれていないものを先頭に書き足す。
+    pub fn upgraded(mut self) -> Config {
+        if self.rules_version >= RULES_VERSION {
+            return self;
+        }
+        let tag_of = crate::engine::tag_of;
+        let mentioned = |tag: &str| {
+            let t = tag_of(tag);
+            self.rules.iter().any(|r| tag_of(&r.tag) == t)
+                || self.drop_defaults.iter().any(|d| tag_of(d) == t)
+        };
+        let mut rules: Vec<RuleSpec> = IMPLICIT_RULES_V0
+            .iter()
+            .filter(|(t, _, _)| !mentioned(t))
+            .map(|(t, l, v)| RuleSpec::new(t, *l, v))
+            .collect();
+        rules.append(&mut self.rules);
+        Config {
+            rules_version: RULES_VERSION,
+            rules,
+            drop_defaults: Vec::new(),
+            ..self
+        }
+    }
+
+    /// `tag` の規則を全部外す(そのタグは元の値のまま写る)。`(0010,0020)` のような書き方でも同じタグなら外す。
+    pub fn drop_rules_for(&mut self, tag: &str) {
+        let t = crate::engine::tag_of(tag);
+        self.rules.retain(|r| crate::engine::tag_of(&r.tag) != t);
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -382,17 +472,59 @@ mod tests {
     }
 
     #[test]
-    fn dropped_defaults_roundtrip_and_are_omitted_when_empty() {
+    fn a_new_config_lists_the_patient_attributes_as_editable_rules() {
+        let c = Config::default();
+        let patient: Vec<&str> = c
+            .rules
+            .iter()
+            .filter(|r| r.level == Level::Patient)
+            .map(|r| r.tag.as_str())
+            .collect();
+        assert_eq!(
+            patient,
+            ["PatientID", "PatientName", "PatientBirthDate", "PatientSex"]
+        );
+        // 保存すると既定の規則もそのまま書かれ、読み直すと同じになる
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert!(text.contains("PatientBirthDate"), "{text}");
+        assert_eq!(toml::from_str::<Config>(&text).unwrap().upgraded(), c);
+    }
+
+    #[test]
+    fn a_version_0_preset_gets_the_implicit_defaults_it_relied_on() {
+        let old: Config = toml::from_str(
+            "drop_default = [\"(0008,0050)\"]\n\n[[rule]]\ntag = \"PatientName\"\nlevel = \"patient\"\nvalue = \"%(name)s\"\n",
+        )
+        .unwrap();
+        let c = old.upgraded();
+        let tags: Vec<&str> = c.rules.iter().map(|r| r.tag.as_str()).collect();
+        // 上書きした PatientName は自分の規則、使わないと書いた AccessionNumber は足さない。
+        // 版 0 になかった生年月日・性別などは、出力が変わらないよう足さない
+        assert_eq!(
+            tags,
+            [
+                "PatientID",
+                "StudyID",
+                "SeriesNumber",
+                "InstanceNumber",
+                "PatientName"
+            ]
+        );
+        assert_eq!(c.rules[4].value, "%(name)s");
+        assert_eq!(c.rules_version, RULES_VERSION);
+        assert!(c.drop_defaults.is_empty());
+        // 一度直したものは、もう書き足さない
+        assert_eq!(c.clone().upgraded(), c);
+    }
+
+    #[test]
+    fn a_saved_config_without_rules_stays_without_rules() {
         let c = Config {
-            drop_defaults: vec!["PatientID".into(), "(0010,0010)".into()],
+            rules: vec![],
             ..Config::default()
         };
         let text = toml::to_string_pretty(&c).unwrap();
-        assert!(text.contains("drop_default = ["), "{text}");
-        assert_eq!(toml::from_str::<Config>(&text).unwrap(), c);
-        assert!(!toml::to_string_pretty(&Config::default())
-            .unwrap()
-            .contains("drop_default"));
+        assert_eq!(toml::from_str::<Config>(&text).unwrap().upgraded(), c);
     }
 
     #[test]

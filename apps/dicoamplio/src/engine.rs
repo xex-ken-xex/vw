@@ -52,27 +52,17 @@ const UID_TAGS: &[(Tag, UidLevel)] = &[
     (Tag(0x0020, 0x0200), UidLevel::Frame), // SynchronizationFrameOfReferenceUID
 ];
 
-/// 何も指定しないときの規則。同じタグを指定すると上書きされる。
-/// 患者の ID には元の患者の番号 `P` も入れる。複製の番号 `p` だけでは、元の患者が複数いるときに
-/// 別の患者が同じ ID に潰れるため。
-pub const DEFAULT_RULES: &[(&str, Level, &str)] = &[
-    ("PatientID", Level::Patient, "EVAL%(P)03d-%(p)04d"),
-    ("PatientName", Level::Patient, "EVAL^%(P)03d-%(p)04d"),
-    ("StudyID", Level::Study, "%(s1)d"),
-    ("AccessionNumber", Level::Study, "ACC%(P)03d%(p)04d%(s)02d"),
-    ("SeriesNumber", Level::Series, "%(r1)d"),
-    ("InstanceNumber", Level::Image, "%(inst)d"),
-];
-
 /// 規則の値に使える整数の変数。小文字は複製の番号、大文字は元の木での番号。
 pub const BUILTIN_VARS: [&str; 14] = [
     "p", "p1", "P", "s", "s1", "S", "r", "r1", "R", "i", "i1", "I", "n", "inst",
 ];
 
 /// 元ファイルの値をそのまま使う文字列の変数(レベルの粗い順)。
-pub const SRC_VARS: [&str; 7] = [
+pub const SRC_VARS: [&str; 9] = [
     "src_patient_id",
     "src_patient_name",
+    "src_patient_birth_date",
+    "src_patient_sex",
     "src_study_id",
     "src_study_description",
     "src_series_number",
@@ -95,9 +85,9 @@ pub fn vars_for(level: Level) -> Vec<&'static str> {
 /// レベルごとに使える、元ファイルの値の変数。
 pub fn src_vars_for(level: Level) -> Vec<&'static str> {
     let upto = match level {
-        Level::Patient => 2,
-        Level::Study => 4,
-        Level::Series | Level::Image => 7,
+        Level::Patient => 4,
+        Level::Study => 6,
+        Level::Series | Level::Image => 9,
     };
     SRC_VARS[..upto].to_vec()
 }
@@ -312,20 +302,13 @@ impl Engine {
             path => Some(table(path, cfg.csv_encoding)?),
         };
 
-        // 既定 → 設定の順に積み、同じタグは後のものが勝つ
-        let mut specs: Vec<RuleSpec> = DEFAULT_RULES
+        // 同じタグは後のものが勝つ
+        let specs = cfg
+            .rules
             .iter()
-            .filter(|(t, _, _)| !cfg.drops_default(t))
-            .map(|(t, l, v)| RuleSpec::new(t, *l, v))
-            .collect();
-        specs.extend(
-            cfg.rules
-                .iter()
-                .filter(|r| !(r.tag.trim().is_empty() && r.value.is_empty()))
-                .cloned(),
-        );
+            .filter(|r| !(r.tag.trim().is_empty() && r.value.is_empty()));
         let mut rules: Vec<Rule> = Vec::new();
-        for s in &specs {
+        for s in specs {
             let own = match s.csv.trim() {
                 "" => None,
                 path => Some(
@@ -404,10 +387,12 @@ impl Engine {
         ]
     }
 
-    fn strs(place: &Place) -> [(&'static str, &str); 7] {
+    fn strs(place: &Place) -> [(&'static str, &str); 9] {
         [
             ("src_patient_id", &place.patient_id),
             ("src_patient_name", &place.patient_name),
+            ("src_patient_birth_date", &place.patient_birth_date),
+            ("src_patient_sex", &place.patient_sex),
             ("src_study_id", &place.study_id),
             ("src_study_description", &place.study_description),
             ("src_series_number", &place.series_number),
@@ -562,6 +547,7 @@ impl Engine {
             progress.total.load(Ordering::Relaxed)
         ));
         tree::log_skipped(&tree.skipped, |m| progress.say(m));
+        tree::log_duplicates(&tree.duplicates, |m| progress.say(m));
         if self.cfg.store.enabled {
             return self.run_store(&tree, &files, progress);
         }
@@ -1168,6 +1154,23 @@ impl Engine {
         let path = &prepared.path;
         let mut ds = prepared.src.clone();
         self.rewrite_uids(&mut ds, ix);
+        if place.duplicate > 0 {
+            // 元で SOPInstanceUID が重なったファイルは、そのままだと複製でも同じ UID・同じファイル名に
+            // なって上書きされる。自分の SOPInstanceUID だけを別にし、ほかのファイルからの参照
+            // (ReferencedSOPInstanceUID)は、どちらを指していたか分からないので最初のファイルのままにする
+            let orig = prepared
+                .src
+                .get(tags::SOP_INSTANCE_UID)
+                .and_then(|e| e.to_str().ok())
+                .map(|s| s.trim_end_matches('\0').trim().to_string())
+                .unwrap_or_default();
+            let key = format!("{orig}#{}", place.duplicate);
+            ds.put_str(
+                tags::SOP_INSTANCE_UID,
+                VR::UI,
+                self.uid(&key, UidLevel::Instance, ix),
+            );
+        }
 
         if let Some(code) = c.charset.code() {
             ds.put_str(tags::SPECIFIC_CHARACTER_SET, VR::CS, code);
@@ -1184,6 +1187,11 @@ impl Engine {
                 .tpl
                 .render(&vars)
                 .with_context(|| format!("{} ({})", rule.tag, path.display()))?;
+            // 値が空で元ファイルにもない要素は作らない。既定の規則は元の値をそのまま使うもの
+            // (生年月日・説明など)を含むので、元にない要素を空で足すと、複製だけ中身が変わるため
+            if text.is_empty() && ds.get(rule.tag).is_none() {
+                continue;
+            }
             // 元ファイルにある要素はその VR を、なければ辞書か規則の VR を使う。暗黙 VR のファイルでは
             // 辞書にないタグが UN で読まれるので、UN は「決まっていない」として扱う
             let source_vr = ds.get(rule.tag).map(|e| e.vr()).filter(|v| *v != VR::UN);
@@ -1475,15 +1483,7 @@ fn cached_table(cache: &mut TableCache, path: &str, enc: CsvEncoding) -> Result<
 }
 
 /// 規則のタグの書き方(`PatientName`、`(0010,0010)`、`(0029,1010)/LO`)からタグだけを取り出す。
-/// 画面が、既定の規則が上書きされたかを、書き方の違いによらず判定するために使う。
-impl Config {
-    /// 既定の規則 `tag` を使わない設定か。`(0010,0020)` のような書き方でも同じタグなら当たる。
-    pub fn drops_default(&self, tag: &str) -> bool {
-        let t = tag_of(tag);
-        t.is_some() && self.drop_defaults.iter().any(|d| tag_of(d) == t)
-    }
-}
-
+/// 同じタグの規則かを、書き方の違いによらず判定するために使う。
 pub fn tag_of(key: &str) -> Option<Tag> {
     let key = key.trim().split('/').next()?.trim();
     StandardDataDictionary
@@ -1754,14 +1754,10 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_default_rule_leaves_the_source_value_untouched() {
-        let cfg = Config {
-            // 辞書の名前でなくタグで書いても、同じタグなら当たる
-            drop_defaults: vec!["(0010,0020)".into()],
-            ..Config::default()
-        };
-        assert!(cfg.drops_default("PatientID"));
-        assert!(!cfg.drops_default("PatientName"));
+    fn a_removed_default_rule_leaves_the_source_value_untouched() {
+        let mut cfg = Config::default();
+        // 辞書の名前でなくタグで書いても、同じタグなら外れる
+        cfg.drop_rules_for("(0010,0020)");
         let eng = Engine::new(&cfg).unwrap();
         let ix = Idx {
             p: 1,
