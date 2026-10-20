@@ -3,7 +3,7 @@
 use eframe::egui::{self, pos2, vec2};
 
 use crate::state::{self, AppState, Monitor, WindowState};
-use crate::theme;
+use crate::{theme, window_placement};
 
 use super::*;
 
@@ -125,20 +125,28 @@ impl VwApp {
     ///
     /// 位置を送った後、移動先のモニタの拡大率がウインドウに反映されるのを待ってから大きさを送る。
     /// 同じフレームで送ると、移動前のモニタの拡大率で大きさが換算され、拡大率の違うモニタに
-    /// 戻すときに大きさがずれるため。
-    pub(super) fn restore_window(&mut self, ctx: &egui::Context) {
+    /// 戻すときに大きさがずれるため。Windows で通常の矩形を覚えていれば、矩形ごと OS に渡す
+    /// （最初は隠したまま動かし、拡大率が移ってからもう一度渡して大きさを合わせる）。
+    pub(super) fn restore_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         let Some(r) = &mut self.restoring else {
             return;
         };
         let native = ctx.input(|i| i.viewport().native_pixels_per_point);
         let zoom = ctx.zoom_factor();
+        let normal = r.saved.normal;
         if r.frames == 0 {
-            if let Some([x, y]) = r.saved.position {
-                let ppp = zoom * native.unwrap_or(1.0);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
-                    x as f32 / ppp,
-                    y as f32 / ppp,
-                )));
+            match (normal, r.saved.position) {
+                (Some(rect), _) => {
+                    window_placement::set(frame, rect, false);
+                }
+                (None, Some([x, y])) => {
+                    let ppp = zoom * native.unwrap_or(1.0);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
+                        x as f32 / ppp,
+                        y as f32 / ppp,
+                    )));
+                }
+                (None, None) => {}
             }
         }
         r.frames += 1;
@@ -147,24 +155,53 @@ impl VwApp {
             ctx.request_repaint();
             return;
         }
-        let ppp = zoom * native.unwrap_or(r.saved.scale);
-        let [w, h] = r.saved.size;
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(
-            w as f32 / ppp,
-            h as f32 / ppp,
-        )));
+        let placed = normal.is_some_and(|rect| window_placement::set(frame, rect, true));
+        if !placed {
+            let ppp = zoom * native.unwrap_or(r.saved.scale);
+            let [w, h] = r.saved.size;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(
+                w as f32 / ppp,
+                h as f32 / ppp,
+            )));
+        }
         if r.saved.maximized {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         }
+        self.log.info(format!(
+            "Window: restored {}{}",
+            match (normal, r.saved.position) {
+                (Some([l, t, r, b]), _) => format!("{}x{} at {l}, {t}", r - l, b - t),
+                (None, Some([x, y])) =>
+                    format!("{}x{} at {x}, {y}", r.saved.size[0], r.saved.size[1]),
+                (None, None) => format!("{}x{}", r.saved.size[0], r.saved.size[1]),
+            },
+            if r.saved.maximized { ", maximized" } else { "" }
+        ));
         self.window = Some(r.saved.clone());
         self.restoring = None;
     }
 
     /// 最小化・最大化していないときのウインドウの位置と大きさを覚えておく。
     /// 最大化中は最大化していることだけを覚え、戻したときの大きさは最大化前のものを残す。
-    pub(super) fn track_window(&mut self, ctx: &egui::Context) {
+    /// Windows では OS の通常の矩形も覚える（最大化・最小化中でも取れる）。
+    pub(super) fn track_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         // 全画面の大きさを覚えると、次の起動でウインドウが画面いっぱいの大きさで開いてしまう。
         if self.restoring.is_some() || self.fullscreen.is_some() {
+            return;
+        }
+        if let Some(n) = window_placement::get(frame) {
+            let scale = ctx.input(|i| i.viewport().native_pixels_per_point);
+            let [l, t, r, b] = n.rect;
+            let previous = self.window.take();
+            self.window = Some(WindowState {
+                position: Some([l, t]),
+                size: [(r - l).max(0) as u32, (b - t).max(0) as u32],
+                // 最小化中は拡大率が取れないことがあるので、前の値を残す。
+                scale: scale.or(previous.as_ref().map(|w| w.scale)).unwrap_or(1.0),
+                maximized: n.maximized,
+                normal: Some(n.rect),
+                monitors: Vec::new(),
+            });
             return;
         }
         let (info, content) = ctx.input(|i| (i.viewport().clone(), i.content_rect()));
@@ -189,6 +226,7 @@ impl VwApp {
             size: [px(inner.width()) as u32, px(inner.height()) as u32],
             scale: native,
             maximized: false,
+            normal: None,
             monitors: Vec::new(),
         });
     }

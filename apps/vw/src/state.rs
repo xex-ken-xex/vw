@@ -33,6 +33,9 @@ pub struct WindowState {
     /// 保存時にウインドウがあったモニタの拡大率。物理ピクセルの大きさを論理に戻すのに使う。
     pub scale: f32,
     pub maximized: bool,
+    /// Windows で OS が持つ通常の矩形 `[left, top, right, bottom]`（外枠、ワークスペース座標）。
+    /// あれば `position` と `size` より優先する（[`crate::window_placement`]）。
+    pub normal: Option<[i32; 4]>,
     /// 保存時のモニタ構成。起動時と違えば位置を復元しない。
     pub monitors: Vec<Monitor>,
 }
@@ -186,6 +189,9 @@ impl AppState {
             t.insert("size".into(), toml::Value::try_from(w.size).unwrap());
             t.insert("scale".into(), toml::Value::try_from(w.scale).unwrap());
             t.insert("maximized".into(), w.maximized.into());
+            if let Some(normal) = w.normal {
+                t.insert("normal".into(), toml::Value::try_from(normal).unwrap());
+            }
             let monitors: Vec<[i32; 5]> = w
                 .monitors
                 .iter()
@@ -303,6 +309,12 @@ fn read_window(r: &mut Reader<'_>) -> Option<WindowState> {
         "must be positive",
     );
     let maximized = r.get::<bool>("window", "maximized");
+    let normal = r.get_valid::<[i32; 4]>(
+        "window",
+        "normal",
+        |[l, t, r, b]| r - l >= MIN_SIZE as i32 && b - t >= MIN_SIZE as i32,
+        "must be at least 200 x 200",
+    );
     let monitors = r.get::<Vec<[i32; 5]>>("window", "monitors");
     if r.problems.len() > before {
         r.problems
@@ -314,6 +326,7 @@ fn read_window(r: &mut Reader<'_>) -> Option<WindowState> {
         size: size?,
         scale: scale?,
         maximized: maximized.unwrap_or(false),
+        normal,
         monitors: monitors?
             .into_iter()
             .map(|[x, y, width, height, scale_percent]| Monitor {
@@ -447,6 +460,7 @@ mod tests {
             size: [1280, 800],
             scale: 1.5,
             maximized: true,
+            normal: Some([1900, 80, 3100, 900]),
             monitors,
         }
     }

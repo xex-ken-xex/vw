@@ -541,6 +541,9 @@ impl VwApp {
         };
         // 別ウインドウに出したペインの前の位置は、モニタの構成が変わると画面の外かもしれない。
         let monitors_changed = saved.window.is_some() && restoring.is_none();
+        if monitors_changed {
+            log.info("Window: the displays changed since last time, so the window opens where the OS puts it");
+        }
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
         log.info(format!(
             "Plugins: {}",
@@ -956,8 +959,8 @@ impl eframe::App for VwApp {
                 ms(self.started.elapsed())
             ));
         }
-        self.restore_window(&ctx);
-        self.track_window(&ctx);
+        self.restore_window(&ctx, frame);
+        self.track_window(&ctx, frame);
         self.receive(&ctx);
         self.receive_archives(&ctx);
         self.pump_folder_load();

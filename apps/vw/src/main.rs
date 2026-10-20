@@ -77,6 +77,7 @@ mod transfer;
 mod tree;
 mod viewer;
 mod watch;
+mod window_placement;
 mod zoom_map;
 
 #[cfg(test)]
