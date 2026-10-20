@@ -223,6 +223,7 @@ struct App {
     dest_name: String,
     /// 開いている「選ぶ窓」と、選んだ結果の入れ先
     picker: Option<(PickTarget, Picker)>,
+    about: crate::about::About,
 }
 
 /// 「参照」で選んだパスの入れ先。
@@ -293,6 +294,7 @@ impl App {
             destinations: vec![],
             dest_name: String::new(),
             picker: None,
+            about: Default::default(),
         };
         match config::load_destinations(&app.preset_dir) {
             Ok(d) => app.destinations = d,
@@ -389,6 +391,7 @@ impl App {
         match s.rx.try_recv() {
             Ok(t) => {
                 tree::log_skipped(&t.skipped, |m| self.log.push(m));
+                tree::log_duplicates(&t.duplicates, |m| self.log.push(m));
                 // 「元 N 個」は読めたファイルの数にする(DICOM でないものや DICOMDIR を除く)
                 self.sources = Some(t.files);
                 self.tree = Some(Arc::new(t));
@@ -789,6 +792,13 @@ impl App {
                     help = true;
                     ui.close();
                 }
+                if ui
+                    .add(vw_ui::menu::item(false, "バージョン情報", ""))
+                    .clicked()
+                {
+                    self.about.open = true;
+                    ui.close();
+                }
             });
         });
         if help {
@@ -1059,6 +1069,9 @@ impl App {
                 (Some(n), None, Some(t)) => {
                     let c = t.counts();
                     ui.colored_label(OK, format!("✓ ファイル {n} 個: {} 患者 / {} 検査 / {} シリーズ / {} 画像", c.patients, c.studies, c.series, c.images));
+                    if !t.duplicates.is_empty() {
+                        ui.colored_label(WARN, format!("⚠ SOPInstanceUID が重なる元ファイル {} 個(複製では別の UID を振る。ログに一覧)", t.duplicates.len()));
+                    }
                 }
                 (Some(n), None, None) => {
                     ui.colored_label(OK, format!("✓ ファイル {n} 個"));
@@ -2187,6 +2200,9 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| self.rules_ui(ui));
         self.save_dialog_ui(&ctx);
         self.picker_ui(&ctx);
+        if let Some(e) = self.about.ui(&ctx) {
+            self.note(format!("エラー: ライセンスの一覧を開けない: {e}"));
+        }
     }
 }
 

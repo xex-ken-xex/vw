@@ -5,6 +5,8 @@
 //! コマンドラインで使うときは、起動元のコンソールにつなぎ直して出力する(`attach_console`)。
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[cfg(feature = "gui")]
+mod about;
 mod charset;
 mod config;
 mod engine;

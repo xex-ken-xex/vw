@@ -26,6 +26,7 @@ cargo build --release -p dicoamplio    # リポジトリのルートで。でき
 
 - 件数は元を 1 組としたときの倍数。総数は 元ファイル数 × patients × studies × series × images。
 - UID(Study/Series/SOP/FrameOfReference と、シーケンス内の参照)は、元の UID と複製の番号から決定的に作り直す。参照は同じ複製の中で張り替わる。
+- 元ファイルに SOPInstanceUID が同じものがあると(元が壊れている)、ログと設定の欄に ⚠ で知らせ、パスの順で後のほうに別の SOPInstanceUID を振る。そのままだと複製でも同じ UID・同じファイル名になり、上書きされて数が減るため。ほかのファイルからの参照は、どちらを指していたか分からないので最初のファイルのものに張り替わる。
 - 出力は `P患者/S検査/Rシリーズ/SOPInstanceUID.dcm`。
 
 ## タグの規則

@@ -547,6 +547,7 @@ impl Engine {
             progress.total.load(Ordering::Relaxed)
         ));
         tree::log_skipped(&tree.skipped, |m| progress.say(m));
+        tree::log_duplicates(&tree.duplicates, |m| progress.say(m));
         if self.cfg.store.enabled {
             return self.run_store(&tree, &files, progress);
         }
@@ -1153,6 +1154,23 @@ impl Engine {
         let path = &prepared.path;
         let mut ds = prepared.src.clone();
         self.rewrite_uids(&mut ds, ix);
+        if place.duplicate > 0 {
+            // 元で SOPInstanceUID が重なったファイルは、そのままだと複製でも同じ UID・同じファイル名に
+            // なって上書きされる。自分の SOPInstanceUID だけを別にし、ほかのファイルからの参照
+            // (ReferencedSOPInstanceUID)は、どちらを指していたか分からないので最初のファイルのままにする
+            let orig = prepared
+                .src
+                .get(tags::SOP_INSTANCE_UID)
+                .and_then(|e| e.to_str().ok())
+                .map(|s| s.trim_end_matches('\0').trim().to_string())
+                .unwrap_or_default();
+            let key = format!("{orig}#{}", place.duplicate);
+            ds.put_str(
+                tags::SOP_INSTANCE_UID,
+                VR::UI,
+                self.uid(&key, UidLevel::Instance, ix),
+            );
+        }
 
         if let Some(code) = c.charset.code() {
             ds.put_str(tags::SPECIFIC_CHARACTER_SET, VR::CS, code);
