@@ -138,6 +138,22 @@ impl SourceTree {
         }
     }
 
+    /// 木の中の画像 1 枚のファイル(元の値を読むため)。
+    pub fn file_of(
+        &self,
+        patient: usize,
+        study: usize,
+        series: usize,
+        image: usize,
+    ) -> Option<&Path> {
+        self.places
+            .iter()
+            .find(|(_, p)| {
+                (p.patient, p.study, p.series, p.image) == (patient, study, series, image)
+            })
+            .map(|(f, _)| f.as_path())
+    }
+
     /// 木のノード(患者・検査・シリーズの番号)から、そのシリーズの最初の画像の位置。画面のプレビュー用。
     pub fn place_of(&self, patient: usize, study: usize, series: usize) -> Option<Place> {
         let p = self.patients.get(patient)?;
@@ -205,6 +221,35 @@ fn text(obj: &InMemDicomObject, tag: Tag, iso: Option<&Iso2022>) -> String {
     raw
 }
 
+/// 元ファイル 1 つの、最上位の要素の値(文字列にしたもの。PixelData の手前まで)。
+/// 画面で複製前後を並べるのに使う。
+pub fn read_values(path: &Path) -> Result<HashMap<Tag, String>> {
+    let obj = OpenFileOptions::new()
+        .read_until(tags::PIXEL_DATA)
+        .open_file(path)
+        .map_err(|e| anyhow::anyhow!("DICOM として読めない: {e}"))?;
+    let iso = file_iso2022(&obj);
+    Ok(obj
+        .iter()
+        .map(|e| e.header().tag)
+        .map(|t| (t, text(&obj, t, iso.as_ref())))
+        .collect())
+}
+
+/// 複数値の ISO 2022 のときだけ、読み直しに使う符号化。
+fn file_iso2022(obj: &InMemDicomObject) -> Option<Iso2022> {
+    let scs = obj
+        .get(tags::SPECIFIC_CHARACTER_SET)
+        .and_then(|e| e.to_str().ok())
+        .map(|v| scs_values(&v))
+        .unwrap_or_default();
+    if is_multi_iso2022(&scs) {
+        Iso2022::from_values(&scs)
+    } else {
+        None
+    }
+}
+
 /// DICOMDIR(媒体の目次)の SOP Class。画像ではないので飛ばす。
 const MEDIA_STORAGE_DIRECTORY: &str = "1.2.840.10008.1.3.10";
 
@@ -233,16 +278,7 @@ fn read(path: &Path) -> Result<Record> {
         .read_until(tags::PIXEL_DATA)
         .open_file(path)
         .map_err(|e| anyhow::anyhow!("DICOM として読めない: {e}"))?;
-    let scs = obj
-        .get(tags::SPECIFIC_CHARACTER_SET)
-        .and_then(|e| e.to_str().ok())
-        .map(|v| scs_values(&v))
-        .unwrap_or_default();
-    let iso = if is_multi_iso2022(&scs) {
-        Iso2022::from_values(&scs)
-    } else {
-        None
-    };
+    let iso = file_iso2022(&obj);
     let t = |tag| text(&obj, tag, iso.as_ref());
     let meta_sop = obj
         .meta()

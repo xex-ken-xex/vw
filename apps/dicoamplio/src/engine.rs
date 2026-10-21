@@ -5,7 +5,7 @@ use crate::charset::{is_multi_iso2022, scs_values, Charset, Iso2022};
 use crate::config::{Config, CsvEncoding, Level, RuleSpec, UidMode};
 use crate::store;
 use crate::template::{Template, Vars};
-use crate::tree::{self, Place};
+use crate::tree::{self, Place, SourceTree};
 use anyhow::{bail, Context, Result};
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry, VirtualVr};
 use dicom_core::header::Header;
@@ -328,8 +328,39 @@ pub struct Engine {
     tables: HashMap<(String, CsvEncoding), Arc<Table>>,
 }
 
+/// CSV の 1 行と、そこを読む複製。画面の割り当て表の 1 行。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CsvUse {
+    /// 列名の行を 1 とした行番号
+    pub line: usize,
+    /// 先頭の列の値(見分ける手がかり)
+    pub head: String,
+    /// この行を読む複製の名札(先頭から ASSIGN_LABELS 個まで)
+    pub units: Vec<String>,
+    /// この行を読む複製の数(数えた範囲の中で)
+    pub count: u64,
+}
+
+/// 規則 1 本の、CSV の割り当て表。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CsvAssignment {
+    pub level: Level,
+    pub rows: Vec<CsvUse>,
+    /// そのレベルの単位(複製後の患者など)の総数
+    pub units: u64,
+    /// 数えた単位の数。総数が ASSIGN_UNIT_LIMIT を超えると、先頭からその数まで
+    pub counted: u64,
+}
+
+/// 割り当て表で数える単位の上限。画面を作るたびに数えるので、全単位を回すと 100 万画像で固まる。
+/// 行は単位の順に 1 つずつ進むので、先頭を数えれば並びは分かる
+pub const ASSIGN_UNIT_LIMIT: u64 = 5000;
+/// 割り当て表の 1 行に並べる名札の数。
+pub const ASSIGN_LABELS: usize = 6;
+
 /// 画面に出す、規則 1 本ぶんの見本。
 pub struct PreviewRow {
+    pub key: Tag,
     pub tag: String,
     pub name: String,
     pub level: Level,
@@ -563,6 +594,7 @@ impl Engine {
                     }
                 }
                 PreviewRow {
+                    key: r.tag,
                     tag: r.tag.to_string(),
                     name: r.name.clone(),
                     level: r.level,
@@ -592,6 +624,135 @@ impl Engine {
             self.render(r, ix, place, &ints, &strs, self.csv_row(r, ix, place))
                 .map_err(|e| format!("{e:#}")),
         )
+    }
+
+    /// タグの規則が CSV を読むなら、CSV の各行をどの複製(そのレベルの単位)が読むか。
+    pub fn csv_assignment(&self, tag: Tag, tree: &SourceTree) -> Option<CsvAssignment> {
+        let rule = self.rules.iter().find(|r| r.tag == tag)?;
+        let table = rule.table.as_deref()?;
+        if !rule.tpl.uses_csv(&table.columns) || table.rows.is_empty() {
+            return None;
+        }
+        let mut rows: Vec<CsvUse> = table
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(k, row)| CsvUse {
+                line: k + 2,
+                head: table
+                    .columns
+                    .iter()
+                    .take(3)
+                    .map(|c| row.get(c).map(String::as_str).unwrap_or(""))
+                    .collect::<Vec<_>>()
+                    .join(" / "),
+                units: Vec::new(),
+                count: 0,
+            })
+            .collect();
+        let mut counted = 0;
+        for (ix, place) in self
+            .units(rule.level, tree)
+            .take(ASSIGN_UNIT_LIMIT as usize)
+        {
+            let u = &mut rows[self.csv_index(rule, ix, &place) % table.rows.len()];
+            u.count += 1;
+            if u.units.len() < ASSIGN_LABELS {
+                u.units.push(self.unit_label(rule.level, ix, &place));
+            }
+            counted += 1;
+        }
+        let c = tree.planned(
+            self.cfg.patients,
+            self.cfg.studies,
+            self.cfg.series,
+            self.cfg.images,
+        );
+        let units = match rule.level {
+            Level::Patient => c.patients,
+            Level::Study => c.studies,
+            Level::Series => c.series,
+            Level::Image => c.images,
+        };
+        Some(CsvAssignment {
+            level: rule.level,
+            rows,
+            units,
+            counted,
+        })
+    }
+
+    /// `level` の単位(複製後の患者など)を、CSV の行が進む順(unit_index の順)に並べる。
+    /// 単位より細かい番号は 0、場所はその単位の最初の画像。
+    fn units<'a>(
+        &'a self,
+        level: Level,
+        tree: &'a SourceTree,
+    ) -> impl Iterator<Item = (Idx, Place)> + 'a {
+        let c = &self.cfg;
+        let (np, ns, nr, ni) = (c.patients, c.studies, c.series, c.images);
+        let depth = level as usize;
+        let copies = move |p: u32| {
+            (0..if depth >= 1 { ns } else { 1 }).flat_map(move |s| {
+                (0..if depth >= 2 { nr } else { 1 }).flat_map(move |r| {
+                    (0..if depth >= 3 { ni } else { 1 }).map(move |i| Idx { p, s, r, i })
+                })
+            })
+        };
+        tree.patients.iter().enumerate().flat_map(move |(pi, pt)| {
+            let sources: Vec<Place> = match level {
+                Level::Patient => tree.place_of(pi, 0, 0).into_iter().collect(),
+                _ => pt
+                    .studies
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(si, st)| {
+                        let series: Vec<usize> = match level {
+                            Level::Study => vec![0],
+                            _ => (0..st.series.len()).collect(),
+                        };
+                        series.into_iter().flat_map(move |ri| {
+                            let images = match level {
+                                Level::Image => st.series[ri].images,
+                                _ => 1,
+                            };
+                            (0..images).filter_map(move |ii| {
+                                tree.place_of(pi, si, ri).map(|p| Place {
+                                    image: ii,
+                                    ordinal: p.ordinal + ii as u64,
+                                    ..p
+                                })
+                            })
+                        })
+                    })
+                    .collect(),
+            };
+            sources.into_iter().flat_map(move |place| {
+                (0..np).flat_map(move |p| {
+                    let place = place.clone();
+                    copies(p).map(move |ix| (ix, place.clone()))
+                })
+            })
+        })
+    }
+
+    /// 割り当て表の名札。複製後の患者 ID(規則があれば)と、元(大文字)と複製(小文字)の番号。
+    fn unit_label(&self, level: Level, ix: Idx, place: &Place) -> String {
+        let id = match self.render_rule(tags::PATIENT_ID, ix, place) {
+            Some(Ok(v)) => v,
+            _ => place.patient_id.clone(),
+        };
+        let mut parts = vec![format!("P{} p{}", place.patient, ix.p)];
+        if level >= Level::Study {
+            parts.push(format!("S{} s{}", place.study, ix.s));
+        }
+        if level >= Level::Series {
+            parts.push(format!("R{} r{}", place.series, ix.r));
+        }
+        if level >= Level::Image {
+            parts.push(format!("I{} i{}", place.image, ix.i));
+        }
+        format!("{id}({})", parts.join(" · "))
     }
 
     /// InstanceNumber の規則が既定(`元の番号 + 複製番号 × 10000`)のままか。
@@ -1825,6 +1986,54 @@ fn cached_table(cache: &mut TableCache, path: &str, enc: CsvEncoding) -> Result<
 
 /// 規則のタグの書き方(`PatientName`、`(0010,0010)`、`(0029,1010)/LO`)からタグだけを取り出す。
 /// 同じタグの規則かを、書き方の違いによらず判定するために使う。
+/// 規則の行 1 つの検査の結果。画面が、その行の下にエラーを出すのに使う。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RuleCheck {
+    pub error: Option<String>,
+    /// 下の行が同じタグを持つので、この行は使われない
+    pub overridden: bool,
+}
+
+/// 規則の行(`cfg.rules` と同じ順)を 1 本ずつ検査する。
+/// Engine を作るのは最初のエラーで止まるので、どの行が悪いか、ほかにも悪い行があるかは分からないため。
+pub fn check_rules(cfg: &Config, cache: &mut TableCache) -> Vec<RuleCheck> {
+    let global = match cfg.csv.trim() {
+        "" => Ok(None),
+        path => cached_table(cache, path, cfg.csv_encoding).map(Some),
+    };
+    let blank = |r: &RuleSpec| r.tag.trim().is_empty() && r.value.is_empty();
+    let tags: Vec<Option<Tag>> = cfg
+        .rules
+        .iter()
+        .map(|r| (!blank(r)).then(|| tag_of(&r.tag)).flatten())
+        .collect();
+    cfg.rules
+        .iter()
+        .enumerate()
+        .map(|(k, spec)| {
+            if blank(spec) {
+                return RuleCheck::default();
+            }
+            let overridden = tags[k].is_some() && tags[k + 1..].contains(&tags[k]);
+            let own = match spec.csv.trim() {
+                "" => Ok(None),
+                path => cached_table(cache, path, spec.csv_encoding.unwrap_or(cfg.csv_encoding))
+                    .map(Some),
+            };
+            let error = match (own, &global) {
+                (Err(e), _) => Some(format!("{e:#}")),
+                (Ok(Some(t)), _) => parse_rule(spec, Some(t)).err().map(|e| format!("{e:#}")),
+                (Ok(None), Ok(g)) => parse_rule(spec, g.clone()).err().map(|e| format!("{e:#}")),
+                // CSV の列が分からないので、列を使う規則を「変数がない」と誤って咎めてしまう
+                (Ok(None), Err(_)) => parse_rule(spec, None)
+                    .err()
+                    .map(|_| "全体の CSV が読めないので、確かめられない".to_string()),
+            };
+            RuleCheck { error, overridden }
+        })
+        .collect()
+}
+
 pub fn tag_of(key: &str) -> Option<Tag> {
     let key = key.trim().split('/').next()?.trim();
     StandardDataDictionary
@@ -1975,6 +2184,390 @@ pub fn check_value(vr: VR, v: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_dicom(
+        dir: &Path,
+        name: &str,
+        pid: &str,
+        study: &str,
+        series: &str,
+        inst: i64,
+    ) -> PathBuf {
+        let mut obj = InMemDicomObject::new_empty();
+        let sop = format!("1.2.3.{pid}.{study}.{series}.{inst}");
+        for (tag, vr, v) in [
+            (
+                tags::SOP_CLASS_UID,
+                VR::UI,
+                "1.2.840.10008.5.1.4.1.1.7".to_string(),
+            ),
+            (tags::SOP_INSTANCE_UID, VR::UI, sop.clone()),
+            (tags::PATIENT_ID, VR::LO, pid.to_string()),
+            (tags::PATIENT_NAME, VR::PN, format!("{pid}^Src")),
+            (tags::STUDY_INSTANCE_UID, VR::UI, format!("1.2.3.{study}")),
+            (tags::STUDY_DESCRIPTION, VR::LO, format!("desc {study}")),
+            (
+                tags::SERIES_INSTANCE_UID,
+                VR::UI,
+                format!("1.2.3.{study}.{series}"),
+            ),
+            (tags::SERIES_NUMBER, VR::IS, "1".to_string()),
+            (tags::MODALITY, VR::CS, "OT".to_string()),
+            (tags::INSTANCE_NUMBER, VR::IS, inst.to_string()),
+        ] {
+            obj.put(DataElement::new(tag, vr, PrimitiveValue::from(v)));
+        }
+        let meta = dicom_object::FileMetaTableBuilder::new()
+            .transfer_syntax("1.2.840.10008.1.2.1")
+            .media_storage_sop_class_uid("1.2.840.10008.5.1.4.1.1.7")
+            .media_storage_sop_instance_uid(sop);
+        let path = dir.join(name);
+        obj.with_meta(meta).unwrap().write_to_file(&path).unwrap();
+        path
+    }
+
+    /// 元: 患者 A(検査 1 つ、シリーズ 1 つ、画像 2 枚)と患者 B(検査 1 つ、シリーズ 2 つ、画像 1 枚ずつ)。
+    fn source_tree(name: &str) -> (PathBuf, SourceTree) {
+        let dir = scratch(name);
+        let files = vec![
+            write_dicom(&dir, "a1.dcm", "A", "10", "1", 1),
+            write_dicom(&dir, "a2.dcm", "A", "10", "1", 2),
+            write_dicom(&dir, "b1.dcm", "B", "20", "1", 1),
+            write_dicom(&dir, "b2.dcm", "B", "20", "2", 1),
+        ];
+        let t = tree::scan(&files, &AtomicBool::new(false), &AtomicU64::new(0));
+        assert_eq!(t.files, 4);
+        (dir, t)
+    }
+
+    fn write_csv(dir: &Path, rows: usize) -> String {
+        let mut text = String::from("name,code\n");
+        for k in 0..rows {
+            text.push_str(&format!("N{k},C{k}\n"));
+        }
+        let p = dir.join("people.csv");
+        std::fs::write(&p, text).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    fn csv_engine(csv: &str, counts: [u32; 4], rules: &[(&str, Level, &str)]) -> Engine {
+        let [patients, studies, series, images] = counts;
+        Engine::new(&Config {
+            patients,
+            studies,
+            series,
+            images,
+            csv: csv.to_string(),
+            rules: rules
+                .iter()
+                .map(|(t, l, v)| RuleSpec::new(t, *l, v))
+                .collect(),
+            ..Config::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn rule_check_reports_each_bad_row_and_rows_hidden_by_a_later_one() {
+        let cfg = Config {
+            rules: vec![
+                RuleSpec::new("PatientID", Level::Patient, "A%(p)d"),
+                RuleSpec::new("NoSuchTag", Level::Patient, "x"),
+                RuleSpec::new("StudyDescription", Level::Study, "%(i)d"),
+                RuleSpec::new("", Level::Image, ""),
+                RuleSpec::new("SeriesDescription", Level::Series, "%(zz)s"),
+                RuleSpec::new("PatientID", Level::Patient, "B%(p)d"),
+                RuleSpec::new("StudyDate", Level::Study, "%(now_date+1d*i)s"),
+            ],
+            ..Config::default()
+        };
+        let checks = check_rules(&cfg, &mut TableCache::new());
+        assert_eq!(checks.len(), 7, "行の数と同じだけ返す");
+        let err = |k: usize| checks[k].error.clone().unwrap_or_default();
+        assert_eq!(checks[0].error, None);
+        assert!(checks[0].overridden, "下の PatientID に負ける");
+        assert!(err(1).contains("NoSuchTag"), "{}", err(1));
+        assert!(err(2).contains("`i`"), "{}", err(2));
+        assert_eq!(checks[3], RuleCheck::default(), "空の行は咎めない");
+        assert!(err(4).contains("`zz`"), "{}", err(4));
+        assert_eq!(
+            checks[5],
+            RuleCheck::default(),
+            "下のものが勝つので、こちらは使われる"
+        );
+        assert!(err(6).contains("`i`"), "{}", err(6));
+    }
+
+    #[test]
+    fn rule_check_matches_what_building_the_engine_reports() {
+        let cfg = Config {
+            rules: vec![RuleSpec::new("StudyDescription", Level::Study, "%(i)d")],
+            ..Config::default()
+        };
+        let engine_err = Engine::new(&cfg).err().unwrap();
+        let checks = check_rules(&cfg, &mut TableCache::new());
+        assert_eq!(checks[0].error, Some(format!("{engine_err:#}")));
+    }
+
+    #[test]
+    fn rule_check_blames_only_the_rows_whose_csv_cannot_be_read() {
+        let dir = scratch("check-csv");
+        let csv = write_csv(&dir, 2);
+        let missing = dir.join("none.csv").to_string_lossy().into_owned();
+        let mut own = RuleSpec::new("PatientName", Level::Patient, "%(name)s");
+        own.csv = missing.clone();
+        let cfg = Config {
+            csv: csv.clone(),
+            rules: vec![
+                own,
+                RuleSpec::new("PatientComments", Level::Patient, "%(code)s"),
+            ],
+            ..Config::default()
+        };
+        let checks = check_rules(&cfg, &mut TableCache::new());
+        assert!(checks[0].error.as_deref().unwrap().contains("none.csv"));
+        assert_eq!(checks[1].error, None, "全体の CSV の列は使える");
+
+        // 全体の CSV が読めないときは、CSV の列を使う行だけ確かめられないと言う
+        let cfg = Config {
+            csv: missing,
+            rules: vec![
+                RuleSpec::new("PatientComments", Level::Patient, "%(code)s"),
+                RuleSpec::new("PatientID", Level::Patient, "A%(p)d"),
+            ],
+            ..Config::default()
+        };
+        let checks = check_rules(&cfg, &mut TableCache::new());
+        assert!(checks[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("確かめられない"));
+        assert_eq!(checks[1].error, None);
+    }
+
+    #[test]
+    fn source_values_are_read_from_the_selected_file() {
+        let (_dir, t) = source_tree("values");
+        let b = t.file_of(1, 0, 1, 0).unwrap();
+        assert!(b.ends_with("b2.dcm"), "{}", b.display());
+        let v = tree::read_values(b).unwrap();
+        assert_eq!(v[&tags::PATIENT_ID], "B");
+        assert_eq!(v[&tags::PATIENT_NAME], "B^Src");
+        assert_eq!(v[&tags::STUDY_DESCRIPTION], "desc 20");
+        assert!(
+            !v.contains_key(&tags::PATIENT_BIRTH_DATE),
+            "元にないタグは入らない"
+        );
+        assert!(t.file_of(1, 0, 5, 0).is_none());
+    }
+
+    #[test]
+    fn preview_rows_carry_their_tag_for_comparing_with_the_source() {
+        let eng = Engine::new(&Config::default()).unwrap();
+        let rows = eng.preview(Idx::default(), &Place::default());
+        let id = rows.iter().find(|r| r.name == "PatientID").unwrap();
+        assert_eq!(id.key, tags::PATIENT_ID);
+    }
+
+    /// 全出力を回して、その規則で各 CSV の行を読む単位の数を数える(割り当て表と突き合わせる)。
+    fn brute_force_counts(eng: &Engine, tag: Tag, t: &SourceTree, rows: usize) -> Vec<u64> {
+        let rule = eng.rules.iter().find(|r| r.tag == tag).unwrap();
+        let c = &eng.cfg;
+        let mut seen = std::collections::HashSet::new();
+        let mut counts = vec![0; rows];
+        for place in t.places.values() {
+            for p in 0..c.patients {
+                for s in 0..c.studies {
+                    for r in 0..c.series {
+                        for i in 0..c.images {
+                            let ix = Idx { p, s, r, i };
+                            let unit = match rule.level {
+                                Level::Patient => vec![place.patient, p as usize],
+                                Level::Study => {
+                                    vec![place.patient, place.study, p as usize, s as usize]
+                                }
+                                Level::Series => vec![
+                                    place.patient,
+                                    place.study,
+                                    place.series,
+                                    p as usize,
+                                    s as usize,
+                                    r as usize,
+                                ],
+                                Level::Image => vec![
+                                    place.ordinal as usize,
+                                    p as usize,
+                                    s as usize,
+                                    r as usize,
+                                    i as usize,
+                                ],
+                            };
+                            if seen.insert(unit) {
+                                counts[eng.csv_line(rule, ix, place).unwrap() - 2] += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn csv_assignment_counts_match_what_the_output_reads_at_every_level() {
+        let (dir, t) = source_tree("assign-levels");
+        let csv = write_csv(&dir, 5);
+        let eng = csv_engine(
+            &csv,
+            [3, 2, 2, 2],
+            &[
+                ("PatientName", Level::Patient, "%(name)s"),
+                ("StudyDescription", Level::Study, "%(name)s"),
+                ("SeriesDescription", Level::Series, "%(name)s"),
+                ("ImageComments", Level::Image, "%(code)s"),
+            ],
+        );
+        for (tag, units) in [
+            (tags::PATIENT_NAME, 2 * 3),
+            (tags::STUDY_DESCRIPTION, 2 * 3 * 2),
+            (tags::SERIES_DESCRIPTION, 3 * 3 * 2 * 2),
+            (tags::IMAGE_COMMENTS, 4 * 3 * 2 * 2 * 2),
+        ] {
+            let a = eng.csv_assignment(tag, &t).unwrap();
+            assert_eq!((a.units, a.counted), (units, units), "{tag}");
+            let counts: Vec<u64> = a.rows.iter().map(|r| r.count).collect();
+            assert_eq!(counts, brute_force_counts(&eng, tag, &t, 5), "{tag}");
+            assert_eq!(counts.iter().sum::<u64>(), units);
+        }
+    }
+
+    #[test]
+    fn csv_assignment_lists_rows_with_their_values_and_the_copies_reading_them() {
+        let (dir, t) = source_tree("assign-labels");
+        let csv = write_csv(&dir, 4);
+        let eng = csv_engine(
+            &csv,
+            [3, 1, 1, 1],
+            &[
+                ("PatientID", Level::Patient, "EVAL%(P)03d-%(p)04d"),
+                ("PatientName", Level::Patient, "%(name)s"),
+            ],
+        );
+        let a = eng.csv_assignment(tags::PATIENT_NAME, &t).unwrap();
+        assert_eq!(a.level, Level::Patient);
+        let lines: Vec<_> = a
+            .rows
+            .iter()
+            .map(|r| (r.line, r.head.as_str(), r.count))
+            .collect();
+        // 元 A の複製 3 人が 2〜4 行目、元 B の 3 人が 5 行目と、戻って 2・3 行目
+        assert_eq!(
+            lines,
+            [
+                (2, "N0 / C0", 2),
+                (3, "N1 / C1", 2),
+                (4, "N2 / C2", 1),
+                (5, "N3 / C3", 1)
+            ]
+        );
+        assert_eq!(
+            a.rows[0].units,
+            ["EVAL000-0000(P0 p0)", "EVAL001-0001(P1 p1)"]
+        );
+        assert_eq!(a.rows[3].units, ["EVAL001-0000(P1 p0)"]);
+    }
+
+    #[test]
+    fn csv_assignment_shows_rows_no_copy_reads() {
+        let (dir, t) = source_tree("assign-unused");
+        let csv = write_csv(&dir, 5);
+        let eng = csv_engine(
+            &csv,
+            [1, 1, 1, 1],
+            &[("PatientName", Level::Patient, "%(name)s")],
+        );
+        let counts: Vec<u64> = eng
+            .csv_assignment(tags::PATIENT_NAME, &t)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.count)
+            .collect();
+        assert_eq!(counts, [1, 1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn csv_assignment_labels_name_every_level_down_to_the_rules_own() {
+        let (dir, t) = source_tree("assign-image");
+        let csv = write_csv(&dir, 100);
+        let eng = csv_engine(
+            &csv,
+            [1, 1, 1, 2],
+            &[("ImageComments", Level::Image, "%(code)s")],
+        );
+        let a = eng.csv_assignment(tags::IMAGE_COMMENTS, &t).unwrap();
+        // 元の画像の順 → 画像の複製の順。A の 2 枚目の複製 0 が 3 番目。
+        // PatientID の規則がないので、名札は元の患者 ID
+        assert_eq!(a.rows[2].units, ["A(P0 p0 · S0 s0 · R0 r0 · I1 i0)"]);
+        assert_eq!(a.rows[6].units, ["B(P1 p0 · S0 s0 · R1 r0 · I0 i0)"]);
+    }
+
+    #[test]
+    fn csv_assignment_keeps_a_few_labels_per_row_and_counts_the_rest() {
+        let (dir, t) = source_tree("assign-many");
+        let csv = write_csv(&dir, 1);
+        let eng = csv_engine(
+            &csv,
+            [10, 1, 1, 1],
+            &[("PatientName", Level::Patient, "%(name)s")],
+        );
+        let a = eng.csv_assignment(tags::PATIENT_NAME, &t).unwrap();
+        assert_eq!(a.rows[0].count, 20);
+        assert_eq!(a.rows[0].units.len(), ASSIGN_LABELS);
+    }
+
+    #[test]
+    fn csv_assignment_counts_only_the_first_units_of_a_huge_output() {
+        let (dir, t) = source_tree("assign-huge");
+        let csv = write_csv(&dir, 7);
+        let eng = csv_engine(
+            &csv,
+            [100, 10, 10, 10],
+            &[("ImageComments", Level::Image, "%(code)s")],
+        );
+        let a = eng.csv_assignment(tags::IMAGE_COMMENTS, &t).unwrap();
+        assert_eq!(a.units, 4 * 100 * 10 * 10 * 10);
+        assert_eq!(a.counted, ASSIGN_UNIT_LIMIT);
+        assert_eq!(
+            a.rows.iter().map(|r| r.count).sum::<u64>(),
+            ASSIGN_UNIT_LIMIT
+        );
+    }
+
+    #[test]
+    fn csv_assignment_is_none_without_csv_columns() {
+        let (dir, t) = source_tree("assign-none");
+        let csv = write_csv(&dir, 3);
+        let eng = csv_engine(
+            &csv,
+            [2, 1, 1, 1],
+            &[("PatientName", Level::Patient, "Fixed^%(p1)d")],
+        );
+        assert!(
+            eng.csv_assignment(tags::PATIENT_NAME, &t).is_none(),
+            "列を使わない規則"
+        );
+        assert!(
+            eng.csv_assignment(tags::ACCESSION_NUMBER, &t).is_none(),
+            "規則がないタグ"
+        );
+        let eng = csv_engine("", [2, 1, 1, 1], &[]);
+        assert!(
+            eng.csv_assignment(tags::PATIENT_ID, &t).is_none(),
+            "CSV がない"
+        );
+    }
 
     #[test]
     fn standard_levels_follow_the_dicom_modules() {
