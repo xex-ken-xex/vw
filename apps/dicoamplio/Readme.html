@@ -123,6 +123,7 @@ label { color: var(--fg2); font-size: 13.5px; }
     <a href="#csv">CSV</a>
     <a href="#defaults">既定の規則</a>
     <a href="#cli">コマンドライン</a>
+    <a href="#screen">画面で確かめる</a>
   </nav>
 </div></header>
 <main>
@@ -398,6 +399,7 @@ StudyDescription:study=再検 %(s1)d</code></pre>
   <li>行は<b>タグのレベルの単位</b>で進む。患者レベルなら「元の患者 × 複製の患者」ごとに 1 行、検査レベルなら検査ごとに 1 行、画像レベルなら通し番号 <code>n</code> の順。行数を超えたら先頭へ戻る。</li>
   <li>同じ CSV から同じレベルのタグを複数読むと、同じ行から来る(名前と体重が別人にならない)。</li>
   <li>書けない字(JIS にない漢字など)は、実行前に全行を調べて「何行目の何列」までエラーに出す。</li>
+  <li>どの行をどの複製が読むかは、画面の<b>割り当て表</b>で見られる(<a href="#screen">11 章</a>)。</li>
 </ul>
 
 <h2 id="defaults">8. 最初から入っている規則(既定)</h2>
@@ -449,6 +451,35 @@ dicoamplio --send PACS@10.0.0.5:11112 --echo         # C-ECHO
 dicoamplio --send PACS@10.0.0.5:11112 --send-only ./dicom   # そのまま送る
 dicoamplio --help</code></pre>
 <p class="kbd">Windows では、引数つきで起動すると起動元のコンソールに出力がつながります(コマンドプロンプトの入力待ちがすぐ戻ってから流れるので、<code>start /wait</code> か PowerShell の <code>| Out-Host</code> で待てます)。</p>
+
+<h2 id="screen">11. 画面で確かめる</h2>
+<p>実行する前に、画面で規則の誤りと、出力の値を確かめられます。</p>
+<h3>規則の誤り</h3>
+<p>規則は打つたびに 1 行ずつ確かめ、誤りは<b>その行のすぐ下に赤で</b>出ます。タグの名前が読めない、レベルに合わない変数を使った(検査のタグに <code>%(i)d</code> など)、CSV が読めない、などです。
+誤りが残っている間は実行できず、一覧の一番下に「規則の n 行にエラーがある」と出ます。</p>
+<p>同じタグの規則が 2 行あると、<b>下の行が勝ち</b>ます。使われない上の行には、黄色で「下に同じタグの規則があるので、この行は使われない」と出ます。</p>
+<h3>元の値との違い(プレビュー)</h3>
+<p>右の「構成とプレビュー」で複製を選ぶと、各タグに入る値が出ます。元のディレクトリを読んだあとは、元の値と並べます。</p>
+<table>
+<tr><th>出かた</th><th>意味</th></tr>
+<tr><td><span class="mono">元: Scout</span> の下に<span class="mono" style="color:#5aa8e8">Scout 2</span></td><td>値が変わる。青が出力の値、上の小さな行が元の値</td></tr>
+<tr><td class="mono">Localizer (元と同じ)</td><td>元と同じ値になる</td></tr>
+<tr><td class="mono">元: (タグがない)</td><td>元のファイルにないタグを、規則で足す</td></tr>
+<tr><td class="mono">(元にもないので作らない)</td><td>変数を当てて空になり、元にもないので、タグを作らない</td></tr>
+<tr><td class="mono">(空で作る)</td><td>値の欄が空の規則。元にないタグも空で作る(<a href="#defaults">8 章</a>)</td></tr>
+</table>
+<p>元の値は、選んでいるシリーズの<b>最初の画像</b>から読みます。</p>
+<h3>CSV の割り当て表</h3>
+<p>規則の行の「CSV」を押して開き、その下の「割り当て表」を開くと、CSV の各行をどの複製が読むかが出ます。</p>
+<pre><code>2 行目 Yamada^Taro / M / 62.5 → 2 個: EVAL000-0000(P0 p0)、EVAL001-0001(P1 p1)
+3 行目 Sato^Hanako / F / 51.0 → 2 個: EVAL000-0001(P0 p1)、EVAL002-0000(P2 p0)
+4 行目 Suzuki^Ichiro / M / 70.2 → 2 個: EVAL001-0000(P1 p0)、EVAL002-0001(P2 p1)</code></pre>
+<ul>
+  <li>行の頭は CSV の行番号(列名の行を 1 とする)と、先頭 3 列の値。</li>
+  <li>名札は、複製後の PatientID と、元(大文字 <code>P S R I</code>)・複製(小文字 <code>p s r i</code>)の番号。そのタグのレベルまで並ぶ。</li>
+  <li>どの複製も読まない行は「読まれない」と出る。CSV が余っているか、件数が足りないかが分かる。</li>
+  <li>複製の単位が 5000 を超えるときは、先頭の 5000 個で数える(行は順に 1 つずつ進むので、並び方は分かる)。</li>
+</ul>
 
 <p class="kbd" style="margin-top:40px">DicoAmplio は <a href="https://github.com/xex-ken-xex/vw">vw</a> のリポジトリ(<code>apps/dicoamplio</code>)にあります。詳しい設計は同じフォルダの README.md。</p>
 </main>
