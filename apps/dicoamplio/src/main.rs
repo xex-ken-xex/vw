@@ -36,6 +36,10 @@ use std::path::{Path, PathBuf};
   p1 s1 r1 i1 = 同(1 始まり)、n = 通し番号(1 始まり)、
   inst = 元の InstanceNumber + 画像番号 × 10000。
   細かいレベルの番号は粗いレベルのタグには使えない(patient のタグでは p p1 だけ)。
+生成を実行した日時: now_date(YYYYMMDD) now_time(HHMMSS) now_year now_month now_day
+  now_hour now_minute now_second。名前の後ろでずらせる(単位 d h m s):
+  %(now_date+1d*s)s = 検査ごとに 1 日進む、%(now_time-5m*i)s = 画像ごとに 5 分戻る、
+  %(now_time~30m)s = ± 30 分のランダム(タグのレベルの単位ごとに 1 回決める)。
 CSV を指定すると、列名がそのまま変数(文字列)になる。
 例: --csv people.csv \\
     --set 'PatientName:patient=%(name)s' --set 'PatientSex:patient=%(sex)s' \\

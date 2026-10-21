@@ -70,6 +70,64 @@ pub const SRC_VARS: [&str; 9] = [
     "src_modality",
 ];
 
+/// 生成を実行した日時の変数。どのレベルでも使える。整数は年・月・日・時・分・秒、文字列は
+/// 日付 `YYYYMMDD` と時刻 `HHMMSS`(DICOM の DA・TM の形)。
+pub const NOW_INT_VARS: [&str; 6] = [
+    "now_year",
+    "now_month",
+    "now_day",
+    "now_hour",
+    "now_minute",
+    "now_second",
+];
+pub const NOW_STR_VARS: [&str; 2] = ["now_date", "now_time"];
+
+/// 生成を実行した日時。PC の現地時刻で、実行の始めに 1 回だけ取る。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunTime {
+    pub at: chrono::NaiveDateTime,
+    pub parts: [i64; 6],
+    pub date: String,
+    pub time: String,
+}
+
+impl RunTime {
+    pub fn now() -> RunTime {
+        Self::from(chrono::Local::now().naive_local())
+    }
+
+    /// 変数の値(画面の吹き出し用)。日時の変数でなければ None。
+    pub fn value(&self, name: &str) -> Option<String> {
+        if let Some(k) = NOW_INT_VARS.iter().position(|v| *v == name) {
+            return Some(self.parts[k].to_string());
+        }
+        match name {
+            "now_date" => Some(self.date.clone()),
+            "now_time" => Some(self.time.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl From<chrono::NaiveDateTime> for RunTime {
+    fn from(t: chrono::NaiveDateTime) -> RunTime {
+        use chrono::{Datelike, Timelike};
+        RunTime {
+            at: t,
+            parts: [
+                t.year() as i64,
+                t.month() as i64,
+                t.day() as i64,
+                t.hour() as i64,
+                t.minute() as i64,
+                t.second() as i64,
+            ],
+            date: t.format("%Y%m%d").to_string(),
+            time: t.format("%H%M%S").to_string(),
+        }
+    }
+}
+
 /// レベルごとに使える整数の変数。細かいレベルの番号は、粗いレベルのタグには使えない。
 pub fn vars_for(level: Level) -> Vec<&'static str> {
     let upto = match level {
@@ -180,7 +238,7 @@ struct Group {
 }
 
 /// 複製の番号。UID はこれと元の UID から決定的に作る。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Idx {
     pub p: u32,
     pub s: u32,
@@ -261,6 +319,8 @@ impl Progress {
 pub struct Engine {
     cfg: Config,
     ns: Uuid,
+    /// 生成を実行した日時。ファイルごとに取ると、秒をまたいだときに同じ実行の中で値がばらつく
+    pub now: RunTime,
     rules: Vec<Rule>,
     /// 全体の CSV の列と行数(画面の表示用)
     pub csv_columns: Vec<String>,
@@ -332,6 +392,7 @@ impl Engine {
                 UidMode::Derived => Uuid::NAMESPACE_OID,
                 UidMode::Random => Uuid::new_v4(),
             },
+            now: RunTime::now(),
             rules,
             csv_columns,
             csv_rows,
@@ -391,10 +452,15 @@ impl Engine {
             ("n", self.serial(ix, place.ordinal) as i64 + 1),
             ("inst", src_inst_no + ix.i as i64 * 10000),
         ]
+        .into_iter()
+        .chain(NOW_INT_VARS.into_iter().zip(self.now.parts))
+        .collect()
     }
 
-    fn strs(place: &Place) -> [(&'static str, &str); 9] {
+    fn strs<'a>(&'a self, place: &'a Place) -> [(&'static str, &'a str); 11] {
         [
+            ("now_date", &self.now.date),
+            ("now_time", &self.now.time),
             ("src_patient_id", &place.patient_id),
             ("src_patient_name", &place.patient_name),
             ("src_patient_birth_date", &place.patient_birth_date),
@@ -407,20 +473,75 @@ impl Engine {
         ]
     }
 
+    /// 規則を `ix` の複製に当てた値。`csv` は読む CSV の行。
+    fn render(
+        &self,
+        rule: &Rule,
+        ix: Idx,
+        place: &Place,
+        ints: &[(&'static str, i64)],
+        strs: &[(&'static str, &str)],
+        csv: Option<&Row>,
+    ) -> Result<String> {
+        let clock = |name: &str, secs: i64, jitter: i64| {
+            self.shifted_now(name, secs, jitter, rule.level, ix, place)
+        };
+        rule.tpl.render(&Vars {
+            ints,
+            strs,
+            csv,
+            clock: Some(&clock),
+        })
+    }
+
+    /// 実行の日時を `secs` 秒ずらし、さらに ±`jitter` 秒の中でランダムにずらした、日時の変数 `name` の値。
+    /// ランダムの分は、規則のレベルの単位(検査なら複製後の検査 1 つ)と幅ごとに 1 回だけ決める。
+    /// タグで分けないのは、StudyDate と StudyTime に同じ幅を書けば、同じ日時を指すようにするため
+    fn shifted_now(
+        &self,
+        name: &str,
+        secs: i64,
+        jitter: i64,
+        level: Level,
+        ix: Idx,
+        place: &Place,
+    ) -> Result<String> {
+        let random = if jitter > 0 {
+            let key = format!(
+                "now~{jitter}|{level:?}|{}",
+                self.unit_index(level, ix, place)
+            );
+            let h = Uuid::new_v5(&self.ns, key.as_bytes()).as_u128();
+            (h % (2 * jitter as u128 + 1)) as i128 - jitter as i128
+        } else {
+            0
+        };
+        let total = i64::try_from(secs as i128 + random)
+            .ok()
+            .and_then(chrono::TimeDelta::try_seconds)
+            .context("日時のずらしが大きすぎる")?;
+        let t = self
+            .now
+            .at
+            .checked_add_signed(total)
+            .filter(|t| (1..=9999).contains(&chrono::Datelike::year(t)))
+            .context("ずらした日時が西暦 1〜9999 年の外になる")?;
+        RunTime::from(t)
+            .value(name)
+            .with_context(|| format!("`{name}` はずらせない(ずらせるのは日時の変数だけ)"))
+    }
+
     /// 元ファイルを読まずに、規則を `ix` の複製(元の木では `place`)に当てた値を見せる。
     pub fn preview(&self, ix: Idx, place: &Place) -> Vec<PreviewRow> {
         let ints = self.ints(ix, place, 1);
-        let strs = Self::strs(place);
+        let strs = self.strs(place);
         let japanese = Iso2022::japanese();
         self.rules
             .iter()
             .map(|r| {
-                let vars = Vars {
-                    ints: &ints,
-                    strs: &strs,
-                    csv: self.csv_row(r, ix, place),
-                };
-                let value = r.tpl.render(&vars).map_err(|e| format!("{e:#}"));
+                let value = self
+                    .render(r, ix, place, &ints, &strs, self.csv_row(r, ix, place))
+                    .map_err(|e| format!("{e:#}"));
                 let vr = r.vr;
                 let mut warnings = Vec::new();
                 if r.level > standard_level(r.tag) {
@@ -466,13 +587,11 @@ impl Engine {
     pub fn render_rule(&self, tag: Tag, ix: Idx, place: &Place) -> Option<Result<String, String>> {
         let r = self.rules.iter().find(|r| r.tag == tag)?;
         let ints = self.ints(ix, place, 1);
-        let strs = Self::strs(place);
-        let vars = Vars {
-            ints: &ints,
-            strs: &strs,
-            csv: self.csv_row(r, ix, place),
-        };
-        Some(r.tpl.render(&vars).map_err(|e| format!("{e:#}")))
+        let strs = self.strs(place);
+        Some(
+            self.render(r, ix, place, &ints, &strs, self.csv_row(r, ix, place))
+                .map_err(|e| format!("{e:#}")),
+        )
     }
 
     /// InstanceNumber の規則が既定(`元の番号 + 複製番号 × 10000`)のままか。
@@ -497,17 +616,21 @@ impl Engine {
     /// 元の木での通し番号(患者・検査・シリーズ・画像)を織り込むので、元が違えば必ず別の行になり、
     /// 同じ元の複製どうしも別の行になる。
     fn csv_index(&self, rule: &Rule, ix: Idx, place: &Place) -> usize {
+        self.unit_index(rule.level, ix, place) as usize
+    }
+
+    /// `level` の単位(複製後の患者・検査・シリーズ・画像)の、全出力での通し番号(0 始まり)。
+    fn unit_index(&self, level: Level, ix: Idx, place: &Place) -> u64 {
         let c = &self.cfg;
         let (np, ns, nr) = (c.patients as u64, c.studies as u64, c.series as u64);
-        let k = match rule.level {
+        match level {
             Level::Patient => place.patient as u64 * np + ix.p as u64,
             Level::Study => (place.study_ordinal * np + ix.p as u64) * ns + ix.s as u64,
             Level::Series => {
                 ((place.series_ordinal * np + ix.p as u64) * ns + ix.s as u64) * nr + ix.r as u64
             }
             Level::Image => self.serial(ix, place.ordinal),
-        };
-        k as usize
+        }
     }
 
     /// 通し番号(1 始まり)。画面の表示用。
@@ -674,6 +797,7 @@ impl Engine {
         Engine {
             cfg: self.cfg.clone(),
             ns: self.ns,
+            now: self.now.clone(),
             rules: vec![],
             csv_columns: vec![],
             csv_rows: 0,
@@ -1012,17 +1136,8 @@ impl Engine {
     fn preflight(&self) -> Result<()> {
         let flavor = (self.cfg.charset == Charset::Iso2022jp).then(Iso2022::japanese);
         let place = Place::default();
-        let ints = self.ints(
-            Idx {
-                p: 0,
-                s: 0,
-                r: 0,
-                i: 0,
-            },
-            &place,
-            1,
-        );
-        let strs = Self::strs(&place);
+        let ints = self.ints(Idx::default(), &place, 1);
+        let strs = self.strs(&place);
         for rule in &self.rules {
             let Some(vr) = rule.vr else { continue };
             let rows: Vec<Option<&Row>> = match &rule.table {
@@ -1036,13 +1151,8 @@ impl Engine {
                     }
                     _ => "テンプレート".to_string(),
                 };
-                let text = rule
-                    .tpl
-                    .render(&Vars {
-                        ints: &ints,
-                        strs: &strs,
-                        csv: row,
-                    })
+                let text = self
+                    .render(rule, Idx::default(), &place, &ints, &strs, row)
                     .with_context(|| format!("{} {}: {origin}", rule.name, rule.tag))?;
                 check_writable(vr, &text, flavor.as_ref())
                     .with_context(|| format!("{} {}: {origin}: `{text}`", rule.name, rule.tag))?;
@@ -1182,16 +1292,10 @@ impl Engine {
             ds.put_str(tags::SPECIFIC_CHARACTER_SET, VR::CS, code);
         }
         let ints = self.ints(ix, place, prepared.src_inst_no);
-        let strs = Self::strs(place);
+        let strs = self.strs(place);
         for rule in &self.rules {
-            let vars = Vars {
-                ints: &ints,
-                strs: &strs,
-                csv: self.csv_row(rule, ix, place),
-            };
-            let text = rule
-                .tpl
-                .render(&vars)
+            let text = self
+                .render(rule, ix, place, &ints, &strs, self.csv_row(rule, ix, place))
                 .with_context(|| format!("{} ({})", rule.tag, path.display()))?;
             // 値が空で元ファイルにもない要素は作らない。既定の規則は元の値をそのまま使うもの
             // (生年月日・説明など)を含むので、元にない要素を空で足すと、複製だけ中身が変わるため
@@ -1424,6 +1528,13 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
     for n in tpl.names() {
         let in_csv = csv_cols.iter().any(|c| c == n);
         let builtin = BUILTIN_VARS.contains(&n) || SRC_VARS.contains(&n);
+        let now = NOW_INT_VARS.contains(&n) || NOW_STR_VARS.contains(&n);
+        if in_csv && now {
+            bail!("{key}: CSV の列名 `{n}` は組み込みの日時の変数と同じで、どちらを指すか決まらない。CSV の列名を変えてほしい");
+        }
+        if now {
+            continue;
+        }
         if in_csv && builtin {
             // 書式によって組み込みの番号と CSV の列のどちらが勝つかが変わり、レベルの検査もすり抜ける
             bail!("{key}: CSV の列名 `{n}` は組み込みの変数と同じで、どちらを指すか決まらない。CSV の列名を変えてほしい");
@@ -1444,6 +1555,22 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
                 "{key}: 変数 `{n}` がない(CSV の列名か {})",
                 allowed.join(" ")
             );
+        }
+    }
+    let ints = vars_for(level);
+    for (n, shift) in tpl.shifts() {
+        if !(NOW_INT_VARS.contains(&n) || NOW_STR_VARS.contains(&n)) {
+            bail!("{key}: `{n}` はずらせない(ずらせるのは now_ で始まる日時の変数だけ)");
+        }
+        for b in shift.steps.iter().filter_map(|(_, b)| b.as_deref()) {
+            if !ints.contains(&b) {
+                // 検査のタグの日付が画像番号で進むと、同じ検査の画像で日付がばらつく
+                bail!(
+                    "{key} は{}レベルのタグなので、ずらしに変数 `{b}` は掛けられない(掛けられる変数: {})",
+                    level.label(),
+                    ints.join(" ")
+                );
+            }
         }
     }
     Ok(Rule {
@@ -2010,13 +2137,14 @@ mod tests {
             &place,
             1,
         );
-        let strs = Engine::strs(&place);
+        let strs = eng.strs(&place);
         assert_eq!(
             rule.tpl
                 .render(&Vars {
                     ints: &ints,
                     strs: &strs,
-                    csv: None
+                    csv: None,
+                    clock: None,
                 })
                 .unwrap(),
             "1001-2"
@@ -2286,5 +2414,469 @@ mod tests {
         assert!(err.to_string().contains("元のディレクトリ"), "{err}");
         assert!(input.join("a.dcm").exists(), "元は消えない");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_time_variables_give_parts_and_dicom_date_and_time() {
+        let t = RunTime::from(
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 21)
+                .unwrap()
+                .and_hms_opt(9, 5, 7)
+                .unwrap(),
+        );
+        assert_eq!(t.parts, [2026, 10, 21, 9, 5, 7]);
+        assert_eq!((t.date.as_str(), t.time.as_str()), ("20261021", "090507"));
+        let mut eng = Engine::new(&Config::default()).unwrap();
+        eng.now = t;
+        let place = Place::default();
+        let ix = Idx {
+            p: 0,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        let ints = eng.ints(ix, &place, 1);
+        let strs = eng.strs(&place);
+        let render = |v: &str| {
+            Template::parse(v)
+                .unwrap()
+                .render(&Vars {
+                    ints: &ints,
+                    strs: &strs,
+                    csv: None,
+                    clock: None,
+                })
+                .unwrap()
+        };
+        assert_eq!(render("%(now_date)s-%(now_time)s"), "20261021-090507");
+        assert_eq!(
+            render("%(now_year)d/%(now_month)02d/%(now_day)02d %(now_hour)02d:%(now_minute)02d:%(now_second)02d"),
+            "2026/10/21 09:05:07"
+        );
+    }
+
+    #[test]
+    fn run_time_variables_are_allowed_at_the_patient_level() {
+        let spec = RuleSpec::new("PatientComments", Level::Patient, "made %(now_date)s");
+        assert!(parse_rule(&spec, None).is_ok());
+    }
+
+    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32, sec: u32) -> chrono::NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(y, mo, d)
+            .unwrap()
+            .and_hms_opt(h, mi, sec)
+            .unwrap()
+    }
+
+    fn idx(p: u32, s: u32, r: u32, i: u32) -> Idx {
+        Idx { p, s, r, i }
+    }
+
+    /// 規則 `rules` で、実行の日時を `now` に固めた Engine(UID は派生にして結果を決める)。
+    fn clocked(now: chrono::NaiveDateTime, rules: &[(&str, Level, &str)]) -> Engine {
+        let cfg = Config {
+            patients: 3,
+            studies: 30,
+            series: 2,
+            images: 4,
+            uid_mode: UidMode::Derived,
+            rules: rules
+                .iter()
+                .map(|(t, l, v)| RuleSpec::new(t, *l, v))
+                .collect(),
+            ..Config::default()
+        };
+        let mut eng = Engine::new(&cfg).unwrap();
+        eng.now = RunTime::from(now);
+        eng
+    }
+
+    fn value(eng: &Engine, tag: Tag, ix: Idx) -> String {
+        eng.render_rule(tag, ix, &Place::default())
+            .unwrap()
+            .unwrap()
+    }
+
+    fn parse_dt(date: &str, time: &str) -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str(&format!("{date}{time}"), "%Y%m%d%H%M%S").unwrap()
+    }
+
+    #[test]
+    fn date_steps_one_day_per_study_across_month_and_year_ends() {
+        let eng = clocked(
+            at(2026, 12, 30, 12, 0, 0),
+            &[("StudyDate", Level::Study, "%(now_date+1d*s)s")],
+        );
+        let days: Vec<String> = (0..4)
+            .map(|s| value(&eng, tags::STUDY_DATE, idx(0, s, 0, 0)))
+            .collect();
+        assert_eq!(days, ["20261230", "20261231", "20270101", "20270102"]);
+        // 患者を替えても、検査の番号が同じなら同じ日
+        assert_eq!(value(&eng, tags::STUDY_DATE, idx(2, 2, 0, 0)), "20270101");
+    }
+
+    #[test]
+    fn date_steps_backwards_and_knows_leap_days() {
+        let rules = [("StudyDate", Level::Study, "%(now_date-1d*p)s")];
+        let eng = clocked(at(2028, 3, 1, 8, 0, 0), &rules);
+        assert_eq!(value(&eng, tags::STUDY_DATE, idx(1, 0, 0, 0)), "20280229");
+        let eng = clocked(at(2026, 3, 1, 8, 0, 0), &rules);
+        assert_eq!(value(&eng, tags::STUDY_DATE, idx(1, 0, 0, 0)), "20260228");
+        assert_eq!(value(&eng, tags::STUDY_DATE, idx(2, 0, 0, 0)), "20260227");
+    }
+
+    #[test]
+    fn time_stepping_past_midnight_moves_the_date_too() {
+        let eng = clocked(
+            at(2026, 12, 31, 23, 50, 0),
+            &[
+                ("ContentDate", Level::Image, "%(now_date+5m*i)s"),
+                ("ContentTime", Level::Image, "%(now_time+5m*i)s"),
+            ],
+        );
+        let pair = |i| {
+            (
+                value(&eng, tags::CONTENT_DATE, idx(0, 0, 0, i)),
+                value(&eng, tags::CONTENT_TIME, idx(0, 0, 0, i)),
+            )
+        };
+        assert_eq!(pair(0), ("20261231".into(), "235000".into()));
+        assert_eq!(pair(1), ("20261231".into(), "235500".into()));
+        assert_eq!(pair(2), ("20270101".into(), "000000".into()));
+        assert_eq!(pair(3), ("20270101".into(), "000500".into()));
+    }
+
+    #[test]
+    fn time_stepping_backwards_past_midnight_moves_the_date_back() {
+        let eng = clocked(
+            at(2026, 1, 1, 0, 10, 0),
+            &[(
+                "StudyDescription",
+                Level::Image,
+                "%(now_date-7m*i)s %(now_time-7m*i)s",
+            )],
+        );
+        assert_eq!(
+            value(&eng, tags::STUDY_DESCRIPTION, idx(0, 0, 0, 1)),
+            "20260101 000300"
+        );
+        assert_eq!(
+            value(&eng, tags::STUDY_DESCRIPTION, idx(0, 0, 0, 2)),
+            "20251231 235600"
+        );
+    }
+
+    #[test]
+    fn shifted_parts_follow_the_shifted_date_and_time() {
+        let eng = clocked(
+            at(2026, 12, 31, 23, 59, 30),
+            &[(
+                "StudyDescription",
+                Level::Study,
+                "%(now_year+45s*s)d-%(now_month+45s*s)02d-%(now_day+45s*s)02d %(now_hour+45s*s)02d:%(now_minute+45s*s)02d:%(now_second+45s*s)02d",
+            )],
+        );
+        assert_eq!(
+            value(&eng, tags::STUDY_DESCRIPTION, idx(0, 1, 0, 0)),
+            "2027-01-01 00:00:15"
+        );
+        // ずらさない変数は実行の日時のまま
+        let eng = clocked(
+            at(2026, 12, 31, 23, 59, 30),
+            &[(
+                "StudyDescription",
+                Level::Study,
+                "%(now_date+1d*s)s %(now_date)s %(now_year)d",
+            )],
+        );
+        assert_eq!(
+            value(&eng, tags::STUDY_DESCRIPTION, idx(0, 1, 0, 0)),
+            "20270101 20261231 2026"
+        );
+    }
+
+    #[test]
+    fn steps_can_combine_several_loop_counts() {
+        // 患者ごとに 1 週、検査ごとに 1 日、画像ごとに 30 秒
+        let eng = clocked(
+            at(2026, 10, 21, 9, 0, 0),
+            &[(
+                "StudyDescription",
+                Level::Image,
+                "%(now_date+7d*p+1d*s+30s*i)s %(now_time+7d*p+1d*s+30s*i)s",
+            )],
+        );
+        assert_eq!(
+            value(&eng, tags::STUDY_DESCRIPTION, idx(1, 2, 0, 3)),
+            "20261030 090130"
+        );
+    }
+
+    /// 検査レベルで ±12 時間のランダムにした、全検査・全画像の (検査の番号, 画像の番号, 日時)。
+    fn random_study_times(eng: &Engine) -> Vec<(u32, (u32, u32, u32), chrono::NaiveDateTime)> {
+        let mut out = Vec::new();
+        for p in 0..3 {
+            for s in 0..30 {
+                for r in 0..2 {
+                    for i in 0..4 {
+                        let ix = idx(p, s, r, i);
+                        let t = parse_dt(
+                            &value(eng, tags::STUDY_DATE, ix),
+                            &value(eng, tags::STUDY_TIME, ix),
+                        );
+                        out.push((p * 30 + s, (p, r, i), t));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    const RANDOM_STUDY_RULES: [(&str, Level, &str); 3] = [
+        ("StudyDate", Level::Study, "%(now_date~12h)s"),
+        ("StudyTime", Level::Study, "%(now_time~12h)s"),
+        (
+            "StudyDescription",
+            Level::Study,
+            "%(now_date~12h)s %(now_hour~12h)02d%(now_minute~12h)02d%(now_second~12h)02d",
+        ),
+    ];
+
+    #[test]
+    fn random_shift_stays_within_its_range() {
+        let now = at(2026, 10, 21, 23, 0, 0);
+        let eng = clocked(now, &RANDOM_STUDY_RULES);
+        let times = random_study_times(&eng);
+        for (_, _, t) in &times {
+            assert!((*t - now).abs() <= chrono::TimeDelta::hours(12), "{t}");
+        }
+        // 23 時 ± 12 時間なので、日付をまたいだ検査も、またがない検査もある
+        let dates: std::collections::BTreeSet<_> = times.iter().map(|(_, _, t)| t.date()).collect();
+        assert!(dates.len() >= 2, "{dates:?}");
+    }
+
+    #[test]
+    fn random_shift_is_the_same_for_every_image_of_a_study() {
+        let eng = clocked(at(2026, 10, 21, 9, 0, 0), &RANDOM_STUDY_RULES);
+        let mut per_study: HashMap<u32, chrono::NaiveDateTime> = HashMap::new();
+        for (study, ix, t) in random_study_times(&eng) {
+            let first = *per_study.entry(study).or_insert(t);
+            assert_eq!(first, t, "検査 {study} の画像 {ix:?}");
+        }
+        // 検査どうしでは違う
+        let distinct: std::collections::BTreeSet<_> = per_study.values().collect();
+        assert!(distinct.len() > 80, "90 検査で {} 通り", distinct.len());
+    }
+
+    #[test]
+    fn random_shift_is_shared_by_date_and_time_tags_with_the_same_range() {
+        let eng = clocked(at(2026, 10, 21, 23, 0, 0), &RANDOM_STUDY_RULES);
+        for s in 0..30 {
+            let ix = idx(1, s, 0, 0);
+            assert_eq!(
+                value(&eng, tags::STUDY_DESCRIPTION, ix),
+                format!(
+                    "{} {}",
+                    value(&eng, tags::STUDY_DATE, ix),
+                    value(&eng, tags::STUDY_TIME, ix)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn random_shift_reaches_both_ends_of_a_small_range() {
+        // ±1 秒なら -1 0 +1 の 3 通りだけで、3 通りとも出る
+        let now = at(2026, 10, 21, 9, 0, 0);
+        let eng = clocked(now, &[("ContentTime", Level::Image, "%(now_time~1s)s")]);
+        let mut seen = std::collections::BTreeSet::new();
+        for s in 0..30 {
+            for i in 0..4 {
+                let time = value(&eng, tags::CONTENT_TIME, idx(0, s, 0, i));
+                seen.insert((parse_dt("20261021", &time) - now).num_seconds());
+            }
+        }
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), [-1, 0, 1]);
+    }
+
+    #[test]
+    fn random_shift_is_drawn_per_unit_of_the_tags_level() {
+        // 画像レベルなら、同じ検査の中でも画像ごとに違う
+        let eng = clocked(
+            at(2026, 10, 21, 9, 0, 0),
+            &[("ContentTime", Level::Image, "%(now_time~12h)s")],
+        );
+        let times: std::collections::BTreeSet<_> = (0..4)
+            .map(|i| value(&eng, tags::CONTENT_TIME, idx(0, 0, 0, i)))
+            .collect();
+        assert!(times.len() > 1, "{times:?}");
+        // 患者レベルなら、検査が違っても同じ患者なら同じ
+        let eng = clocked(
+            at(2026, 10, 21, 9, 0, 0),
+            &[("PatientComments", Level::Patient, "%(now_time~12h)s")],
+        );
+        let comments = tags::PATIENT_COMMENTS;
+        let first = value(&eng, comments, idx(1, 0, 0, 0));
+        for s in 0..30 {
+            assert_eq!(value(&eng, comments, idx(1, s, 1, 3)), first);
+        }
+        assert_ne!(value(&eng, comments, idx(0, 0, 0, 0)), first);
+    }
+
+    #[test]
+    fn random_shift_differs_between_source_studies_copied_with_the_same_numbers() {
+        let eng = clocked(at(2026, 10, 21, 9, 0, 0), &RANDOM_STUDY_RULES);
+        let values: std::collections::BTreeSet<_> = (0..20)
+            .map(|k| {
+                let place = Place {
+                    study_ordinal: k,
+                    ..Place::default()
+                };
+                eng.render_rule(tags::STUDY_DESCRIPTION, idx(0, 0, 0, 0), &place)
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
+        assert!(values.len() > 15, "{values:?}");
+    }
+
+    #[test]
+    fn random_shift_adds_to_fixed_steps() {
+        let now = at(2026, 10, 21, 9, 0, 0);
+        let eng = clocked(
+            now,
+            &[
+                ("StudyDate", Level::Study, "%(now_date+1d*s~30m)s"),
+                ("StudyTime", Level::Study, "%(now_time+1d*s~30m)s"),
+            ],
+        );
+        for s in 0..30 {
+            let ix = idx(0, s, 0, 0);
+            let t = parse_dt(
+                &value(&eng, tags::STUDY_DATE, ix),
+                &value(&eng, tags::STUDY_TIME, ix),
+            );
+            let off = t - now - chrono::TimeDelta::days(s as i64);
+            assert!(
+                off.abs() <= chrono::TimeDelta::minutes(30),
+                "検査 {s}: {off}"
+            );
+        }
+    }
+
+    #[test]
+    fn random_shift_repeats_with_derived_uids_and_changes_with_random_ones() {
+        let now = at(2026, 10, 21, 9, 0, 0);
+        let all = |eng: &Engine| -> Vec<String> {
+            (0..30)
+                .map(|s| value(eng, tags::STUDY_DESCRIPTION, idx(0, s, 0, 0)))
+                .collect()
+        };
+        let a = clocked(now, &RANDOM_STUDY_RULES);
+        assert_eq!(all(&a), all(&a), "同じ実行の中では何度引いても同じ");
+        assert_eq!(all(&a), all(&clocked(now, &RANDOM_STUDY_RULES)));
+        let random = |eng: Engine| Engine {
+            ns: Uuid::new_v4(),
+            ..eng
+        };
+        let b = random(clocked(now, &RANDOM_STUDY_RULES));
+        let c = random(clocked(now, &RANDOM_STUDY_RULES));
+        assert_ne!(all(&b), all(&c));
+    }
+
+    #[test]
+    fn zero_range_random_shift_does_nothing() {
+        let eng = clocked(
+            at(2026, 10, 21, 9, 5, 7),
+            &[("StudyTime", Level::Study, "%(now_time~0m)s")],
+        );
+        assert_eq!(value(&eng, tags::STUDY_TIME, idx(2, 7, 1, 3)), "090507");
+    }
+
+    #[test]
+    fn shift_outside_years_1_to_9999_is_an_error() {
+        let eng = clocked(
+            at(9999, 12, 31, 12, 0, 0),
+            &[("StudyDate", Level::Study, "%(now_date+1d*s)s")],
+        );
+        assert_eq!(value(&eng, tags::STUDY_DATE, idx(0, 0, 0, 0)), "99991231");
+        let err = eng
+            .render_rule(tags::STUDY_DATE, idx(0, 1, 0, 0), &Place::default())
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("9999"), "{err}");
+        let eng = clocked(
+            at(2026, 1, 1, 0, 0, 0),
+            &[("StudyDate", Level::Study, "%(now_date-1000000d*s)s")],
+        );
+        assert!(eng
+            .render_rule(tags::STUDY_DATE, idx(0, 1, 0, 0), &Place::default())
+            .unwrap()
+            .is_err());
+    }
+
+    #[test]
+    fn multiplier_must_be_a_loop_count_allowed_at_the_tags_level() {
+        let ok = |l, v| parse_rule(&RuleSpec::new("StudyDescription", l, v), None);
+        let err = |l, v| format!("{:#}", ok(l, v).err().unwrap());
+        assert!(ok(Level::Patient, "%(now_date+1d*p)s").is_ok());
+        assert!(ok(Level::Patient, "%(now_date+1d*P)s").is_ok());
+        assert!(ok(Level::Study, "%(now_date+1d*s1)s").is_ok());
+        assert!(ok(Level::Series, "%(now_time+5m*r)s").is_ok());
+        assert!(ok(Level::Image, "%(now_time+5m*i+1s*n)s").is_ok());
+        // 細かいレベルの番号は、粗いレベルのタグには掛けられない
+        assert!(err(Level::Patient, "%(now_date+1d*s)s").contains("`s`"));
+        assert!(err(Level::Study, "%(now_date+1d*i)s").contains("`i`"));
+        assert!(err(Level::Series, "%(now_time+1m*n)s").contains("`n`"));
+        // 文字列の変数や、日時の変数は掛けられない
+        assert!(err(Level::Image, "%(now_date+1d*src_series_number)s").contains("掛けられない"));
+        assert!(err(Level::Image, "%(now_date+1d*now_day)s").contains("掛けられない"));
+        // ランダムだけなら、どのレベルでも使える
+        assert!(ok(Level::Patient, "%(now_time~30m)s").is_ok());
+    }
+
+    #[test]
+    fn multiplier_cannot_be_a_csv_column() {
+        let table = Arc::new(Table {
+            columns: vec!["days".into()],
+            rows: vec![[("days".to_string(), "3".to_string())].into()],
+        });
+        let err = parse_rule(
+            &RuleSpec::new("StudyDate", Level::Study, "%(now_date+1d*days)s"),
+            Some(table),
+        )
+        .err()
+        .unwrap();
+        assert!(format!("{err:#}").contains("`days`"), "{err:#}");
+    }
+
+    #[test]
+    fn only_run_time_variables_can_be_shifted() {
+        let err = |v| {
+            format!(
+                "{:#}",
+                parse_rule(&RuleSpec::new("StudyDate", Level::Study, v), None)
+                    .err()
+                    .unwrap()
+            )
+        };
+        // now_ で始まる名前だけをずらしとして読むので、ほかは名前の一部になり、変数がない
+        assert!(err("%(s+1d)s").contains("`s+1d`"));
+        assert!(err("%(now_week+1d)s").contains("`now_week`"));
+        assert!(err("%(now_date*s)s").contains("`now_date*s`"));
+        assert!(err("%(now_date+1y)s").contains("単位"));
+    }
+
+    #[test]
+    fn preflight_accepts_shifted_dates_for_date_and_time_tags() {
+        let eng = clocked(
+            at(2026, 10, 21, 9, 0, 0),
+            &[
+                ("StudyDate", Level::Study, "%(now_date+1d*s~30m)s"),
+                ("StudyTime", Level::Study, "%(now_time+1d*s~30m)s"),
+                ("ContentTime", Level::Image, "%(now_time-5m*i)s"),
+            ],
+        );
+        eng.preflight().unwrap();
     }
 }

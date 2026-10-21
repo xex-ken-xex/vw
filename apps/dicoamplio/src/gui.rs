@@ -7,7 +7,7 @@ use crate::config::{
 };
 use crate::engine::{
     self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, OutputSummary, PreviewRow,
-    Progress, TableCache, WorkerStatus,
+    Progress, TableCache, WorkerStatus, NOW_INT_VARS, NOW_STR_VARS,
 };
 use crate::tree::{self, Counts, Place, SourceTree};
 use anyhow::Result;
@@ -124,6 +124,14 @@ fn var_help(name: &str) -> &'static str {
         "src_series_number" => "元ファイルの SeriesNumber",
         "src_series_description" => "元ファイルの SeriesDescription",
         "src_modality" => "元ファイルの Modality",
+        "now_year" => "生成を実行した年(例 2026)。実行の始めに 1 回取り、全ファイルで同じ",
+        "now_month" => "生成を実行した月(1〜12)。2 桁にするなら %(now_month)02d",
+        "now_day" => "生成を実行した日(1〜31)。2 桁にするなら %(now_day)02d",
+        "now_hour" => "生成を実行した時(0〜23)",
+        "now_minute" => "生成を実行した分(0〜59)",
+        "now_second" => "生成を実行した秒(0〜59)",
+        "now_date" => "生成を実行した日付 YYYYMMDD(例 20261021)。StudyDate などに。%(now_date+1d*s)s で検査ごとに 1 日進む",
+        "now_time" => "生成を実行した時刻 HHMMSS(例 140509)。StudyTime などに。%(now_time~30m)s で ± 30 分のランダム",
         _ => "CSV の列。タグのレベルの単位で 1 行ずつ進む(行数を超えたら先頭へ戻る)",
     }
 }
@@ -1274,6 +1282,7 @@ impl App {
             .ok()
             .map(|e| e.serial_number(sample, &place))
             .unwrap_or(1);
+        let run_time = self.engine.as_ref().ok().map(|e| e.now.clone());
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -1292,9 +1301,15 @@ impl App {
                             let vars = vars_for(level)
                                 .into_iter()
                                 .chain(src_vars_for(level))
+                                .chain(NOW_INT_VARS)
+                                .chain(NOW_STR_VARS)
                                 .chain(csv_columns.iter().map(String::as_str));
                             for v in vars {
-                                let now = sample_value(v, sample, &place, serial);
+                                let now = run_time
+                                    .as_ref()
+                                    .and_then(|t| t.value(v))
+                                    .map(|t| format!("{t}(画面ではこの設定を読んだ時刻。出力では実行の始めの時刻)"))
+                                    .or_else(|| sample_value(v, sample, &place, serial));
                                 let hover = match now {
                                     Some(n) => {
                                         format!("{}\nいま選んでいる複製では {n}", var_help(v))

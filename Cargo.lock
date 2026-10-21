@@ -821,6 +821,7 @@ name = "dicoamplio"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "csv",
  "dicom-core 0.8.2",
