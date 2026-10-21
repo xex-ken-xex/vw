@@ -2193,9 +2193,9 @@ impl App {
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             let old = before.as_ref().map(|b| b.get(&r.key));
-                            // 空の値は、元にない要素なら作らない(書き出しと同じ)ので、変わらない
-                            let absent_both =
-                                matches!((&r.value, old), (Ok(v), Some(None)) if v.is_empty());
+                            // 変数を当てて空になった値は、元にない要素なら作らない(書き出しと同じ)ので、変わらない
+                            let absent_both = !r.creates_empty
+                                && matches!((&r.value, old), (Ok(v), Some(None)) if v.is_empty());
                             let changed = match (&r.value, old) {
                                 (Ok(v), Some(o)) => {
                                     !absent_both && o.map(String::as_str) != Some(v.as_str())
@@ -2218,6 +2218,13 @@ impl App {
                             match &r.value {
                                 Ok(_) if absent_both => {
                                     ui.weak(RichText::new("(元にもないので作らない)").monospace());
+                                }
+                                Ok(_) if r.creates_empty => {
+                                    let t = RichText::new("(空で作る)").monospace();
+                                    match color {
+                                        Some(c) => ui.label(t.color(c)),
+                                        None => ui.weak(t),
+                                    };
                                 }
                                 Ok(v) if v.is_empty() => {
                                     ui.weak(RichText::new("(空)").monospace());

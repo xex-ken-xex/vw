@@ -84,7 +84,7 @@ printf 風で、変数は `%(名前)` で指定する: `EVAL%(p1)05d`、`%(weigh
 | シリーズ | SeriesNumber / SeriesDescription | `%(r1)d` / `%(src_series_description)s` |
 | 画像 | InstanceNumber | `%(inst)d` |
 
-生年月日・性別・説明は元の値のままで、どこを書き換えられるかが見えるように並べてある。値が空で元ファイルにもない要素は作らない。画面では各レベルの枠の「既定を足し直す」で消した既定を戻せ、「タグを選んで足す」で既定にあるタグを選ぶと既定の値が入る。コマンドラインで外すには `--drop-default PatientID`。PatientID を消して患者を 2 以上にすると、複製は同じ患者の別の検査になる。
+生年月日・性別・説明は元の値のままで、どこを書き換えられるかが見えるように並べてある。変数を当てて空になった値は、元ファイルにない要素なら作らない。値の欄そのものを空にした規則(`--set 'InstitutionName:study='`)は、元にない要素も空で作り、元にある要素は空にする。画面では各レベルの枠の「既定を足し直す」で消した既定を戻せ、「タグを選んで足す」で既定にあるタグを選ぶと既定の値が入る。コマンドラインで外すには `--drop-default PatientID`。PatientID を消して患者を 2 以上にすると、複製は同じ患者の別の検査になる。
 
 前の版のプリセット(`rules_version` がなく、既定の規則を書いていないもの)は、読むときに当時暗黙に足していた 6 つ(PatientID・PatientName・StudyID・AccessionNumber・SeriesNumber・InstanceNumber)を書き足すので、出力は変わらない。`drop_default` に書いたタグは足さない。
 

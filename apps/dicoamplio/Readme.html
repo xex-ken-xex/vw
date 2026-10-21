@@ -416,7 +416,8 @@ StudyDescription:study=再検 %(s1)d</code></pre>
 <tr><td class="mono">SeriesDescription</td><td><span class="tag lv-r">series</span></td><td class="mono">%(src_series_description)s</td><td>元の値のまま。<code>%(src_series_description)s #%(r1)d</code> などに書き換えて使う</td></tr>
 <tr><td class="mono">InstanceNumber</td><td><span class="tag lv-i">image</span></td><td class="mono">%(inst)d</td><td>複製どうしで番号が重ならないように(元の番号 + 複製番号 × 10000)</td></tr>
 </table>
-<p>値が空になり、元ファイルにもその要素がないときは、要素を作りません(元に生年月日がなければ、複製にも生年月日は入らない)。
+<p>変数を当てて値が空になり、元ファイルにもその要素がないときは、要素を作りません(元に生年月日がなければ、複製にも生年月日は入らない)。
+<b>値の欄そのものを空にした規則</b>は「空で入れる」という意味になり、元にない要素も空で作ります(元にある要素は空にします)。
 コマンドラインで既定の規則を外すには <code>--drop-default PatientID</code>。</p>
 <div class="note warn">PatientID を消して患者を 2 以上に増やすと、複製は<b>同じ患者の別の検査</b>として PACS に入ります(UID は振り直されるので重複エラーにはなりません)。それが狙いのとき(シナリオ G)だけ消してください。
 AccessionNumber や InstanceNumber を消すと、複製どうしで番号が重なり、PACS によっては取り違えや上書きが起きます。</div>

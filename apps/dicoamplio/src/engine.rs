@@ -216,6 +216,13 @@ struct Rule {
     level: Level,
 }
 
+impl Rule {
+    /// 値の欄が空。元ファイルにない要素も空で作る
+    fn creates_empty(&self) -> bool {
+        self.value.is_empty()
+    }
+}
+
 /// 読んで、複製ごとに同じ結果になる書き換えを済ませた元ファイル。
 struct Prepared {
     src: dicom_object::DefaultDicomObject,
@@ -368,6 +375,8 @@ pub struct PreviewRow {
     pub value: Result<String, String>,
     /// 文字コードで符号化したバイト列(日本語を ISO 2022 にしたときだけ)
     pub encoded: Option<Vec<u8>>,
+    /// 値の欄が空の規則(元にない要素も空で作る)
+    pub creates_empty: bool,
     pub warnings: Vec<String>,
     /// CSV を使う規則なら、この複製で読む行(列名の行を 1 とした行番号)
     pub csv_line: Option<usize>,
@@ -603,6 +612,7 @@ impl Engine {
                         .unwrap_or_else(|| "?".into()),
                     value,
                     encoded,
+                    creates_empty: r.creates_empty(),
                     warnings,
                     csv_line: self.csv_line(r, ix, place),
                 }
@@ -1458,9 +1468,10 @@ impl Engine {
             let text = self
                 .render(rule, ix, place, &ints, &strs, self.csv_row(rule, ix, place))
                 .with_context(|| format!("{} ({})", rule.tag, path.display()))?;
-            // 値が空で元ファイルにもない要素は作らない。既定の規則は元の値をそのまま使うもの
-            // (生年月日・説明など)を含むので、元にない要素を空で足すと、複製だけ中身が変わるため
-            if text.is_empty() && ds.get(rule.tag).is_none() {
+            // 変数を当てて空になった値は、元ファイルにない要素なら作らない。既定の規則は元の値をそのまま
+            // 使うもの(生年月日・説明など)を含むので、元にない要素を空で足すと、複製だけ中身が変わるため。
+            // 値の欄そのものが空の規則は、空の要素を作れと書いたものとして作る
+            if text.is_empty() && ds.get(rule.tag).is_none() && !rule.creates_empty() {
                 continue;
             }
             // 元ファイルにある要素はその VR を、なければ辞書か規則の VR を使う。暗黙 VR のファイルでは
@@ -2265,6 +2276,91 @@ mod tests {
             ..Config::default()
         })
         .unwrap()
+    }
+
+    /// 元 1 枚(StudyDescription はある、InstitutionName・PatientBirthDate はない)を規則で 1 回書き出す。
+    fn write_once(name: &str, rules: &[(&str, Level, &str)]) -> InMemDicomObject {
+        let dir = scratch(name);
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_dicom(&src, "a.dcm", "A", "10", "1", 1);
+        let out = dir.join("out");
+        let mut cfg = Config {
+            input: src.to_string_lossy().into_owned(),
+            output: out.to_string_lossy().into_owned(),
+            ..Config::default()
+        };
+        cfg.rules
+            .extend(rules.iter().map(|(t, l, v)| RuleSpec::new(t, *l, v)));
+        let n = Engine::new(&cfg)
+            .unwrap()
+            .run(&Progress::default())
+            .unwrap();
+        assert_eq!(n, 1);
+        let f = WalkDir::new(&out)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_type().is_file())
+            .unwrap();
+        open_file(f.path()).unwrap().into_inner()
+    }
+
+    #[test]
+    fn rule_with_an_empty_value_creates_the_element_empty_even_when_the_source_lacks_it() {
+        let ds = write_once(
+            "empty-create",
+            &[
+                ("InstitutionName", Level::Study, ""),
+                ("StudyDescription", Level::Study, ""),
+            ],
+        );
+        let inst = ds.get(tags::INSTITUTION_NAME).expect("元になくても作る");
+        assert_eq!(inst.vr(), VR::LO);
+        assert_eq!(inst.to_str().unwrap().trim(), "");
+        assert_eq!(
+            ds.get(tags::STUDY_DESCRIPTION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .trim(),
+            "",
+            "元の値は空にする"
+        );
+    }
+
+    #[test]
+    fn value_that_renders_empty_does_not_add_an_element_the_source_lacks() {
+        let ds = write_once(
+            "empty-render",
+            &[(
+                "InstitutionName",
+                Level::Study,
+                "%(src_patient_birth_date)s",
+            )],
+        );
+        assert!(ds.get(tags::INSTITUTION_NAME).is_none());
+        // 既定の PatientBirthDate(元の値のまま)も、元にないので作らない
+        assert!(ds.get(tags::PATIENT_BIRTH_DATE).is_none());
+    }
+
+    #[test]
+    fn preview_marks_rules_whose_value_field_is_empty() {
+        let cfg = Config {
+            rules: vec![
+                RuleSpec::new("InstitutionName", Level::Study, ""),
+                RuleSpec::new(
+                    "StudyDescription",
+                    Level::Study,
+                    "%(src_study_description)s",
+                ),
+            ],
+            ..Config::default()
+        };
+        let rows = Engine::new(&cfg)
+            .unwrap()
+            .preview(Idx::default(), &Place::default());
+        assert!(rows[0].creates_empty);
+        assert!(!rows[1].creates_empty, "空に描かれるだけの規則は違う");
     }
 
     #[test]
