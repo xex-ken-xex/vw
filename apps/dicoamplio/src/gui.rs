@@ -130,8 +130,8 @@ fn var_help(name: &str) -> &'static str {
         "now_hour" => "生成を実行した時(0〜23)",
         "now_minute" => "生成を実行した分(0〜59)",
         "now_second" => "生成を実行した秒(0〜59)",
-        "now_date" => "生成を実行した日付 YYYYMMDD(例 20261021)。StudyDate などに",
-        "now_time" => "生成を実行した時刻 HHMMSS(例 140509)。StudyTime などに",
+        "now_date" => "生成を実行した日付 YYYYMMDD(例 20261021)。StudyDate などに。%(now_date+1d*s)s で検査ごとに 1 日進む",
+        "now_time" => "生成を実行した時刻 HHMMSS(例 140509)。StudyTime などに。%(now_time~30m)s で ± 30 分のランダム",
         _ => "CSV の列。タグのレベルの単位で 1 行ずつ進む(行数を超えたら先頭へ戻る)",
     }
 }

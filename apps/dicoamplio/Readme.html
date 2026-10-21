@@ -321,6 +321,18 @@ StudyDescription:study=再検 %(s1)d</code></pre>
 <tr><td class="mono">now_date</td><td>日付 YYYYMMDD(文字列)</td><td class="mono">StudyDate:study=%(now_date)s → 20261021</td></tr>
 <tr><td class="mono">now_time</td><td>時刻 HHMMSS(文字列)</td><td class="mono">StudyTime:study=%(now_time)s → 090507</td></tr>
 </table>
+<p>日時の変数は、名前の後ろに書いて<b>ずらせます</b>。単位は <code>d</code>(日) <code>h</code>(時間) <code>m</code>(分) <code>s</code>(秒)。
+<code>*</code> の後ろには番号の変数(<code>p s r i n</code> など、そのタグのレベルで使えるもの)を書けます。</p>
+<table>
+<tr><th>書き方</th><th>意味</th><th>例(2026-10-21 09:05:07 に実行)</th></tr>
+<tr><td class="mono">%(now_date+1d*s)s</td><td>検査の複製ごとに 1 日進む</td><td class="mono">s=0 → 20261021、s=1 → 20261022</td></tr>
+<tr><td class="mono">%(now_time+5m*i)s</td><td>画像の複製ごとに 5 分進む</td><td class="mono">i=2 → 091507</td></tr>
+<tr><td class="mono">%(now_date-1d*p)s</td><td>患者の複製ごとに 1 日戻る</td><td class="mono">p=1 → 20261020</td></tr>
+<tr><td class="mono">%(now_time~30m)s</td><td>± 30 分の中のランダム</td><td class="mono">083507〜093507 のどれか</td></tr>
+<tr><td class="mono">%(now_date+1d*s~30m)s</td><td>組み合わせ(<code>+</code> <code>-</code> はいくつでも、<code>~</code> は 1 つまで)</td><td class="mono">s=1 → 20261022</td></tr>
+</table>
+<div class="note">0 時をまたぐと日付も動きます。<code>%(now_time+1h*i)s</code> と <code>%(now_date+1h*i)s</code> のように、日付と時刻に<b>同じずらし</b>を書いてください。
+ランダム(<code>~</code>)は<b>タグのレベルの単位ごとに 1 回</b>決まります。検査のタグなら、同じ検査の画像はみな同じ値です。幅が同じなら StudyDate と StudyTime で同じ値を引くので、日付と時刻が食い違いません。</div>
 
 <h3>5.4 CSV の列(文字列)</h3>
 <p>CSV の 1 行目の列名が、そのまま変数名になります(<code>name</code>, <code>weight</code> など)。全体の CSV と、タグごとの CSV(規則の行の「CSV」)があり、タグごとの CSV が優先です。
@@ -361,6 +373,9 @@ StudyDescription:study=再検 %(s1)d</code></pre>
         <button data-t="%(inst)d">inst</button>
         <button data-t="ACC%(P)03d%(p)04d%(s)02d">AccessionNumber の既定</button>
         <button data-t="%(src_modality)s-%(r1)d-%(i1)d">モダリティ+番号</button>
+        <button data-t="%(now_date+1d*s)s">検査ごとに 1 日進む</button>
+        <button data-t="%(now_time+5m*i)s">画像ごとに 5 分進む</button>
+        <button data-t="%(now_time~30m)s">± 30 分のランダム</button>
         <button data-t="%(x)d">変数がない(エラー)</button>
       </div>
       <label>結果</label>
@@ -452,7 +467,9 @@ dicoamplio --help</code></pre>
       if (k < cs.length && cs[k] === '%') { lit += '%'; k++; continue; }
       if (k >= cs.length || cs[k] !== '(') throw new Error('`%` の次は `(名前)` か `%` が必要: ' + src);
       const close = cs.indexOf(')', k); if (close < 0) throw new Error('`)` がない');
-      const name = cs.slice(k + 1, close).join(''); k = close + 1;
+      const raw = cs.slice(k + 1, close).join(''); k = close + 1;
+      let sh; try { sh = splitShift(raw); } catch (e) { throw new Error('`%(' + raw + ')`: ' + e.message); }
+      const { name, shift } = sh;
       let left = false, zero = false, plus = false;
       while (k < cs.length && '-0+'.includes(cs[k])) { if (cs[k] === '-') left = true; else if (cs[k] === '0') zero = true; else plus = true; k++; }
       let width = 0; while (k < cs.length && /[0-9]/.test(cs[k])) { width = width * 10 + +cs[k]; k++; }
@@ -461,20 +478,58 @@ dicoamplio --help</code></pre>
       if (k >= cs.length) throw new Error('変換(d s f x X)がない: ' + src);
       const conv = cs[k++];
       if (!'dsfxX'.includes(conv)) throw new Error('使える変換は d s f x X: ' + conv);
-      flush(); pieces.push({ name, left, zero, plus, width, prec, conv });
+      flush(); pieces.push({ name, shift, left, zero, plus, width, prec, conv });
     }
     flush(); return pieces;
+  }
+  // `now_date+1d*s~30m` を名前とずらしに分ける。now_ で始まらない名前は、記号を含んでもそのまま 1 つの名前
+  const SHIFT_FORM = 'ずらしは `+1d` `-5m*i` `~30m` の形(単位は d h m s)';
+  function splitShift(raw) {
+    const cut = raw.search(/[+\-~]/);
+    if (cut < 0 || !raw.startsWith('now_')) return { name: raw, shift: null };
+    const rest = Array.from(raw.slice(cut)).filter((c) => !/\s/.test(c));
+    const UNIT = { d: 86400, h: 3600, m: 60, s: 1 };
+    const shift = { steps: [], jitter: 0 }; let hasJitter = false; let k = 0;
+    while (k < rest.length) {
+      const op = rest[k++]; let n = '';
+      while (k < rest.length && /[0-9]/.test(rest[k])) n += rest[k++];
+      if (!n) throw new Error('ずらしの数がない。' + SHIFT_FORM);
+      const unit = UNIT[rest[k]]; if (unit === undefined) throw new Error('ずらしの単位がない。' + SHIFT_FORM); k++;
+      const secs = Number(n) * unit; if (!Number.isSafeInteger(secs)) throw new Error('ずらしの数が大きすぎる');
+      if (op === '~') {
+        if (hasJitter) throw new Error('ランダムのずらし `~` は 1 つまで');
+        if (rest[k] === '*') throw new Error('ランダムのずらし `~` には変数を掛けられない');
+        hasJitter = true; shift.jitter = secs;
+      } else if (op === '+' || op === '-') {
+        let by = null;
+        if (rest[k] === '*') { k++; let id = ''; while (k < rest.length && /[A-Za-z0-9_]/.test(rest[k])) id += rest[k++]; if (!id) throw new Error('`*` の次に変数名がない。' + SHIFT_FORM); by = id; }
+        shift.steps.push([op === '-' ? -secs : secs, by]);
+      } else throw new Error('`' + op + '` が読めない。' + SHIFT_FORM);
+    }
+    return { name: raw.slice(0, cut).trim(), shift };
+  }
+  function shifted(p, ints, clock) {
+    if (!clock) throw new Error('`' + p.name + '` のずらしはここでは使えない');
+    let secs = 0;
+    for (const [step, by] of p.shift.steps) {
+      const times = by === null ? 1 : ints[by];
+      if (times === undefined) throw new Error('ずらしに掛ける整数の変数 `' + by + '` がない');
+      secs += step * times;
+    }
+    if (!Number.isSafeInteger(secs)) throw new Error('日時のずらしが大きすぎる');
+    return clock(p.name, secs, p.shift.jitter);
   }
   function pad(s, w, left) { const n = Array.from(s).length; if (n >= w) return s; const f = ' '.repeat(w - n); return left ? s + f : f + s; }
   function padNum(sign, digits, w, left, zero) {
     const n = sign.length + digits.length; if (n >= w) return sign + digits; const k = w - n;
     return left ? sign + digits + ' '.repeat(k) : zero ? sign + '0'.repeat(k) + digits : ' '.repeat(k) + sign + digits;
   }
-  function render(pieces, ints, strs) {
+  function render(pieces, ints, strs, clock) {
     let out = '';
     for (const p of pieces) {
       if (p.lit !== undefined) { out += p.lit; continue; }
-      const int = ints[p.name]; const text = strs[p.name];
+      const sv = p.shift ? shifted(p, ints, clock) : undefined;
+      const int = sv !== undefined ? undefined : ints[p.name]; const text = sv !== undefined ? sv : strs[p.name];
       if (p.conv === 'd' || p.conv === 'x' || p.conv === 'X') {
         let n;
         if (int !== undefined) n = int; else if (text !== undefined) { n = Number(text.trim()); if (Number.isNaN(n)) throw new Error('`' + p.name + '` が数でない: ' + text); n = Math.round(n); }
@@ -637,13 +692,27 @@ dicoamplio --help</code></pre>
     document.querySelectorAll('[data-str]').forEach((e) => { strs[e.dataset.str] = e.value; });
     const r = $('#result'); const tpl = $('#tpl').value;
     try {
-      const pieces = parseTpl(tpl); r.textContent = render(pieces, ints, strs); r.classList.remove('err');
-      const used = pieces.filter((p) => p.name).map((p) => p.name);
+      // 本体は実行の日時(PC の現地時刻)をそのままずらす。ここでは上の now_ の欄を UTC として計算し、夏時間の飛びを避ける
+      const clock = (name, secs, jitter) => {
+        const base = Date.UTC(ints.now_year, ints.now_month - 1, ints.now_day, ints.now_hour, ints.now_minute, ints.now_second);
+        const random = jitter > 0 ? Math.floor(Math.random() * (2 * jitter + 1)) - jitter : 0;
+        const d = new Date(base + (secs + random) * 1000); const y = d.getUTCFullYear();
+        if (Number.isNaN(d.getTime()) || y < 1 || y > 9999) throw new Error('ずらした日時が西暦 1〜9999 年の外になる');
+        const p2 = (x) => String(x).padStart(2, '0');
+        const parts = [y, d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()];
+        const v = { now_year: parts[0], now_month: parts[1], now_day: parts[2], now_hour: parts[3], now_minute: parts[4], now_second: parts[5],
+          now_date: String(y).padStart(4, '0') + p2(parts[1]) + p2(parts[2]), now_time: p2(parts[3]) + p2(parts[4]) + p2(parts[5]) }[name];
+        if (v === undefined) throw new Error('`' + name + '` はずらせない(ずらせるのは日時の変数だけ)');
+        return String(v);
+      };
+      const pieces = parseTpl(tpl); r.textContent = render(pieces, ints, strs, clock); r.classList.remove('err');
+      const used = [...new Set(pieces.filter((p) => p.name).flatMap((p) => [p.name, ...(p.shift ? p.shift.steps.map((s) => s[1]).filter((b) => b !== null) : [])]))];
       const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', src_patient_birth_date: 'patient', src_patient_sex: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series', now_year: 'patient', now_month: 'patient', now_day: 'patient', now_hour: 'patient', now_minute: 'patient', now_second: 'patient', now_date: 'patient', now_time: 'patient' };
       const order = ['patient', 'study', 'series', 'image'];
       const need = used.reduce((m, v) => Math.max(m, order.indexOf(lv[v] || (ints[v] !== undefined ? 'image' : 'patient'))), 0);
       const where = need === 0 ? 'どのレベルにも付けられる' : `この規則に付けられるレベルは ${order.slice(need).join(' / ')}(${order[need]} より粗いレベルには付けられない)`;
       $('#hint').textContent = used.length ? `使った変数: ${used.join(', ')} → ${where}` : '';
+      if (pieces.some((p) => p.shift && p.shift.jitter > 0)) $('#hint').textContent += '。~ はランダムなので、打つたびに変わる(本体ではレベルの単位ごとに 1 回決まる)';
     } catch (e) { r.textContent = '✗ ' + e.message; r.classList.add('err'); $('#hint').textContent = ''; }
   }
   document.querySelectorAll('#tpl, [data-int], [data-str]').forEach((e) => e.addEventListener('input', tryRender));
