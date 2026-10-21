@@ -2,7 +2,7 @@
 //! 複製して UID と識別タグを振り直し、rayon で並列に書き出す。
 
 use crate::charset::{is_multi_iso2022, scs_values, Charset, Iso2022};
-use crate::config::{Config, CsvEncoding, Level, RuleSpec};
+use crate::config::{Config, CsvEncoding, Level, RuleSpec, UidMode};
 use crate::store;
 use crate::template::{Template, Vars};
 use crate::tree::{self, Place};
@@ -325,7 +325,13 @@ impl Engine {
             .unwrap_or_default();
         Ok(Engine {
             cfg: cfg.clone(),
-            ns: Uuid::NAMESPACE_OID,
+            // ランダムでも、名前空間だけを実行ごとに引き、UID は元の UID と番号から引いた名前空間で作る。
+            // UID を 1 つずつ引くと、別のファイルから同じ UID を指す参照(Study・Series の UID、
+            // ReferencedSOPInstanceUID)がばらばらになり、検査やシリーズのまとまりが崩れるため
+            ns: match cfg.uid_mode {
+                UidMode::Derived => Uuid::NAMESPACE_OID,
+                UidMode::Random => Uuid::new_v4(),
+            },
             rules,
             csv_columns,
             csv_rows,
@@ -1452,6 +1458,214 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
 }
 
 /// 元のディレクトリにあるファイル(再帰)。DICOM でないものや DICOMDIR も入る。読むときに飛ばして、ログに出す。
+/// 出力先にすでにあるファイルの数(出力先がなければ 0)。前の出力と混ざるのを、出力の前に知らせるため。
+pub fn count_output_files(output: &str) -> usize {
+    WalkDir::new(output.trim())
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .count()
+}
+
+/// 出力先の直下の 1 項目。消す前に、何が消えるかを見せるため。
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputEntry {
+    pub name: String,
+    pub dir: bool,
+    /// フォルダなら、その中のファイルの数(0 なら空のフォルダ)
+    pub files: usize,
+    /// DicoAmplio が書いた形(`P` と 6 桁の数字のフォルダ)か
+    pub ours: bool,
+}
+
+/// 消す前に見せる、出力先の中身。
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputSummary {
+    /// 実際に消すディレクトリ(リンクなどを辿った先)
+    pub path: PathBuf,
+    pub entries: Vec<OutputEntry>,
+    pub files: usize,
+}
+
+impl OutputSummary {
+    /// DicoAmplio が書いた形でない項目の数。出力先の指定違いに気づくため
+    pub fn foreign(&self) -> usize {
+        self.entries.iter().filter(|e| !e.ours).count()
+    }
+}
+
+/// 出力先の直下に、ファイルか(空でも)フォルダがあるか。
+pub fn output_has_entries(output: &str) -> bool {
+    std::fs::read_dir(output.trim()).is_ok_and(|mut d| d.next().is_some())
+}
+
+/// 消してよい出力先か確かめ、実際に消すディレクトリを返す。
+fn cleanable(input: &str, output: &str) -> Result<PathBuf> {
+    let out = Path::new(output.trim()).canonicalize()?;
+    let input = Path::new(input.trim()).canonicalize().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent()?.canonicalize().ok());
+    let home = dirs_home();
+    let protected = Protected {
+        input: input.as_deref(),
+        home: home.as_deref(),
+        exe_dir: exe_dir.as_deref(),
+        system: &system_dirs(),
+    };
+    match protected.reason(&out) {
+        Some(why) => bail!("{why}ので消さない: {}", out.display()),
+        None => Ok(out),
+    }
+}
+
+/// 消してはいけない場所。出力先の打ち間違いで、元・ホーム・システムを中身ごと消さないため。
+struct Protected<'a> {
+    input: Option<&'a Path>,
+    home: Option<&'a Path>,
+    exe_dir: Option<&'a Path>,
+    system: &'a [PathBuf],
+}
+
+impl Protected<'_> {
+    /// `out` を消してはいけない理由。どれも、その場所か、それを中に含む上の階層を止める
+    fn reason(&self, out: &Path) -> Option<String> {
+        let holds = |p: Option<&Path>| p.is_some_and(|p| p.starts_with(out));
+        if out.parent().is_none() {
+            return Some("出力先がドライブの直下".into());
+        }
+        if holds(self.input) {
+            return Some("元のディレクトリが出力先の中にある".into());
+        }
+        if holds(self.home) {
+            return Some("出力先がホームか、ホームを含む".into());
+        }
+        if holds(self.exe_dir) {
+            return Some("出力先が DicoAmplio の置き場を含む".into());
+        }
+        // システムの場所は、その中も止める(C:\Windows\Temp なども消させない)
+        self.system
+            .iter()
+            .find(|s| out.starts_with(s) || s.starts_with(out))
+            .map(|s| format!("出力先がシステムの場所({})にかかる", s.display()))
+    }
+}
+
+/// OS の大事な場所。ないものは除く。
+fn system_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = if cfg!(windows) {
+        [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "ProgramData",
+        ]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        // macOS の /private は /tmp と /var の実体なので入れない(一時フォルダへ出力できなくなる)
+        [
+            "/bin",
+            "/boot",
+            "/dev",
+            "/etc",
+            "/lib",
+            "/lib32",
+            "/lib64",
+            "/opt",
+            "/proc",
+            "/root",
+            "/run",
+            "/sbin",
+            "/srv",
+            "/sys",
+            "/usr",
+            "/var",
+            "/System",
+            "/Library",
+            "/Applications",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    };
+    dirs.retain_mut(|d| match d.canonicalize() {
+        Ok(c) => {
+            *d = c;
+            true
+        }
+        Err(_) => false,
+    });
+    dirs
+}
+
+/// 出力先の直下の中身。消してよい出力先でなければエラー。
+pub fn output_summary(input: &str, output: &str) -> Result<OutputSummary> {
+    let path = cleanable(input, output)?;
+    let mut entries: Vec<OutputEntry> = std::fs::read_dir(&path)?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let dir = e.path().is_dir();
+            let files = if dir {
+                count_output_files(&e.path().to_string_lossy())
+            } else {
+                1
+            };
+            let ours = dir
+                && name.len() == 7
+                && name.starts_with('P')
+                && name[1..].chars().all(|c| c.is_ascii_digit());
+            OutputEntry {
+                name,
+                dir,
+                files,
+                ours,
+            }
+        })
+        .collect();
+    // 見慣れないものを先に見せる
+    entries.sort_by(|a, b| (a.ours, &a.name).cmp(&(b.ours, &b.name)));
+    let files = entries.iter().map(|e| e.files).sum();
+    Ok(OutputSummary {
+        path,
+        entries,
+        files,
+    })
+}
+
+/// 出力先の中身を消す。出力先のディレクトリそのものは残す。消したファイルの数を返す。
+pub fn clean_output(input: &str, output: &str) -> Result<u64> {
+    if !Path::new(output.trim()).is_dir() {
+        return Ok(0);
+    }
+    let out = cleanable(input, output)?;
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&out)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            removed += count_output_files(&path.to_string_lossy()) as u64;
+            std::fs::remove_dir_all(&path)
+        } else {
+            removed += 1;
+            std::fs::remove_file(&path)
+        }
+        .with_context(|| format!("消せない: {}", path.display()))?;
+    }
+    Ok(removed)
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .and_then(|p| p.canonicalize().ok())
+}
+
 pub fn list_sources(input: &str) -> Result<Vec<PathBuf>> {
     let input = input.trim();
     if input.is_empty() {
@@ -1928,5 +2142,149 @@ mod tests {
         assert!(!check_value(VR::LO, &"あ".repeat(65)).is_empty());
         assert!(check_value(VR::LO, &"あ".repeat(64)).is_empty());
         assert!(!check_value(VR::PN, "a=b=c=d").is_empty());
+    }
+
+    fn uid_of(cfg: &Config, orig: &str, p: u32) -> String {
+        let ix = Idx {
+            p,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        Engine::new(cfg).unwrap().uid(orig, UidLevel::Instance, ix)
+    }
+
+    #[test]
+    fn derived_uids_repeat_across_runs_and_random_ones_do_not() {
+        let derived = Config {
+            uid_mode: UidMode::Derived,
+            ..Config::default()
+        };
+        assert_eq!(uid_of(&derived, "1.2.3", 0), uid_of(&derived, "1.2.3", 0));
+        let random = Config::default();
+        assert_eq!(random.uid_mode, UidMode::Random, "既定はランダム");
+        assert_ne!(uid_of(&random, "1.2.3", 0), uid_of(&random, "1.2.3", 0));
+    }
+
+    #[test]
+    fn random_uids_keep_references_within_one_run() {
+        let eng = Engine::new(&Config::default()).unwrap();
+        let ix = Idx {
+            p: 1,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        let a = eng.uid("1.2.3", UidLevel::Study, ix);
+        assert_eq!(
+            a,
+            eng.uid("1.2.3", UidLevel::Study, ix),
+            "同じ元の UID は同じ新しい UID"
+        );
+        assert_ne!(a, eng.uid("1.2.4", UidLevel::Study, ix));
+        assert!(a.starts_with("2.25.") && a.len() <= 64, "{a}");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dicoamplio-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn cleaning_the_output_removes_its_contents_but_keeps_the_folder() {
+        let root = scratch("clean");
+        let (input, output) = (root.join("in"), root.join("out"));
+        std::fs::create_dir_all(output.join("P000000/S000")).unwrap();
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::write(output.join("P000000/S000/a.dcm"), b"x").unwrap();
+        std::fs::write(output.join("note.txt"), b"x").unwrap();
+        let (i, o) = (input.to_string_lossy(), output.to_string_lossy());
+        assert_eq!(count_output_files(&o), 2);
+        assert_eq!(clean_output(&i, &o).unwrap(), 2);
+        assert!(output.is_dir());
+        assert_eq!(count_output_files(&o), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_summary_lists_what_would_be_removed_with_foreign_entries_first() {
+        let root = scratch("summary");
+        let output = root.join("out");
+        std::fs::create_dir_all(output.join("P000000/S000")).unwrap();
+        std::fs::create_dir_all(output.join("photos")).unwrap();
+        std::fs::write(output.join("P000000/S000/a.dcm"), b"x").unwrap();
+        std::fs::write(output.join("P000000/S000/b.dcm"), b"x").unwrap();
+        std::fs::write(output.join("memo.txt"), b"x").unwrap();
+        let o = output.to_string_lossy();
+        let s = output_summary("", &o).unwrap();
+        let names: Vec<(&str, usize, bool)> = s
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.files, e.ours))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("memo.txt", 1, false),
+                ("photos", 0, false),
+                ("P000000", 2, true)
+            ],
+            "空のフォルダも出る"
+        );
+        assert_eq!((s.files, s.foreign()), (3, 2));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_output_with_only_empty_folders_still_counts_as_not_empty() {
+        let root = scratch("empty-dirs");
+        let o = root.to_string_lossy();
+        assert!(!output_has_entries(&o));
+        std::fs::create_dir_all(root.join("P000000")).unwrap();
+        assert!(output_has_entries(&o));
+        assert_eq!(count_output_files(&o), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn protected_places_and_folders_holding_them_are_never_cleaned() {
+        let system = [PathBuf::from("/sys/w"), PathBuf::from("/apps")];
+        let p = Protected {
+            input: Some(Path::new("/data/src")),
+            home: Some(Path::new("/users/ken")),
+            exe_dir: Some(Path::new("/tools/dicoamplio")),
+            system: &system,
+        };
+        for out in [
+            "/",
+            "/data",
+            "/data/src",
+            "/users",
+            "/users/ken",
+            "/tools",
+            "/sys/w",
+            "/sys/w/temp",
+            "/sys",
+            "/apps",
+        ] {
+            assert!(p.reason(Path::new(out)).is_some(), "{out} は消さない");
+        }
+        for out in ["/data/out", "/users/ken/out", "/sys/other"] {
+            assert_eq!(p.reason(Path::new(out)), None, "{out} は消してよい");
+        }
+    }
+
+    #[test]
+    fn cleaning_refuses_an_output_that_holds_the_input() {
+        let root = scratch("guard");
+        let input = root.join("src");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::write(input.join("a.dcm"), b"x").unwrap();
+        let err = clean_output(&input.to_string_lossy(), &root.to_string_lossy()).unwrap_err();
+        assert!(err.to_string().contains("元のディレクトリ"), "{err}");
+        assert!(input.join("a.dcm").exists(), "元は消えない");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

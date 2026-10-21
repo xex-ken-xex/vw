@@ -25,9 +25,9 @@ cargo build --release -p dicoamplio    # リポジトリのルートで。でき
 できる実行ファイルは `target/release/dicoamplio`(Windows は `target\release\dicoamplio.exe`)。`target/` は `.gitignore` で除いてあるので、リポジトリには入らない。画面なしで作るなら `cargo build --release --no-default-features`(eframe などを入れないので小さい)。
 
 - 件数は元を 1 組としたときの倍数。総数は 元ファイル数 × patients × studies × series × images。
-- UID(Study/Series/SOP/FrameOfReference と、シーケンス内の参照)は、元の UID と複製の番号から決定的に作り直す。参照は同じ複製の中で張り替わる。
+- UID(Study/Series/SOP/FrameOfReference と、シーケンス内の参照)は、元の UID と複製の番号から作り直す。参照は同じ複製の中で張り替わる。作り方は 2 つ: 毎回ランダム(既定、`--uid-mode random`。実行ごとに別の UID になり、やり直した出力を同じ PACS に送ってもぶつからない)と、元の UID から決める(`--uid-mode derived`。やり直しても同じ UID)。ランダムでも、同じ実行の中では同じ元の UID は同じ新しい UID になる。
 - 元ファイルに SOPInstanceUID が同じものがあると(元が壊れている)、ログと設定の欄に ⚠ で知らせ、パスの順で後のほうに別の SOPInstanceUID を振る。そのままだと複製でも同じ UID・同じファイル名になり、上書きされて数が減るため。ほかのファイルからの参照は、どちらを指していたか分からないので最初のファイルのものに張り替わる。
-- 出力は `P患者/S検査/Rシリーズ/SOPInstanceUID.dcm`。
+- 出力は `P患者/S検査/Rシリーズ/SOPInstanceUID.dcm`。出力の前に、画面では出力先の中身を確かめる(空なら「出力先フォルダには、何もありません。」)。中身があれば消すか尋ね(消さないと前のファイルと混ざり、同じ名前は上書きされる)、消すときは直下の一覧(空のフォルダも、DicoAmplio が書いた形でないものは黄色で)を見せてもう一度確かめる。コマンドラインでは `--clean-output` で同じ一覧を出して `yes` と打ってもらう(端末から打てないときは `--yes`)。付けなければ警告だけ出す。次の出力先は消さない: ドライブの直下、元のディレクトリ・ホーム・DicoAmplio の置き場を中に含むもの、システムの場所(Windows は Windows・Program Files・ProgramData、Linux は /usr・/etc・/var など)とその中。
 
 ## タグの規則
 
