@@ -6,8 +6,8 @@ use crate::config::{
     self, Config, CsvEncoding, Destination, Level, RuleSpec, UidMode, DEFAULT_RULES,
 };
 use crate::engine::{
-    self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, PreviewRow, Progress,
-    TableCache, WorkerStatus,
+    self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, OutputSummary, PreviewRow,
+    Progress, TableCache, WorkerStatus,
 };
 use crate::tree::{self, Counts, Place, SourceTree};
 use anyhow::Result;
@@ -170,6 +170,16 @@ struct Scan {
     cancel: Arc<AtomicBool>,
 }
 
+/// 出力の前に、出力先の中身を見せて尋ねる確認の段。
+enum CleanDialog {
+    /// 出力先が空(ないときも)。そう見せて、出力するか尋ねる
+    Empty,
+    /// 中身がある。消すか尋ねる。消してはいけない出力先なら、その理由
+    Ask(Result<OutputSummary, String>),
+    /// 「消す」を選んだあと。消す中身を一覧で見せて、もう一度確かめる
+    Confirm(OutputSummary),
+}
+
 /// 保存の確認。同じ名前があるときは、もう一度押してもらう。
 struct SaveDialog {
     name: String,
@@ -196,8 +206,8 @@ struct App {
     presets: Vec<String>,
     current_preset: Option<String>,
     save_dialog: Option<SaveDialog>,
-    /// 出力先にすでにあるファイルの数。Some のあいだ「消してから出力するか」を尋ねている
-    clean_dialog: Option<usize>,
+    /// 出力の前の確認。Some のあいだ、出力先の中身を見せて尋ねている
+    clean_dialog: Option<CleanDialog>,
     theme: ThemePreference,
 
     /// Arc なのは、実行のスレッドに渡すときに作り直さずに済ませるため
@@ -526,11 +536,15 @@ impl App {
         }
         let as_is = self.cfg.store.enabled && self.cfg.store.as_is;
         if !as_is && self.writes_files() {
-            let n = engine::count_output_files(&self.cfg.output);
-            if n > 0 {
-                self.clean_dialog = Some(n);
-                return;
-            }
+            let output = &self.cfg.output;
+            self.clean_dialog = Some(if engine::output_has_entries(output) {
+                CleanDialog::Ask(
+                    engine::output_summary(&self.cfg.input, output).map_err(|e| format!("{e:#}")),
+                )
+            } else {
+                CleanDialog::Empty
+            });
+            return;
         }
         self.launch(ctx, false);
     }
@@ -2100,45 +2114,139 @@ impl App {
     // ---- 出力先の前のファイル ------------------------------------------------------------
 
     fn clean_dialog_ui(&mut self, ctx: &egui::Context) {
-        let Some(n) = self.clean_dialog else { return };
-        let mut action = None;
-        egui::Window::new("出力先にファイルがある")
+        let Some(dialog) = &self.clean_dialog else {
+            return;
+        };
+        /// 押されたもの。None は「まだ」
+        enum Choice {
+            Run { clean: bool },
+            ConfirmClean(OutputSummary),
+            Back(Result<OutputSummary, String>),
+            Cancel,
+        }
+        let mut choice = None;
+        let output = self.cfg.output.trim().to_string();
+        let title = match dialog {
+            CleanDialog::Confirm(_) => "本当に消す?",
+            _ => "出力先の確認",
+        };
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(format!("出力先 {} に、ファイルが {n} 個ある。", self.cfg.output.trim()));
-                ui.label("消してから出力する?");
-                ui.add_space(4.0);
-                ui.colored_label(
-                    WARN,
-                    "⚠ 消さないと、前のファイルと今回のファイルが混ざる。同じ名前のものは上書きされる",
-                );
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("はい(消して出力する)").clicked() {
-                        action = Some(Some(true));
+                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                match dialog {
+                    CleanDialog::Empty => {
+                        ui.label(RichText::new(&output).monospace());
+                        ui.label("出力先フォルダには、何もありません。");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("出力する").clicked() {
+                                choice = Some(Choice::Run { clean: false });
+                            }
+                            if ui.button("やめる").clicked() || esc {
+                                choice = Some(Choice::Cancel);
+                            }
+                        });
                     }
-                    if ui.button("いいえ(消さずに出力する)").clicked() {
-                        action = Some(Some(false));
+                    CleanDialog::Ask(summary) => {
+                        ui.label(RichText::new(&output).monospace());
+                        match summary {
+                            Ok(s) => {
+                                ui.label(format!(
+                                    "出力先フォルダに {} 個の項目(ファイル {} 個)がある。消してから出力する?",
+                                    s.entries.len(),
+                                    s.files
+                                ));
+                            }
+                            Err(e) => {
+                                ui.label("出力先フォルダに、ファイルかフォルダがある。");
+                                ui.colored_label(ERROR, format!("✗ {e}"));
+                            }
+                        }
+                        ui.add_space(4.0);
+                        ui.colored_label(
+                            WARN,
+                            "⚠ 消さないと、前のファイルと今回のファイルが混ざる。同じ名前のものは上書きされる",
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if let Ok(s) = summary {
+                                if ui.button("はい(中身を見て消す)").clicked() {
+                                    choice = Some(Choice::ConfirmClean(s.clone()));
+                                }
+                            }
+                            if ui.button("いいえ(消さずに出力する)").clicked() {
+                                choice = Some(Choice::Run { clean: false });
+                            }
+                            if ui.button("やめる").clicked() || esc {
+                                choice = Some(Choice::Cancel);
+                            }
+                        });
                     }
-                    if ui.button("やめる").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        action = Some(None);
+                    CleanDialog::Confirm(s) => {
+                        ui.label("次のフォルダの中身を全部消してから出力する。フォルダそのものは残る。");
+                        ui.label(RichText::new(s.path.display().to_string()).monospace().strong());
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(260.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for e in &s.entries {
+                                    let line = match (e.dir, e.files) {
+                                        (true, 0) => format!("📁 {}/  (空のフォルダ)", e.name),
+                                        (true, n) => format!("📁 {}/  ファイル {n} 個", e.name),
+                                        (false, _) => format!("📄 {}", e.name),
+                                    };
+                                    let text = RichText::new(line).monospace();
+                                    if e.ours {
+                                        ui.label(text);
+                                    } else {
+                                        ui.colored_label(WARN, text);
+                                    }
+                                }
+                            });
+                        ui.add_space(4.0);
+                        ui.label(format!("合わせて {} 項目、ファイル {} 個", s.entries.len(), s.files));
+                        if s.foreign() > 0 {
+                            ui.colored_label(
+                                WARN,
+                                format!(
+                                    "⚠ DicoAmplio が書いた形(P000000 のようなフォルダ)でないものが {} 個ある(黄色)。出力先を間違えていないか確かめてほしい",
+                                    s.foreign()
+                                ),
+                            );
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let kill = egui::Button::new(RichText::new("本当に消して出力する").color(ERROR));
+                            if ui.add(kill).clicked() {
+                                choice = Some(Choice::Run { clean: true });
+                            }
+                            if ui.button("戻る").clicked() || esc {
+                                choice = Some(Choice::Back(Ok(s.clone())));
+                            }
+                        });
                     }
-                });
+                }
             });
-        let Some(choice) = action else { return };
-        self.clean_dialog = None;
+        let Some(choice) = choice else { return };
         match choice {
-            Some(clean) => {
-                if !clean {
-                    self.note(format!(
-                        "⚠ 出力先の前のファイル {n} 個を消さずに出力する。前のファイルと混ざる"
-                    ));
+            Choice::ConfirmClean(s) => self.clean_dialog = Some(CleanDialog::Confirm(s)),
+            Choice::Back(s) => self.clean_dialog = Some(CleanDialog::Ask(s)),
+            Choice::Cancel => {
+                self.clean_dialog = None;
+                self.note("出力をやめた");
+            }
+            Choice::Run { clean } => {
+                let had_entries = matches!(self.clean_dialog, Some(CleanDialog::Ask(_)));
+                self.clean_dialog = None;
+                if !clean && had_entries {
+                    self.note("⚠ 出力先の前のファイルを消さずに出力する。前のファイルと混ざる");
                 }
                 self.launch(ctx, clean);
             }
-            None => self.note("出力をやめた"),
         }
     }
 

@@ -1468,13 +1468,41 @@ pub fn count_output_files(output: &str) -> usize {
         .count()
 }
 
-/// 出力先の中身を消す。出力先のディレクトリそのものは残す。消したファイルの数を返す。
-pub fn clean_output(input: &str, output: &str) -> Result<u64> {
-    let out = Path::new(output.trim());
-    if !out.is_dir() {
-        return Ok(0);
+/// 出力先の直下の 1 項目。消す前に、何が消えるかを見せるため。
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputEntry {
+    pub name: String,
+    pub dir: bool,
+    /// フォルダなら、その中のファイルの数(0 なら空のフォルダ)
+    pub files: usize,
+    /// DicoAmplio が書いた形(`P` と 6 桁の数字のフォルダ)か
+    pub ours: bool,
+}
+
+/// 消す前に見せる、出力先の中身。
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputSummary {
+    /// 実際に消すディレクトリ(リンクなどを辿った先)
+    pub path: PathBuf,
+    pub entries: Vec<OutputEntry>,
+    pub files: usize,
+}
+
+impl OutputSummary {
+    /// DicoAmplio が書いた形でない項目の数。出力先の指定違いに気づくため
+    pub fn foreign(&self) -> usize {
+        self.entries.iter().filter(|e| !e.ours).count()
     }
-    let out = out.canonicalize()?;
+}
+
+/// 出力先の直下に、ファイルか(空でも)フォルダがあるか。
+pub fn output_has_entries(output: &str) -> bool {
+    std::fs::read_dir(output.trim()).is_ok_and(|mut d| d.next().is_some())
+}
+
+/// 消してよい出力先か確かめ、実際に消すディレクトリを返す。
+fn cleanable(input: &str, output: &str) -> Result<PathBuf> {
+    let out = Path::new(output.trim()).canonicalize()?;
     // 元のディレクトリが出力先の中にあると、元ごと消える。ホームやドライブの直下を指定した打ち間違いも止める
     if let Ok(inp) = Path::new(input.trim()).canonicalize() {
         if inp.starts_with(&out) {
@@ -1490,6 +1518,50 @@ pub fn clean_output(input: &str, output: &str) -> Result<u64> {
             out.display()
         );
     }
+    Ok(out)
+}
+
+/// 出力先の直下の中身。消してよい出力先でなければエラー。
+pub fn output_summary(input: &str, output: &str) -> Result<OutputSummary> {
+    let path = cleanable(input, output)?;
+    let mut entries: Vec<OutputEntry> = std::fs::read_dir(&path)?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let dir = e.path().is_dir();
+            let files = if dir {
+                count_output_files(&e.path().to_string_lossy())
+            } else {
+                1
+            };
+            let ours = dir
+                && name.len() == 7
+                && name.starts_with('P')
+                && name[1..].chars().all(|c| c.is_ascii_digit());
+            OutputEntry {
+                name,
+                dir,
+                files,
+                ours,
+            }
+        })
+        .collect();
+    // 見慣れないものを先に見せる
+    entries.sort_by(|a, b| (a.ours, &a.name).cmp(&(b.ours, &b.name)));
+    let files = entries.iter().map(|e| e.files).sum();
+    Ok(OutputSummary {
+        path,
+        entries,
+        files,
+    })
+}
+
+/// 出力先の中身を消す。出力先のディレクトリそのものは残す。消したファイルの数を返す。
+pub fn clean_output(input: &str, output: &str) -> Result<u64> {
+    if !Path::new(output.trim()).is_dir() {
+        return Ok(0);
+    }
+    let out = cleanable(input, output)?;
     let mut removed = 0;
     for entry in std::fs::read_dir(&out)? {
         let path = entry?.path();
@@ -2049,6 +2121,46 @@ mod tests {
         assert_eq!(count_output_files(&o), 2);
         assert_eq!(clean_output(&i, &o).unwrap(), 2);
         assert!(output.is_dir());
+        assert_eq!(count_output_files(&o), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_summary_lists_what_would_be_removed_with_foreign_entries_first() {
+        let root = scratch("summary");
+        let output = root.join("out");
+        std::fs::create_dir_all(output.join("P000000/S000")).unwrap();
+        std::fs::create_dir_all(output.join("photos")).unwrap();
+        std::fs::write(output.join("P000000/S000/a.dcm"), b"x").unwrap();
+        std::fs::write(output.join("P000000/S000/b.dcm"), b"x").unwrap();
+        std::fs::write(output.join("memo.txt"), b"x").unwrap();
+        let o = output.to_string_lossy();
+        let s = output_summary("", &o).unwrap();
+        let names: Vec<(&str, usize, bool)> = s
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.files, e.ours))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("memo.txt", 1, false),
+                ("photos", 0, false),
+                ("P000000", 2, true)
+            ],
+            "空のフォルダも出る"
+        );
+        assert_eq!((s.files, s.foreign()), (3, 2));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_output_with_only_empty_folders_still_counts_as_not_empty() {
+        let root = scratch("empty-dirs");
+        let o = root.to_string_lossy();
+        assert!(!output_has_entries(&o));
+        std::fs::create_dir_all(root.join("P000000")).unwrap();
+        assert!(output_has_entries(&o));
         assert_eq!(count_output_files(&o), 0);
         let _ = std::fs::remove_dir_all(&root);
     }

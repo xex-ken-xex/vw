@@ -104,9 +104,12 @@ struct Args {
     /// UID の作り方。random = 実行ごとに別(既定)、derived = 元の UID と複製の番号から決める(やり直しても同じ)
     #[arg(long, value_enum)]
     uid_mode: Option<config::UidMode>,
-    /// 出力の前に、出力先の中身を消す(付けないと、前のファイルと混ざる)
+    /// 出力の前に、出力先の中身を消す(付けないと、前のファイルと混ざる)。消す中身を見せて確かめる
     #[arg(long)]
     clean_output: bool,
+    /// --clean-output の確かめを省く(端末から打てないとき用)
+    #[arg(long)]
+    yes: bool,
     /// プリセットを読む(名前か、.toml のパス)
     #[arg(long)]
     preset: Option<String>,
@@ -201,6 +204,41 @@ fn build_config(a: &Args, dir: &Path) -> Result<Config> {
     Ok(c)
 }
 
+/// 消す中身を見せて、yes と打ってもらう。端末から打てないときは --yes がなければ止める。
+fn confirm_clean(cfg: &Config, yes: bool) -> Result<()> {
+    use std::io::{BufRead, IsTerminal};
+    let s = engine::output_summary(&cfg.input, &cfg.output)?;
+    eprintln!("次のフォルダの中身を全部消す: {}", s.path.display());
+    for e in &s.entries {
+        let mark = if e.ours { " " } else { "?" };
+        match (e.dir, e.files) {
+            (true, 0) => eprintln!(" {mark} {}/  (空のフォルダ)", e.name),
+            (true, n) => eprintln!(" {mark} {}/  ファイル {n} 個", e.name),
+            (false, _) => eprintln!(" {mark} {}", e.name),
+        }
+    }
+    eprintln!("合わせて {} 項目、ファイル {} 個", s.entries.len(), s.files);
+    if s.foreign() > 0 {
+        eprintln!(
+            "⚠ ? の {} 個は DicoAmplio が書いた形(P000000 のようなフォルダ)でない",
+            s.foreign()
+        );
+    }
+    if yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("確かめられないので消さない(消してよければ --yes を付ける)");
+    }
+    eprint!("消してよければ yes と打つ: ");
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    if line.trim() != "yes" {
+        anyhow::bail!("消さずにやめた");
+    }
+    Ok(())
+}
+
 /// Windows の GUI サブシステムは、コンソールから起動されても標準出力・標準エラーがつながっていない。
 /// 引数があるとき(コマンドラインの使い方)だけ、起動元のコンソールにつなぐ。ダブルクリックでは何もしない。
 #[cfg(windows)]
@@ -274,9 +312,12 @@ fn main() -> Result<()> {
             .build_global()?;
     }
     if needs_output {
-        if args.clean_output {
+        if args.clean_output && engine::output_has_entries(&cfg.output) {
+            confirm_clean(&cfg, args.yes)?;
             let n = engine::clean_output(&cfg.input, &cfg.output)?;
             eprintln!("出力先の前のファイル {n} 個を消した");
+        } else if args.clean_output {
+            eprintln!("出力先フォルダには、何もありません。");
         } else {
             let n = engine::count_output_files(&cfg.output);
             if n > 0 {
