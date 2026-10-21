@@ -7,13 +7,14 @@ use crate::config::{
 };
 use crate::engine::{
     self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, OutputSummary, PreviewRow,
-    Progress, TableCache, WorkerStatus, NOW_INT_VARS, NOW_STR_VARS,
+    Progress, RuleCheck, TableCache, WorkerStatus, NOW_INT_VARS, NOW_STR_VARS,
 };
 use crate::tree::{self, Counts, Place, SourceTree};
 use anyhow::Result;
+use dicom_core::Tag;
 use dicom_dictionary_std::tags;
 use eframe::egui::{self, Color32, RichText, ThemePreference};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -139,6 +140,8 @@ fn var_help(name: &str) -> &'static str {
 const WARN: Color32 = Color32::from_rgb(0xe0, 0xa0, 0x40);
 const ERROR: Color32 = Color32::from_rgb(0xe0, 0x60, 0x60);
 const OK: Color32 = Color32::from_rgb(0x6a, 0xc0, 0x7a);
+/// 複製で元から変わる値
+const CHANGED: Color32 = Color32::from_rgb(0x5a, 0xa8, 0xe8);
 
 /// 規則の行のタグの欄の幅。既定の規則の行とそろえるため、1 か所で決める。
 const TAG_W: f32 = 200.0;
@@ -146,6 +149,8 @@ const TAG_W: f32 = 200.0;
 /// 木に出す患者・複製の上限。それより多い分は「…ほか N」にまとめる。
 const TREE_LIMIT: usize = 3;
 const SOURCE_LIMIT: usize = 50;
+/// 割り当て表に出す CSV の行の上限
+const ASSIGN_ROW_LIMIT: usize = 200;
 
 pub fn run(dir: PathBuf, initial: Option<Config>, preset: Option<String>) -> Result<()> {
     let options = eframe::NativeOptions {
@@ -200,6 +205,9 @@ enum RightTab {
     Send,
 }
 
+/// 元ファイル 1 つのタグの値か、読めなかった理由。
+type SourceValues = Result<HashMap<Tag, String>, String>;
+
 /// 複製後の木で選んでいる元のノード(患者・検査・シリーズの番号)。
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Selection {
@@ -222,6 +230,10 @@ struct App {
     engine: Result<Arc<Engine>, String>,
     /// engine を作ったときの設定(入出力先など、engine に関わらない欄は空にしてある)
     engine_cfg: Config,
+    /// 規則の行ごとの検査(cfg.rules と同じ順)
+    rule_checks: Vec<RuleCheck>,
+    /// 選んでいる元ファイルと、そのタグの値(複製前後を並べるため)。選びが変わったときだけ読み直す
+    source_values: Option<(PathBuf, SourceValues)>,
     table_cache: TableCache,
     /// 元のディレクトリのファイル数(歩いて数えたもの。木を読む前から分かる)
     sources: Option<usize>,
@@ -288,6 +300,8 @@ impl App {
                 .map_err(|e| format!("{e:#}"))
                 .map(Arc::new),
             engine_cfg: Self::engine_key(&cfg),
+            rule_checks: engine::check_rules(&cfg, &mut table_cache),
+            source_values: None,
             table_cache,
             cfg,
             presets: config::list_presets(&preset_dir),
@@ -355,6 +369,7 @@ impl App {
             self.engine = Engine::with_cache(&self.cfg, &mut self.table_cache)
                 .map_err(|e| format!("{e:#}"))
                 .map(Arc::new);
+            self.rule_checks = engine::check_rules(&self.cfg, &mut self.table_cache);
             self.engine_cfg = key;
         }
     }
@@ -433,6 +448,21 @@ impl App {
     }
 
     /// 選んでいる元のノード(シリーズ)の位置。木をまだ読めていなければ先頭。
+    /// 選んでいるシリーズの最初の画像の、元の値。木を読む前は None。選びが変わったときだけ読み直す。
+    fn selected_source_values(&mut self) -> Option<SourceValues> {
+        let s = self.selection;
+        let file = self
+            .tree
+            .as_ref()?
+            .file_of(s.patient, s.study, s.series, 0)?
+            .to_path_buf();
+        if self.source_values.as_ref().map(|(p, _)| p) != Some(&file) {
+            let values = tree::read_values(&file).map_err(|e| format!("{e:#}"));
+            self.source_values = Some((file, values));
+        }
+        self.source_values.as_ref().map(|(_, v)| v.clone())
+    }
+
     fn current_place(&self) -> Place {
         let s = self.selection;
         self.tree
@@ -1356,7 +1386,11 @@ impl App {
                     });
                     ui.add_space(6.0);
                 }
-                if let Err(e) = &self.engine {
+                let bad = self.rule_checks.iter().filter(|c| c.error.is_some()).count();
+                if bad > 0 {
+                    ui.add_space(4.0);
+                    ui.colored_label(ERROR, format!("✗ 規則の {bad} 行にエラーがある(赤字の行)"));
+                } else if let Err(e) = &self.engine {
                     ui.add_space(4.0);
                     ui.colored_label(ERROR, format!("✗ {e}"));
                 }
@@ -1422,7 +1456,7 @@ impl App {
             );
             toggle = ui
                 .selectable_label(!r.csv.is_empty(), "CSV")
-                .on_hover_text("このタグだけが読む CSV を指定する")
+                .on_hover_text("このタグだけが読む CSV を指定する。割り当て表もここに出る")
                 .clicked();
             if ui.button("×").on_hover_text("この規則を消す").clicked() {
                 *remove = Some(i);
@@ -1430,6 +1464,20 @@ impl App {
         });
         if toggle && !self.csv_open.insert(i) {
             self.csv_open.remove(&i);
+        }
+        // 規則の行を足したり消したりした直後は、検査が 1 こま遅れて行の数が合わない
+        if let Some(c) = self.rule_checks.get(i) {
+            if let Some(e) = &c.error {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(TAG_W);
+                    ui.colored_label(ERROR, format!("✗ {e}"));
+                });
+            } else if c.overridden {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(TAG_W);
+                    ui.colored_label(WARN, "⚠ 下に同じタグの規則があるので、この行は使われない");
+                });
+            }
         }
         if !open {
             return;
@@ -1480,6 +1528,63 @@ impl App {
                 });
             }
         }
+        self.assignment_ui(ui, i);
+    }
+
+    /// CSV の各行を、どの複製が読むか。
+    fn assignment_ui(&self, ui: &mut egui::Ui, i: usize) {
+        let (Some(tag), Ok(engine)) = (tag_of(&self.cfg.rules[i].tag), &self.engine) else {
+            return;
+        };
+        // 横に並べると、名札の長い表が規則の欄を押し広げるので、字下げして折り返す
+        ui.indent(("assign_in", i), |ui| {
+            egui::CollapsingHeader::new(
+                RichText::new("割り当て表(CSV のどの行を、どの複製が読むか)").small(),
+            )
+            .id_salt(("assign", i))
+            .show(ui, |ui| {
+                let Some(tree) = &self.tree else {
+                    ui.weak("元のディレクトリを読むと出る");
+                    return;
+                };
+                let Some(a) = engine.csv_assignment(tag, tree) else {
+                    ui.weak("この規則は CSV の列を使っていない");
+                    return;
+                };
+                let unit = a.level.label();
+                if a.counted < a.units {
+                    ui.weak(format!(
+                        "複製後の{unit}は全 {} 個。先頭の {} 個で数えた(行は{unit}ごとに 1 つずつ進み、最後の行の次は先頭に戻る)",
+                        a.units, a.counted
+                    ));
+                } else {
+                    ui.weak(format!(
+                        "複製後の{unit} {} 個が、{unit}ごとに 1 行ずつ読む(最後の行の次は先頭に戻る)",
+                        a.units
+                    ));
+                }
+                for r in a.rows.iter().take(ASSIGN_ROW_LIMIT) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("{} 行目", r.line)).small().strong());
+                        ui.label(RichText::new(&r.head).small());
+                        if r.count == 0 {
+                            ui.weak(RichText::new("→ 読まれない").small());
+                            return;
+                        }
+                        ui.weak(RichText::new(format!("→ {} 個:", r.count)).small());
+                        let more = r.count - r.units.len() as u64;
+                        let mut text = r.units.join("、");
+                        if more > 0 {
+                            text.push_str(&format!(" …ほか {more}"));
+                        }
+                        ui.label(RichText::new(text).small().monospace());
+                    });
+                }
+                if a.rows.len() > ASSIGN_ROW_LIMIT {
+                    ui.weak(format!("…ほか {} 行", a.rows.len() - ASSIGN_ROW_LIMIT));
+                }
+            });
+        });
     }
 
     // ---- 構成(元 → 複製後)とプレビュー ------------------------------------------------------
@@ -2056,6 +2161,17 @@ impl App {
             .as_ref()
             .map(|e| e.preview(self.sample, &place))
             .unwrap_or_default();
+        let before = self.selected_source_values();
+        match &before {
+            Some(Ok(_)) => {
+                ui.weak("元の値は、選んでいるシリーズの最初の画像のもの。変わる値は色を付けて、元の値を上に出す");
+            }
+            Some(Err(e)) => {
+                ui.colored_label(WARN, format!("⚠ 元の値を読めない: {e}"));
+            }
+            None => {}
+        }
+        let before = before.and_then(|b| b.ok());
         let field_bg = ui.visuals().extreme_bg_color;
         egui::ScrollArea::vertical()
             .id_salt("values")
@@ -2076,12 +2192,52 @@ impl App {
                         .corner_radius(2)
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
+                            let old = before.as_ref().map(|b| b.get(&r.key));
+                            // 変数を当てて空になった値は、元にない要素なら作らない(書き出しと同じ)ので、変わらない
+                            let absent_both = !r.creates_empty
+                                && matches!((&r.value, old), (Ok(v), Some(None)) if v.is_empty());
+                            let changed = match (&r.value, old) {
+                                (Ok(v), Some(o)) => {
+                                    !absent_both && o.map(String::as_str) != Some(v.as_str())
+                                }
+                                _ => false,
+                            };
+                            if changed {
+                                let o = old.flatten();
+                                ui.weak(
+                                    RichText::new(format!(
+                                        "元: {}",
+                                        o.map(|o| if o.is_empty() { "(空)" } else { o.as_str() })
+                                            .unwrap_or("(タグがない)")
+                                    ))
+                                    .small()
+                                    .monospace(),
+                                );
+                            }
+                            let color = changed.then_some(CHANGED);
                             match &r.value {
+                                Ok(_) if absent_both => {
+                                    ui.weak(RichText::new("(元にもないので作らない)").monospace());
+                                }
+                                Ok(_) if r.creates_empty => {
+                                    let t = RichText::new("(空で作る)").monospace();
+                                    match color {
+                                        Some(c) => ui.label(t.color(c)),
+                                        None => ui.weak(t),
+                                    };
+                                }
                                 Ok(v) if v.is_empty() => {
                                     ui.weak(RichText::new("(空)").monospace());
                                 }
                                 Ok(v) => {
-                                    ui.label(RichText::new(v).monospace());
+                                    let mut t = RichText::new(v).monospace();
+                                    if let Some(c) = color {
+                                        t = t.color(c);
+                                    }
+                                    ui.label(t);
+                                    if old.is_some() && !changed {
+                                        ui.weak(RichText::new("(元と同じ)").small());
+                                    }
                                 }
                                 Err(e) => {
                                     ui.colored_label(ERROR, format!("✗ {e}"));
