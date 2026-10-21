@@ -1503,22 +1503,105 @@ pub fn output_has_entries(output: &str) -> bool {
 /// 消してよい出力先か確かめ、実際に消すディレクトリを返す。
 fn cleanable(input: &str, output: &str) -> Result<PathBuf> {
     let out = Path::new(output.trim()).canonicalize()?;
-    // 元のディレクトリが出力先の中にあると、元ごと消える。ホームやドライブの直下を指定した打ち間違いも止める
-    if let Ok(inp) = Path::new(input.trim()).canonicalize() {
-        if inp.starts_with(&out) {
-            bail!(
-                "元のディレクトリが出力先の中にあるので消さない: {}",
-                out.display()
-            );
+    let input = Path::new(input.trim()).canonicalize().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent()?.canonicalize().ok());
+    let home = dirs_home();
+    let protected = Protected {
+        input: input.as_deref(),
+        home: home.as_deref(),
+        exe_dir: exe_dir.as_deref(),
+        system: &system_dirs(),
+    };
+    match protected.reason(&out) {
+        Some(why) => bail!("{why}ので消さない: {}", out.display()),
+        None => Ok(out),
+    }
+}
+
+/// 消してはいけない場所。出力先の打ち間違いで、元・ホーム・システムを中身ごと消さないため。
+struct Protected<'a> {
+    input: Option<&'a Path>,
+    home: Option<&'a Path>,
+    exe_dir: Option<&'a Path>,
+    system: &'a [PathBuf],
+}
+
+impl Protected<'_> {
+    /// `out` を消してはいけない理由。どれも、その場所か、それを中に含む上の階層を止める
+    fn reason(&self, out: &Path) -> Option<String> {
+        let holds = |p: Option<&Path>| p.is_some_and(|p| p.starts_with(out));
+        if out.parent().is_none() {
+            return Some("出力先がドライブの直下".into());
         }
+        if holds(self.input) {
+            return Some("元のディレクトリが出力先の中にある".into());
+        }
+        if holds(self.home) {
+            return Some("出力先がホームか、ホームを含む".into());
+        }
+        if holds(self.exe_dir) {
+            return Some("出力先が DicoAmplio の置き場を含む".into());
+        }
+        // システムの場所は、その中も止める(C:\Windows\Temp なども消させない)
+        self.system
+            .iter()
+            .find(|s| out.starts_with(s) || s.starts_with(out))
+            .map(|s| format!("出力先がシステムの場所({})にかかる", s.display()))
     }
-    if out.parent().is_none() || dirs_home().as_deref() == Some(out.as_path()) {
-        bail!(
-            "出力先がドライブの直下かホームなので消さない: {}",
-            out.display()
-        );
-    }
-    Ok(out)
+}
+
+/// OS の大事な場所。ないものは除く。
+fn system_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = if cfg!(windows) {
+        [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "ProgramData",
+        ]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        // macOS の /private は /tmp と /var の実体なので入れない(一時フォルダへ出力できなくなる)
+        [
+            "/bin",
+            "/boot",
+            "/dev",
+            "/etc",
+            "/lib",
+            "/lib32",
+            "/lib64",
+            "/opt",
+            "/proc",
+            "/root",
+            "/run",
+            "/sbin",
+            "/srv",
+            "/sys",
+            "/usr",
+            "/var",
+            "/System",
+            "/Library",
+            "/Applications",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    };
+    dirs.retain_mut(|d| match d.canonicalize() {
+        Ok(c) => {
+            *d = c;
+            true
+        }
+        Err(_) => false,
+    });
+    dirs
 }
 
 /// 出力先の直下の中身。消してよい出力先でなければエラー。
@@ -2163,6 +2246,34 @@ mod tests {
         assert!(output_has_entries(&o));
         assert_eq!(count_output_files(&o), 0);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn protected_places_and_folders_holding_them_are_never_cleaned() {
+        let system = [PathBuf::from("/sys/w"), PathBuf::from("/apps")];
+        let p = Protected {
+            input: Some(Path::new("/data/src")),
+            home: Some(Path::new("/users/ken")),
+            exe_dir: Some(Path::new("/tools/dicoamplio")),
+            system: &system,
+        };
+        for out in [
+            "/",
+            "/data",
+            "/data/src",
+            "/users",
+            "/users/ken",
+            "/tools",
+            "/sys/w",
+            "/sys/w/temp",
+            "/sys",
+            "/apps",
+        ] {
+            assert!(p.reason(Path::new(out)).is_some(), "{out} は消さない");
+        }
+        for out in ["/data/out", "/users/ken/out", "/sys/other"] {
+            assert_eq!(p.reason(Path::new(out)), None, "{out} は消してよい");
+        }
     }
 
     #[test]
