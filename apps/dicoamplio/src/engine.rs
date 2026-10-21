@@ -70,6 +70,62 @@ pub const SRC_VARS: [&str; 9] = [
     "src_modality",
 ];
 
+/// 生成を実行した日時の変数。どのレベルでも使える。整数は年・月・日・時・分・秒、文字列は
+/// 日付 `YYYYMMDD` と時刻 `HHMMSS`(DICOM の DA・TM の形)。
+pub const NOW_INT_VARS: [&str; 6] = [
+    "now_year",
+    "now_month",
+    "now_day",
+    "now_hour",
+    "now_minute",
+    "now_second",
+];
+pub const NOW_STR_VARS: [&str; 2] = ["now_date", "now_time"];
+
+/// 生成を実行した日時。PC の現地時刻で、実行の始めに 1 回だけ取る。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunTime {
+    pub parts: [i64; 6],
+    pub date: String,
+    pub time: String,
+}
+
+impl RunTime {
+    pub fn now() -> RunTime {
+        Self::from(chrono::Local::now().naive_local())
+    }
+
+    /// 変数の値(画面の吹き出し用)。日時の変数でなければ None。
+    pub fn value(&self, name: &str) -> Option<String> {
+        if let Some(k) = NOW_INT_VARS.iter().position(|v| *v == name) {
+            return Some(self.parts[k].to_string());
+        }
+        match name {
+            "now_date" => Some(self.date.clone()),
+            "now_time" => Some(self.time.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl From<chrono::NaiveDateTime> for RunTime {
+    fn from(t: chrono::NaiveDateTime) -> RunTime {
+        use chrono::{Datelike, Timelike};
+        RunTime {
+            parts: [
+                t.year() as i64,
+                t.month() as i64,
+                t.day() as i64,
+                t.hour() as i64,
+                t.minute() as i64,
+                t.second() as i64,
+            ],
+            date: t.format("%Y%m%d").to_string(),
+            time: t.format("%H%M%S").to_string(),
+        }
+    }
+}
+
 /// レベルごとに使える整数の変数。細かいレベルの番号は、粗いレベルのタグには使えない。
 pub fn vars_for(level: Level) -> Vec<&'static str> {
     let upto = match level {
@@ -261,6 +317,8 @@ impl Progress {
 pub struct Engine {
     cfg: Config,
     ns: Uuid,
+    /// 生成を実行した日時。ファイルごとに取ると、秒をまたいだときに同じ実行の中で値がばらつく
+    pub now: RunTime,
     rules: Vec<Rule>,
     /// 全体の CSV の列と行数(画面の表示用)
     pub csv_columns: Vec<String>,
@@ -332,6 +390,7 @@ impl Engine {
                 UidMode::Derived => Uuid::NAMESPACE_OID,
                 UidMode::Random => Uuid::new_v4(),
             },
+            now: RunTime::now(),
             rules,
             csv_columns,
             csv_rows,
@@ -391,10 +450,15 @@ impl Engine {
             ("n", self.serial(ix, place.ordinal) as i64 + 1),
             ("inst", src_inst_no + ix.i as i64 * 10000),
         ]
+        .into_iter()
+        .chain(NOW_INT_VARS.into_iter().zip(self.now.parts))
+        .collect()
     }
 
-    fn strs(place: &Place) -> [(&'static str, &str); 9] {
+    fn strs<'a>(&'a self, place: &'a Place) -> [(&'static str, &'a str); 11] {
         [
+            ("now_date", &self.now.date),
+            ("now_time", &self.now.time),
             ("src_patient_id", &place.patient_id),
             ("src_patient_name", &place.patient_name),
             ("src_patient_birth_date", &place.patient_birth_date),
@@ -410,7 +474,7 @@ impl Engine {
     /// 元ファイルを読まずに、規則を `ix` の複製(元の木では `place`)に当てた値を見せる。
     pub fn preview(&self, ix: Idx, place: &Place) -> Vec<PreviewRow> {
         let ints = self.ints(ix, place, 1);
-        let strs = Self::strs(place);
+        let strs = self.strs(place);
         let japanese = Iso2022::japanese();
         self.rules
             .iter()
@@ -466,7 +530,7 @@ impl Engine {
     pub fn render_rule(&self, tag: Tag, ix: Idx, place: &Place) -> Option<Result<String, String>> {
         let r = self.rules.iter().find(|r| r.tag == tag)?;
         let ints = self.ints(ix, place, 1);
-        let strs = Self::strs(place);
+        let strs = self.strs(place);
         let vars = Vars {
             ints: &ints,
             strs: &strs,
@@ -674,6 +738,7 @@ impl Engine {
         Engine {
             cfg: self.cfg.clone(),
             ns: self.ns,
+            now: self.now.clone(),
             rules: vec![],
             csv_columns: vec![],
             csv_rows: 0,
@@ -1022,7 +1087,7 @@ impl Engine {
             &place,
             1,
         );
-        let strs = Self::strs(&place);
+        let strs = self.strs(&place);
         for rule in &self.rules {
             let Some(vr) = rule.vr else { continue };
             let rows: Vec<Option<&Row>> = match &rule.table {
@@ -1182,7 +1247,7 @@ impl Engine {
             ds.put_str(tags::SPECIFIC_CHARACTER_SET, VR::CS, code);
         }
         let ints = self.ints(ix, place, prepared.src_inst_no);
-        let strs = Self::strs(place);
+        let strs = self.strs(place);
         for rule in &self.rules {
             let vars = Vars {
                 ints: &ints,
@@ -1424,6 +1489,13 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
     for n in tpl.names() {
         let in_csv = csv_cols.iter().any(|c| c == n);
         let builtin = BUILTIN_VARS.contains(&n) || SRC_VARS.contains(&n);
+        let now = NOW_INT_VARS.contains(&n) || NOW_STR_VARS.contains(&n);
+        if in_csv && now {
+            bail!("{key}: CSV の列名 `{n}` は組み込みの日時の変数と同じで、どちらを指すか決まらない。CSV の列名を変えてほしい");
+        }
+        if now {
+            continue;
+        }
         if in_csv && builtin {
             // 書式によって組み込みの番号と CSV の列のどちらが勝つかが変わり、レベルの検査もすり抜ける
             bail!("{key}: CSV の列名 `{n}` は組み込みの変数と同じで、どちらを指すか決まらない。CSV の列名を変えてほしい");
@@ -2010,7 +2082,7 @@ mod tests {
             &place,
             1,
         );
-        let strs = Engine::strs(&place);
+        let strs = eng.strs(&place);
         assert_eq!(
             rule.tpl
                 .render(&Vars {
@@ -2286,5 +2358,49 @@ mod tests {
         assert!(err.to_string().contains("元のディレクトリ"), "{err}");
         assert!(input.join("a.dcm").exists(), "元は消えない");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_time_variables_give_parts_and_dicom_date_and_time() {
+        let t = RunTime::from(
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 21)
+                .unwrap()
+                .and_hms_opt(9, 5, 7)
+                .unwrap(),
+        );
+        assert_eq!(t.parts, [2026, 10, 21, 9, 5, 7]);
+        assert_eq!((t.date.as_str(), t.time.as_str()), ("20261021", "090507"));
+        let mut eng = Engine::new(&Config::default()).unwrap();
+        eng.now = t;
+        let place = Place::default();
+        let ix = Idx {
+            p: 0,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        let ints = eng.ints(ix, &place, 1);
+        let strs = eng.strs(&place);
+        let render = |v: &str| {
+            Template::parse(v)
+                .unwrap()
+                .render(&Vars {
+                    ints: &ints,
+                    strs: &strs,
+                    csv: None,
+                })
+                .unwrap()
+        };
+        assert_eq!(render("%(now_date)s-%(now_time)s"), "20261021-090507");
+        assert_eq!(
+            render("%(now_year)d/%(now_month)02d/%(now_day)02d %(now_hour)02d:%(now_minute)02d:%(now_second)02d"),
+            "2026/10/21 09:05:07"
+        );
+    }
+
+    #[test]
+    fn run_time_variables_are_allowed_at_the_patient_level() {
+        let spec = RuleSpec::new("PatientComments", Level::Patient, "made %(now_date)s");
+        assert!(parse_rule(&spec, None).is_ok());
     }
 }

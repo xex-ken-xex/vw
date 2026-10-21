@@ -53,6 +53,8 @@ printf 風で、変数は `%(名前)` で指定する: `EVAL%(p1)05d`、`%(weigh
 | `n` | 通し番号(1 始まり)。元の画像 → 患者 → 検査 → シリーズ → 画像の複製の順に振る。全出力で一意 |
 | `inst` | 元の InstanceNumber + 画像の複製番号 × 10000。元の画像どうしの区別はこれが引き受ける |
 | `src_patient_id` `src_patient_name` `src_study_id` `src_study_description` `src_series_number` `src_series_description` `src_modality` | 元ファイルの値(文字列)。`PatientID:patient=%(src_patient_id)s-%(p1)d` のように、元の値を残したまま増やせる |
+| `now_year` `now_month` `now_day` `now_hour` `now_minute` `now_second` | 生成を実行した日時(整数、PC の現地時刻)。実行の始めに 1 回取るので全ファイルで同じ。`%(now_month)02d` で 2 桁 |
+| `now_date` `now_time` | 生成を実行した日付 `YYYYMMDD`・時刻 `HHMMSS`(文字列)。`StudyDate:study=%(now_date)s` のように DA・TM にそのまま入る |
 | CSV の列名 | CSV の 1 行目の列名がそのまま使える(文字列) |
 
 元の患者が複数いるときは、複製の番号 `p` だけでは別の患者が同じ ID に潰れる。既定の `PatientID` は `EVAL%(P)03d-%(p)04d` で、元の患者(`P`)と複製(`p`)の両方で区別する。書き出しの前に元の木を読む(ヘッダだけ)のはこのため。

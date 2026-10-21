@@ -312,12 +312,22 @@ StudyDescription:study=再検 %(s1)d</code></pre>
 <tr><td class="mono">src_modality</td><td>元の Modality</td><td class="c no">×</td><td class="c no">×</td><td class="c ok">✓</td><td class="mono">%(src_modality)s-%(r1)d</td></tr>
 </table>
 
-<h3>5.3 CSV の列(文字列)</h3>
+<h3>5.3 生成を実行した日時の変数</h3>
+<p>実行の始めに PC の現地時刻を 1 回だけ取り、全ファイルで同じ値にします。どのレベルでも使えます。</p>
+<table>
+<tr><th>変数</th><th>意味</th><th>例(2026-10-21 09:05:07 に実行)</th></tr>
+<tr><td class="mono">now_year now_month now_day</td><td>年・月・日(整数)</td><td class="mono">%(now_year)d/%(now_month)02d/%(now_day)02d → 2026/10/21</td></tr>
+<tr><td class="mono">now_hour now_minute now_second</td><td>時・分・秒(整数)</td><td class="mono">%(now_hour)02d:%(now_minute)02d:%(now_second)02d → 09:05:07</td></tr>
+<tr><td class="mono">now_date</td><td>日付 YYYYMMDD(文字列)</td><td class="mono">StudyDate:study=%(now_date)s → 20261021</td></tr>
+<tr><td class="mono">now_time</td><td>時刻 HHMMSS(文字列)</td><td class="mono">StudyTime:study=%(now_time)s → 090507</td></tr>
+</table>
+
+<h3>5.4 CSV の列(文字列)</h3>
 <p>CSV の 1 行目の列名が、そのまま変数名になります(<code>name</code>, <code>weight</code> など)。全体の CSV と、タグごとの CSV(規則の行の「CSV」)があり、タグごとの CSV が優先です。
 行は<b>そのタグのレベルの単位</b>で 1 行ずつ進み、行数を超えると先頭に戻ります(上の「動きを見る」の表)。数字の列は <code>%(weight).1f</code> や <code>%(age)d</code> のように数としても使えます。</p>
 <div class="note warn">列名を組み込みの変数(<code>n</code>, <code>i</code>, <code>P</code> …)と同じにするとエラーになります。</div>
 
-<h3>5.4 書式(printf 風)</h3>
+<h3>5.5 書式(printf 風)</h3>
 <table>
 <tr><th>書き方</th><th>意味</th><th>例</th></tr>
 <tr><td class="mono">%(x)d</td><td>整数。文字列の変数でも数なら使える(四捨五入)</td><td class="mono">%(p)d → 3</td></tr>
@@ -617,8 +627,8 @@ dicoamplio --help</code></pre>
   $('#lvsel').addEventListener('change', drawLv); drawLv();
 
   // ---- 試す ----
-  const INTS = [['p', 1], ['p1', 2], ['P', 1], ['s', 0], ['s1', 1], ['S', 0], ['r', 0], ['r1', 1], ['R', 0], ['i', 1], ['i1', 2], ['I', 6], ['n', 42], ['inst', 10007]];
-  const STRS = [['src_patient_id', '1001'], ['src_patient_name', 'Yamada^Tarou'], ['src_patient_birth_date', '19800102'], ['src_patient_sex', 'M'], ['src_study_id', 'ST1'], ['src_study_description', '頭部CT 造影あり'], ['src_series_number', '3'], ['src_series_description', 'Axial 5mm'], ['src_modality', 'CT'], ['name_alpha', 'Yamada^Tarou'], ['name_kanji', '山田^太郎'], ['name_kana', 'ﾔﾏﾀﾞ^ﾀﾛｳ'], ['name', 'Yamada^Tarou'], ['sex', 'M'], ['weight', '68.4'], ['height_cm', '172']];
+  const INTS = [['p', 1], ['p1', 2], ['P', 1], ['s', 0], ['s1', 1], ['S', 0], ['r', 0], ['r1', 1], ['R', 0], ['i', 1], ['i1', 2], ['I', 6], ['n', 42], ['inst', 10007], ['now_year', 2026], ['now_month', 10], ['now_day', 21], ['now_hour', 9], ['now_minute', 5], ['now_second', 7]];
+  const STRS = [['src_patient_id', '1001'], ['src_patient_name', 'Yamada^Tarou'], ['src_patient_birth_date', '19800102'], ['src_patient_sex', 'M'], ['src_study_id', 'ST1'], ['src_study_description', '頭部CT 造影あり'], ['src_series_number', '3'], ['src_series_description', 'Axial 5mm'], ['src_modality', 'CT'], ['now_date', '20261021'], ['now_time', '090507'], ['name_alpha', 'Yamada^Tarou'], ['name_kanji', '山田^太郎'], ['name_kana', 'ﾔﾏﾀﾞ^ﾀﾛｳ'], ['name', 'Yamada^Tarou'], ['sex', 'M'], ['weight', '68.4'], ['height_cm', '172']];
   for (const [k, v] of INTS) $('#intvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="number" data-int="${k}" value="${v}"></label>`);
   for (const [k, v] of STRS) $('#strvars').insertAdjacentHTML('beforeend', `<label>${k}<input type="text" data-str="${k}" value="${v}"></label>`);
   function tryRender() {
@@ -629,7 +639,7 @@ dicoamplio --help</code></pre>
     try {
       const pieces = parseTpl(tpl); r.textContent = render(pieces, ints, strs); r.classList.remove('err');
       const used = pieces.filter((p) => p.name).map((p) => p.name);
-      const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', src_patient_birth_date: 'patient', src_patient_sex: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series' };
+      const lv = { p: 'patient', p1: 'patient', P: 'patient', src_patient_id: 'patient', src_patient_name: 'patient', src_patient_birth_date: 'patient', src_patient_sex: 'patient', s: 'study', s1: 'study', S: 'study', src_study_id: 'study', src_study_description: 'study', r: 'series', r1: 'series', R: 'series', src_series_number: 'series', src_series_description: 'series', src_modality: 'series', now_year: 'patient', now_month: 'patient', now_day: 'patient', now_hour: 'patient', now_minute: 'patient', now_second: 'patient', now_date: 'patient', now_time: 'patient' };
       const order = ['patient', 'study', 'series', 'image'];
       const need = used.reduce((m, v) => Math.max(m, order.indexOf(lv[v] || (ints[v] !== undefined ? 'image' : 'patient'))), 0);
       const where = need === 0 ? 'どのレベルにも付けられる' : `この規則に付けられるレベルは ${order.slice(need).join(' / ')}(${order[need]} より粗いレベルには付けられない)`;
