@@ -2,7 +2,9 @@
 //! パネルの並びも vw に合わせる: メニュー → 道具の帯 → ログ(下)→ 設定(左)→ 構成とプレビュー(右)→ タグの規則(中央)。
 
 use crate::charset::Charset;
-use crate::config::{self, Config, CsvEncoding, Destination, Level, RuleSpec, DEFAULT_RULES};
+use crate::config::{
+    self, Config, CsvEncoding, Destination, Level, RuleSpec, UidMode, DEFAULT_RULES,
+};
 use crate::engine::{
     self, src_vars_for, tag_of, vars_for, Engine, GroupResult, Idx, PreviewRow, Progress,
     TableCache, WorkerStatus,
@@ -194,6 +196,8 @@ struct App {
     presets: Vec<String>,
     current_preset: Option<String>,
     save_dialog: Option<SaveDialog>,
+    /// 出力先にすでにあるファイルの数。Some のあいだ「消してから出力するか」を尋ねている
+    clean_dialog: Option<usize>,
     theme: ThemePreference,
 
     /// Arc なのは、実行のスレッドに渡すときに作り直さずに済ませるため
@@ -272,6 +276,7 @@ impl App {
             preset_dir,
             current_preset: preset,
             save_dialog: None,
+            clean_dialog: None,
             theme,
             sources: None,
             counted_input: String::new(),
@@ -519,6 +524,19 @@ impl App {
             self.note(format!("エラー: {p}"));
             return;
         }
+        let as_is = self.cfg.store.enabled && self.cfg.store.as_is;
+        if !as_is && self.writes_files() {
+            let n = engine::count_output_files(&self.cfg.output);
+            if n > 0 {
+                self.clean_dialog = Some(n);
+                return;
+            }
+        }
+        self.launch(ctx, false);
+    }
+
+    /// 実行を裏のスレッドで始める。`clean` なら、先に出力先の中身を消す。
+    fn launch(&mut self, ctx: &egui::Context, clean: bool) {
         // 元のディレクトリと出力先は engine_key に入れていないので、ここで最新の値で作り直す
         let engine = match Engine::with_cache(&self.cfg, &mut self.table_cache) {
             Ok(e) => Arc::new(e),
@@ -534,7 +552,19 @@ impl App {
         let p = progress.clone();
         let ctx = ctx.clone();
         let as_is = self.cfg.store.enabled && self.cfg.store.as_is;
+        let (input, output) = (self.cfg.input.clone(), self.cfg.output.clone());
         std::thread::spawn(move || {
+            // 消すのも裏で。数万ファイルを消すあいだ画面を止めないため
+            if clean {
+                match engine::clean_output(&input, &output) {
+                    Ok(n) => p.say(format!("出力先の前のファイル {n} 個を消した")),
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("{e:#}")));
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
+            }
             let r = if as_is {
                 engine.run_send_as_is(&p)
             } else {
@@ -1189,9 +1219,18 @@ impl App {
                 }
             }
 
-            Self::section(ui, "UID の接頭辞");
+            Self::section(ui, "UID");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.cfg.uid_mode, UidMode::Derived, "元の UID から決める");
+                ui.radio_value(&mut self.cfg.uid_mode, UidMode::Random, "毎回ランダム");
+            });
+            ui.weak(match self.cfg.uid_mode {
+                UidMode::Derived => "元の UID と複製の番号から決まる。同じ設定でやり直すと同じ UID になる",
+                UidMode::Random => "実行ごとに別の UID になる。同じ実行の中では、同じ元の UID は同じ新しい UID になる(参照は保たれる)",
+            });
+            ui.label("接頭辞");
             ui.add(egui::TextEdit::singleline(&mut self.cfg.uid_root).desired_width(ui.available_width() - 8.0));
-            ui.weak("UID は 接頭辞.<元の UID と複製番号から決まる数> になる");
+            ui.weak("UID は 接頭辞.<UUID を 10 進にした数> になる");
             ui.add_space(8.0);
         });
     }
@@ -1797,11 +1836,13 @@ impl App {
         };
         let c = t.counts();
         ui.weak(counts_line(c));
-        egui::ScrollArea::vertical()
+        // 横にもスクロールさせる。長い患者 ID・名前で列が広がると、右のパネルごと広がって規則の欄を狭めるため
+        egui::ScrollArea::both()
             .id_salt("src_tree")
             .max_height(height)
             .auto_shrink([false, true])
             .show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 for (pi, p) in t.patients.iter().enumerate().take(SOURCE_LIMIT) {
                     let label = format!("患者 {} {}", p.id, p.name);
                     egui::CollapsingHeader::new(label)
@@ -1858,7 +1899,8 @@ impl App {
                 None => fallback.to_string(),
             }
         };
-        egui::ScrollArea::vertical().id_salt("plan_tree").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::both().id_salt("plan_tree").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             for (pi, p) in t.patients.iter().enumerate().take(SOURCE_LIMIT) {
                 let p_place = t.place_of(pi, 0, 0).unwrap_or_default();
                 for pk in 0..np.min(TREE_LIMIT as u32) {
@@ -2055,6 +2097,51 @@ impl App {
             });
     }
 
+    // ---- 出力先の前のファイル ------------------------------------------------------------
+
+    fn clean_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(n) = self.clean_dialog else { return };
+        let mut action = None;
+        egui::Window::new("出力先にファイルがある")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!("出力先 {} に、ファイルが {n} 個ある。", self.cfg.output.trim()));
+                ui.label("消してから出力する?");
+                ui.add_space(4.0);
+                ui.colored_label(
+                    WARN,
+                    "⚠ 消さないと、前のファイルと今回のファイルが混ざる。同じ名前のものは上書きされる",
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("はい(消して出力する)").clicked() {
+                        action = Some(Some(true));
+                    }
+                    if ui.button("いいえ(消さずに出力する)").clicked() {
+                        action = Some(Some(false));
+                    }
+                    if ui.button("やめる").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        action = Some(None);
+                    }
+                });
+            });
+        let Some(choice) = action else { return };
+        self.clean_dialog = None;
+        match choice {
+            Some(clean) => {
+                if !clean {
+                    self.note(format!(
+                        "⚠ 出力先の前のファイル {n} 個を消さずに出力する。前のファイルと混ざる"
+                    ));
+                }
+                self.launch(ctx, clean);
+            }
+            None => self.note("出力をやめた"),
+        }
+    }
+
     // ---- プリセットの保存 ----------------------------------------------------------------
 
     fn save_dialog_ui(&mut self, ctx: &egui::Context) {
@@ -2199,6 +2286,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.right_panel_ui(ui));
         egui::CentralPanel::default().show(ui, |ui| self.rules_ui(ui));
         self.save_dialog_ui(&ctx);
+        self.clean_dialog_ui(&ctx);
         self.picker_ui(&ctx);
         if let Some(e) = self.about.ui(&ctx) {
             self.note(format!("エラー: ライセンスの一覧を開けない: {e}"));

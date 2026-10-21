@@ -2,7 +2,7 @@
 //! 複製して UID と識別タグを振り直し、rayon で並列に書き出す。
 
 use crate::charset::{is_multi_iso2022, scs_values, Charset, Iso2022};
-use crate::config::{Config, CsvEncoding, Level, RuleSpec};
+use crate::config::{Config, CsvEncoding, Level, RuleSpec, UidMode};
 use crate::store;
 use crate::template::{Template, Vars};
 use crate::tree::{self, Place};
@@ -325,7 +325,13 @@ impl Engine {
             .unwrap_or_default();
         Ok(Engine {
             cfg: cfg.clone(),
-            ns: Uuid::NAMESPACE_OID,
+            // ランダムでも、名前空間だけを実行ごとに引き、UID は元の UID と番号から引いた名前空間で作る。
+            // UID を 1 つずつ引くと、別のファイルから同じ UID を指す参照(Study・Series の UID、
+            // ReferencedSOPInstanceUID)がばらばらになり、検査やシリーズのまとまりが崩れるため
+            ns: match cfg.uid_mode {
+                UidMode::Derived => Uuid::NAMESPACE_OID,
+                UidMode::Random => Uuid::new_v4(),
+            },
             rules,
             csv_columns,
             csv_rows,
@@ -1452,6 +1458,59 @@ fn parse_rule(spec: &RuleSpec, table: Option<Arc<Table>>) -> Result<Rule> {
 }
 
 /// 元のディレクトリにあるファイル(再帰)。DICOM でないものや DICOMDIR も入る。読むときに飛ばして、ログに出す。
+/// 出力先にすでにあるファイルの数(出力先がなければ 0)。前の出力と混ざるのを、出力の前に知らせるため。
+pub fn count_output_files(output: &str) -> usize {
+    WalkDir::new(output.trim())
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .count()
+}
+
+/// 出力先の中身を消す。出力先のディレクトリそのものは残す。消したファイルの数を返す。
+pub fn clean_output(input: &str, output: &str) -> Result<u64> {
+    let out = Path::new(output.trim());
+    if !out.is_dir() {
+        return Ok(0);
+    }
+    let out = out.canonicalize()?;
+    // 元のディレクトリが出力先の中にあると、元ごと消える。ホームやドライブの直下を指定した打ち間違いも止める
+    if let Ok(inp) = Path::new(input.trim()).canonicalize() {
+        if inp.starts_with(&out) {
+            bail!(
+                "元のディレクトリが出力先の中にあるので消さない: {}",
+                out.display()
+            );
+        }
+    }
+    if out.parent().is_none() || dirs_home().as_deref() == Some(out.as_path()) {
+        bail!(
+            "出力先がドライブの直下かホームなので消さない: {}",
+            out.display()
+        );
+    }
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&out)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            removed += count_output_files(&path.to_string_lossy()) as u64;
+            std::fs::remove_dir_all(&path)
+        } else {
+            removed += 1;
+            std::fs::remove_file(&path)
+        }
+        .with_context(|| format!("消せない: {}", path.display()))?;
+    }
+    Ok(removed)
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .and_then(|p| p.canonicalize().ok())
+}
+
 pub fn list_sources(input: &str) -> Result<Vec<PathBuf>> {
     let input = input.trim();
     if input.is_empty() {
@@ -1928,5 +1987,81 @@ mod tests {
         assert!(!check_value(VR::LO, &"あ".repeat(65)).is_empty());
         assert!(check_value(VR::LO, &"あ".repeat(64)).is_empty());
         assert!(!check_value(VR::PN, "a=b=c=d").is_empty());
+    }
+
+    fn uid_of(cfg: &Config, orig: &str, p: u32) -> String {
+        let ix = Idx {
+            p,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        Engine::new(cfg).unwrap().uid(orig, UidLevel::Instance, ix)
+    }
+
+    #[test]
+    fn derived_uids_repeat_across_runs_and_random_ones_do_not() {
+        let derived = Config {
+            uid_mode: UidMode::Derived,
+            ..Config::default()
+        };
+        assert_eq!(uid_of(&derived, "1.2.3", 0), uid_of(&derived, "1.2.3", 0));
+        let random = Config::default();
+        assert_eq!(random.uid_mode, UidMode::Random, "既定はランダム");
+        assert_ne!(uid_of(&random, "1.2.3", 0), uid_of(&random, "1.2.3", 0));
+    }
+
+    #[test]
+    fn random_uids_keep_references_within_one_run() {
+        let eng = Engine::new(&Config::default()).unwrap();
+        let ix = Idx {
+            p: 1,
+            s: 0,
+            r: 0,
+            i: 0,
+        };
+        let a = eng.uid("1.2.3", UidLevel::Study, ix);
+        assert_eq!(
+            a,
+            eng.uid("1.2.3", UidLevel::Study, ix),
+            "同じ元の UID は同じ新しい UID"
+        );
+        assert_ne!(a, eng.uid("1.2.4", UidLevel::Study, ix));
+        assert!(a.starts_with("2.25.") && a.len() <= 64, "{a}");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dicoamplio-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn cleaning_the_output_removes_its_contents_but_keeps_the_folder() {
+        let root = scratch("clean");
+        let (input, output) = (root.join("in"), root.join("out"));
+        std::fs::create_dir_all(output.join("P000000/S000")).unwrap();
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::write(output.join("P000000/S000/a.dcm"), b"x").unwrap();
+        std::fs::write(output.join("note.txt"), b"x").unwrap();
+        let (i, o) = (input.to_string_lossy(), output.to_string_lossy());
+        assert_eq!(count_output_files(&o), 2);
+        assert_eq!(clean_output(&i, &o).unwrap(), 2);
+        assert!(output.is_dir());
+        assert_eq!(count_output_files(&o), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cleaning_refuses_an_output_that_holds_the_input() {
+        let root = scratch("guard");
+        let input = root.join("src");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::write(input.join("a.dcm"), b"x").unwrap();
+        let err = clean_output(&input.to_string_lossy(), &root.to_string_lossy()).unwrap_err();
+        assert!(err.to_string().contains("元のディレクトリ"), "{err}");
+        assert!(input.join("a.dcm").exists(), "元は消えない");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

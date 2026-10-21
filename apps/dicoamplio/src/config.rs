@@ -112,6 +112,18 @@ impl RuleSpec {
 
 /// 1 つのアソシエーションで送るまとまり。実機の装置は検査(モダリティ)の単位で送るので、
 /// 混ぜて送ると PACS 側で取り違えが起きやすい。
+/// 新しい UID の作り方。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum UidMode {
+    /// 元の UID と複製の番号から決める。同じ設定でやり直すと同じ UID になる
+    Derived,
+    /// 実行ごとにランダム。やり直すたびに別の UID になる。既定(ken 10/21)。決まった UID だと、
+    /// やり直した出力を同じ PACS に送ったときに前の出力と UID がぶつかる
+    #[default]
+    Random,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum AssocUnit {
@@ -266,6 +278,7 @@ pub struct Config {
     pub images: u32,
     pub charset: Charset,
     pub uid_root: String,
+    pub uid_mode: UidMode,
     pub csv: String,
     pub csv_encoding: CsvEncoding,
     pub store: StoreConfig,
@@ -344,6 +357,7 @@ impl Default for Config {
             images: 1,
             charset: Charset::default(),
             uid_root: "2.25".into(),
+            uid_mode: UidMode::default(),
             csv: String::new(),
             csv_encoding: CsvEncoding::default(),
             store: StoreConfig::default(),

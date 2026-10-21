@@ -399,9 +399,9 @@ AccessionNumber や InstanceNumber を消すと、複製どうしで番号が重
 
 <h2 id="uid">9. UID・出力・文字コード</h2>
 <ul>
-  <li><b>UID</b>: 元の UID と複製の番号から UUID v5 で作り、<code>2.25.&lt;数値&gt;</code> の形にする(接頭辞は設定の「UID の接頭辞」)。Study/FrameOfReference は <code>(p, s)</code>、Series は <code>(p, s, r)</code>、SOP は <code>(p, s, r, i)</code> で決まる。シーケンス内の参照(ReferencedSOPInstanceUID など)も同じ複製の中で張り替わる。</li>
+  <li><b>UID</b>: 設定の「UID」で作り方を選ぶ。<b>毎回ランダム</b>(既定)は実行ごとに別の UID になり、やり直した出力を同じ PACS に送ってもぶつからない。<b>元の UID から決める</b>は、同じ設定でやり直すと同じ UID になる。どちらも、同じ実行の中では同じ元の UID は同じ新しい UID になるので、検査やシリーズのまとまり、画像どうしの参照は保たれる。UID は UUID を 10 進にした <code>2.25.&lt;数値&gt;</code> の形(接頭辞は設定の「接頭辞」)。Study/FrameOfReference は <code>(p, s)</code>、Series は <code>(p, s, r)</code>、SOP は <code>(p, s, r, i)</code> で決まる。シーケンス内の参照(ReferencedSOPInstanceUID など)も同じ複製の中で張り替わる。</li>
   <li><b>元で UID が重なったとき</b>: 元ファイルに SOPInstanceUID が同じものがあると、ログと設定の欄に ⚠ で知らせ、後のほう(パスの順)に別の UID を振る。そのままだと上書きされて出力の数が減るため。</li>
-  <li><b>出力</b>: <code>出力先/P000000/S000/R000/SOPInstanceUID.dcm</code>。フォルダ名は複製の番号。</li>
+  <li><b>出力</b>: <code>出力先/P000000/S000/R000/SOPInstanceUID.dcm</code>。フォルダ名は複製の番号。出力先にファイルがあると、消してから出力するかを尋ねる。「いいえ」だと前のファイルと混ざり、同じ名前のものは上書きされる。</li>
   <li><b>文字コード</b>: <code>utf8</code>(ISO_IR 192)/ <code>iso2022jp</code>(ISO 2022 IR 13\IR 87、JAHIS 向け)/ <code>keep</code>(元のまま。元が日本語を表せるときだけ)。</li>
   <li><b>送信</b>: C-STORE。単位(モダリティ / 検査 / シリーズ / 患者 / 全部)ごとに 1 アソシエーション、接続数まで同時。提案する SOP Class は元ファイルのものそのままなので、私用の SOP Class も送れる。</li>
   <li><b>読めないもの</b>: DICOM でないファイル、DICOMDIR、壊れたファイル、Deflated 転送構文は飛ばして、理由つきでログに出す。</li>
@@ -416,6 +416,8 @@ AccessionNumber や InstanceNumber を消すと、複製どうしで番号が重
 dicoamplio 元 出力 --preset 日本人患者-UTF8          # プリセットを使う
 dicoamplio 元 出力 --rules rules.txt                 # 1 行 1 規則のファイル
 dicoamplio 元 出力 --drop-default PatientID          # 既定の規則を外す(元の値のまま写す)
+dicoamplio 元 出力 --uid-mode derived                # UID を元の UID から決める(既定は random)
+dicoamplio 元 出力 --clean-output                    # 出力先の前のファイルを消してから出力する
 dicoamplio 元 --send PACS@10.0.0.5:11112 --patients 100 --assoc-unit modality --connections 4
 dicoamplio --send PACS@10.0.0.5:11112 --echo         # C-ECHO
 dicoamplio --send PACS@10.0.0.5:11112 --send-only ./dicom   # そのまま送る

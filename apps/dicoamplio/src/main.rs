@@ -101,6 +101,12 @@ struct Args {
     /// UID の接頭辞(ルート)。末尾のドットは不要
     #[arg(long)]
     uid_root: Option<String>,
+    /// UID の作り方。random = 実行ごとに別(既定)、derived = 元の UID と複製の番号から決める(やり直しても同じ)
+    #[arg(long, value_enum)]
+    uid_mode: Option<config::UidMode>,
+    /// 出力の前に、出力先の中身を消す(付けないと、前のファイルと混ざる)
+    #[arg(long)]
+    clean_output: bool,
     /// プリセットを読む(名前か、.toml のパス)
     #[arg(long)]
     preset: Option<String>,
@@ -152,6 +158,9 @@ fn build_config(a: &Args, dir: &Path) -> Result<Config> {
     }
     if let Some(v) = &a.uid_root {
         c.uid_root = v.clone();
+    }
+    if let Some(m) = a.uid_mode {
+        c.uid_mode = m;
     }
     if let Some(t) = &a.send {
         c.store.parse_target(t)?;
@@ -263,6 +272,19 @@ fn main() -> Result<()> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
             .build_global()?;
+    }
+    if needs_output {
+        if args.clean_output {
+            let n = engine::clean_output(&cfg.input, &cfg.output)?;
+            eprintln!("出力先の前のファイル {n} 個を消した");
+        } else {
+            let n = engine::count_output_files(&cfg.output);
+            if n > 0 {
+                eprintln!(
+                    "⚠ 出力先にファイルが {n} 個ある。消さずに出力するので、前のファイルと混ざる(消すなら --clean-output)"
+                );
+            }
+        }
     }
     let progress = Progress {
         echo: true,
