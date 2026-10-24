@@ -45,6 +45,8 @@ impl VwApp {
 
     /// ZIP や 7z の展開先が変わったら、これから開くものをそこへ展開する。
     pub(super) fn apply_archive_dir(&mut self) {
+        let limit = self.settings().behavior.archive_size_limit_bytes();
+        self.archives.set_size_limit(limit);
         let before = self.archives.base().to_path_buf();
         let parent = self.settings().behavior.archive_parent();
         self.archives.set_parent(parent.as_deref());

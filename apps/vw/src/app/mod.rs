@@ -142,6 +142,16 @@ struct PasswordPrompt {
     focused: bool,
 }
 
+/// 展開すると大きさの上限を超えるので、展開するか尋ねているアーカイブ。
+struct LargeArchivePrompt {
+    zip: PathBuf,
+    /// 展開後の大きさ。tar 系のように書いてないものは `None`。
+    size: Option<u64>,
+    limit: u64,
+    /// 暗号化されていれば、入力されたパスワード。展開し直すときに使う。
+    password: Option<String>,
+}
+
 pub struct VwApp {
     loader: Loader,
     tree: FolderTree,
@@ -308,6 +318,7 @@ pub struct VwApp {
     pending_trash: Option<discard::Pending>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
+    large_archive_prompt: Option<LargeArchivePrompt>,
     dataset_dialog: Option<crate::dataset_ui::DatasetDialog>,
     trash_job: Option<TrashJob>,
     /// 裏で進めているドラッグでの移動・コピー。
@@ -600,7 +611,8 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("labels"));
         let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
-        let archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
+        let mut archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
+        archives.set_size_limit(settings.settings.behavior.archive_size_limit_bytes());
         let settings_dir = settings
             .path
             .as_deref()
@@ -714,6 +726,7 @@ impl VwApp {
             export: None,
             pending_trash: None,
             password_prompt: None,
+            large_archive_prompt: None,
             dataset_dialog: None,
             trash_job: None,
             transfer_jobs: Vec::new(),
@@ -1097,6 +1110,7 @@ impl eframe::App for VwApp {
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
+        self.large_archive_dialog(&ctx);
         self.meta_new_group_ui(&ctx);
         self.next_queued_update(&ctx);
         self.dataset_window(&ctx);

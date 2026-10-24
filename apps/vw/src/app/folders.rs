@@ -878,7 +878,7 @@ impl VwApp {
         let ctx = ctx.clone();
         if self
             .archives
-            .mount(zip, None, move || ctx.request_repaint())
+            .mount(zip, None, false, move || ctx.request_repaint())
         {
             // 展開している間はログ欄の下に 1 行で出し、済んだら「Extracted」の行を積むので、
             // 始めたことはファイルにだけ残す。
@@ -916,6 +916,23 @@ impl VwApp {
                         input: String::new(),
                         wrong,
                         focused: false,
+                    });
+                }
+                archive::Event::TooLarge {
+                    zip,
+                    size,
+                    limit,
+                    password,
+                } => {
+                    self.log.warn(format!(
+                        "{} is larger than the archive size limit",
+                        zip.display()
+                    ));
+                    self.large_archive_prompt = Some(LargeArchivePrompt {
+                        zip,
+                        size,
+                        limit,
+                        password,
                     });
                 }
             }
@@ -1030,7 +1047,61 @@ impl VwApp {
                 .info(format!("Extracting {}…", prompt.zip.display()));
             let ctx = ctx.clone();
             self.archives
-                .mount(&prompt.zip, Some(prompt.input), move || {
+                .mount(&prompt.zip, Some(prompt.input), false, move || {
+                    ctx.request_repaint()
+                });
+        }
+    }
+    /// 展開すると大きさの上限を超えるアーカイブを、展開するか尋ねる。展開するなら上限なしで
+    /// 展開し直す（空き容量を超えるものは展開しない）。
+    pub(super) fn large_archive_dialog(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &self.large_archive_prompt else {
+            return;
+        };
+        let lang = self.settings.settings.appearance.language;
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("large_archive")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            let name = prompt
+                .zip
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ui.label(tr1(
+                lang,
+                "{} is larger than the archive size limit.",
+                &name,
+            ));
+            let size = prompt
+                .size
+                .map_or_else(|| tr(lang, "more than the limit").to_owned(), archive::gib);
+            ui.label(tr1(lang, "Size when extracted: {}", &size));
+            ui.label(tr1(lang, "Limit: {}", &archive::gib(prompt.limit)));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Extract anyway")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(extract) = answer else {
+            return;
+        };
+        let Some(prompt) = self.large_archive_prompt.take() else {
+            return;
+        };
+        if extract {
+            self.log
+                .info(format!("Extracting {}…", prompt.zip.display()));
+            let ctx = ctx.clone();
+            self.archives
+                .mount(&prompt.zip, prompt.password, true, move || {
                     ctx.request_repaint()
                 });
         }

@@ -255,6 +255,8 @@ pub struct Behavior {
     pub auto_reload: bool,
     /// ZIP や 7z を展開するフォルダ。空なら OS の一時フォルダ。
     pub archive_dir: String,
+    /// 確かめずに展開してよい大きさ（GB）。超えるアーカイブは展開する前に尋ねる。
+    pub archive_size_limit_gb: u32,
 }
 
 impl Default for Behavior {
@@ -263,6 +265,7 @@ impl Default for Behavior {
             header_click: HeaderClick::default(),
             auto_reload: true,
             archive_dir: String::new(),
+            archive_size_limit_gb: crate::archive::DEFAULT_SIZE_LIMIT_GIB,
         }
     }
 }
@@ -281,7 +284,20 @@ impl Behavior {
                     "must be empty or an absolute folder path",
                 )
                 .unwrap_or(d.archive_dir),
+            archive_size_limit_gb: r
+                .get_valid(
+                    "archive_size_limit_gb",
+                    |v: &u32| Behavior::ARCHIVE_SIZE_RANGE_GB.contains(v),
+                    "must be 1 to 1048576",
+                )
+                .unwrap_or(d.archive_size_limit_gb),
         }
+    }
+
+    pub const ARCHIVE_SIZE_RANGE_GB: std::ops::RangeInclusive<u32> = 1..=1_048_576;
+
+    pub fn archive_size_limit_bytes(&self) -> u64 {
+        u64::from(self.archive_size_limit_gb) << 30
     }
 
     /// 相対パスを受け付けないのは、起動した場所によって展開先が変わってしまうため。
@@ -2166,6 +2182,18 @@ ae_title = "PACS"
             Settings::from_toml(&format!("[behavior]\narchive_dir = '{dir}'\n")).unwrap();
         assert_eq!(s.behavior.archive_parent(), Some(PathBuf::from(dir)));
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn archives_up_to_20gb_are_extracted_without_asking_by_default() {
+        let s = Settings::default();
+        assert_eq!(s.behavior.archive_size_limit_bytes(), 20 << 30);
+        let (s, problems) = Settings::from_toml("[behavior]\narchive_size_limit_gb = 0\n").unwrap();
+        assert_eq!(s.behavior.archive_size_limit_gb, 20);
+        assert!(
+            problems.iter().any(|p| p.contains("archive_size_limit_gb")),
+            "{problems:?}"
+        );
     }
 
     #[test]
