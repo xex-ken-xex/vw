@@ -285,7 +285,7 @@ fn worker(
 }
 
 /// panic のメッセージ。`panic!("{}")` の文字列か `&str` のどちらかで届く。
-fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
     panic
         .downcast_ref::<String>()
         .cloned()

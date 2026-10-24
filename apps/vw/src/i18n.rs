@@ -1099,7 +1099,24 @@ const JA: &[(&str, &str)] = &[
     ("Name", "名前"),
     ("Memo", "メモ"),
     ("Separate with commas", "カンマ区切り"),
-    ("Stopped reading {}.", "{} の読み込みを止めました。"),
+    (
+        "Stopped reading {}. Register or update it again to continue from there.",
+        "{} の読み込みを中断しました。もう一度登録か更新をすると、続きから読みます。",
+    ),
+    (
+        "The previous reading stopped partway ({} files done).",
+        "前回の読み込みが途中で止まっています（{} ファイル済み）。",
+    ),
+    (
+        "vw stopped while reading {}. It will be skipped.",
+        "{} を読んでいる途中で vw が止まりました。このファイルは飛ばします。",
+    ),
+    ("Continue from where it stopped", "続きから読む"),
+    ("Stop reading", "中断"),
+    (
+        "The files read so far are kept. The next time, reading continues from there.",
+        "ここまで読んだ分は残します。次は続きから読みます。",
+    ),
     ("Skip", "スキップ"),
     (
         "Finish the open dataset dialog first.",
