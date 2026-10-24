@@ -240,9 +240,22 @@ pub struct Progress {
     pub total: AtomicUsize,
     pub current: Mutex<String>,
     pub cancel: AtomicBool,
+    /// 一時中断している。解くか止めるまで、次のファイルを読まずに待つ。
+    pub pause: AtomicBool,
 }
 
 impl Progress {
+    pub(crate) fn paused(&self) -> bool {
+        self.pause.load(Ordering::Relaxed)
+    }
+
+    /// 一時中断が解けるか止められるまで待つ。
+    pub(crate) fn wait_while_paused(&self) {
+        while self.paused() && !self.cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
@@ -365,6 +378,12 @@ pub fn scan_resumable(
         }
     };
     for path in &candidates {
+        if progress.paused() {
+            // 一時中断したまま vw を閉じたり落ちたりしても、そこまでの分から続けられるように。
+            checkpoint(&builder, &problems, &state);
+            checkpoint_at = std::time::Instant::now();
+            progress.wait_while_paused();
+        }
         if progress.cancelled() {
             checkpoint(&builder, &problems, &state);
             // 止めただけで落ちたのではないので、読んでいたファイルを次に飛ばさないよう消す。
@@ -502,6 +521,7 @@ fn scan_archive(
         // パスワードが違うと途中で失敗するので、読み終わるまでは別に貯めておく。
         let mut found = Vec::new();
         let result = archive::for_each_entry(path, password.as_deref(), |inner, data| {
+            progress.wait_while_paused();
             if progress.cancelled() {
                 return Err(EntryError::Other("Cancelled".into()));
             }
@@ -1309,5 +1329,38 @@ mod tests {
         .catalog;
         assert_eq!(c.files.len(), 1);
         assert!(c.skipped.is_empty(), "{:?}", c.skipped);
+    }
+
+    #[test]
+    fn a_paused_scan_reads_nothing_until_resumed_and_keeps_its_place_meanwhile() {
+        let tmp = TempDir::new();
+        write_png(&tmp.path().join("a.png"), 1, 1, &[0; 3]);
+        let progress = Progress::default();
+        progress.pause.store(true, Ordering::Relaxed);
+        std::thread::scope(|s| {
+            let scan = s.spawn(|| run_resumable(tmp.path(), Resume::Fresh, &progress));
+            while unfinished(tmp.path()).is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            assert_eq!(progress.done.load(Ordering::Relaxed), 0);
+            progress.pause.store(false, Ordering::Relaxed);
+            let c = scan.join().unwrap().unwrap().catalog;
+            assert_eq!(c.files.len(), 1);
+        });
+    }
+
+    #[test]
+    fn stopping_a_paused_scan_ends_it() {
+        let tmp = TempDir::new();
+        write_png(&tmp.path().join("a.png"), 1, 1, &[0; 3]);
+        let progress = Progress::default();
+        progress.pause.store(true, Ordering::Relaxed);
+        std::thread::scope(|s| {
+            let scan = s.spawn(|| run_resumable(tmp.path(), Resume::Fresh, &progress));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            progress.cancel.store(true, Ordering::Relaxed);
+            assert!(scan.join().unwrap().is_err());
+        });
     }
 }

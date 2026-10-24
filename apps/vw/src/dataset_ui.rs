@@ -74,6 +74,8 @@ pub struct DatasetDialog {
     unfinished: Option<catalog::Unfinished>,
     /// 前回の続きから読むか。
     resume: bool,
+    /// キャンセルされたので、止まったら途中の結果を捨てる。
+    discard: bool,
 }
 
 /// 別スレッドでの処理の結果。
@@ -144,6 +146,7 @@ impl DatasetDialog {
                 .then(|| catalog::unfinished(&dir))
                 .flatten(),
             resume: true,
+            discard: false,
             dir,
             kind,
         };
@@ -338,6 +341,7 @@ impl DatasetDialog {
         let mut run = false;
         let mut save = false;
         let mut cancel = false;
+        let mut discard = false;
         let running = self.job.is_some();
         egui::Window::new(title)
             .pivot(egui::Align2::CENTER_CENTER)
@@ -422,22 +426,40 @@ impl DatasetDialog {
                             .lock()
                             .map(|c| c.clone())
                             .unwrap_or_default();
+                        let paused = job.progress.paused();
                         ui.horizontal(|ui| {
+                            let text = if paused {
+                                format!("{done} / {total}  {}", tr(lang, "(paused)"))
+                            } else {
+                                format!("{done} / {total}")
+                            };
                             ui.add(
                                 egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                                    .text(format!("{done} / {total}"))
+                                    .text(text)
                                     .desired_width(300.0),
                             );
-                            cancel = if self.kind == Kind::Extract {
-                                ui.button(tr(lang, "Cancel")).clicked()
+                            if self.kind == Kind::Extract {
+                                cancel = ui.button(tr(lang, "Cancel")).clicked();
+                                return;
+                            }
+                            let (label, hint) = if paused {
+                                ("Resume reading", "Continue reading the files.")
                             } else {
-                                ui.button(tr(lang, "Stop reading"))
-                                    .on_hover_text(tr(
-                                        lang,
-                                        "The files read so far are kept. The next time, reading continues from there.",
-                                    ))
-                                    .clicked()
+                                (
+                                    "Pause reading",
+                                    "Stop reading for now. Even if vw is closed while paused, reading continues from here the next time.",
+                                )
                             };
+                            if ui.button(tr(lang, label)).on_hover_text(tr(lang, hint)).clicked() {
+                                job.progress.pause.store(!paused, Ordering::Relaxed);
+                            }
+                            discard = ui
+                                .button(tr(lang, "Cancel"))
+                                .on_hover_text(tr(
+                                    lang,
+                                    "Stop reading and discard the files read so far. The next time, reading starts over.",
+                                ))
+                                .clicked();
                         });
                         ui.add(egui::Label::new(egui::RichText::new(current).weak()).truncate());
                     }
@@ -479,6 +501,10 @@ impl DatasetDialog {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if cancel {
+            self.cancel();
+        }
+        if discard {
+            self.discard = true;
             self.cancel();
         }
         if !open {
@@ -646,6 +672,18 @@ impl DatasetDialog {
                     self.dest.trim(),
                 ));
                 Some(false)
+            }
+            Err(e) if e == "Cancelled" && self.discard => {
+                // 読んでいたスレッドは終わっているので、ここで消しても書き戻されない。
+                catalog::discard_unfinished(&self.dir);
+                self.discard = false;
+                self.unfinished = None;
+                log.info(tr1(
+                    lang,
+                    "Cancelled reading {}.",
+                    &self.dir.display().to_string(),
+                ));
+                Some(self.kind == Kind::Update)
             }
             Err(e) if e == "Cancelled" => {
                 log.info(tr1(
