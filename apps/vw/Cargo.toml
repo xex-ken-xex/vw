@@ -24,6 +24,7 @@ vw-tree.workspace = true
 vw-dock.workspace = true
 vw-log.workspace = true
 vw-launch.workspace = true
+vw-renderer.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 egui-phosphor = "0.14"
 serde = { version = "1", features = ["derive"] }

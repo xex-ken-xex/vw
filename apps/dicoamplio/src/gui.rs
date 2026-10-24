@@ -160,7 +160,7 @@ pub fn run(dir: PathBuf, initial: Option<Config>, preset: Option<String>) -> Res
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    vw_renderer::run_native(
         "DicoAmplio",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, dir, initial, preset)))),

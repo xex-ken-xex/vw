@@ -132,7 +132,7 @@ fn main() -> eframe::Result {
             .with_icon(window_icon()),
         ..Default::default()
     };
-    eframe::run_native(
+    vw_renderer::run_native(
         "vw",
         options,
         Box::new(move |cc| {
