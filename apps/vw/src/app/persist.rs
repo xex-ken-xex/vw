@@ -31,6 +31,7 @@ impl VwApp {
         self.apply_probe_extensions();
         self.apply_fits_options();
         self.apply_texture_options();
+        self.apply_archive_dir();
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -38,6 +39,17 @@ impl VwApp {
             )),
             Ok(None) => {}
             Err(e) => self.log.error(format!("Settings: {e}")),
+        }
+    }
+
+    /// ZIP や 7z の展開先が変わったら、これから開くものをそこへ展開する。
+    pub(super) fn apply_archive_dir(&mut self) {
+        let before = self.archives.base().to_path_buf();
+        let parent = self.settings().behavior.archive_parent();
+        self.archives.set_parent(parent.as_deref());
+        if self.archives.base() != before {
+            let message = format!("Archives: extracting to {}", self.archives.base().display());
+            self.log.info(message);
         }
     }
 
@@ -116,6 +128,7 @@ impl VwApp {
                 self.apply_probe_extensions();
                 self.apply_fits_options();
                 self.apply_texture_options();
+                self.apply_archive_dir();
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }

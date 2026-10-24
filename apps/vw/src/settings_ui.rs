@@ -3,6 +3,8 @@
 //! 値を変えたらその場で反映・保存する（呼び出し側が [`Response::changed`] を見て行う）。
 //! 「適用」ボタンを置かないのは、変更の結果を見ながら調整できるようにするため。
 
+use std::sync::{Arc, Mutex};
+
 use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
@@ -95,7 +97,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 79] = [
+const ITEMS: [Item; 80] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -270,6 +272,13 @@ const ITEMS: [Item; 79] = [
         title: "Auto reload",
         description: "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
         widget: auto_reload_widget,
+    },
+    Item {
+        section: Section::Behavior,
+        key: "behavior.archive_dir",
+        title: "Archive extraction folder",
+        description: "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
+        widget: archive_dir_widget,
     },
     Item {
         section: Section::Metadata,
@@ -1310,6 +1319,76 @@ fn thresholds_widget(
 fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.behavior.auto_reload, tr(lang, "Enabled"))
         .changed()
+}
+
+/// 展開先のフォルダ。入力中の文字列は egui の一時データに持ち、確定したときに反映する。
+/// 1 文字ごとに反映すると、打っている途中のパスごとに展開先が変わり、ログも流れてしまうため。
+fn archive_dir_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("behavior.archive_dir.edit");
+    let picker_id = id.with("picker");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| s.behavior.archive_dir.clone());
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text(std::env::temp_dir().display().to_string())
+                .desired_width(360.0),
+        );
+        if ui.button(tr(lang, "Choose...")).clicked() {
+            let start = s.behavior.archive_parent();
+            let picker = vw_tree::picker::Picker::folder(
+                tr(lang, "Archive extraction folder"),
+                start.as_deref(),
+                picker_labels(lang),
+            );
+            ui.data_mut(|d| d.insert_temp(picker_id, Arc::new(Mutex::new(picker))));
+        }
+        let valid = crate::settings::Behavior::valid_archive_dir(&text);
+        if !valid {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                tr(lang, "Use an absolute path."),
+            );
+        }
+        if r.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text.clone()));
+        } else {
+            let text = text.trim();
+            if r.lost_focus() && valid && text != s.behavior.archive_dir {
+                s.behavior.archive_dir = text.to_owned();
+                changed = true;
+            }
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+    });
+    let picker: Option<Arc<Mutex<vw_tree::picker::Picker>>> =
+        ui.data_mut(|d| d.get_temp(picker_id));
+    if let Some(picker) = picker {
+        let outcome = picker.lock().unwrap().show(ui.ctx());
+        match outcome {
+            vw_tree::picker::Outcome::Open => {}
+            vw_tree::picker::Outcome::Chosen(dir) => {
+                s.behavior.archive_dir = dir.display().to_string();
+                changed = true;
+                ui.data_mut(|d| d.remove::<Arc<Mutex<vw_tree::picker::Picker>>>(picker_id));
+            }
+            vw_tree::picker::Outcome::Cancelled => {
+                ui.data_mut(|d| d.remove::<Arc<Mutex<vw_tree::picker::Picker>>>(picker_id));
+            }
+        }
+    }
+    changed
+}
+
+fn picker_labels(lang: Language) -> vw_tree::picker::Labels {
+    vw_tree::picker::Labels {
+        choose: tr(lang, "Choose").into(),
+        cancel: tr(lang, "Cancel").into(),
+        name: tr(lang, "Name").into(),
+        nothing: tr(lang, "(no folder chosen)").into(),
+    }
 }
 
 /// タグの一覧をカンマ区切りで編集する。入力中の文字列は egui の一時データに持ち、

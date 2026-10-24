@@ -1,4 +1,5 @@
-//! ZIP と 7z をフォルダとして開く。vw 専用の一時フォルダに展開し、アンマウントするまで保つ。
+//! ZIP と 7z をフォルダとして開く。vw 専用の展開先（既定は OS の一時フォルダ）に展開し、
+//! アンマウントするまで保つ。
 //!
 //! ZIP の中を直接読まずに展開するのは、ツリー・フォルダの読み込み・
 //! フォルダの監視がすべてファイルのパスで動いているため。展開すれば ZIP の中も普通の
@@ -88,10 +89,18 @@ struct Count {
     total: AtomicUsize,
 }
 
+/// 展開先のフォルダ名。設定で選んだフォルダの直下にこれを作り、その中だけを消す。
+/// 選んだフォルダをそのまま使わないのは、古いものの後片付けでそこにある利用者のファイルを
+/// 消してしまわないため。
+const FOLDER_NAME: &str = "vw-archives";
+
 /// 開いている ZIP の一覧。
 pub struct Archives {
     /// このプロセスの展開先の親。終了時にまとめて消す。
     base: PathBuf,
+    /// 設定で展開先を変える前の `base`。そこに展開したものは閉じるまでそのまま使い、
+    /// 終了時に一緒に消す。
+    earlier: Vec<PathBuf>,
     mounted: Vec<Mount>,
     pending: Vec<Pending>,
     next: u64,
@@ -102,17 +111,33 @@ impl Archives {
     pub fn new(base: PathBuf) -> Self {
         Self {
             base,
+            earlier: Vec::new(),
             mounted: Vec::new(),
             pending: Vec::new(),
             next: 0,
         }
     }
 
-    /// OS の一時フォルダの下に展開する。前回の異常終了で残ったものはここで消す。
-    pub fn in_temp_dir() -> Self {
-        let root = std::env::temp_dir().join("vw-archives");
-        remove_stale(&root, &std::process::id().to_string());
-        Self::new(root.join(std::process::id().to_string()))
+    /// `parent`（`None` なら OS の一時フォルダ）の下に展開する。前回の異常終了で残ったものはここで消す。
+    pub fn in_dir(parent: Option<&Path>) -> Self {
+        Self::new(prepare_base(parent))
+    }
+
+    /// これから開くものの展開先を `parent` の下に変える。もう開いているものは閉じるまで今の場所に置く。
+    pub fn set_parent(&mut self, parent: Option<&Path>) {
+        let base = base_under(parent);
+        if base == self.base {
+            return;
+        }
+        let base = prepare_base(parent);
+        let old = std::mem::replace(&mut self.base, base);
+        self.earlier.retain(|b| *b != self.base);
+        self.earlier.push(old);
+    }
+
+    /// これから開くものの展開先。
+    pub fn base(&self) -> &Path {
+        &self.base
     }
 
     /// `zip`（ZIP か 7z）を別スレッドで展開し始める。終わったら `wake` を呼ぶ。すでに開いているか
@@ -217,7 +242,10 @@ impl Archives {
 
     /// 閉じた ZIP の展開先（消したところ）か、その中のパス。
     pub fn is_closed(&self, path: &Path) -> bool {
-        path.starts_with(&self.base) && self.mount_of(path).is_none()
+        let extracted = std::iter::once(&self.base)
+            .chain(&self.earlier)
+            .any(|b| path.starts_with(b));
+        extracted && self.mount_of(path).is_none()
     }
 
     /// `zip` を展開したもの。
@@ -228,8 +256,25 @@ impl Archives {
 
 impl Drop for Archives {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.base);
+        for base in std::iter::once(&self.base).chain(&self.earlier) {
+            let _ = std::fs::remove_dir_all(base);
+        }
     }
+}
+
+/// `parent` の下の、このプロセスの展開先。
+fn base_under(parent: Option<&Path>) -> PathBuf {
+    let root = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
+    root.join(FOLDER_NAME).join(std::process::id().to_string())
+}
+
+/// [`base_under`] を返す。同じ親に前の vw が残したものがあれば、先に消す。
+fn prepare_base(parent: Option<&Path>) -> PathBuf {
+    let base = base_under(parent);
+    if let Some(root) = base.parent() {
+        remove_stale(root, &std::process::id().to_string());
+    }
+    base
 }
 
 /// ツリーでフォルダのように開けるアーカイブ（ZIP と 7z）か。
@@ -736,6 +781,76 @@ mod tests {
         wait(&mut archives);
         drop(archives);
         assert!(!base.exists());
+    }
+
+    #[test]
+    fn changing_the_folder_extracts_new_archives_there_and_keeps_open_ones() {
+        let tmp = TempDir::new();
+        let (a, b) = (tmp.path().join("a.zip"), tmp.path().join("b.zip"));
+        write_zip(&a, &[("a.png", b"A")]);
+        write_zip(&b, &[("b.png", b"B")]);
+        let mut archives = Archives::in_dir(Some(&tmp.path().join("first")));
+        archives.mount(&a, None, || {});
+        wait(&mut archives);
+        let second = tmp.path().join("second");
+        archives.set_parent(Some(&second));
+        archives.mount(&b, None, || {});
+        wait(&mut archives);
+
+        let first_dir = archives.mounted_zip(&a).unwrap().dir.clone();
+        let second_dir = archives.mounted_zip(&b).unwrap().dir.clone();
+        assert!(first_dir.starts_with(tmp.path().join("first")));
+        assert!(first_dir.join("a.png").is_file(), "an open archive stays");
+        assert!(second_dir.starts_with(second.join(FOLDER_NAME)));
+        assert!(second_dir.join("b.png").is_file());
+    }
+
+    #[test]
+    fn closing_vw_removes_what_it_extracted_in_every_folder_it_used() {
+        let tmp = TempDir::new();
+        let (a, b) = (tmp.path().join("a.zip"), tmp.path().join("b.zip"));
+        write_zip(&a, &[("a.png", b"A")]);
+        write_zip(&b, &[("b.png", b"B")]);
+        let mut archives = Archives::in_dir(Some(&tmp.path().join("first")));
+        archives.mount(&a, None, || {});
+        wait(&mut archives);
+        archives.set_parent(Some(&tmp.path().join("second")));
+        archives.mount(&b, None, || {});
+        wait(&mut archives);
+        let dirs: Vec<PathBuf> = [&a, &b]
+            .map(|z| archives.mounted_zip(z).unwrap().dir.clone())
+            .into();
+        drop(archives);
+
+        assert!(dirs.iter().all(|d| !d.exists()));
+    }
+
+    #[test]
+    fn the_chosen_folder_keeps_its_own_files() {
+        let tmp = TempDir::new();
+        let chosen = tmp.path().join("work");
+        let mine = chosen.join("notes.txt");
+        std::fs::create_dir_all(&chosen).unwrap();
+        std::fs::write(&mine, b"keep").unwrap();
+        let zip = tmp.path().join("a.zip");
+        write_zip(&zip, &[("a.png", b"A")]);
+        let mut archives = Archives::in_dir(Some(&chosen));
+        archives.mount(&zip, None, || {});
+        wait(&mut archives);
+        drop(archives);
+
+        assert!(mine.is_file());
+    }
+
+    #[test]
+    fn leftovers_in_the_previous_folder_are_left_as_they_are() {
+        let tmp = TempDir::new();
+        let leftover = tmp.path().join("first").join(FOLDER_NAME).join("0");
+        std::fs::create_dir_all(&leftover).unwrap();
+        let mut archives = Archives::in_dir(Some(&tmp.path().join("second")));
+        archives.set_parent(Some(&tmp.path().join("third")));
+
+        assert!(leftover.exists());
     }
 
     #[test]
