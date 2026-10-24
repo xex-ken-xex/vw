@@ -318,3 +318,14 @@ fn broken_files_are_errors() {
     assert!(TiffPlugin.decode(b"II*\0\xff\xff\xff\xff").is_err());
     assert!(TiffPlugin.decode(b"not a tiff").is_err());
 }
+
+#[test]
+fn huge_dimensions_in_the_header_are_refused_before_allocating() {
+    // 100000 x 100000 の 16bit RGB（60 GB）を名乗る、1 画素分しか中身のない TIFF。
+    let mut p = page(100_000, 100_000, basic(&[16, 16, 16], 2), vec![0; 6]);
+    p.tags.push((278, V::Long(vec![100_000])));
+    let tiff = build(&[p]);
+    let err = TiffPlugin.decode(&tiff).unwrap_err().to_string();
+    assert!(err.contains("100000 x 100000"), "{err}");
+    assert!(err.contains("image size limit"), "{err}");
+}

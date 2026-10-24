@@ -15,6 +15,8 @@ use rawler::imgop::srgb::{srgb_apply_gamma, srgb_invert_gamma};
 use rawler::rawsource::RawSource;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+mod tiff_guard;
+
 /// 富士フイルムの RAF の先頭。
 const RAF_SIGNATURE: &[u8] = b"FUJIFILMCCD-RAW";
 
@@ -306,6 +308,7 @@ fn from_dynamic(img: DynamicImage) -> Result<VwImage, DecodeError> {
 
 /// 中身に合う rawler のデコーダ。
 fn decoder_for(source: &RawSource) -> Result<Box<dyn Decoder>, DecodeError> {
+    tiff_guard::check(source.subview_until_eof(0).map_err(DecodeError::Io)?)?;
     // rawler のエラー（"No decoder found, model '', make: ''"）では、RAW でないファイルか
     // 対応していない機種かが分かりにくいため言い換える。
     rawler::get_decoder(source).map_err(|_| {

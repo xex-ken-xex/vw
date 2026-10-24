@@ -718,6 +718,11 @@ const JA: &[(&str, &str)] = &[
         "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
         "フル解像度の画像に使うメモリの上限（MB）。超えた分は、空きができるまで 512px の縮小画像で表示します。",
     ),
+    ("Image size limit", "画像の大きさの上限"),
+    (
+        "Memory one image may take to decode (MB). A file whose header claims a larger image is not opened, so a broken header cannot exhaust memory.",
+        "1 枚の画像を読むのに使ってよいメモリ（MB）。見出しにこれより大きな画像だと書いてあるファイルは開きません。壊れた見出しでメモリを使い切らないためです。",
+    ),
     ("Sort order", "並び順"),
     (
         "Order of the folders in the tree and of the folders and images in the slots, also used for previous/next image. Folders always come first.",

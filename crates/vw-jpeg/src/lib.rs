@@ -44,6 +44,13 @@ impl DecoderPlugin for JpegPlugin {
             ColorSpace::RGB
         };
         decoder.set_options(decoder.options().jpeg_set_out_colorspace(out));
+        if let Some(info) = decoder.info() {
+            vw_core::limits::check_image(
+                u64::from(info.width),
+                u64::from(info.height),
+                u64::from(info.components),
+            )?;
+        }
         let pixels = decoder.decode().map_err(invalid)?;
         let color = match decoder.output_colorspace() {
             Some(ColorSpace::Luma) => ColorModel::Gray,
@@ -139,6 +146,41 @@ mod tests {
         }
         enc.encode(data, w, h, color).unwrap();
         out
+    }
+
+    /// 見出しだけの JPEG（SOF0 に幅と高さ、ハフマン表、SOS）。
+    fn header_only(w: u16, h: u16) -> Vec<u8> {
+        fn segment(marker: u8, body: &[u8]) -> Vec<u8> {
+            let mut s = vec![0xFF, marker];
+            s.extend((body.len() as u16 + 2).to_be_bytes());
+            s.extend(body);
+            s
+        }
+        let mut out = vec![0xFF, 0xD8];
+        out.extend(segment(0xDB, &[&[0u8][..], &[1u8; 64]].concat()));
+        let mut sof = vec![8];
+        sof.extend(h.to_be_bytes());
+        sof.extend(w.to_be_bytes());
+        sof.extend([3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        out.extend(segment(0xC0, &sof));
+        let mut bits = [0u8; 16];
+        bits[1] = 1;
+        out.extend(segment(0xC4, &[&[0u8][..], &bits, &[0]].concat()));
+        out.extend(segment(0xC4, &[&[0x10u8][..], &bits, &[0]].concat()));
+        out.extend(segment(0xDA, &[3, 1, 0, 2, 0, 3, 0, 0, 0x3F, 0]));
+        out.extend([0; 64]);
+        out.extend([0xFF, 0xD9]);
+        out
+    }
+
+    #[test]
+    fn huge_dimensions_in_the_header_are_refused_before_allocating() {
+        let err = JpegPlugin
+            .decode(&header_only(65_535, 65_535))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("65535 x 65535"), "{err}");
+        assert!(err.contains("image size limit"), "{err}");
     }
 
     #[test]
