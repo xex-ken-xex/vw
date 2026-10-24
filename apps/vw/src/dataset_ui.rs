@@ -28,6 +28,8 @@ pub enum Request {
     Update(PathBuf),
     /// 取り出す。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
     Extract(PathBuf, Option<Vec<String>>),
+    /// 途中で止めた登録か更新を、続きからすぐに読み始める。
+    Resume(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,7 +119,10 @@ impl DatasetDialog {
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
+        let resuming = matches!(request, Request::Resume(_));
         let (dir, kind, hits) = match request {
+            Request::Resume(d) if catalog::exists_in(&d) => (d, Kind::Update, None),
+            Request::Resume(d) => (d, Kind::Register, None),
             Request::Register(d) => (d, Kind::Register, None),
             Request::Edit(d) => (d, Kind::Edit, None),
             Request::Update(d) => (d, Kind::Update, None),
@@ -157,13 +162,18 @@ impl DatasetDialog {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             dialog.error = catalog::check_can_register(&dialog.dir).err();
+            if let Some(info) = dialog.unfinished.as_ref().and_then(|u| u.info.clone()) {
+                if !info.name.is_empty() {
+                    dialog.fill_info(info);
+                }
+            }
         } else {
             match catalog::load(&dialog.dir) {
                 Ok(c) => dialog.fill(c),
                 Err(e) => dialog.error = Some(e),
             }
         }
-        if kind == Kind::Update && dialog.error.is_none() {
+        if (kind == Kind::Update || resuming) && dialog.error.is_none() {
             dialog.start(registry, ctx, Language::English);
         }
         dialog
@@ -194,16 +204,25 @@ impl DatasetDialog {
     }
 
     fn fill(&mut self, c: Catalog) {
-        self.name = c.name.clone();
-        self.memo = c.memo.clone();
-        self.tags = c.tags.join(", ");
-        for (key, value) in &c.fields {
-            match self.fields.iter_mut().find(|(k, _)| k == key) {
-                Some((_, v)) => v.clone_from(value),
-                None => self.fields.push((key.clone(), value.clone())),
+        self.fill_info(Info {
+            name: c.name.clone(),
+            memo: c.memo.clone(),
+            tags: c.tags.clone(),
+            fields: c.fields.clone(),
+        });
+        self.previous = Some(c);
+    }
+
+    fn fill_info(&mut self, info: Info) {
+        self.name = info.name;
+        self.memo = info.memo;
+        self.tags = info.tags.join(", ");
+        for (key, value) in info.fields {
+            match self.fields.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, v)) => *v = value,
+                None => self.fields.push((key, value)),
             }
         }
-        self.previous = Some(c);
     }
 
     fn info(&self) -> Info {

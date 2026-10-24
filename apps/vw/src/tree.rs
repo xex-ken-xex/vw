@@ -81,6 +81,18 @@ impl View<'_> {
             }
         }
     }
+
+    /// データセットの登録か更新が途中で止まっているフォルダか。先読みで調べる。
+    fn is_unfinished(&self, node: &Node) -> bool {
+        !node.ext.mounted
+            && matches!(
+                self.peeks.get(&node.path),
+                Some(Peek::Done {
+                    unfinished: true,
+                    ..
+                })
+            )
+    }
 }
 
 /// DICOM かもしれないファイル（[`View::may_be_dicom`]）。
@@ -196,6 +208,12 @@ impl Hooks<Mark> for View<'_> {
         if node.ext.mounted {
             let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, node.name);
             ui.selectable_label(is_current, text)
+        } else if self.is_unfinished(node) {
+            let text = egui::RichText::new(node.name.as_str()).color(crate::theme::UNFINISHED);
+            ui.selectable_label(is_current, text).on_hover_text(tr(
+                self.lang,
+                "Registering this dataset stopped partway. Open the folder to continue.",
+            ))
         } else if self.is_dataset(node) {
             let text = egui::RichText::new(node.name.as_str()).color(crate::theme::DATASET);
             ui.selectable_label(is_current, text)
@@ -414,6 +432,8 @@ enum Peek {
         children: bool,
         /// 検索カタログがある（データセットとして登録した）フォルダか。
         dataset: bool,
+        /// データセットの登録か更新が途中で止まっているか。
+        unfinished: bool,
     },
 }
 
@@ -437,6 +457,7 @@ impl Peeker {
                 let peek = Peek::Done {
                     children: has_tree_children(&dir, &registry),
                     dataset: crate::catalog::exists_in(&dir),
+                    unfinished: dir.join(crate::catalog::PARTIAL_FILE).is_file(),
                 };
                 if done.send((dir, peek)).is_err() {
                     break;

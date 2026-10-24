@@ -101,7 +101,7 @@ pub struct FileEntry {
 }
 
 /// 人が入力する部分。登録・編集のダイアログで変える。
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Info {
     pub name: String,
     pub memo: String,
@@ -169,6 +169,9 @@ struct Partial {
     /// 読んでいる最中に vw が落ちたファイル。続きからでは読まない。
     #[serde(default)]
     crashed: Vec<String>,
+    /// 登録のダイアログで入れた名前など。続きから登録するときに入れ直さなくて済むように。
+    #[serde(default)]
+    info: Option<Info>,
 }
 
 /// 途中で止めた登録があれば、その様子（読み終えたファイルの数と、読んでいる最中に落ちたファイル）。
@@ -177,6 +180,8 @@ pub struct Unfinished {
     pub done: usize,
     /// 前回、読んでいる最中に vw が落ちたファイル。続きからではこれを飛ばす。
     pub crashed: Option<String>,
+    /// 止めたときの登録の名前など。
+    pub info: Option<Info>,
 }
 
 /// `dir` に途中で止めた登録があるか。
@@ -185,6 +190,7 @@ pub fn unfinished(dir: &Path) -> Option<Unfinished> {
     Some(Unfinished {
         done: partial.done.len(),
         crashed: crashed_file(dir, &partial),
+        info: partial.info,
     })
 }
 
@@ -344,6 +350,7 @@ pub fn scan_resumable(
         format: FORMAT,
         ..Partial::default()
     });
+    state.info = Some(info.clone());
     // 止めている間に消えたファイルは、読み終えた分からも外す。
     let present: std::collections::HashSet<String> =
         candidates.iter().map(|p| relative_name(dir, p)).collect();
@@ -382,6 +389,7 @@ pub fn scan_resumable(
             // 一時中断したまま vw を閉じたり落ちたりしても、そこまでの分から続けられるように。
             checkpoint(&builder, &problems, &state);
             checkpoint_at = std::time::Instant::now();
+            reading("");
             progress.wait_while_paused();
         }
         if progress.cancelled() {
@@ -521,7 +529,11 @@ fn scan_archive(
         // パスワードが違うと途中で失敗するので、読み終わるまでは別に貯めておく。
         let mut found = Vec::new();
         let result = archive::for_each_entry(path, password.as_deref(), |inner, data| {
-            progress.wait_while_paused();
+            if progress.paused() {
+                // 最後に読んだ項目は読み終えている。止めている間に閉じても、落ちたとみなさないように。
+                reading("");
+                progress.wait_while_paused();
+            }
             if progress.cancelled() {
                 return Err(EntryError::Other("Cancelled".into()));
             }
@@ -1166,7 +1178,11 @@ mod tests {
             unfinished(tmp.path()),
             Some(Unfinished {
                 done: 0,
-                crashed: None
+                crashed: None,
+                info: Some(Info {
+                    name: "set".into(),
+                    ..Info::default()
+                })
             })
         );
         assert!(!tmp.path().join(READING_FILE).exists());

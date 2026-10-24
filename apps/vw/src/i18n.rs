@@ -1130,6 +1130,15 @@ const JA: &[(&str, &str)] = &[
         "読むのをやめて、ここまで読んだ分を捨てます。次は最初から読みます。",
     ),
     ("Cancelled reading {}.", "{} の読み込みをキャンセルしました。"),
+    (
+        "Registering this dataset stopped partway. Open the folder to continue.",
+        "データセットの登録が途中で止まっています。フォルダを開くと続けられます。",
+    ),
+    (
+        "Registering this folder as a dataset stopped partway ({} files done). Continue from there?",
+        "このフォルダのデータセットの登録が途中で止まっています（{} ファイル済み）。続きから読みますか？",
+    ),
+    ("Continue", "続きから読む"),
     ("Skip", "スキップ"),
     (
         "Finish the open dataset dialog first.",

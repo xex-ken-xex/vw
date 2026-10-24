@@ -228,6 +228,10 @@ pub struct VwApp {
     dataset_queue: Vec<PathBuf>,
     /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
     outer_to_update: Option<PathBuf>,
+    /// 開いたフォルダのデータセットの登録が途中で止まっているので、続けるか聞く（フォルダ, 読み終えた数）。
+    resume_offer: Option<(PathBuf, usize)>,
+    /// 続けるかを聞いて「あとで」と答えたフォルダ。起動している間は聞き直さない。
+    resume_declined: Vec<PathBuf>,
     /// 最後にデータセットを取り出した出力先の親フォルダ。次の出力先の初期値に使う。
     last_extract_dir: Option<PathBuf>,
     log: Log,
@@ -673,6 +677,8 @@ impl VwApp {
             last_fullscreen_root: saved.fullscreen_root.clone(),
             dataset_queue: Vec::new(),
             outer_to_update: None,
+            resume_offer: None,
+            resume_declined: Vec::new(),
             last_extract_dir: saved.extract_dir.clone(),
             log,
             started,
@@ -1107,6 +1113,7 @@ impl eframe::App for VwApp {
         self.next_queued_update(&ctx);
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
+        self.resume_offer_dialog(&ctx);
         self.finish_trash_job();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);
