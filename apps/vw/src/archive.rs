@@ -1,4 +1,5 @@
-//! ZIP と 7z をフォルダとして開く。vw 専用の展開先（既定は OS の一時フォルダ）に展開し、
+//! ZIP・7z・tar（gzip / bzip2 / xz / zstd で圧縮したものも）と、1 ファイルだけを圧縮した
+//! .gz などをフォルダとして開く。vw 専用の展開先（既定は OS の一時フォルダ）に展開し、
 //! アンマウントするまで保つ。
 //!
 //! ZIP の中を直接読まずに展開するのは、ツリー・フォルダの読み込み・
@@ -8,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 /// 展開したまま残った一時フォルダを消すまでの時間。vw が異常終了すると後片付けできないので、
@@ -277,20 +278,118 @@ fn prepare_base(parent: Option<&Path>) -> PathBuf {
     base
 }
 
-/// ツリーでフォルダのように開けるアーカイブ（ZIP と 7z）か。
+/// ツリーでフォルダのように開けるアーカイブか。拡張子で見る。
 ///
 /// 名前だけでなく、フォルダでないことも見る。データセットの取り出しで ZIP の中身を
 /// `data.zip` という名前のフォルダに置くので、名前だけではそのフォルダをアーカイブとして
 /// 開こうとしてしまうため。
 pub fn is_archive(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("7z"))
-        && !path.is_dir()
+    kind(path).is_some() && !path.is_dir()
+}
+
+/// 中身の並べ方。圧縮の方式（gzip など）は中身の先頭のバイト列で見分けるので、ここでは区別しない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// ZIP か 7z。どちらかは先頭のバイト列で見分ける。
+    ZipOr7z,
+    Tar,
+    /// 1 ファイルだけを圧縮したもの（`photo.png.gz`）。
+    Single,
+}
+
+/// 拡張子（小文字）と形式。.cbz・.cb7・.cbt は漫画のページ画像を束ねるときの名前で、中身は ZIP・7z・tar。
+/// `tar.gz` が `gz` より先にあるのは、長い方から当てるため。
+const KINDS: &[(&str, Kind)] = &[
+    ("zip", Kind::ZipOr7z),
+    ("cbz", Kind::ZipOr7z),
+    ("7z", Kind::ZipOr7z),
+    ("cb7", Kind::ZipOr7z),
+    ("tar", Kind::Tar),
+    ("cbt", Kind::Tar),
+    ("tar.gz", Kind::Tar),
+    ("tgz", Kind::Tar),
+    ("tar.bz2", Kind::Tar),
+    ("tbz2", Kind::Tar),
+    ("tbz", Kind::Tar),
+    ("tar.xz", Kind::Tar),
+    ("txz", Kind::Tar),
+    ("tar.zst", Kind::Tar),
+    ("tzst", Kind::Tar),
+    ("gz", Kind::Single),
+    ("bz2", Kind::Single),
+    ("xz", Kind::Single),
+    ("zst", Kind::Single),
+];
+
+fn kind(path: &Path) -> Option<Kind> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    let (_, kind) = KINDS.iter().find(|(ext, _)| has_extension(&name, ext))?;
+    (*kind != Kind::Single || !decoded_directly(&name)).then_some(*kind)
+}
+
+/// `name` が `.ext` で終わり、その前に名前があるか。
+fn has_extension(name: &str, ext: &str) -> bool {
+    name.len() > ext.len() + 1
+        && name.ends_with(ext)
+        && name.as_bytes()[name.len() - ext.len() - 1] == b'.'
+}
+
+/// 画像のデコーダが圧縮したまま読む拡張子（`fits.gz` など）。
+///
+/// 呼び出し側ごとにデコーダの一覧を渡さず、起動時に一度だけ決めておくのは、
+/// [`is_archive`] がツリー・カタログ・書き出しなど十数か所から呼ばれ、どこもデコーダの
+/// 一覧を持っているとは限らないため。
+static DECODED_DIRECTLY: OnceLock<Vec<String>> = OnceLock::new();
+
+/// デコーダが圧縮したまま読む拡張子を伝える。これらはアーカイブとして開かず、画像として読む。
+pub fn set_decoded_directly(extensions: Vec<String>) {
+    let _ = DECODED_DIRECTLY.set(extensions);
+}
+
+fn decoded_directly(name: &str) -> bool {
+    DECODED_DIRECTLY
+        .get()
+        .is_some_and(|exts| exts.iter().any(|ext| has_extension(name, ext)))
+}
+
+/// 読めないアーカイブの拡張子。分割したもの（`.7z.001`、`.z01`、`.r00`）は [`is_unsupported_archive`] で見る。
+const UNSUPPORTED: &[&str] = &[
+    "rar", "cbr", "lzh", "lha", "cab", "iso", "arj", "ace", "cpio", "xar", "dmg", "wim",
+];
+
+/// 読めない形式のアーカイブを見つけたときのログ。`{}` はフルパス。
+pub const UNSUPPORTED_MESSAGE: &str = "Unsupported archive file: {}";
+
+/// 読めない形式のアーカイブか。ログで知らせるためだけに使う。
+///
+/// 数字だけの拡張子は DICOM の連番（`IMG.001`）にも使われるので、手前の名前が
+/// アーカイブの拡張子で終わるとき（`scans.7z.001`）だけ分割したものとみなす。
+pub fn is_unsupported_archive(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let split_part = digits(ext)
+        && KINDS
+            .iter()
+            .map(|(e, _)| *e)
+            .chain(UNSUPPORTED.iter().copied())
+            .any(|e| has_extension(stem, e) || stem == e);
+    let volume = ext.len() == 3 && matches!(ext.as_bytes()[0], b'z' | b'r') && digits(&ext[1..]);
+    let unsupported = !stem.is_empty() && (UNSUPPORTED.contains(&ext) || split_part || volume);
+    unsupported && !path.is_dir()
 }
 
 const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
 
 /// `archive` を `dir` に展開し、展開したファイルの数を返す。
+///
+/// tar 系は目次がなく、全部のバイト数は最後まで読まないと分からない。そこで進み具合は、
+/// ZIP・7z は書いたバイト数、tar 系は元のファイルを読んだバイト数で数える。
 fn extract(
     archive: &Path,
     dir: &Path,
@@ -298,10 +397,17 @@ fn extract(
     count: &Count,
 ) -> Result<usize, ArchiveError> {
     std::fs::create_dir_all(dir)?;
-    if let Some(n) = total_size(archive, password) {
+    let streamed = kind(archive).is_some_and(|k| k != Kind::ZipOr7z);
+    let total = if streamed {
+        std::fs::metadata(archive).ok().map(|m| m.len() as usize)
+    } else {
+        total_size(archive, password)
+    };
+    if let Some(n) = total {
         count.total.store(n, Ordering::Relaxed);
     }
-    for_each_entry(archive, password, |relative, data| {
+    let read = streamed.then_some(&count.done);
+    each_entry(archive, password, read, |relative, data| {
         let out = dir.join(relative);
         let Some(data) = data else {
             return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
@@ -311,6 +417,7 @@ fn extract(
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::File::create(&out));
         match target {
+            Ok(mut file) if streamed => copy_entry(data, &mut file),
             Ok(mut file) => copy_entry(
                 &mut Counted {
                     inner: data,
@@ -324,12 +431,12 @@ fn extract(
 }
 
 /// 読んだバイト数を数えながら読む。
-struct Counted<'a> {
-    inner: &'a mut dyn std::io::Read,
+struct Counted<'a, R> {
+    inner: R,
     count: &'a AtomicUsize,
 }
 
-impl std::io::Read for Counted<'_> {
+impl<R: std::io::Read> std::io::Read for Counted<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.count.fetch_add(n, Ordering::Relaxed);
@@ -350,12 +457,34 @@ fn total_size(archive: &Path, password: Option<&str>) -> Option<usize> {
     Some(reader.archive().files.iter().map(|f| f.size).sum::<u64>() as usize)
 }
 
-/// `archive`（ZIP か 7z）の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
+/// `archive` の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
 /// アーカイブの中の相対パスと、ファイルなら中身を読むもの、フォルダなら `None` を渡す。
 /// 展開先の外を指す名前の項目は渡さない（[`enclosed_name`]）。
 ///
-/// 形式は拡張子ではなく先頭のバイト列で見分ける（拡張子と中身が違うファイルもあるため）。
+/// ZIP と 7z、圧縮の方式は拡張子ではなく先頭のバイト列で見分ける（拡張子と中身が違うファイルもあるため）。
 pub fn for_each_entry(
+    archive: &Path,
+    password: Option<&str>,
+    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
+    each_entry(archive, password, None, visit)
+}
+
+/// [`for_each_entry`] に加えて、tar 系なら元のファイルを読んだバイト数を `read` に足していく。
+fn each_entry(
+    archive: &Path,
+    password: Option<&str>,
+    read: Option<&AtomicUsize>,
+    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
+    match kind(archive) {
+        Some(Kind::Tar) => each_in_tar(decompressed(archive, read)?, visit),
+        Some(Kind::Single) => each_in_single(archive, decompressed(archive, read)?, visit),
+        Some(Kind::ZipOr7z) | None => each_in_zip_or_7z(archive, password, visit),
+    }
+}
+
+fn each_in_zip_or_7z(
     archive: &Path,
     password: Option<&str>,
     visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
@@ -366,7 +495,7 @@ pub fn for_each_entry(
         std::io::Read::read_exact(&mut file, &mut head).is_ok() && head == SEVEN_ZIP_MAGIC;
     let named_7z = archive
         .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("7z"));
+        .is_some_and(|e| e.eq_ignore_ascii_case("7z") || e.eq_ignore_ascii_case("cb7"));
     if seven_zip {
         each_in_7z(archive, password, visit)
     } else if named_7z && !head.starts_with(b"PK") {
@@ -374,6 +503,125 @@ pub fn for_each_entry(
     } else {
         each_in_zip(archive, password, visit)
     }
+}
+
+/// `archive` を、先頭のバイト列から決めた方式で伸長しながら読むもの。どれでもなければそのまま読む
+/// （圧縮していない tar）。
+fn decompressed<'a>(
+    archive: &Path,
+    read: Option<&'a AtomicUsize>,
+) -> Result<Box<dyn std::io::Read + 'a>, ArchiveError> {
+    use std::io::BufRead as _;
+    let file = std::fs::File::open(archive)?;
+    let counted: Box<dyn std::io::Read + 'a> = match read {
+        Some(count) => Box::new(Counted { inner: file, count }),
+        None => Box::new(file),
+    };
+    let mut input = std::io::BufReader::new(counted);
+    let head = input.fill_buf()?.to_vec();
+    let reader: Box<dyn std::io::Read + 'a> = if head.starts_with(&[0x1f, 0x8b]) {
+        Box::new(flate2::bufread::MultiGzDecoder::new(input))
+    } else if head.starts_with(b"BZh") {
+        Box::new(bzip2::bufread::MultiBzDecoder::new(input))
+    } else if head.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]) {
+        Box::new(lzma_rust2::XzReader::new(input, true))
+    } else if head.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        Box::new(ZstdFrames::new(input)?)
+    } else {
+        Box::new(input)
+    };
+    Ok(reader)
+}
+
+/// zstd の続けて並んだフレームを順に伸長する。ruzstd の `StreamingDecoder` は 1 フレームしか読まず、
+/// `zstd -T0` などで作ると複数のフレームになるため。
+struct ZstdFrames<R: std::io::BufRead> {
+    frame: Option<ruzstd::decoding::StreamingDecoder<R, ruzstd::decoding::FrameDecoder>>,
+}
+
+impl<R: std::io::BufRead> ZstdFrames<R> {
+    fn new(input: R) -> std::io::Result<Self> {
+        let frame =
+            ruzstd::decoding::StreamingDecoder::new(input).map_err(std::io::Error::other)?;
+        Ok(Self { frame: Some(frame) })
+    }
+}
+
+impl<R: std::io::BufRead> std::io::Read for ZstdFrames<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let Some(frame) = self.frame.as_mut() else {
+                return Ok(0);
+            };
+            let n = frame.read(buf)?;
+            if n > 0 || buf.is_empty() {
+                return Ok(n);
+            }
+            let mut rest = self.frame.take().expect("checked above").into_inner();
+            if rest.fill_buf()?.is_empty() {
+                return Ok(0);
+            }
+            self.frame =
+                Some(ruzstd::decoding::StreamingDecoder::new(rest).map_err(std::io::Error::other)?);
+        }
+    }
+}
+
+fn each_in_tar(
+    input: impl std::io::Read,
+    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
+    let mut archive = tar::Archive::new(input);
+    let mut files = 0;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = decode_name(&entry.path_bytes())
+            .unwrap_or_else(|| String::from_utf8_lossy(&entry.path_bytes()).into_owned());
+        let Some(relative) = enclosed_name(&name) else {
+            continue;
+        };
+        // リンクは展開しない。シンボリックリンクは展開先の外を指せ、その先へ書き込まれうるため。
+        let result = match entry.header().entry_type() {
+            tar::EntryType::Directory => visit(&relative, None),
+            tar::EntryType::Regular | tar::EntryType::Continuous => {
+                files += 1;
+                visit(&relative, Some(&mut entry))
+            }
+            _ => continue,
+        };
+        result.map_err(|e| entry_failed(&relative, e, false))?;
+    }
+    Ok(files)
+}
+
+/// 1 ファイルだけを圧縮したもの。中身の名前は、圧縮したファイルの名前から最後の拡張子を外したもの。
+fn each_in_single(
+    archive: &Path,
+    mut input: impl std::io::Read,
+    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+) -> Result<usize, ArchiveError> {
+    let stem = archive
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let relative = enclosed_name(&stem).ok_or_else(|| ArchiveError::Other("no name".into()))?;
+    visit(&relative, Some(&mut input)).map_err(|e| entry_failed(&relative, e, false))?;
+    Ok(1)
+}
+
+/// アーカイブの中の名前を文字列にする。UTF-8 として読めなければ Shift_JIS（日本語の Windows の
+/// 文字コード）として読む。どちらでも読めなければ `None`。
+///
+/// 名前の文字コードを記録していない ZIP や tar は、作った PC の文字コードで名前が入っている。
+/// 日本語名が化けないよう、UTF-8 の次は Shift_JIS を試す。設定で選ばせないのは、ほとんどの
+/// 名前はこの 2 つのどちらかで読め、選ばせても迷わせるだけなため。
+fn decode_name(raw: &[u8]) -> Option<String> {
+    if let Ok(name) = std::str::from_utf8(raw) {
+        return Some(name.to_owned());
+    }
+    encoding_rs::SHIFT_JIS
+        .decode_without_bom_handling_and_without_replacement(raw)
+        .map(|name| name.into_owned())
 }
 
 fn each_in_zip(
@@ -404,7 +652,11 @@ fn each_in_zip(
                 other => other?,
             },
         };
-        let Some(relative) = entry.enclosed_name() else {
+        let name = match decode_name(entry.name_raw()) {
+            Some(name) => name,
+            None => entry.name()?.into_owned(),
+        };
+        let Some(relative) = enclosed_name(&name) else {
             continue;
         };
         if entry.is_dir() {
@@ -495,7 +747,8 @@ pub fn copy_entry(
 
 /// アーカイブの中の名前を、展開先の中を指す相対パスにする。「../」や絶対パスで展開先の外を
 /// 指すものは `None`。悪意のあるアーカイブで一時フォルダの外のファイルを書き換えられないようにするため。
-/// ZIP は zip クレートの `enclosed_name` が同じことをするが、7z のクレートにはない。
+/// ZIP は zip クレートの `enclosed_name` が同じことをするが、名前を Shift_JIS としても読むため
+/// （[`decode_name`]）、どの形式もこちらで確かめる。
 fn enclosed_name(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in name.split(['/', '\\']) {
@@ -851,6 +1104,273 @@ mod tests {
         archives.set_parent(Some(&tmp.path().join("third")));
 
         assert!(leftover.exists());
+    }
+
+    /// `entries` の tar を作る。名前が `/` で終わるものはフォルダ。
+    fn tar_bytes(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            let dir = name.ends_with(b"/");
+            header.set_entry_type(if dir {
+                tar::EntryType::Directory
+            } else {
+                tar::EntryType::Regular
+            });
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            // set_path は UTF-8 の名前しか受け付けないので、Shift_JIS の名前を入れるために直接書く。
+            header.as_old_mut().name[..name.len()].copy_from_slice(name);
+            header.set_cksum();
+            builder.append(&header, *data).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    type Compress = fn(&[u8]) -> Vec<u8>;
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(data).unwrap();
+        gz.finish().unwrap()
+    }
+
+    fn bzip2(data: &[u8]) -> Vec<u8> {
+        let mut bz = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        bz.write_all(data).unwrap();
+        bz.finish().unwrap()
+    }
+
+    fn xz(data: &[u8]) -> Vec<u8> {
+        let mut xz =
+            lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(1)).unwrap();
+        xz.write_all(data).unwrap();
+        xz.finish().unwrap()
+    }
+
+    /// 2 つのフレームに分けた zstd（並列で圧縮したものと同じ形）。
+    fn zstd_in_two_frames(data: &[u8]) -> Vec<u8> {
+        let level = ruzstd::encoding::CompressionLevel::Fastest;
+        let (head, tail) = data.split_at(data.len() / 2);
+        let mut out = ruzstd::encoding::compress_to_vec(head, level);
+        out.extend(ruzstd::encoding::compress_to_vec(tail, level));
+        out
+    }
+
+    #[test]
+    fn tar_is_extracted_with_its_folders() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("photos.tar");
+        let tar = tar_bytes(&[(b"sub/", b""), (b"a.png", b"A"), (b"sub/b.png", b"B")]);
+        std::fs::write(&archive, tar).unwrap();
+        let out = tmp.path().join("out");
+
+        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(2));
+        assert_eq!(std::fs::read(out.join("a.png")).unwrap(), b"A");
+        assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
+    }
+
+    #[test]
+    fn compressed_tars_are_extracted_whatever_the_compression() {
+        let tmp = TempDir::new();
+        let tar = tar_bytes(&[(b"a.png", b"AAAA"), (b"sub/b.png", b"BBBBBB")]);
+        let compress: [(&str, Compress); 4] = [
+            ("photos.tar.gz", gzip),
+            ("photos.tar.bz2", bzip2),
+            ("photos.tar.xz", xz),
+            ("photos.tar.zst", zstd_in_two_frames),
+        ];
+        for (name, compress) in compress {
+            let archive = tmp.path().join(name);
+            std::fs::write(&archive, compress(&tar)).unwrap();
+            let out = tmp.path().join(format!("{name}.out"));
+
+            assert_eq!(
+                extract(&archive, &out, None, &Count::default()),
+                Ok(2),
+                "{name}"
+            );
+            assert_eq!(
+                std::fs::read(out.join("sub/b.png")).unwrap(),
+                b"BBBBBB",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_compression_is_told_by_the_contents_not_the_name() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("photos.tgz");
+        std::fs::write(&archive, xz(&tar_bytes(&[(b"a.png", b"A")]))).unwrap();
+
+        assert_eq!(
+            extract(&archive, &tmp.path().join("out"), None, &Count::default()),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn links_in_a_tar_are_not_extracted() {
+        let tmp = TempDir::new();
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        builder
+            .append_link(&mut header, "evil", "/etc/passwd")
+            .unwrap();
+        let mut file = tar::Header::new_gnu();
+        file.set_size(1);
+        builder.append_data(&mut file, "a.png", &b"A"[..]).unwrap();
+        let archive = tmp.path().join("links.tar");
+        std::fs::write(&archive, builder.into_inner().unwrap()).unwrap();
+        let out = tmp.path().join("out");
+
+        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert!(std::fs::symlink_metadata(out.join("evil")).is_err());
+    }
+
+    #[test]
+    fn a_broken_tar_reports_an_error() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("broken.tar.gz");
+        let gz = gzip(&tar_bytes(&[(b"a.png", &[7u8; 4096])]));
+        std::fs::write(&archive, &gz[..gz.len() / 2]).unwrap();
+
+        let result = extract(&archive, &tmp.path().join("out"), None, &Count::default());
+        assert!(matches!(result, Err(ArchiveError::Other(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_single_compressed_file_opens_as_a_folder_holding_it() {
+        let tmp = TempDir::new();
+        let out = tmp.path().join("out");
+        for (name, data) in [
+            ("photo.png.gz", gzip(b"PNG")),
+            ("photo.png.bz2", bzip2(b"PNG")),
+            ("photo.png.xz", xz(b"PNG")),
+            ("photo.png.zst", zstd_in_two_frames(b"PNG")),
+        ] {
+            let archive = tmp.path().join(name);
+            std::fs::write(&archive, data).unwrap();
+            let out = out.join(name);
+
+            assert_eq!(
+                extract(&archive, &out, None, &Count::default()),
+                Ok(1),
+                "{name}"
+            );
+            assert_eq!(
+                std::fs::read(out.join("photo.png")).unwrap(),
+                b"PNG",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn extracting_a_tar_counts_the_bytes_read_from_the_file() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("photos.tar.gz");
+        let gz = gzip(&tar_bytes(&[(b"a.png", &[1u8; 5000])]));
+        std::fs::write(&archive, &gz).unwrap();
+        let count = Count::default();
+        extract(&archive, &tmp.path().join("out"), None, &count).unwrap();
+
+        assert_eq!(count.total.load(Ordering::Relaxed), gz.len());
+        assert_eq!(count.done.load(Ordering::Relaxed), gz.len());
+    }
+
+    /// 「ソ」は Shift_JIS で 2 バイト目が `\` と同じ 0x5C になる。名前を文字にしてから区切らないと、
+    /// フォルダの区切りと取り違える。
+    const SO_PNG_SJIS: &[u8] = b"\x83\x5c.png";
+
+    #[test]
+    fn shift_jis_names_in_a_tar_are_read_as_japanese() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("japanese.tar");
+        std::fs::write(&archive, tar_bytes(&[(SO_PNG_SJIS, b"A")])).unwrap();
+        let out = tmp.path().join("out");
+
+        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert!(out.join("ソ.png").is_file());
+    }
+
+    #[test]
+    fn shift_jis_names_in_a_zip_are_read_as_japanese() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("japanese.zip");
+        // zip クレートは UTF-8 の名前でしか書けないので、同じ長さの名前で書いてから名前のバイト列を置き換える。
+        write_zip(&archive, &[("XX.png", b"A")]);
+        let bytes = std::fs::read(&archive).unwrap();
+        let mut patched = Vec::new();
+        let mut rest = &bytes[..];
+        while let Some(at) = rest.windows(6).position(|w| w == b"XX.png") {
+            patched.extend_from_slice(&rest[..at]);
+            patched.extend_from_slice(SO_PNG_SJIS);
+            rest = &rest[at + 6..];
+        }
+        patched.extend_from_slice(rest);
+        std::fs::write(&archive, patched).unwrap();
+        let out = tmp.path().join("out");
+
+        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert!(out.join("ソ.png").is_file());
+    }
+
+    #[test]
+    fn tar_and_comic_book_names_are_archives() {
+        for name in [
+            "a.tar",
+            "a.TGZ",
+            "a.tar.gz",
+            "a.tar.bz2",
+            "a.tbz2",
+            "a.tar.xz",
+            "a.txz",
+            "a.tar.zst",
+            "a.tzst",
+            "a.cbz",
+            "a.cb7",
+            "a.cbt",
+            "photo.png.gz",
+            "photo.png.bz2",
+            "a.xz",
+            "a.zst",
+        ] {
+            assert!(is_archive(Path::new(name)), "{name}");
+        }
+        assert!(!is_archive(Path::new(".gz")));
+    }
+
+    #[test]
+    fn files_a_decoder_reads_compressed_are_not_archives() {
+        set_decoded_directly(vec!["fits.gz".into()]);
+
+        assert!(!is_archive(Path::new("m31.FITS.gz")));
+        assert!(is_archive(Path::new("m31.png.gz")));
+    }
+
+    #[test]
+    fn unsupported_archives_are_told_apart() {
+        for name in [
+            "a.rar",
+            "a.CBR",
+            "a.lzh",
+            "a.lha",
+            "a.cab",
+            "a.iso",
+            "a.7z.001",
+            "a.zip.002",
+            "a.z01",
+            "a.r00",
+        ] {
+            assert!(is_unsupported_archive(Path::new(name)), "{name}");
+        }
+        for name in ["IMG.001", "a.zip", "a.tar.gz", "a.png", "rar", "a.zip.part"] {
+            assert!(!is_unsupported_archive(Path::new(name)), "{name}");
+        }
     }
 
     #[test]
