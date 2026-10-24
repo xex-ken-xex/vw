@@ -1288,6 +1288,12 @@ impl Engine {
         ix: Idx,
         path: &Path,
     ) -> Result<()> {
+        if !is_uid(sop) {
+            bail!(
+                "SOPInstanceUID {sop:?} は数字と点だけの 1〜64 文字でないので、ファイル名にできない ({})",
+                path.display()
+            );
+        }
         let dir = Path::new(self.cfg.output.trim())
             .join(format!("P{:06}", ix.p))
             .join(format!("S{:03}", ix.s))
@@ -1519,6 +1525,13 @@ impl Engine {
             });
         }
     }
+}
+
+/// DICOM の UID の形(数字と点だけ、1〜64 文字)か。出力のファイル名に使うので、`..` や `C:` や区切りを
+/// 含む値をそのまま使うと出力先の外に書いてしまう。連番にせず UID のままにするのは、同じ UID の
+/// 重なりがファイル名の衝突として見えるため。
+fn is_uid(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
 }
 
 fn unsupported_scs(path: &Path, values: &[String]) -> String {
@@ -2303,6 +2316,18 @@ mod tests {
             .find(|e| e.file_type().is_file())
             .unwrap();
         open_file(f.path()).unwrap().into_inner()
+    }
+
+    #[test]
+    fn only_digits_and_dots_make_a_file_name_from_a_uid() {
+        assert!(is_uid("1.2.840.10008.5.1.4.1.1.2"));
+        assert!(is_uid("1"));
+        assert!(!is_uid(""));
+        assert!(!is_uid(&"1".repeat(65)));
+        assert!(!is_uid("../../etc/passwd"));
+        assert!(!is_uid("C:\\Windows\\x"));
+        assert!(!is_uid("1.2.3 "));
+        assert!(!is_uid("1.2.3\0"));
     }
 
     #[test]
