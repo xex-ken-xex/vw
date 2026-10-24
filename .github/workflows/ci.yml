@@ -78,9 +78,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\setup-windows.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors; exit 1 }
+          foreach ($script in 'scripts\setup-windows.ps1', 'packaging\windows\check\check-vw.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("$PWD\$script", [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors; exit 1 }
+          }
 
       # apps/ のアプリを 1 つずつ別の書庫にする。使う人が要るものだけ取れるように
       - name: Package (Linux)
@@ -99,6 +101,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/vw, dist/dicoamplio | Out-Null
           Copy-Item target/release/vw.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt dist/vw/
+          # 起動しない PC で原因を調べるスクリプト。起動できないと vw の中からは何も調べられないので、zip に同梱する
+          Copy-Item -Recurse packaging/windows/check dist/vw/check
           Compress-Archive -Path dist/vw -DestinationPath dist/${{ matrix.package }}
           Copy-Item target/release/dicoamplio.exe, apps/dicoamplio/README.md, apps/dicoamplio/Readme.html, LICENSE-MIT, LICENSE-APACHE dist/dicoamplio/
           Copy-Item THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt

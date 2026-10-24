@@ -1,0 +1,19 @@
+[package]
+name = "vw-renderer"
+description = "Starts an eframe app with OpenGL, and falls back to wgpu where OpenGL 2.0 is missing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["glow", "wgpu_no_default_features", "wayland", "x11"] }
+
+# eframe の wgpu を既定の機能のまま入れると、使わない Metal・WebGL・WebGPU まで付いてくる。
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(not(windows))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "gles"] }

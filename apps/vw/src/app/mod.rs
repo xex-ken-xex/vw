@@ -545,6 +545,7 @@ impl VwApp {
             log.info("Window: the displays changed since last time, so the window opens where the OS puts it");
         }
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
+        log.info(format!("Renderer: {}", vw_renderer::describe(cc)));
         log.info(format!(
             "Plugins: {}",
             registry
