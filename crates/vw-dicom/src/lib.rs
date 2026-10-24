@@ -65,6 +65,7 @@ impl DecoderPlugin for DicomPlugin {
                 "no frame {frame} (the file has {frames})"
             )));
         }
+        check_pixel_size(&obj)?;
         let px = obj
             .decode_pixel_data_frame(frame as u32)
             .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
@@ -155,6 +156,17 @@ fn open(data: &[u8], header_only: bool) -> Result<DefaultDicomObject, DecodeErro
     options
         .from_reader(Cursor::new(data))
         .map_err(|e| DecodeError::Invalid(e.to_string()))
+}
+
+/// 画素を展開する前に、Rows・Columns・Samples per Pixel・Bits Allocated から要るメモリを確かめる。
+fn check_pixel_size(obj: &DefaultDicomObject) -> Result<(), DecodeError> {
+    let (rows, columns) = (
+        int(obj, tags::ROWS).unwrap_or(0).max(0) as u64,
+        int(obj, tags::COLUMNS).unwrap_or(0).max(0) as u64,
+    );
+    let samples = int(obj, tags::SAMPLES_PER_PIXEL).unwrap_or(1).max(1) as u64;
+    let bytes = (int(obj, tags::BITS_ALLOCATED).unwrap_or(16).max(1) as u64).div_ceil(8);
+    vw_core::limits::check_image(columns, rows, samples * bytes).map(drop)
 }
 
 fn frames_in(obj: &DefaultDicomObject) -> usize {
@@ -551,6 +563,17 @@ mod tests {
     use synth::{
         Synth, CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, XA_IMAGE,
     };
+
+    #[test]
+    fn huge_rows_and_columns_are_refused_before_decoding_pixels() {
+        // 65535 x 65535 の 16bit（8 GiB）を名乗る、画素が 1 つしかないファイル。
+        let data = Synth::new(CT_IMAGE, 65_535, 65_535)
+            .pixels_i16(&[0])
+            .bytes();
+        let err = DicomPlugin.decode(&data).unwrap_err().to_string();
+        assert!(err.contains("65535 x 65535"), "{err}");
+        assert!(err.contains("image size limit"), "{err}");
+    }
 
     /// testdata/*.j2k に入れた値。testdata/make_j2k.py で作った。
     const J2K_GRAY16: [u16; 8] = [0, 1000, 2000, 3000, 4095, 300, 40, 7];

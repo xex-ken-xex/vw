@@ -260,11 +260,16 @@ fn worker(
             }
         };
         running.fetch_add(1, Ordering::Relaxed);
-        let result = if job.develop {
-            develop(registry, &job.path)
-        } else {
-            load_fit(registry, &job.path, job.thumb, job.full, job.fit_side)
-        };
+        // デコーダの panic でこのスレッドが終わると二度と戻らず、何本か当たると画像が
+        // 永遠に「読み込み中」になる。panic はその 1 枚のエラーにして、スレッドは続ける。
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if job.develop {
+                develop(registry, &job.path)
+            } else {
+                load_fit(registry, &job.path, job.thumb, job.full, job.fit_side)
+            }
+        }))
+        .unwrap_or_else(|panic| Err(format!("internal error: {}", panic_text(&panic))));
         running.fetch_sub(1, Ordering::Relaxed);
         let sent = tx.send(LoadResult {
             slot: job.slot,
@@ -277,6 +282,15 @@ fn worker(
         }
         ctx.request_repaint();
     }
+}
+
+/// panic のメッセージ。`panic!("{}")` の文字列か `&str` のどちらかで届く。
+fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "panic".to_owned())
 }
 
 /// [`load_fit`] の縮めない版。
@@ -560,6 +574,55 @@ mod tests {
         let r = loader.rx.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(r.request, 7);
         assert!(r.result.is_ok());
+    }
+
+    /// 読むたびに panic するデコーダ。
+    struct PanicPlugin;
+
+    impl vw_core::DecoderPlugin for PanicPlugin {
+        fn name(&self) -> &str {
+            "Panic"
+        }
+        fn extensions(&self) -> &[&str] {
+            &["boom"]
+        }
+        fn probe(&self, _: &[u8]) -> bool {
+            false
+        }
+        fn decode(&self, _: &[u8]) -> Result<VwImage, vw_core::DecodeError> {
+            panic!("decoder bug")
+        }
+    }
+
+    #[test]
+    fn panicking_decoder_yields_an_error_and_the_worker_keeps_serving() {
+        let dir = TempDir::new();
+        let bad = dir.path().join("a.boom");
+        let good = dir.path().join("b.png");
+        std::fs::write(&bad, b"x").unwrap();
+        write_png(&good, 1, 1, &[1, 2, 3]);
+        let mut registry = png_registry();
+        registry.register(Arc::new(PanicPlugin));
+        let loader = Loader::new(registry, egui::Context::default());
+        // 作業スレッドの数より多く panic させても、その後の要求に答える。
+        for i in 0..(loader.workers as u64 + 2) {
+            loader.request(job(i, &bad));
+        }
+        loader.request(job(99, &good));
+        let mut results = Vec::new();
+        while results.len() < loader.workers + 3 {
+            results.push(loader.rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        }
+        let good = results.iter().find(|r| r.request == 99).unwrap();
+        assert!(good.result.is_ok());
+        let bad = results.iter().find(|r| r.request == 0).unwrap();
+        let Err(err) = &bad.result else {
+            panic!("the panicking decoder must not succeed");
+        };
+        assert!(
+            err.contains("internal error") && err.contains("decoder bug"),
+            "{err}"
+        );
     }
 
     #[test]

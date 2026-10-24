@@ -97,7 +97,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 80] = [
+const ITEMS: [Item; 81] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -139,6 +139,13 @@ const ITEMS: [Item; 80] = [
         title: "Full-resolution memory limit",
         description: "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
         widget: limit_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.image_size_limit_mb",
+        title: "Image size limit",
+        description: "Memory one image may take to decode (MB). A file whose header claims a larger image is not opened, so a broken header cannot exhaust memory.",
+        widget: image_size_limit_widget,
     },
     Item {
         section: Section::Viewer,
@@ -950,6 +957,16 @@ fn limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
             .suffix(" MB"),
     );
     // ドラッグ中に反映すると、値が下がるたびに画像を捨てて読み直してしまうため、離したときに反映する。
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn image_size_limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.viewer.image_size_limit_mb)
+            .range(Viewer::IMAGE_SIZE_RANGE_MB)
+            .speed(64.0)
+            .suffix(" MB"),
+    );
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 

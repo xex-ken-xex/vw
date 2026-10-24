@@ -109,6 +109,9 @@ pub struct Viewer {
     pub background: String,
     /// フル解像度の画像に使うメモリの上限（MB）。超えた分は縮小画像で表示する。
     pub full_image_limit_mb: u32,
+    /// 1 枚の画像をデコードするのに使ってよいメモリの上限（MB）。見出しにこれより大きな幅・高さを
+    /// 書いたファイルは開かない。
+    pub image_size_limit_mb: u32,
     /// スロットの並べ方。
     pub layout: SlotLayout,
     /// メニューの「カスタム」で選ぶマス目。`auto` は選べない（既定の項目にあるため）。
@@ -139,9 +142,14 @@ impl Viewer {
 
 impl Viewer {
     pub const LIMIT_RANGE_MB: std::ops::RangeInclusive<u32> = 256..=1_048_576;
+    pub const IMAGE_SIZE_RANGE_MB: std::ops::RangeInclusive<u32> = 64..=1_048_576;
 
     pub fn full_image_limit_bytes(&self) -> usize {
         self.full_image_limit_mb as usize * 1024 * 1024
+    }
+
+    pub fn image_size_limit_bytes(&self) -> usize {
+        self.image_size_limit_mb as usize * 1024 * 1024
     }
 }
 
@@ -150,6 +158,7 @@ impl Default for Viewer {
         Self {
             background: String::new(),
             full_image_limit_mb: 256,
+            image_size_limit_mb: (vw_core::limits::DEFAULT_MAX_IMAGE_BYTES >> 20) as u32,
             layout: SlotLayout::Auto,
             custom_layout: SlotLayout::grid(6, 6),
             auto_layout_max: SlotLayout::grid(6, 6),
@@ -183,6 +192,13 @@ impl Viewer {
                     "must be 256 to 1048576",
                 )
                 .unwrap_or(d.full_image_limit_mb),
+            image_size_limit_mb: r
+                .get_valid(
+                    "image_size_limit_mb",
+                    |v: &u32| Viewer::IMAGE_SIZE_RANGE_MB.contains(v),
+                    "must be 64 to 1048576",
+                )
+                .unwrap_or(d.image_size_limit_mb),
             layout: r.get("layout").unwrap_or(d.layout),
             custom_layout: r
                 .get_valid(
@@ -1937,6 +1953,18 @@ ae_title = "PACS"
         let (s, problems) = Settings::from_toml("[viewer]\nbackground = \"#12\"\n").unwrap();
         assert_eq!(s.viewer.background, "");
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn image_size_limit_is_4gib_by_default_and_rejects_tiny_values() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.image_size_limit_bytes(), 4 << 30);
+        let (s, problems) = Settings::from_toml("[viewer]\nimage_size_limit_mb = 1\n").unwrap();
+        assert_eq!(s.viewer.image_size_limit_mb, 4096);
+        assert!(
+            problems.iter().any(|p| p.contains("image_size_limit_mb")),
+            "{problems:?}"
+        );
     }
 
     #[test]
