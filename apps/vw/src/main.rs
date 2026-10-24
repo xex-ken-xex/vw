@@ -34,6 +34,7 @@ mod frames;
 mod fullscreen;
 mod geo_map;
 mod geonames;
+mod help;
 mod histogram;
 mod histogram_view;
 mod i18n;

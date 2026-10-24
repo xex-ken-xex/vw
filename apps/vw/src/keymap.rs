@@ -84,6 +84,7 @@ pub enum Action {
     ToggleSkyChart,
     UndoPosition,
     ShowAbout,
+    OpenQualityHelp,
     ShowAiModels,
     AiTagFolder,
     FindFacesFolder,
@@ -106,7 +107,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 79] = [
+    pub const ALL: [Action; 80] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -170,6 +171,7 @@ impl Action {
         Action::ToggleSettings,
         Action::ToggleDatasets,
         Action::ShowAbout,
+        Action::OpenQualityHelp,
         Action::ShowAiModels,
         Action::AiTagFolder,
         Action::FindFacesFolder,
@@ -249,6 +251,7 @@ impl Action {
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
+            Action::OpenQualityHelp => "open_quality_help",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
             Action::FindFacesFolder => "find_faces_folder",
@@ -337,6 +340,7 @@ impl Action {
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::UndoPosition => "Undo the last position change",
             Action::ShowAbout => "About vw",
+            Action::OpenQualityHelp => "Image quality metrics help",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
             Action::FindFacesFolder => "Find faces in this folder",
@@ -516,6 +520,7 @@ impl Action {
             Action::ToggleSkyChart => vec![],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
+            Action::OpenQualityHelp => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
             Action::FindFacesFolder => vec![],

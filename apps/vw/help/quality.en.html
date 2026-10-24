@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image quality metrics - vw help</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --panel: #f6f8fa; --good: #3f8f4f; --caution: #a5781d; --bad: #b5463f; --accent: #2f6fb3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1f22; --fg: #dfe1e5; --muted: #9aa0a6; --line: #3a3d42;
+      --panel: #26282c; --good: #6eb478; --caution: #d2aa46; --bad: #d25a5a; --accent: #6ea8e6;
+    }
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+    font: 15px/1.7 "Segoe UI", "Yu Gothic UI", "Noto Sans JP", "Hiragino Sans", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 36px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 24px 0 4px; }
+  p, li { margin: 6px 0; }
+  .lead { color: var(--muted); }
+  nav { background: var(--panel); border: 1px solid var(--line); padding: 8px 16px; margin: 16px 0; }
+  nav a { margin-right: 14px; white-space: nowrap; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+  th, td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .formula { background: var(--panel); border-left: 3px solid var(--accent); padding: 10px 16px; margin: 10px 0; overflow-x: auto; }
+  math { font-size: 1.1em; }
+  .good { color: var(--good); font-weight: 600; }
+  .caution { color: var(--caution); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .note { border: 1px solid var(--line); padding: 8px 14px; margin: 12px 0; }
+  code, kbd { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.92em;
+    background: var(--panel); border: 1px solid var(--line); padding: 0 4px; }
+  pre { background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; overflow-x: auto; }
+  pre code { border: none; padding: 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Image quality metrics</h1>
+<p class="lead">What the five metrics on the Evaluation tab of the Analysis window (and in the pixel pipeline window) mean, how they are computed, and the default thresholds.</p>
+
+<nav>
+  <a href="#use">How to use</a>
+  <a href="#psnr">PSNR</a>
+  <a href="#ssim">SSIM</a>
+  <a href="#snr">SNR</a>
+  <a href="#cnr">CNR</a>
+  <a href="#sharpness">Sharpness</a>
+  <a href="#verdict">Verdicts and thresholds</a>
+  <a href="#measure">What is measured</a>
+</nav>
+
+<h2 id="use">How to use</h2>
+<ol>
+  <li>Open <strong>View → Analysis</strong> and choose the <strong>Evaluation</strong> tab. The image in the active slot is evaluated.</li>
+  <li>The columns are <strong>Before</strong> (the normal display) and <strong>After</strong> (the result of changing values in the pixel pipeline).</li>
+  <li>PSNR and SSIM compare two images. By default After is measured against Before. To compare with another image (a retake, or another processing result), right-click its slot and choose <strong>Use as evaluation reference</strong>. Both images must have the same width and height.</li>
+  <li>SNR and CNR need ROIs. Choose the <strong>ROI</strong> tool in the left tool column (<kbd>R</kbd>) and drag on a slot for the <strong>target</strong> (red dashes); drag with <kbd>Shift</kbd> for the <strong>background</strong> (blue dashes). <kbd>Delete</kbd> removes them. ROIs are kept per frame.</li>
+  <li><strong>Copy as CSV</strong> copies the table for pasting into a spreadsheet.</li>
+</ol>
+<p>Values are computed in the background. While you move a value, a reduced image is used to keep up; when you stop, every pixel is computed again.</p>
+
+<h2 id="psnr">PSNR (peak signal-to-noise ratio)</h2>
+<p>How large the per-pixel difference from the reference is. The smaller the difference, the larger the value. In dB. Infinite (∞) when the two images are identical.</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>MSE</mi><mo>=</mo><mfrac><mn>1</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><msup><mrow><mo>(</mo><msub><mi>a</mi><mi>i</mi></msub><mo>−</mo><msub><mi>b</mi><mi>i</mi></msub><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+<math display="block">
+  <mrow><mi>PSNR</mi><mo>=</mo><mn>10</mn><mo>&#x2062;</mo><msub><mi>log</mi><mn>10</mn></msub><mfrac><msup><mi>P</mi><mn>2</mn></msup><mi>MSE</mi></mfrac></mrow>
+</math>
+</div>
+<p><i>a</i> and <i>b</i> are the pixels of the two images, <i>N</i> is the number of pixels, and <i>P</i> is the largest possible pixel value (255, the display brightness, in vw).</p>
+<p>It only looks at the average difference over the whole image, so a small flaw in a conspicuous place counts the same as a large flaw where nobody looks. When it disagrees with what you see, look at SSIM as well.</p>
+
+<h2 id="ssim">SSIM (structural similarity)</h2>
+<p>How similar the brightness, contrast and structure are to the reference. 1 means identical; it gets smaller the less alike they are. The formula of Wang et al. (2004).</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>SSIM</mi><mo>(</mo><mi>x</mi><mo>,</mo><mi>y</mi><mo>)</mo><mo>=</mo>
+  <mfrac>
+    <mrow><mo>(</mo><mn>2</mn><msub><mi>μ</mi><mi>x</mi></msub><msub><mi>μ</mi><mi>y</mi></msub><mo>+</mo><msub><mi>C</mi><mn>1</mn></msub><mo>)</mo><mo>(</mo><mn>2</mn><msub><mi>σ</mi><mrow><mi>x</mi><mi>y</mi></mrow></msub><mo>+</mo><msub><mi>C</mi><mn>2</mn></msub><mo>)</mo></mrow>
+    <mrow><mo>(</mo><msubsup><mi>μ</mi><mi>x</mi><mn>2</mn></msubsup><mo>+</mo><msubsup><mi>μ</mi><mi>y</mi><mn>2</mn></msubsup><mo>+</mo><msub><mi>C</mi><mn>1</mn></msub><mo>)</mo><mo>(</mo><msubsup><mi>σ</mi><mi>x</mi><mn>2</mn></msubsup><mo>+</mo><msubsup><mi>σ</mi><mi>y</mi><mn>2</mn></msubsup><mo>+</mo><msub><mi>C</mi><mn>2</mn></msub><mo>)</mo></mrow>
+  </mfrac></mrow>
+</math>
+<math display="block">
+  <mrow><msub><mi>C</mi><mn>1</mn></msub><mo>=</mo><msup><mrow><mo>(</mo><mn>0.01</mn><mi>P</mi><mo>)</mo></mrow><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><msub><mi>C</mi><mn>2</mn></msub><mo>=</mo><msup><mrow><mo>(</mo><mn>0.03</mn><mi>P</mi><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+</div>
+<ul>
+  <li><i>μ</i>, <i>σ</i>² and <i>σ<sub>xy</sub></i> are the mean, variance and covariance weighted by an 11×11 Gaussian window (σ = 1.5) around each pixel.</li>
+  <li>The value shown is the mean of the per-pixel values where the window fits inside the image.</li>
+  <li>As in the original implementation, the images are first reduced by an integer factor until the short side is about 256 pixels. SSIM is meant to compare at a resolution matching the viewing distance; comparing a large image at full size picks up differences too small to see.</li>
+</ul>
+
+<h2 id="snr">SNR (signal-to-noise ratio)</h2>
+<p>The ratio of the mean brightness to its spread inside the target ROI. The smaller the spread (noise), the larger the value. Infinite when the ROI is perfectly flat.</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>SNR</mi><mo>=</mo><mfrac><mrow><mo>|</mo><msub><mi>μ</mi><mtext>target</mtext></msub><mo>|</mo></mrow><msub><mi>σ</mi><mtext>target</mtext></msub></mfrac></mrow>
+</math>
+</div>
+<p><i>μ</i> is the mean inside the ROI and <i>σ</i> the (population) standard deviation. Put the target ROI where the image should be uniform (a flat surface, an even material). Over a pattern, the pattern itself is counted as noise.</p>
+
+<h2 id="cnr">CNR (contrast-to-noise ratio)</h2>
+<p>How many times the background noise the brightness difference between target and background is. It tells whether what you want to tell apart is buried in noise.</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>CNR</mi><mo>=</mo><mfrac><mrow><mo>|</mo><msub><mi>μ</mi><mtext>target</mtext></msub><mo>−</mo><msub><mi>μ</mi><mtext>background</mtext></msub><mo>|</mo></mrow><msub><mi>σ</mi><mtext>background</mtext></msub></mfrac></mrow>
+</math>
+</div>
+<p>Needs both a target ROI and a background ROI. Infinite when the background has no spread.</p>
+
+<h2 id="sharpness">Sharpness (variance of the Laplacian)</h2>
+<p>How crisp the edges are. The 4-neighbour Laplacian is computed at each pixel and its variance is shown. The blurrier the image, the smaller the value.</p>
+<div class="formula">
+<math display="block">
+  <mrow><msub><mi>L</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi></mrow></msub><mo>=</mo><mn>4</mn><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>−</mo><mn>1</mn><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>+</mo><mn>1</mn><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow>
+</math>
+<math display="block">
+  <mrow><mtext>Sharpness</mtext><mo>=</mo><mi>Var</mi><mo>(</mo><mi>L</mi><mo>)</mo><mo>=</mo><mfrac><mn>1</mn><mi>M</mi></mfrac><mo>∑</mo><msup><mi>L</mi><mn>2</mn></msup><mo>−</mo><msup><mrow><mo>(</mo><mfrac><mn>1</mn><mi>M</mi></mfrac><mo>∑</mo><mi>L</mi><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+</div>
+<p>The outermost pixel on each side is left out (<i>M</i> is the number of remaining pixels). No reference is needed. Noise also counts as edges, so noisy images score high. Compare images of the same subject taken the same way.</p>
+
+<h2 id="verdict">Verdicts and thresholds</h2>
+<p>For every metric, larger is better. At or above the “acceptable” bound the verdict is <span class="good">Acceptable</span>, at or above the “caution” bound it is <span class="caution">Caution</span>, and below that <span class="bad">Degraded</span>.</p>
+<table>
+  <tr><th>Metric</th><th>Acceptable (at least)</th><th>Caution (at least)</th><th>Setting</th></tr>
+  <tr><td>PSNR</td><td class="num">35 dB</td><td class="num">25 dB</td><td><code>quality.psnr</code></td></tr>
+  <tr><td>SSIM</td><td class="num">0.95</td><td class="num">0.85</td><td><code>quality.ssim</code></td></tr>
+  <tr><td>SNR</td><td class="num">10</td><td class="num">5</td><td><code>quality.snr</code></td></tr>
+  <tr><td>CNR</td><td class="num">3</td><td class="num">1.5</td><td><code>quality.cnr</code></td></tr>
+  <tr><td>Sharpness</td><td class="num">500</td><td class="num">100</td><td><code>quality.sharpness</code></td></tr>
+</table>
+<p>These are the defaults, for values measured on the display brightness (0 to 255). They depend on the use, so each metric can be changed in the settings. Changing them only changes the verdicts at once (nothing is computed again). In the settings file:</p>
+<pre><code>[quality]
+psnr = { good = 40, caution = 30 }
+cnr = { good = 5, caution = 3 }</code></pre>
+<p>The bar next to a verdict is 3/4 long at the acceptable bound and full at 1.5 times that, so metrics with very different thresholds can be compared on the same bar.</p>
+<p>Where the defaults come from:</p>
+<ul>
+  <li><strong>PSNR</strong>: for 8-bit images, differences are hardly visible above 40 dB, noticeable on a careful look around 30 dB, and usually clearly visible below 20 dB.</li>
+  <li><strong>SSIM</strong>: 0.95 or more looks practically the same. Below 0.9, broken texture or blur usually starts to show.</li>
+  <li><strong>SNR</strong>: the caution bound is the imaging rule of thumb that a signal can be told apart from noise at 5 or more (the Rose criterion).</li>
+  <li><strong>CNR</strong>: at 1 the difference is as large as the noise and is easy to miss; at 3 or more it is easy to see.</li>
+  <li><strong>Sharpness</strong>: depends strongly on the subject and the image size. Use it to compare images taken under the same conditions rather than as an absolute value. Below 100, suspect an out-of-focus image (a common rule of thumb).</li>
+</ul>
+
+<h2 id="measure">What is measured</h2>
+<div class="note">
+<p>Every metric is measured on the <strong>display brightness (0 to 255)</strong>. Color images are first turned into brightness (Y = 0.2126 R + 0.7152 G + 0.0722 B).</p>
+<p>The After image exists only as display colors (the result of the pixel pipeline), so display brightness is the only common ground for comparing it with Before. That is why the values do not match the mean and standard deviation shown next to an ROI, which are computed from the values stored in the file.</p>
+</div>
+</main>
+</body>
+</html>

@@ -140,6 +140,10 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Help"), |ui| {
+                if self.menu_item(ui, Action::OpenQualityHelp, None) {
+                    chosen = Some(Action::OpenQualityHelp);
+                }
+                ui.separator();
                 if self.menu_item(ui, Action::ShowAbout, None) {
                     chosen = Some(Action::ShowAbout);
                 }

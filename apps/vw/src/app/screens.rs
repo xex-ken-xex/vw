@@ -244,6 +244,9 @@ impl VwApp {
             Some(crate::quality_view::Command::ClearReference) => {
                 self.quality_reference = None;
             }
+            Some(crate::quality_view::Command::OpenHelp) => {
+                self.open_help(crate::help::Page::Quality);
+            }
             None => {}
         }
     }

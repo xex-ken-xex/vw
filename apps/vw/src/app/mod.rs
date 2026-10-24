@@ -801,6 +801,7 @@ impl VwApp {
             }
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
+            Action::OpenQualityHelp => self.open_help(crate::help::Page::Quality),
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
             Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),

@@ -37,6 +37,8 @@ const JA: &[(&str, &str)] = &[
     // vw について
     ("Help", "ヘルプ"),
     ("About vw", "vw について"),
+    ("Image quality metrics help", "画質の評価のヘルプ"),
+    ("Help on the metrics", "指標の説明"),
     ("Fast image viewer", "高速画像ビューワ"),
     ("Author", "作者"),
     ("License", "ライセンス"),
