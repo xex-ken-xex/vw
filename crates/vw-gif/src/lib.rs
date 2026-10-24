@@ -368,7 +368,7 @@ fn canvas_size(width: u32, height: u32) -> Result<usize, DecodeError> {
             "GIF canvas {width} x {height} is too large or empty"
         )));
     }
-    Ok(size as usize)
+    vw_core::limits::check_image(width as u64, height as u64, 4)
 }
 
 fn invalid(e: DecodingError) -> DecodeError {

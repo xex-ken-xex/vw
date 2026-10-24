@@ -98,6 +98,7 @@ impl DecoderPlugin for TiffPlugin {
         let photometric = decoder
             .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
             .map_err(invalid)?;
+        check_size(&mut decoder)?;
         let mut img = if photometric == Some(PALETTE) {
             palette(data, ifd, &mut decoder)?
         } else {
@@ -122,9 +123,12 @@ const PALETTE: u16 = 3;
 
 fn open(data: &[u8]) -> Result<Decoder<Cursor<&[u8]>>, DecodeError> {
     // 既定の上限（256 MiB）は、スキャンした図面や顕微鏡の画像のような大きな TIFF で
-    // 足りなくなる。読み込める大きさの上限は、アプリのメモリの設定の側で決めるため外す。
+    // 足りなくなる。画像の大きさの上限（設定で変えられる）をそのまま渡す。
+    let mut limits = Limits::unlimited();
+    limits.decoding_buffer_size = vw_core::limits::max_image_bytes();
+    limits.intermediate_buffer_size = vw_core::limits::max_image_bytes();
     Decoder::new(Cursor::new(data))
-        .map(|d| d.with_limits(Limits::unlimited()))
+        .map(|d| d.with_limits(limits))
         .map_err(invalid)
 }
 
@@ -158,6 +162,27 @@ fn pages(data: &[u8]) -> Result<Vec<usize>, DecodeError> {
         return Err(DecodeError::Invalid("no full-size image".into()));
     }
     Ok(pages)
+}
+
+/// 画素を読む前に、幅・高さ・色の種類から要るメモリを確かめる。tiff クレートの上限でも止まるが、
+/// こちらは幅と高さを添えて断れる。
+fn check_size(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<(), DecodeError> {
+    let (width, height) = decoder.dimensions().map_err(invalid)?;
+    // パレットのページは tiff クレートが色の種類を返さない。その画素は後でグレーとして読み直し、
+    // そのときクレートの上限で止まるので、ここでは確かめない。
+    let Ok(color) = decoder.colortype() else {
+        return Ok(());
+    };
+    let channels = match color {
+        ColorType::Gray(_) => 1,
+        ColorType::GrayA(_) => 2,
+        ColorType::RGB(_) | ColorType::YCbCr(_) => 3,
+        ColorType::RGBA(_) | ColorType::CMYK(_) => 4,
+        ColorType::CMYKA(_) => 5,
+        _ => 4,
+    };
+    let bytes = u64::from(color.bit_depth()).div_ceil(8).max(1);
+    vw_core::limits::check_image(u64::from(width), u64::from(height), channels * bytes).map(drop)
 }
 
 /// パレット以外のページの画素。

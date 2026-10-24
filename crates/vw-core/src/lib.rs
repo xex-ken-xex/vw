@@ -16,6 +16,7 @@
 pub mod display;
 pub mod exif;
 pub mod image;
+pub mod limits;
 pub mod plugin;
 
 pub use display::{DisplayImage, DisplayParams};

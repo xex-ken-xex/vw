@@ -169,9 +169,10 @@ impl Animation {
 fn buffer_size<R: std::io::BufRead + std::io::Seek>(
     decoder: &WebPDecoder<R>,
 ) -> Result<usize, DecodeError> {
-    decoder
+    let size = decoder
         .output_buffer_size()
-        .ok_or_else(|| DecodeError::Unsupported("WebP image too large".into()))
+        .ok_or_else(|| DecodeError::Unsupported("WebP image too large".into()))?;
+    vw_core::limits::check_bytes(size as u64, "WebP image")
 }
 
 fn invalid(e: DecodingError) -> DecodeError {

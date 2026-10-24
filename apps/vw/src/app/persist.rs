@@ -32,6 +32,7 @@ impl VwApp {
         self.apply_fits_options();
         self.apply_texture_options();
         self.apply_archive_dir();
+        self.apply_image_size_limit();
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -66,6 +67,11 @@ impl VwApp {
         for dir in self.tree.open_paths() {
             self.tree.refresh(&dir, &registry);
         }
+    }
+
+    /// 1 枚の画像に使ってよいメモリの上限を、デコーダに知らせる。
+    pub(super) fn apply_image_size_limit(&mut self) {
+        vw_core::limits::set_max_image_bytes(self.settings().viewer.image_size_limit_bytes());
     }
 
     /// 天体の画像の表示の決め方が変わったら、表示中の FITS を読み直してすぐ反映する。
@@ -129,6 +135,7 @@ impl VwApp {
                 self.apply_fits_options();
                 self.apply_texture_options();
                 self.apply_archive_dir();
+                self.apply_image_size_limit();
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }

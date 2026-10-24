@@ -85,12 +85,6 @@ impl FitsPlugin {
 /// メタデータの見出し。
 pub const GROUP: &str = "FITS";
 
-/// 1 枚の画素の上限。巨大な `NAXIS` を書いた壊れたファイルで、メモリを取りに行かないように。
-/// 2^31 画素（16bit なら 4 GiB）を超える画像は、天体の観測データでもまずない。
-const MAX_PIXELS: usize = 1 << 31;
-/// `.fits.gz` を展開する大きさの上限。
-const MAX_GUNZIP_BYTES: u64 = 16 << 30;
-
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
         "FITS"
@@ -131,11 +125,14 @@ fn gunzip(data: &[u8]) -> Result<Cow<'_, [u8]>, DecodeError> {
     if !data.starts_with(&[0x1f, 0x8b]) {
         return Ok(Cow::Borrowed(data));
     }
+    // 展開した大きさは展開してみるまで分からないので、画像の上限まで読んで、それでも続くなら断る。
+    let limit = vw_core::limits::max_image_bytes() as u64;
     let mut out = Vec::new();
     flate2::read::MultiGzDecoder::new(data)
-        .take(MAX_GUNZIP_BYTES)
+        .take(limit + 1)
         .read_to_end(&mut out)
         .map_err(|e| DecodeError::Invalid(format!("gzip: {e}")))?;
+    vw_core::limits::check_bytes(out.len() as u64, "gzip-compressed FITS file")?;
     Ok(Cow::Owned(out))
 }
 
@@ -174,16 +171,22 @@ fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
         let Some(bitpix) = hdu.int(&format!("{prefix}BITPIX")) else {
             continue;
         };
-        let too_large = || {
-            DecodeError::Unsupported(format!("FITS image {} x {} is too large", axes[0], axes[1]))
-        };
         let planes = axes[2..]
             .iter()
             .try_fold(1usize, |n, &a| n.checked_mul(a))
-            .ok_or_else(too_large)?;
-        if axes[0].checked_mul(axes[1]).is_none_or(|n| n > MAX_PIXELS) {
-            return Err(too_large());
-        }
+            .ok_or_else(|| {
+                DecodeError::Unsupported(format!(
+                    "FITS image {} x {} is too large",
+                    axes[0], axes[1]
+                ))
+            })?;
+        // tile 圧縮の整数は i64 に展開するので、1 画素の最大は 8 バイト。
+        let bytes_per_pixel = if compressed {
+            8
+        } else {
+            (bitpix.unsigned_abs() / 8).max(1)
+        };
+        vw_core::limits::check_image(axes[0] as u64, axes[1] as u64, bytes_per_pixel)?;
         return Ok(Image {
             index,
             hdu,
