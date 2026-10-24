@@ -39,6 +39,12 @@ trash = { version = "5.2", default-features = false, features = ["coinit_apartme
 # 読むだけなので、圧縮側（zopfli）や C ライブラリの要る方式は入れない。
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "aes-crypto"] }
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "bzip2", "ppmd"] }
+# tar.bz2 / tar.xz は 7z が使うのと同じ純 Rust の実装で読む。tar.zst の ruzstd も純 Rust。
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz"] }
+ruzstd = "0.9"
+# 日本語の Windows で作った ZIP・tar の中の名前と、日本の QR コードの中身（Shift_JIS）を読む。
+encoding_rs = "0.8"
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "platform-verifier"] }
 ort = { version = "2.0.0-rc.14", default-features = false, features = ["load-dynamic"] }
 tar = "0.4"
@@ -49,11 +55,11 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 raw-window-handle = "0.6"
 # 純 Rust で C のライブラリが要らない。zbar（LGPL・C）や quircs より、配る物が増えないため。
 rqrr = { version = "0.11", default-features = false }
-# 日本の QR コードは 8 ビットのモードに Shift_JIS で入れたものが多い。
-encoding_rs = "0.8"
 
 [dev-dependencies]
 png = "0.18"
+# テスト用の tar.xz を作るため。
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz", "encoder"] }
 # テスト用の 7z を作るため。アプリ本体は読むだけなので圧縮の機能は入れない。
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "compress", "util"] }
 # テスト用の QR コードを作るため。

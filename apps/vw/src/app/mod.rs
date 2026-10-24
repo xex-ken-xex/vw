@@ -18,7 +18,7 @@ use crate::copy::{Focus, MetaSelection};
 use crate::discard::{self, TrashJob};
 use crate::export::{CopyJob, Filter, ListFormat};
 use crate::frames;
-use crate::i18n::tr;
+use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo, Scope};
 use crate::labels::{Flag, LabelStore};
 use crate::loader::{Job, Loader};
@@ -296,6 +296,8 @@ pub struct VwApp {
     loaded_folders: Vec<(PathBuf, LoadInto)>,
     /// ツリーで開いた ZIP。
     archives: Archives,
+    /// 読めない形式だとログで知らせたアーカイブ。フォルダを開き直すたびに同じことを出さないため。
+    warned_archives: std::collections::HashSet<PathBuf>,
     labels: LabelStore,
     /// 地図で置いた位置の変更。Ctrl+Z で戻す。
     position_undo: positions::PositionUndo,
@@ -557,6 +559,15 @@ impl VwApp {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+        archive::set_decoded_directly(
+            registry
+                .plugins()
+                .iter()
+                .flat_map(|p| p.extensions())
+                .filter(|ext| ext.contains('.'))
+                .map(|ext| ext.to_string())
+                .collect(),
+        );
 
         // 引数のフォルダはツリーの先頭に開いた状態で置き、ファイルはそれぞれ別のスロットで開く。
         // ファイルだけが渡されたときは、その親フォルダをツリーに出して前後の画像を辿りやすくする。
@@ -564,6 +575,11 @@ impl VwApp {
         let (dirs, files): (Vec<PathBuf>, Vec<PathBuf>) = initial
             .into_iter()
             .partition(|p| p.is_dir() || archive::is_archive(p));
+        for file in files.iter().filter(|f| archive::is_unsupported_archive(f)) {
+            let lang = settings.settings.appearance.language;
+            let path = file.display().to_string();
+            log.warn(tr1(lang, archive::UNSUPPORTED_MESSAGE, &path));
+        }
         let first_dir = dirs.into_iter().next();
         let root = first_dir.clone().filter(|d| d.is_dir()).or_else(|| {
             files
@@ -693,6 +709,7 @@ impl VwApp {
             watcher_failed: false,
             loaded_folders: Vec::new(),
             archives,
+            warned_archives: Default::default(),
             labels: LabelStore::new(label_fallback),
             position_undo: Vec::new(),
             tagging: false,
