@@ -583,6 +583,7 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("labels"));
         let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
+        let archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
         let settings_dir = settings
             .path
             .as_deref()
@@ -687,7 +688,7 @@ impl VwApp {
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
-            archives: Archives::in_temp_dir(),
+            archives,
             labels: LabelStore::new(label_fallback),
             position_undo: Vec::new(),
             tagging: false,

@@ -237,6 +237,8 @@ pub struct Behavior {
     pub header_click: HeaderClick,
     /// 開いているフォルダを監視し、新しい画像や書き換えられた画像をすぐ表示に反映する。
     pub auto_reload: bool,
+    /// ZIP や 7z を展開するフォルダ。空なら OS の一時フォルダ。
+    pub archive_dir: String,
 }
 
 impl Default for Behavior {
@@ -244,6 +246,7 @@ impl Default for Behavior {
         Self {
             header_click: HeaderClick::default(),
             auto_reload: true,
+            archive_dir: String::new(),
         }
     }
 }
@@ -255,7 +258,26 @@ impl Behavior {
         Self {
             header_click: r.get("header_click").unwrap_or(d.header_click),
             auto_reload: r.get("auto_reload").unwrap_or(d.auto_reload),
+            archive_dir: r
+                .get_valid(
+                    "archive_dir",
+                    |v: &String| Behavior::valid_archive_dir(v),
+                    "must be empty or an absolute folder path",
+                )
+                .unwrap_or(d.archive_dir),
         }
+    }
+
+    /// 相対パスを受け付けないのは、起動した場所によって展開先が変わってしまうため。
+    pub fn valid_archive_dir(dir: &str) -> bool {
+        let dir = dir.trim();
+        dir.is_empty() || Path::new(dir).is_absolute()
+    }
+
+    /// ZIP や 7z の展開先の親。`None` は OS の一時フォルダ。
+    pub fn archive_parent(&self) -> Option<PathBuf> {
+        let dir = self.archive_dir.trim();
+        (!dir.is_empty()).then(|| PathBuf::from(dir))
     }
 }
 
@@ -2106,6 +2128,23 @@ ae_title = "PACS"
         assert!(Settings::default().behavior.auto_reload);
         let (s, _) = Settings::from_toml("[behavior]\nauto_reload = false\n").unwrap();
         assert!(!s.behavior.auto_reload);
+    }
+
+    #[test]
+    fn archives_are_extracted_in_the_os_temp_folder_unless_a_folder_is_set() {
+        assert_eq!(Settings::default().behavior.archive_parent(), None);
+        let dir = if cfg!(windows) { r"D:\work" } else { "/work" };
+        let (s, problems) =
+            Settings::from_toml(&format!("[behavior]\narchive_dir = '{dir}'\n")).unwrap();
+        assert_eq!(s.behavior.archive_parent(), Some(PathBuf::from(dir)));
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn a_relative_archive_folder_falls_back_to_the_os_temp_folder() {
+        let (s, problems) = Settings::from_toml("[behavior]\narchive_dir = \"work\"\n").unwrap();
+        assert_eq!(s.behavior.archive_parent(), None);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]
