@@ -12,10 +12,10 @@ default = ["gui"]
 gui = ["dep:eframe", "dep:vw-ui", "dep:vw-tree", "dep:vw-launch", "dep:vw-renderer"]
 
 [dependencies]
-dicom-core = "0.8"
-dicom-dictionary-std = "0.8"
-dicom-encoding = "0.8"
-dicom-object = "0.8"
+dicom-core = "0.10"
+dicom-dictionary-std = "0.10"
+dicom-encoding = "0.10"
+dicom-object = "0.10"
 clap = { version = "4", features = ["derive"] }
 rayon = "1"
 walkdir = "2"
@@ -31,8 +31,8 @@ vw-tree = { workspace = true, optional = true }
 vw-launch = { workspace = true, optional = true }
 vw-renderer = { workspace = true, optional = true }
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"], optional = true }
-dicom-ul = "0.8"
-dicom-transfer-syntax-registry = "0.8"
+dicom-ul = "0.10"
+dicom-transfer-syntax-registry = "0.10"
 
 # Windows で、コマンドラインから使うときに起動元のコンソールへ出力をつなぐ(main.rs の attach_console)
 [target.'cfg(windows)'.dependencies]
