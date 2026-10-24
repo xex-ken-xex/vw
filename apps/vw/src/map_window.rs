@@ -483,12 +483,7 @@ impl MapWindow {
 
         let template = &inputs.settings.tile_url;
         if self.tiles.as_ref().is_none_or(|t| t.template() != template) {
-            self.tiles = Some(Tiles::new(
-                template,
-                inputs.cache,
-                inputs.registry.clone(),
-                ui.ctx(),
-            ));
+            self.tiles = Some(Tiles::new(template, inputs.cache, ui.ctx()));
         }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);

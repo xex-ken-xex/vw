@@ -87,12 +87,8 @@ pub struct Tiles {
 
 impl Tiles {
     /// `cache_root` は取ったタイルを残すフォルダ（設定フォルダの `map-tiles`）。
-    pub fn new(
-        template: &str,
-        cache_root: Option<&Path>,
-        registry: Registry,
-        ctx: &egui::Context,
-    ) -> Self {
+    pub fn new(template: &str, cache_root: Option<&Path>, ctx: &egui::Context) -> Self {
+        let registry = tile_registry();
         let queue: Arc<(Mutex<Queue>, Condvar)> = Default::default();
         let (tx, results) = channel();
         let dir = cache_root.map(|r| cache_dir(r, template));
@@ -312,6 +308,17 @@ impl Worker {
     }
 }
 
+/// タイルを読むデコーダ。地図のタイルは PNG・JPEG・WebP のどれかなので、それだけにする。
+/// 画像を開くのと同じすべての形式のデコーダを通さないのは、タイルの URL は `http://` も
+/// 許していて、途中で差し替えられた中身を受け取りうるため。受け付ける形式は少ないほうがよい。
+fn tile_registry() -> Registry {
+    let mut registry = Registry::new();
+    registry.register(Arc::new(vw_png::PngPlugin));
+    registry.register(Arc::new(vw_jpeg::JpegPlugin));
+    registry.register(Arc::new(vw_webp::WebpPlugin::default()));
+    registry
+}
+
 fn agent() -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig};
     ureq::Agent::config_builder()
@@ -396,5 +403,16 @@ mod tests {
         };
         let bytes = worker.bytes(&agent(), id).unwrap();
         assert_eq!(worker.decode(&bytes).unwrap().size, [4, 4]);
+    }
+
+    #[test]
+    fn tiles_are_read_only_as_png_jpeg_or_webp() {
+        let registry = tile_registry();
+        assert!(registry
+            .decode_bytes(Path::new("tile"), &crate::test_util::png_bytes(2, 2))
+            .is_ok());
+        // 中身で形式が分かる DICOM でも、タイルとしては読まない。
+        let dicom = vw_dicom::synth::Synth::ct(1, 1).bytes();
+        assert!(registry.decode_bytes(Path::new("tile"), &dicom).is_err());
     }
 }
