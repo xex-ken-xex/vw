@@ -41,6 +41,12 @@ impl DecoderPlugin for BmpPlugin {
             return Err(DecodeError::Invalid("not a BMP file".into()));
         }
         let header = Header::parse(data)?;
+        // zune-bmp は RGBA の 8bit で返すので、1 画素は最大 4 バイト。
+        vw_core::limits::check_image(
+            header.width.unsigned_abs() as u64,
+            header.height.unsigned_abs() as u64,
+            4,
+        )?;
         let own = match (header.bits, header.compression) {
             (4, BI_RLE4) => Some(rle4::decode(data, &header)?),
             (16, BI_RGB | BI_BITFIELDS | BI_ALPHABITFIELDS) => Some(rgb16::decode(data, &header)?),
@@ -233,6 +239,14 @@ mod tests {
             PixelData::U8(v) => v,
             _ => panic!("8bit expected"),
         }
+    }
+
+    #[test]
+    fn huge_dimensions_in_the_header_are_refused_before_allocating() {
+        let file = bmp(60_000, 60_000, 32, &[], &[vec![0; 4]]);
+        let err = BmpPlugin.decode(&file).unwrap_err().to_string();
+        assert!(err.contains("60000 x 60000"), "{err}");
+        assert!(err.contains("image size limit"), "{err}");
     }
 
     #[test]

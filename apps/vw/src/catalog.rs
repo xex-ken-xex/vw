@@ -318,8 +318,15 @@ fn scan_archive(
             if !registry.supports_path(inner) && !registry.needs_probe(inner) {
                 return Ok(());
             }
+            // 展開した大きさは項目の見出しに書いてあるとおりとは限らないので、画像の上限まで読み、
+            // それでも続く項目はカタログに入れない（画像としても開けない大きさのため）。
+            let limit = vw_core::limits::max_image_bytes() as u64;
             let mut bytes = Vec::new();
-            data.read_to_end(&mut bytes).map_err(EntryError::Read)?;
+            std::io::Read::read_to_end(&mut std::io::Read::take(data, limit + 1), &mut bytes)
+                .map_err(EntryError::Read)?;
+            if bytes.len() as u64 > limit {
+                return Ok(());
+            }
             let name = format!("{relative}{IN_ARCHIVE}{}", slash_path(inner));
             if let Ok(t) = triples(registry, inner, &bytes, None) {
                 found.push((name, bytes.len() as u64, t));

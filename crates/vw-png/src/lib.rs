@@ -38,6 +38,7 @@ impl DecoderPlugin for PngPlugin {
         let size = reader
             .output_buffer_size()
             .ok_or_else(|| DecodeError::Invalid("image too large".into()))?;
+        let size = vw_core::limits::check_bytes(size as u64, "PNG image")?;
         let mut buf = vec![0u8; size];
         let frame = reader.next_frame(&mut buf).map_err(invalid)?;
         buf.truncate(frame.buffer_size());
@@ -321,5 +322,42 @@ mod tests {
             PngPlugin.decode(truncated),
             Err(DecodeError::Invalid(_))
         ));
+    }
+
+    /// 見出しだけの PNG。`png::Encoder` を使わないのは、巨大な幅・高さでは画素も書かされるため。
+    fn header_only(w: u32, h: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            !bytes.iter().fold(!0u32, |crc, &b| {
+                (0..8).fold(crc ^ u32::from(b), |c, _| {
+                    (c >> 1) ^ (0xEDB8_8320 & (0u32.wrapping_sub(c & 1)))
+                })
+            })
+        }
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[16, 6, 0, 0, 0]);
+        let mut out = SIGNATURE.to_vec();
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(&ihdr);
+        out.extend_from_slice(&crc32(&ihdr).to_be_bytes());
+        // 画素の読み出しは IDAT に差しかかってから始まるので、空の IDAT を 1 つ置く。
+        let idat = [
+            b"IDAT".as_slice(),
+            &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+        ]
+        .concat();
+        out.extend_from_slice(&(idat.len() as u32 - 4).to_be_bytes());
+        out.extend_from_slice(&idat);
+        out.extend_from_slice(&crc32(&idat).to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn huge_dimensions_in_the_header_are_refused_before_allocating() {
+        let data = header_only(200_000, 200_000);
+        let err = PngPlugin.decode(&data).unwrap_err().to_string();
+        assert!(err.contains("image size limit"), "{err}");
     }
 }

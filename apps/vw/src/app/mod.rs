@@ -589,6 +589,7 @@ impl VwApp {
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
         fits.set(settings.settings.fits.options());
+        vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 

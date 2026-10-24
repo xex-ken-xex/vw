@@ -126,8 +126,8 @@ impl Archives {
 
     /// これから開くものの展開先を `parent` の下に変える。もう開いているものは閉じるまで今の場所に置く。
     pub fn set_parent(&mut self, parent: Option<&Path>) {
-        let base = base_under(parent);
-        if base == self.base {
+        let root = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
+        if self.base.parent().and_then(Path::parent) == Some(root.as_path()) {
             return;
         }
         let base = prepare_base(parent);
@@ -263,19 +263,86 @@ impl Drop for Archives {
     }
 }
 
-/// `parent` の下の、このプロセスの展開先。
-fn base_under(parent: Option<&Path>) -> PathBuf {
-    let root = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
-    root.join(FOLDER_NAME).join(std::process::id().to_string())
+/// `parent`（`None` なら OS の一時フォルダ）の下に、このプロセスの展開先を作って返す。
+/// 同じ親に前の vw が残したものがあれば、先に消す。
+///
+/// 展開先は自分だけが読み書きできる権限で作る。Linux の `/tmp` はほかのユーザーと共有なので、
+/// 普通の権限では展開した中身（パスワード付きのアーカイブの中身も）がほかのユーザーから読める。
+/// 作るのは既にあれば失敗する `create_dir` で、ほかのユーザーが先に同じ名前（シンボリックリンク
+/// を含む）を置いていたら、その名前は使わず番号を足した名前にする。
+fn prepare_base(parent: Option<&Path>) -> PathBuf {
+    let parent = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
+    let root = own_root(&parent);
+    let pid = std::process::id();
+    remove_stale(&root, pid);
+    let _ = std::fs::create_dir_all(&root);
+    for n in 0..100 {
+        let name = match n {
+            0 => pid.to_string(),
+            n => format!("{pid}-{n}"),
+        };
+        let base = root.join(name);
+        match create_private_dir(&base) {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // 作れない理由がほかにあるなら、展開するときに同じ理由で失敗し、そこで知らせる。
+            _ => return base,
+        }
+    }
+    root.join(pid.to_string())
 }
 
-/// [`base_under`] を返す。同じ親に前の vw が残したものがあれば、先に消す。
-fn prepare_base(parent: Option<&Path>) -> PathBuf {
-    let base = base_under(parent);
-    if let Some(root) = base.parent() {
-        remove_stale(root, &std::process::id().to_string());
+/// `parent` の下の、展開先をまとめるフォルダ。`vw-archives` がシンボリックリンクか、ほかの
+/// ユーザーの物なら使わず、ユーザーごとの名前にする。ほかのユーザーの物の中に作ると、その
+/// ユーザーが展開先を差し替えて、展開した中身を好きな場所に書かせることができるため。
+fn own_root(parent: &Path) -> PathBuf {
+    let shared = parent.join(FOLDER_NAME);
+    if is_usable_root(&shared) {
+        return shared;
     }
-    base
+    parent.join(format!("{FOLDER_NAME}-{}", user_id().unwrap_or(0)))
+}
+
+/// まだないか、自分の物の本物のフォルダなら使える。
+fn is_usable_root(root: &Path) -> bool {
+    match std::fs::symlink_metadata(root) {
+        Err(_) => true,
+        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => false,
+        Ok(m) => owner(&m).is_none_or(|uid| Some(uid) == user_id()),
+    }
+}
+
+#[cfg(unix)]
+fn owner(m: &std::fs::Metadata) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some(m.uid())
+}
+
+#[cfg(not(unix))]
+fn owner(_: &std::fs::Metadata) -> Option<u32> {
+    None
+}
+
+/// このプロセスのユーザーの番号。libc を足さずに済むよう、/proc/self の持ち主で知る。
+#[cfg(unix)]
+fn user_id() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
+#[cfg(not(unix))]
+fn user_id() -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new().mode(0o700).create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(path)
 }
 
 /// ツリーでフォルダのように開けるアーカイブか。拡張子で見る。
@@ -764,12 +831,19 @@ fn enclosed_name(name: &str) -> Option<PathBuf> {
 }
 
 /// 前回までの vw が残した展開先のうち、古いものを消す。
-fn remove_stale(root: &Path, own: &str) {
+///
+/// 消すのは vw が付ける名前（プロセス番号、または「番号-n」）のものだけ。展開先の設定で選んだ
+/// フォルダに、利用者がたまたま `vw-archives` という名前のフォルダを持っていても、その中の
+/// 利用者のファイルは消さない。
+fn remove_stale(root: &Path, own: u32) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     let now = SystemTime::now();
     for e in entries.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(stale_pid) else {
+            continue;
+        };
         let old = e
             .metadata()
             .and_then(|m| m.modified())
@@ -777,11 +851,20 @@ fn remove_stale(root: &Path, own: &str) {
             .and_then(|t| now.duration_since(t).ok())
             .is_some_and(|age| age > STALE_AFTER);
         // Linux ではプロセスが動いているか /proc で分かるので、終わったものはすぐ消す。
-        let dead = cfg!(target_os = "linux") && !Path::new("/proc").join(e.file_name()).exists();
-        if (old || dead) && e.file_name() != own {
+        let dead = cfg!(target_os = "linux") && !Path::new("/proc").join(pid.to_string()).exists();
+        if (old || dead) && pid != own {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
+}
+
+/// vw が付けた展開先の名前（「1234」か「1234-2」）なら、そのプロセス番号。
+fn stale_pid(name: &str) -> Option<u32> {
+    let (pid, n) = name.split_once('-').unwrap_or((name, "0"));
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (digits(pid) && digits(n))
+        .then(|| pid.parse().ok())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -1387,5 +1470,77 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         assert!(!is_archive(&dir));
+    }
+
+    #[test]
+    fn only_folders_named_like_a_process_are_cleaned_up() {
+        assert_eq!(stale_pid("1234"), Some(1234));
+        assert_eq!(stale_pid("1234-2"), Some(1234));
+        assert_eq!(stale_pid("photos"), None);
+        assert_eq!(stale_pid("1234-old"), None);
+        assert_eq!(stale_pid("-2"), None);
+    }
+
+    #[test]
+    fn user_files_in_a_folder_named_vw_archives_are_kept() {
+        let tmp = TempDir::new();
+        let mine = tmp.path().join(FOLDER_NAME).join("photos");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::write(mine.join("a.jpg"), b"x").unwrap();
+        // 動いていないプロセスの番号の残り物は消える。
+        let dead = tmp.path().join(FOLDER_NAME).join("4000000000");
+        std::fs::create_dir_all(&dead).unwrap();
+        let archives = Archives::in_dir(Some(tmp.path()));
+        assert!(mine.join("a.jpg").is_file());
+        if cfg!(target_os = "linux") {
+            assert!(!dead.exists());
+        }
+        drop(archives);
+        assert!(mine.join("a.jpg").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_folder_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = TempDir::new();
+        let archives = Archives::in_dir(Some(tmp.path()));
+        let mode = std::fs::metadata(archives.base())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_name_taken_in_advance_is_not_used() {
+        let tmp = TempDir::new();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let root = tmp.path().join(FOLDER_NAME);
+        std::fs::create_dir(&root).unwrap();
+        let taken = root.join(std::process::id().to_string());
+        std::os::unix::fs::symlink(&elsewhere, &taken).unwrap();
+        let archives = Archives::in_dir(Some(tmp.path()));
+        assert_ne!(archives.base(), taken);
+        assert!(archives.base().starts_with(&root));
+        assert!(!std::fs::symlink_metadata(archives.base())
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_shared_folder_is_not_used() {
+        let tmp = TempDir::new();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, tmp.path().join(FOLDER_NAME)).unwrap();
+        let archives = Archives::in_dir(Some(tmp.path()));
+        assert!(!archives.base().starts_with(tmp.path().join(FOLDER_NAME)));
+        assert!(archives.base().starts_with(tmp.path()));
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
     }
 }

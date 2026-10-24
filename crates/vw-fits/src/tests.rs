@@ -524,3 +524,14 @@ fn sky_of_a_file_without_position_or_image_is_none() {
     assert!(header_of_file(&path).is_err());
     std::fs::remove_file(&path).unwrap();
 }
+
+#[test]
+fn huge_axes_in_the_header_are_refused_before_allocating() {
+    let cards = image_cards(16, &[200_000, 200_000]);
+    let err = FitsPlugin::default()
+        .decode(&fits(&cards, &[0; 8]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("200000 x 200000"), "{err}");
+    assert!(err.contains("image size limit"), "{err}");
+}
