@@ -833,6 +833,7 @@ const JA: &[(&str, &str)] = &[
         "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
         "開いているフォルダを監視します。新しい画像をツリーとフォルダスロットに加え、最後の画像を表示しているスロットは最新の画像に移り、上書きされた画像は読み直します。",
     ),
+    ("Unsupported archive file: {}", "非対応アーカイブファイル：{}"),
     ("Archive extraction folder", "ZIP・7z の展開先"),
     (
         "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",

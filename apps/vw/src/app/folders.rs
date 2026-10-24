@@ -56,6 +56,7 @@ impl VwApp {
         self.load_into = into;
         self.loaded_folders.push((path.clone(), into));
         let listing = tree::list_folder(&path, &registry, tree.order());
+        self.warn_unsupported_archives(&path);
         for folder in listing.folders.into_iter().chain(listing.archives) {
             let index = self.push_slot();
             self.slots[index].folder = Some(folder);
@@ -693,10 +694,33 @@ impl VwApp {
         }
     }
 
+    /// `dir` の直下にある読めない形式のアーカイブ（RAR など）を、1 つにつき 1 度だけログに黄色で出す。
+    /// ツリーやスロットには出さないので、置いてあるのに見えない理由が分かるようにする。
+    pub(super) fn warn_unsupported_archives(&mut self, dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let lang = self.lang();
+        let mut found: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| archive::is_unsupported_archive(p))
+            .collect();
+        found.sort();
+        for path in found {
+            if self.warned_archives.insert(path.clone()) {
+                let path = path.display().to_string();
+                self.log
+                    .warn(tr1(lang, archive::UNSUPPORTED_MESSAGE, &path));
+            }
+        }
+    }
+
     /// cd したフォルダのサブフォルダと ZIP のスロットを、フォルダの今の中身に合わせる。
     /// 消えたもののスロットは閉じ、新しいものはフォルダのスロットの最後に足す。
     pub(super) fn sync_folder_slots(&mut self, current: &Path, registry: &Registry) {
         let listing = tree::list_folder(current, registry, self.settings().tree.order());
+        self.warn_unsupported_archives(current);
         let wanted: Vec<PathBuf> = listing
             .folders
             .into_iter()

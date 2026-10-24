@@ -39,6 +39,12 @@ trash = { version = "5.2", default-features = false, features = ["coinit_apartme
 # 読むだけなので、圧縮側（zopfli）や C ライブラリの要る方式は入れない。
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "aes-crypto"] }
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "bzip2", "ppmd"] }
+# tar.bz2 / tar.xz は 7z が使うのと同じ純 Rust の実装で読む。tar.zst の ruzstd も純 Rust。
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz"] }
+ruzstd = "0.9"
+# 日本語の Windows で作った ZIP・tar の中の名前（Shift_JIS）を読む。
+encoding_rs = "0.8"
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "platform-verifier"] }
 ort = { version = "2.0.0-rc.14", default-features = false, features = ["load-dynamic"] }
 tar = "0.4"
@@ -50,6 +56,8 @@ raw-window-handle = "0.6"
 
 [dev-dependencies]
 png = "0.18"
+# テスト用の tar.xz を作るため。
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz", "encoder"] }
 # テスト用の 7z を作るため。アプリ本体は読むだけなので圧縮の機能は入れない。
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "compress", "util"] }
 
