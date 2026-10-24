@@ -105,7 +105,7 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 5] = [
+                let groups: [&[Action]; 6] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -116,6 +116,7 @@ impl VwApp {
                         Action::ZoomOut,
                     ],
                     &[Action::DevelopRaw],
+                    &[Action::ReadQrCodes],
                 ];
                 for (i, group) in groups.into_iter().enumerate() {
                     if i > 0 {

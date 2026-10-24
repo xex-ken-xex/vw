@@ -1113,6 +1113,10 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Continue from where it stopped", "続きから読む"),
     ("Stop reading", "中断"),
+    ("Read QR codes", "QR コードを読む"),
+    ("QR codes", "QR コード"),
+    ("Unreadable", "読めなかったもの"),
+    ("Found", "見つかったもの"),
     (
         "The files read so far are kept. The next time, reading continues from there.",
         "ここまで読んだ分は残します。次は続きから読みます。",

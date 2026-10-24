@@ -323,6 +323,8 @@ pub struct SlotResponse {
     pub pipeline: bool,
     /// 右クリックメニューで「評価の基準にする」が選ばれた。
     pub reference: bool,
+    /// 右クリックメニューで「QR コードを読む」が選ばれた。
+    pub read_qr: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
@@ -1497,6 +1499,10 @@ impl Slot {
                     .clicked()
                 {
                     out.reference = true;
+                    ui.close();
+                }
+                if ui.button(tr(lang, "Read QR codes")).clicked() {
+                    out.read_qr = true;
                     ui.close();
                 }
                 ui.separator();

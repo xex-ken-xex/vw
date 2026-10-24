@@ -47,11 +47,17 @@ sha1 = "0.11"
 base64 = "0.22"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 raw-window-handle = "0.6"
+# 純 Rust で C のライブラリが要らない。zbar（LGPL・C）や quircs より、配る物が増えないため。
+rqrr = { version = "0.11", default-features = false }
+# 日本の QR コードは 8 ビットのモードに Shift_JIS で入れたものが多い。
+encoding_rs = "0.8"
 
 [dev-dependencies]
 png = "0.18"
 # テスト用の 7z を作るため。アプリ本体は読むだけなので圧縮の機能は入れない。
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "compress", "util"] }
+# テスト用の QR コードを作るため。
+qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

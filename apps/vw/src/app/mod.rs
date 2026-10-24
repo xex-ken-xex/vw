@@ -51,6 +51,7 @@ mod people_ui;
 mod persist;
 mod playback;
 mod positions;
+mod qr_reading;
 mod screens;
 mod send;
 mod slots;
@@ -186,6 +187,7 @@ pub struct VwApp {
     /// モデルの置き場。設定ファイルの場所が決まらない環境では `None`。
     ai_store: Option<crate::ai_models::Store>,
     ai_tags: crate::ai_tags::AiTagStore,
+    qr: qr_reading::QrReading,
     /// 走っている AI タグ付け。一度に 1 つ。
     ai_job: Option<ai_tagging::Job>,
     /// 走っている仕事が終わったら処理する画像。
@@ -619,6 +621,7 @@ impl VwApp {
             ai_models: Default::default(),
             ai_store,
             ai_tags: crate::ai_tags::AiTagStore::new(ai_tag_fallback),
+            qr: Default::default(),
             ai_job: None,
             ai_queue: Vec::new(),
             people,
@@ -888,6 +891,7 @@ impl VwApp {
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
             Action::DevelopRaw => self.develop_slot(self.active),
+            Action::ReadQrCodes => self.read_qr_codes_active(ctx),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),
@@ -1006,6 +1010,7 @@ impl eframe::App for VwApp {
         self.sky_tick();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
+        self.qr_ui();
         let lang = self.lang();
         if let Some(e) = self.about.ui(&ctx, lang, &self.settings.settings.map) {
             self.log

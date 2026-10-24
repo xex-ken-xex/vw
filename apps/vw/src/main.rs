@@ -57,6 +57,7 @@ mod pipelines;
 mod pixel_pipeline;
 mod popup_thumb;
 mod probe;
+mod qr;
 mod quality;
 mod quality_view;
 mod quantity;

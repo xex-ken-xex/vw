@@ -92,6 +92,13 @@ impl VwApp {
                 rows,
             ));
         }
+        if let Some(rows) = self.qr_rows(&path) {
+            groups.push(meta_view::Group::new(
+                super::qr_reading::QR_CODES,
+                tr(lang, super::qr_reading::QR_CODES).to_owned(),
+                rows,
+            ));
+        }
         groups.extend(group_metadata(&entries).into_iter().map(|(g, rows)| {
             let rows = rows
                 .into_iter()

@@ -630,6 +630,11 @@ impl VwApp {
             if resp.reference {
                 self.set_quality_reference(i);
             }
+            if resp.read_qr {
+                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+                    self.read_qr_codes(ui.ctx(), path);
+                }
+            }
             if resp.ai_tag {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.ai_tag_paths(ui.ctx(), vec![path]);
