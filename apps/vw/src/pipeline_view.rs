@@ -73,6 +73,8 @@ pub enum Command {
     },
     /// アクティブなスロットの色の表の段を、外すか別の表にする。
     ColorMap(colormap::Pick),
+    /// スロットの黒と白（画素の値の単位）を変えた。`None` はファイルの値に戻す。
+    Window(Option<(f32, f32)>),
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
 }
@@ -94,6 +96,8 @@ enum Node {
     Display,
     /// PET の、Unit（Bq/ml）から表示の道と分かれて SUVbw に換算する枝。
     Suv,
+    /// 計測の道の出口。十字・ROI・解析の値の軸が読む値。
+    Measure,
 }
 
 /// 関係するノードをまとめる枠。
@@ -172,7 +176,7 @@ impl Kind {
 }
 
 impl Node {
-    const ALL: [Node; 8] = [
+    const ALL: [Node; 9] = [
         Node::Stored,
         Node::Modality,
         Node::Unit,
@@ -181,6 +185,7 @@ impl Node {
         Node::ColorSpace,
         Node::Display,
         Node::Suv,
+        Node::Measure,
     ];
 
     fn key(self) -> &'static str {
@@ -196,11 +201,14 @@ impl Node {
             Node::ColorMap => "color_map",
             Node::Display => "display",
             Node::Suv => "suv",
+            Node::Measure => "measure",
         }
     }
 }
 
 const NODE_WIDTH: f32 = 210.0;
+/// VOI の段をドラッグしている間に、スロットの黒と白を送る間隔（秒）。
+const WINDOW_INTERVAL: f64 = 0.15;
 const NODE_GAP: f32 = 40.0;
 /// ファイルの段を広げる上限。EXIF の長い文などで、図が横に伸びすぎないように。
 const NODE_MAX_WIDTH: f32 = 520.0;
@@ -209,9 +217,16 @@ struct GrayState {
     info: Gray,
     decoded: Decoded,
     image: Option<Arc<VwImage>>,
+    /// ファイルに書かれた値。
+    in_file: Params,
+    /// 色導出の基準。スロットのゲージで黒と白を変えていれば、VOI の中心と幅はその値。
     file: Params,
     params: Params,
     histogram: Option<Histogram>,
+    /// VOI の段で変えた中心と幅。スロットの黒と白に送り、読み直した画像が届くまで欄に出す。
+    window_edit: Option<(f64, f64)>,
+    /// 最後に送った中心と幅、送った時刻、送ったときの画像。
+    window_sent: Option<((f64, f64), f64, usize)>,
 }
 
 enum Loaded {
@@ -261,6 +276,8 @@ pub struct PipelineView {
     /// このフレームで、ダーク・フラットの段か色の表の段で押されたもの。
     calibration: Option<Command>,
     color_rules: Option<Arc<colormap::Rules>>,
+    /// 色の表の段のゲージで、ドラッグしている黒と白。
+    gauge_drag: Option<(f32, f32)>,
 }
 
 impl PipelineView {
@@ -334,13 +351,49 @@ impl PipelineView {
             }
         }
         out.extend(self.calibration.take());
+        out.extend(self.send_window(ui));
         out
+    }
+
+    /// VOI の段で変えた中心と幅を、スロットの黒と白にして送る。ドラッグの間は間を空けて送る
+    /// （毎フレーム送ると、大きな画像では読み直しが溜まって離したあとまで遅れるため）。
+    fn send_window(&mut self, ui: &egui::Ui) -> Option<Command> {
+        let Some(Loaded::Gray(g)) = &mut self.loaded else {
+            return None;
+        };
+        let (edit, image) = (g.window_edit?, g.image.as_ref()?);
+        let now = ui.input(|i| i.time);
+        let dragging = ui.input(|i| i.pointer.any_down());
+        match g.window_sent {
+            Some((sent, _, _)) if sent == edit => return None,
+            Some((_, at, _)) if dragging && now - at < WINDOW_INTERVAL => return None,
+            _ => {}
+        }
+        g.window_sent = Some((edit, now, Arc::as_ptr(image) as usize));
+        let p = Params {
+            center: edit.0,
+            width: edit.1,
+            ..g.in_file
+        };
+        let window = pixel_pipeline::pixel_window(&p, image, &g.decoded);
+        let in_file = pixel_pipeline::pixel_window(&g.in_file, image, &g.decoded);
+        let same = |a: f32, b: f32| (a - b).abs() <= (in_file.1 - in_file.0).abs() * 1e-6;
+        let back = same(window.0, in_file.0) && same(window.1, in_file.1);
+        Some(Command::Window((!back).then_some(window)))
     }
 
     /// 今の値（スロットの色導出に渡す形）。ファイルの段の値は、ファイルと違うときだけ持つ。
     fn values(&self) -> Option<Values> {
         let params = match self.loaded.as_ref()? {
-            Loaded::Gray(g) => (g.params != g.file).then_some(g.params),
+            Loaded::Gray(g) => {
+                // VOI の中心と幅はスロットの黒と白が持つので、色導出の値には入れない。
+                let p = Params {
+                    center: g.file.center,
+                    width: g.file.width,
+                    ..g.params
+                };
+                (p != g.file).then_some(p)
+            }
             Loaded::Color(_) | Loaded::Plain(_) => None,
             Loaded::Reading(_) | Loaded::Failed(_) => return None,
         };
@@ -379,9 +432,12 @@ impl PipelineView {
                         decoded: Decoded::of(&info),
                         info: *info,
                         image: None,
+                        in_file: placeholder(),
                         file: placeholder(),
                         params: placeholder(),
                         histogram: None,
+                        window_edit: None,
+                        window_sent: None,
                     })),
                     Ok(Pipeline::Color(c)) => Loaded::Color(c),
                     Err(e) => Loaded::Failed(e),
@@ -395,18 +451,32 @@ impl PipelineView {
             let same = g.image.as_ref().is_some_and(|i| Arc::ptr_eq(i, image));
             if !same {
                 g.image = Some(image.clone());
-                g.file = pixel_pipeline::file_params(&g.info, image, &g.decoded);
+                g.in_file = pixel_pipeline::file_params(&g.info, image, &g.decoded);
                 g.histogram = Some(pixel_pipeline::histogram(
                     image,
                     &g.decoded,
-                    g.file.slope,
-                    g.file.intercept,
+                    g.in_file.slope,
+                    g.in_file.intercept,
                 ));
+                // 送った黒と白で読み直した画像が届いたら、欄はスロットの値に戻す。
+                if let (Some(edit), Some((sent, _, _))) = (g.window_edit, g.window_sent) {
+                    if edit == sent {
+                        g.window_edit = None;
+                    }
+                }
             }
         }
         if let (Some(Loaded::Gray(g)), Some(t)) = (&mut self.loaded, target) {
-            if g.image.is_some() {
+            if let Some(image) = &g.image {
+                g.file = match t.info.look.as_ref().and_then(|a| a.slot_window()) {
+                    Some(w) => pixel_pipeline::with_window(g.in_file, image, &g.decoded, w),
+                    None => g.in_file,
+                };
                 g.params = t.values.and_then(|v| v.params).unwrap_or(g.file);
+                if let Some((center, width)) = g.window_edit {
+                    g.params.center = center;
+                    g.params.width = width;
+                }
             }
         }
     }
@@ -505,13 +575,19 @@ impl PipelineView {
                     self.save_buttons(ui, lang, values, preset, saved, out);
                     ui.separator();
                 }
-                let can_reset = values.as_ref().is_some_and(|v| !v.is_standard());
+                let slot_window = info
+                    .and_then(|i| i.look.as_ref())
+                    .is_some_and(|a| a.slot_window().is_some());
+                let can_reset = values.as_ref().is_some_and(|v| !v.is_standard()) || slot_window;
                 if ui
                     .add_enabled(can_reset, egui::Button::new(tr(lang, "Reset to file values")))
                     .clicked()
                 {
                     if let Some(Loaded::Gray(g)) = &mut self.loaded {
                         g.params = g.file;
+                    }
+                    if slot_window {
+                        out.push(Command::Window(None));
                     }
                     self.chain.clear();
                     edited = true;
@@ -660,10 +736,10 @@ impl PipelineView {
         let (outer, background) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let mut edited = self.add_menus(ui, lang, &background);
-        let branch = self.has_suv_branch().then_some(Node::Suv);
+        let branches = self.branches(flow);
         let content = flow
             .iter()
-            .chain(&branch)
+            .chain(branches.iter().map(|(_, n)| n))
             .filter_map(|n| self.rects.get(n))
             .fold(Rect::NOTHING, |a, r| a.union(*r));
         let mut transform = match self.transform {
@@ -740,11 +816,10 @@ impl PipelineView {
             ));
             ports.extend([from, to]);
         }
-        if let (Some(_), Some(a), Some(b)) = (
-            branch,
-            self.rects.get(&Node::Unit),
-            self.rects.get(&Node::Suv),
-        ) {
+        for (a, b) in branches
+            .iter()
+            .filter_map(|(a, b)| Some((self.rects.get(a)?, self.rects.get(b)?)))
+        {
             let from = transform * port(*a, true);
             let to = transform * port(*b, false);
             let dx = ((to.x - from.x) * 0.5).max(30.0 * scale);
@@ -800,14 +875,19 @@ impl PipelineView {
                     .insert((kind, node), pos + moved / scale - shift);
             }
         }
-        if let Some(node) = branch {
-            // 表示の道の下に、VOI の段と同じ列から置く。VOI の段は関数やグラフで高さが変わるので、
-            // 前のフレームの大きさの下にする。
-            let below = self
+        // 枝は表示の道の下に、分かれる段の次の列から置く。表示の道の段は関数やグラフで
+        // 高さが変わるので、前のフレームの大きさの下にする。
+        let below = flow
+            .iter()
+            .filter_map(|n| self.rects.get(n))
+            .map(|r| r.max.y + NODE_GAP)
+            .fold(320.0f32, f32::max);
+        for &(from, node) in &branches {
+            let column = self
                 .rects
-                .get(&Node::Voi)
-                .map_or(320.0, |r| r.max.y + NODE_GAP);
-            let default = pos2(3.0 * (NODE_WIDTH + NODE_GAP), below);
+                .get(&from)
+                .map_or(3.0 * (NODE_WIDTH + NODE_GAP), |r| r.max.x + NODE_GAP);
+            let default = pos2(column, below);
             let pos = self
                 .positions
                 .get(&(kind, node))
@@ -1023,14 +1103,18 @@ impl PipelineView {
         }
         if node == Node::ColorMap {
             if let (Some(applied), Some(rules)) = (&info.look, &self.color_rules) {
-                if let Some(pick) = color_map_body(ui, lang, applied, rules) {
-                    self.calibration = Some(Command::ColorMap(pick));
+                if let Some(c) = color_map_body(ui, lang, applied, rules, &mut self.gauge_drag) {
+                    self.calibration = Some(c);
                 }
             }
             return false;
         }
         let traces = self.traces(marks);
-        match &mut self.loaded {
+        if node == Node::Measure {
+            measure_body(ui, lang, &self.loaded, info, &traces);
+            return false;
+        }
+        let edited = match &mut self.loaded {
             Some(Loaded::Gray(g)) => gray_body(ui, lang, node, g, &traces, self.scale),
             Some(Loaded::Color(c)) => {
                 color_body(ui, lang, node, c);
@@ -1043,12 +1127,40 @@ impl PipelineView {
                 false
             }
             _ => false,
+        };
+        if node == Node::Display {
+            ui.separator();
+            ui.weak(tr(
+                lang,
+                "Read by: the slot and the analysis brightness axis. Full screen, copy and quality evaluation still use the standard display without the nodes.",
+            ));
         }
+        edited
     }
 
-    /// PET の Bq/ml の画像で、SUVbw の枝を出すか。
-    fn has_suv_branch(&self) -> bool {
-        matches!(&self.loaded, Some(Loaded::Gray(g)) if g.info.suv.is_some())
+    /// 表示の道から分かれる枝（分かれる段, 枝の段）。計測の道は、表示のための黒と白より前の値を読む。
+    /// PET の Bq/ml の画像は、Unit から SUVbw に換算してから計測に行く。
+    fn branches(&self, flow: &[Node]) -> Vec<(Node, Node)> {
+        match &self.loaded {
+            Some(Loaded::Gray(g)) if g.info.suv.is_some() => {
+                vec![(Node::Unit, Node::Suv), (Node::Suv, Node::Measure)]
+            }
+            Some(Loaded::Gray(_)) => vec![(Node::Unit, Node::Measure)],
+            Some(Loaded::Color(_)) => vec![(Node::ColorSpace, Node::Measure)],
+            Some(Loaded::Plain(stages)) => {
+                let before_display = stages
+                    .iter()
+                    .position(|s| s.title == format_stages::BLACK_AND_WHITE)
+                    .unwrap_or(stages.len());
+                before_display
+                    .checked_sub(1)
+                    .map(Node::Stage)
+                    .filter(|n| flow.contains(n))
+                    .map(|n| vec![(n, Node::Measure)])
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// 十字の位置の、各段の値。
@@ -1202,6 +1314,7 @@ fn node_title(node: Node) -> &'static str {
         Node::ColorMap => "Color map",
         Node::Display => "Display",
         Node::Suv => "SUVbw",
+        Node::Measure => "Measurement",
     }
 }
 
@@ -1286,7 +1399,8 @@ fn gray_body(
 ) -> bool {
     let info = &g.info;
     let mut edited = false;
-    let file = g.file;
+    let mut voi = false;
+    let (file, in_file) = (g.file, g.in_file);
     let p = &mut g.params;
     match node {
         Node::Stored => {
@@ -1370,24 +1484,32 @@ fn gray_body(
                 _ => (Origin::Default, Origin::Default),
             };
             let (ctag, wtag) = (tags::WINDOW_CENTER, tags::WINDOW_WIDTH);
-            edited |= number_field(
+            // 中心と幅はスロットの黒と白（ゲージ）と同じ値。変えたらスロットに送る。
+            // 「変更あり」はファイルに書かれた値と比べる。
+            voi |= number_field(
                 ui,
                 lang,
                 ("Window Center", ctag),
                 &mut p.center,
-                file.center,
+                in_file.center,
                 c_origin,
                 1.0,
             );
-            edited |= number_field(
+            voi |= number_field(
                 ui,
                 lang,
                 ("Window Width", wtag),
                 &mut p.width,
-                file.width,
+                in_file.width,
                 w_origin,
                 1.0,
             );
+            if (p.center, p.width) != (in_file.center, in_file.width) {
+                ui.weak(tr(
+                    lang,
+                    "Same values as the black and white of the slot's color gauge. Shown only, never written to the file.",
+                ));
+            }
             if v.center.is_none() {
                 ui.weak(tr(
                     lang,
@@ -1416,7 +1538,7 @@ fn gray_body(
                     });
             });
             ui.weak(origin_text(lang, v.function.origin));
-            edited |= voi_graph(ui, p, g.histogram.as_ref(), scale);
+            voi |= voi_graph(ui, p, g.histogram.as_ref(), scale);
             ui.weak(tr(
                 lang,
                 "Drag the graph: sideways moves the center, up and down changes the width.",
@@ -1448,7 +1570,10 @@ fn gray_body(
                 ));
             }
         }
-        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) | Node::ColorMap => {}
+        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) | Node::ColorMap | Node::Measure => {}
+    }
+    if voi {
+        g.window_edit = Some((g.params.center, g.params.width));
     }
     edited
 }
@@ -1536,9 +1661,12 @@ fn color_map_body(
     lang: Language,
     applied: &colormap::Applied,
     rules: &colormap::Rules,
-) -> Option<colormap::Pick> {
+    gauge_drag: &mut Option<(f32, f32)>,
+) -> Option<Command> {
     use crate::colormap::Pick;
+    use crate::colormap_ui::GaugeEvent;
     let mut pick = None;
+    let mut window = None;
     let mut on = applied.palette.is_some();
     if ui.checkbox(&mut on, tr(lang, "Use a color map")).clicked() {
         pick = Some(match (on, rules.default_for(applied.kind)) {
@@ -1563,9 +1691,36 @@ fn color_map_body(
                 }
             }
         });
-    if let Some(p) = rules.palette(&current) {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
-        crate::colormap_ui::paint_strip(ui.painter(), rect, &p, false);
+    // スロットのゲージと同じもの。どちらで変えても、もう一方に同じ値が出る。
+    let (body, _) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
+    match crate::colormap_ui::gauge(
+        ui,
+        ui.id().with("color_map_gauge"),
+        body,
+        crate::settings::GaugeSide::Top,
+        lang,
+        applied,
+        rules,
+        gauge_drag,
+    ) {
+        Some(GaugeEvent::Window(w)) => window = Some(w),
+        Some(GaugeEvent::Pick(p)) => pick = Some(p),
+        None => {}
+    }
+    let f = applied.scale.factor;
+    let (lo, hi) = gauge_drag.unwrap_or(applied.window);
+    ui.label(format!(
+        "{} {}  /  {} {}  {}",
+        tr(lang, "Black"),
+        crate::histogram::number(f64::from(lo) * f),
+        tr(lang, "White"),
+        crate::histogram::number(f64::from(hi) * f),
+        applied.scale.unit
+    ));
+    if applied.slot_window().is_some()
+        && ui.small_button(tr(lang, "Reset black and white")).clicked()
+    {
+        window = Some(None);
     }
     let auto = rules
         .default_for(applied.kind)
@@ -1583,7 +1738,40 @@ fn color_map_body(
         lang,
         "Only the look changes. Probe, ROI and analysis values stay the file values.",
     ));
-    pick
+    match (pick, window) {
+        (Some(p), _) => Some(Command::ColorMap(p)),
+        (None, Some(w)) => Some(Command::Window(w)),
+        (None, None) => None,
+    }
+}
+
+/// 計測の道の出口。どの道具がここの値を読むかと、十字の位置の値。
+fn measure_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    loaded: &Option<Loaded>,
+    info: &ImageInfo,
+    traces: &[(u32, u32, Trace)],
+) {
+    let pet = matches!(loaded, Some(Loaded::Gray(g)) if g.info.suv.is_some());
+    ui.label(match loaded {
+        Some(Loaded::Gray(_)) => tr(
+            lang,
+            "Read by: probe crosses, ROI statistics, and the analysis physical value axis.",
+        ),
+        _ => tr(lang, "Read by: probe crosses and ROI statistics."),
+    });
+    if pet {
+        ui.weak(tr(lang, "PET values are shown in SUVbw and Bq/ml."));
+    }
+    ui.weak(tr(
+        lang,
+        "Black and white, the color map and the nodes do not change these values.",
+    ));
+    let quantity = crate::quantity::Quantity::of(&info.metadata);
+    for (x, y, t) in traces {
+        ui.monospace(format!("({x}, {y})  {}", quantity.text(t.modality)));
+    }
 }
 
 /// 既定が灰色の画像で、色の表の段を入れたときに選ぶ表。

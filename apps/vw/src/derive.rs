@@ -49,6 +49,8 @@ struct Key {
     size: [usize; 2],
     /// 色の表の段の表。ノードの後ろで、標準の表示と同じ表を引く。
     palette: Option<Arc<vw_core::Palette>>,
+    /// スロットのゲージで変えた黒と白。ファイルの VOI の代わりに使う。
+    window: Option<(f32, f32)>,
 }
 
 struct Rendered {
@@ -162,6 +164,7 @@ impl Derive {
             values: self.values.clone(),
             size: full.texture.size(),
             palette: shown.info.look.as_ref().and_then(|a| a.palette.clone()),
+            window: shown.info.look.as_ref().and_then(|a| a.slot_window()),
         };
         let done = self.ready.as_ref().is_some_and(|r| r.key == key)
             || self.failed.as_ref().is_some_and(|(k, _)| *k == key);
@@ -328,6 +331,10 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
         Some(g) => {
             let decoded = Decoded::of(g);
             let file = pixel_pipeline::file_params(g, image, &decoded);
+            let file = match key.window {
+                Some(w) => pixel_pipeline::with_window(file, image, &decoded, w),
+                None => file,
+            };
             let at_file = pixel_pipeline::float_of_params(image, &decoded, &file);
             let float = match key.values.params {
                 Some(p) if p != file => pixel_pipeline::float_of_params(image, &decoded, &p),

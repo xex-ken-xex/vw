@@ -179,6 +179,11 @@ impl Applied {
     pub fn palette_name(&self) -> Option<&str> {
         self.palette.as_deref().map(|p| p.name.as_str())
     }
+
+    /// スロットで変えた黒と白。ファイルの値のままなら `None`。
+    pub fn slot_window(&self) -> Option<(f32, f32)> {
+        (self.window != self.file_window).then_some(self.window)
+    }
 }
 
 /// `image` が灰色なら、黒と白の値をスロットで変えた値にし、当てる表を決める。

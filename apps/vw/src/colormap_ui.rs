@@ -122,6 +122,14 @@ const BOTTOM_ROOM: f32 = 24.0;
 /// ドラッグの間に読み直しを頼む間隔（秒）。
 const PREVIEW_INTERVAL: f64 = 0.15;
 
+/// スロットの画像部分 `body` に、ゲージを置く場所があるか。
+pub fn fits(body: Rect, side: GaugeSide) -> bool {
+    match side {
+        GaugeSide::Right => body.height() >= 120.0,
+        GaugeSide::Top | GaugeSide::Bottom => body.width() >= 160.0,
+    }
+}
+
 /// スロットの画像部分 `body` にゲージを重ねて描き、端のドラッグと右クリックを受ける。
 /// `drag` はドラッグ中の黒と白の値（離すまで読み直さず、目盛りだけ動かす）。
 #[allow(clippy::too_many_arguments)]
@@ -141,9 +149,6 @@ pub fn gauge(
     } else {
         (body.width() * 0.6).clamp(80.0, 420.0)
     };
-    if (vertical && body.height() < 120.0) || (!vertical && body.width() < 160.0) {
-        return None;
-    }
     let band = match side {
         GaugeSide::Right => Rect::from_center_size(
             pos2(body.right() - MARGIN - BAND / 2.0, body.center().y),
@@ -246,7 +251,14 @@ pub fn gauge(
     let backdrop = Color32::from_black_alpha(140);
     let text_color = Color32::from_gray(230);
     let font = egui::FontId::proportional(11.0);
-    let (ticks, step) = colormap::ticks(&shown, if vertical { 5 } else { 4 });
+    // 短い帯では目盛りの数字が重なるので、長さに合わせて数を減らす。
+    let length = if vertical {
+        band.height()
+    } else {
+        band.width()
+    };
+    let most = if vertical { 5.0 } else { 4.0 };
+    let (ticks, step) = colormap::ticks(&shown, (length / 50.0).floor().clamp(2.0, most) as usize);
     let galleys: Vec<_> = ticks
         .iter()
         .map(|(t, v)| {
@@ -255,7 +267,9 @@ pub fn gauge(
         })
         .collect();
     let unit = (!shown.scale.unit.is_empty())
-        .then(|| painter.layout_no_wrap(shown.scale.unit.clone(), font.clone(), text_color));
+        .then(|| painter.layout_no_wrap(shown.scale.unit.clone(), font.clone(), text_color))
+        // 横の帯の右に入りきらない単位は出さない（切れた字だけが残るため）。
+        .filter(|u| vertical || band.right() + ARROW + 6.0 + u.size().x <= body.right());
 
     // 目盛りの文字の分も含めて、暗い下地を敷く（明るい画像の上でも読めるように）。
     let widest = galleys.iter().map(|(_, g)| g.size().x).fold(0.0, f32::max);

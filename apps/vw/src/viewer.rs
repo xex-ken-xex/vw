@@ -1439,7 +1439,7 @@ impl Slot {
             &gauge,
             self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
         ) {
-            if applied.palette.is_some() || g.on_gray {
+            if (applied.palette.is_some() || g.on_gray) && crate::colormap_ui::fits(body, g.side) {
                 let id = ui.id().with(("gauge", self.id));
                 let event = crate::colormap_ui::gauge(
                     ui,

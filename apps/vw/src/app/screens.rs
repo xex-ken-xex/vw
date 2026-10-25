@@ -74,6 +74,10 @@ impl VwApp {
                     self.set_color_pick(self.active, pick);
                     continue;
                 }
+                Command::Window(window) => {
+                    self.set_slot_window(self.active, window);
+                    continue;
+                }
                 Command::Closed => {
                     for slot in &mut self.slots {
                         crate::derive::revert(&mut slot.derive, self.presets.presets());
