@@ -194,6 +194,8 @@ impl Node {
 
 const NODE_WIDTH: f32 = 210.0;
 const NODE_GAP: f32 = 40.0;
+/// ファイルの段を広げる上限。EXIF の長い文などで、図が横に伸びすぎないように。
+const NODE_MAX_WIDTH: f32 = 520.0;
 
 struct GrayState {
     info: Gray,
@@ -924,8 +926,9 @@ impl PipelineView {
         (inner.response.rect, moved, edited, chain_edit)
     }
 
-    /// ノードの幅（キャンバスの座標）。マスターを選ぶ箱のある段は、ファイル名が切れないよう
-    /// 一番長い候補に合わせて広げる。ほかは決まった幅（値は切り詰めるか折り返す）。
+    /// ノードの幅（キャンバスの座標）。ファイルの段は、値やファイル名が切れないよう、
+    /// 一番長い行に合わせて [`NODE_MAX_WIDTH`] まで広げる。説明の文は折り返すので数えない。
+    /// DICOM の段と鎖のノードは、つまみやグラフの幅が決まっているので決まった幅のまま。
     fn node_width(&self, ui: &egui::Ui, lang: Language, node: Node) -> f32 {
         let (Node::Stage(i), Some(Loaded::Plain(stages))) = (node, &self.loaded) else {
             return NODE_WIDTH;
@@ -934,38 +937,39 @@ impl PipelineView {
             return NODE_WIDTH;
         };
         let font = egui::TextStyle::Body.resolve(ui.style());
-        let text_width = |text: String| {
+        let text_width = |text: &str| {
             ui.painter()
-                .layout_no_wrap(text, font.clone(), Color32::WHITE)
+                .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
                 .size()
                 .x
         };
-        let widest = stage
-            .choices
-            .iter()
-            .flat_map(|p| {
-                // 箱に出すのはファイル名まで（条件は箱の下に折り返す）。
-                let file = p.current.split(" (").next().unwrap_or_default();
-                let shown = std::iter::once(format!("{}: {file}", tr(lang, "Auto")));
-                shown.chain(p.candidates.iter().map(|c| {
-                    let name = c.file_name().unwrap_or_default().to_string_lossy();
-                    format!("{name}  ({})", tr(lang, "best match"))
-                }))
-            })
-            .map(text_width)
-            .fold(0.0, f32::max);
-        if widest == 0.0 {
-            return NODE_WIDTH;
-        }
         let spacing = ui.spacing();
-        // 箱の枠と矢印、ノードの余白の分。
-        let chrome = 2.0 * spacing.button_padding.x
-            + spacing.icon_width
-            + spacing.item_spacing.x
-            + 2.0 * 8.0 * self.scale
-            + 4.0;
+        // 箱の枠と矢印の分。
+        let combo = 2.0 * spacing.button_padding.x + spacing.icon_width + spacing.item_spacing.x;
+        let mut widest: f32 = 0.0;
+        for p in &stage.choices {
+            // 箱に出すのはファイル名まで（条件は箱の下に折り返す）。
+            let file = p.current.split(" (").next().unwrap_or_default();
+            widest = widest.max(text_width(&format!("{}: {file}", tr(lang, "Auto"))) + combo);
+            for c in &p.candidates {
+                let name = c.file_name().unwrap_or_default().to_string_lossy();
+                let label = format!("{name}  ({})", tr(lang, "best match"));
+                widest = widest.max(text_width(&label) + combo);
+            }
+        }
+        for (name, value) in &stage.lines {
+            let name = text_width(tr_text(lang, name).as_ref());
+            let value = text_width(value);
+            widest = widest.max(if stage.stacked {
+                name.max(value)
+            } else {
+                name + 8.0 + value
+            });
+        }
+        // ノードの余白と、端数で切れないための少しのゆとり。
+        let margin = 2.0 * 8.0 * self.scale + 4.0;
         // 文字の大きさはキャンバスの倍率で変わっているので、倍率 1 の幅に戻す。
-        ((widest + chrome) / self.scale).max(NODE_WIDTH)
+        ((widest + margin) / self.scale).clamp(NODE_WIDTH, NODE_MAX_WIDTH)
     }
 
     fn node_title(&self, lang: Language, node: Node) -> String {
