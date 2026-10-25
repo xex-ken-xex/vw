@@ -312,13 +312,28 @@ pub fn float_of_display(image: &VwImage) -> Float {
             push(&|i| ((f32::from(v[i]) - lo) * scale).clamp(0.0, 255.0) / 255.0);
         }
         PixelData::F32(v) => {
-            let (lo, hi) = image.window.unwrap_or_else(|| {
-                v.iter()
-                    .filter(|x| x.is_finite())
-                    .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)))
+            let windows = match image.channel_windows.filter(|_| samples >= 3) {
+                Some(w) => w,
+                None => {
+                    [image.window.unwrap_or_else(|| {
+                        v.iter()
+                            .filter(|x| x.is_finite())
+                            .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)))
+                    }); 3]
+                }
+            };
+            let shades =
+                windows.map(|(lo, hi)| (lo, if hi > lo { 255.0 / (hi - lo) } else { 0.0 }));
+            push(&|i| {
+                let (lo, scale) = shades[i % samples % 3];
+                // NaN（合成で重ならない所など）は標準の表示と同じく黒。
+                let x = ((v[i] - lo) * scale).clamp(0.0, 255.0);
+                if x.is_nan() {
+                    0.0
+                } else {
+                    x / 255.0
+                }
             });
-            let scale = if hi > lo { 255.0 / (hi - lo) } else { 0.0 };
-            push(&|i| ((v[i] - lo) * scale).clamp(0.0, 255.0) / 255.0);
         }
     }
     if image.curve != vw_core::Curve::Linear {

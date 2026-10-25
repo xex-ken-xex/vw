@@ -13,6 +13,7 @@ use eframe::egui::{self, ColorImage};
 use vw_core::{display, ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwImage};
 
 use crate::colormap::{self, Look};
+use crate::compose;
 use crate::frames;
 use crate::memory::THUMB_SIDE;
 
@@ -60,6 +61,8 @@ pub struct ImageInfo {
     pub convert: Duration,
     /// 色の表の段（灰色の画像だけ）。
     pub look: Option<colormap::Applied>,
+    /// 灰色の画像を色に割り当てて重ねたときの内訳。
+    pub compose: Option<Arc<compose::Composite>>,
 }
 
 impl ImageInfo {
@@ -331,6 +334,9 @@ fn load_look(
     fit_side: Option<u32>,
     look: Option<&Look>,
 ) -> Result<Loaded, String> {
+    if let Some(files) = compose::split(path) {
+        return load_composite(registry, &files, (thumb, full), fit_side, look);
+    }
     let t0 = Instant::now();
     let (file, frame) =
         frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
@@ -356,6 +362,49 @@ fn load_look(
         fit_side,
         look,
     ))
+}
+
+/// 灰色の画像 `files`（赤・緑・青）を読んで重ねる。
+fn load_composite(
+    registry: &Registry,
+    files: &compose::Files,
+    (thumb, full): (bool, bool),
+    fit_side: Option<u32>,
+    look: Option<&Look>,
+) -> Result<Loaded, String> {
+    let t0 = Instant::now();
+    let mut size = 0;
+    let mut read = Duration::ZERO;
+    let mut images: [Option<(PathBuf, VwImage)>; 3] = Default::default();
+    for (c, file) in files.iter().enumerate() {
+        let Some(file) = file else {
+            continue;
+        };
+        let start = Instant::now();
+        let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        read += start.elapsed();
+        size += bytes.len();
+        let (image, _) = registry
+            .decode_frame_bytes(file, &bytes, 0)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        images[c] = Some((file.clone(), image));
+    }
+    let windows = look.map_or([None; 3], |l| l.choice.channels);
+    let (image, composite) = compose::compose(images, windows)?;
+    let decode = t0.elapsed() - read;
+    let mut loaded = finish(
+        image,
+        compose::PLUGIN,
+        1,
+        size,
+        (read, decode),
+        thumb,
+        full,
+        fit_side,
+        None,
+    );
+    loaded.info.compose = Some(Arc::new(composite));
+    Ok(loaded)
 }
 
 /// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。縮小画像とフル解像度の画像を返す。
@@ -425,6 +474,7 @@ fn finish(
         decode,
         convert: t3 - t2,
         look: applied,
+        compose: None,
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),
@@ -502,6 +552,7 @@ mod tests {
             choice: Choice {
                 pick: Pick::Palette("hot_iron".into()),
                 window: None,
+                channels: [None; 3],
             },
         };
         let registry = crate::test_util::all_registry();

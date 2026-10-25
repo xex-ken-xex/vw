@@ -120,6 +120,8 @@ pub struct Choice {
     pub pick: Pick,
     /// ゲージで変えた黒と白の値（ファイルの値の単位）。`None` はファイル（と設定）のまま。
     pub window: Option<(f32, f32)>,
+    /// 色を重ねた合成で、赤・緑・青ごとに変えた黒と白。
+    pub channels: [Option<(f32, f32)>; 3],
 }
 
 /// 読み込みに渡す、色の表の当て方。
@@ -137,7 +139,7 @@ pub struct Scale {
 }
 
 impl Scale {
-    fn of(meta: &Metadata) -> Self {
+    pub fn of(meta: &Metadata) -> Self {
         let (factor, unit) = match Quantity::of(meta) {
             Quantity::Pet(Ok(f)) => (f, "SUVbw".to_owned()),
             Quantity::Pet(Err(_)) => (1.0, "Bq/ml".to_owned()),
@@ -342,12 +344,14 @@ mod tests {
         let off = Choice {
             pick: Pick::Off,
             window: None,
+            channels: [None; 3],
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, off)).unwrap();
         assert_eq!(a.palette_name(), None);
         let viridis = Choice {
             pick: Pick::Palette("viridis".into()),
             window: None,
+            channels: [None; 3],
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "PNG", &look(&s, viridis)).unwrap();
         assert_eq!(a.palette_name(), Some("viridis"));
@@ -359,6 +363,7 @@ mod tests {
         let choice = Choice {
             pick: Pick::Palette("gray".into()),
             window: None,
+            channels: [None; 3],
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, choice)).unwrap();
         assert_eq!(a.palette_name(), None);
@@ -386,6 +391,7 @@ mod tests {
         let choice = Choice {
             pick: Pick::Auto,
             window: Some((20.0, 40.0)),
+            channels: [None; 3],
         };
         let a = prepare(&mut img, "FITS", &look(&s, choice)).unwrap();
         assert_eq!(img.window, Some((20.0, 40.0)));

@@ -430,6 +430,7 @@ mod tests {
             decode: Default::default(),
             convert: Default::default(),
             look: None,
+            compose: None,
         }
     }
 

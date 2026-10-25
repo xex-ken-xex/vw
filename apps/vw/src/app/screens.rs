@@ -78,6 +78,14 @@ impl VwApp {
                     self.set_slot_window(self.active, window);
                     continue;
                 }
+                Command::Compose(files) => {
+                    self.show_composite(self.active, files);
+                    continue;
+                }
+                Command::ChannelWindow(channel, window) => {
+                    self.set_channel_window(self.active, channel, window);
+                    continue;
+                }
                 Command::Closed => {
                     for slot in &mut self.slots {
                         crate::derive::revert(&mut slot.derive, self.presets.presets());

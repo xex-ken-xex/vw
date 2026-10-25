@@ -544,6 +544,21 @@ impl VwApp {
     }
 
     /// スロット `index` の黒と白の値をゲージで変えた値にする。`None` はファイルの値に戻す。
+    /// 合成のスロット `index` の、`channel` 色目の黒と白を変える。
+    pub(super) fn set_channel_window(
+        &mut self,
+        index: usize,
+        channel: usize,
+        window: Option<(f32, f32)>,
+    ) {
+        let slot = &mut self.slots[index];
+        if slot.color.channels[channel] == window {
+            return;
+        }
+        slot.color.channels[channel] = window;
+        self.reload_slot(index);
+    }
+
     pub(super) fn set_slot_window(&mut self, index: usize, window: Option<(f32, f32)>) {
         let slot = &mut self.slots[index];
         if slot.color.window == window {
@@ -724,6 +739,9 @@ impl VwApp {
             }
             if resp.reference {
                 self.set_quality_reference(i);
+            }
+            if resp.compose {
+                self.open_compose_dialog(i);
             }
             if resp.read_qr {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {

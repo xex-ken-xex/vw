@@ -126,6 +126,9 @@ pub struct VwImage {
     /// ファイルが勧める表示の階調 `(黒, 白)`（DICOM のウィンドウ幅/レベルなど）。
     /// 表示時に [`crate::DisplayParams::window`] の指定がなければこれを使う。
     pub window: Option<(f32, f32)>,
+    /// RGB の画像で、色ごとに別の `(黒, 白)` を当てるとき（灰色の画像を色に割り当てて
+    /// 重ねた合成など）。あれば [`VwImage::window`] の代わりに使う。
+    pub channel_windows: Option<[(f32, f32); 3]>,
     /// 黒〜白の間の明るさの付け方。天体の画像で淡い部分を持ち上げるのに使う。
     pub curve: Curve,
     pub metadata: Metadata,
@@ -161,6 +164,7 @@ impl VwImage {
             data,
             significant_bits,
             window: None,
+            channel_windows: None,
             curve: Curve::Linear,
             metadata: Metadata::default(),
             develop_size: None,

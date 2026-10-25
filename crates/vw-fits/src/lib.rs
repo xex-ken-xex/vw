@@ -29,7 +29,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 pub use calibration::Calibration;
 pub use header::is_fits;
 use header::Hdu;
-pub use sky::{header_of_file, sky, ImageHeader, Sky};
+pub use sky::{header_of_file, pixel_offset, sky, ImageHeader, Sky};
 pub use stretch::Stretch;
 
 /// 表示の決め方。設定画面で変える。
@@ -92,6 +92,10 @@ impl FitsPlugin {
 
 /// メタデータの見出し。
 pub const GROUP: &str = "FITS";
+/// 行の並びを返して表示したとき、メタデータに [`ROWS_FLIPPED`] を書く鍵。
+/// 画面の行と FITS の y 座標の向きが逆になるので、WCS で位置を合わせるときに使う。
+pub const ROWS: &str = "Rows";
+pub const ROWS_FLIPPED: &str = "Turned upside down";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -261,7 +265,8 @@ fn decode_with(
         }
     }
     let mut img = VwImage::new(w as u32, h as u32, color, pixels).map_err(DecodeError::Invalid)?;
-    if bottom_up(image.hdu, options.flip_rows) {
+    let flipped = bottom_up(image.hdu, options.flip_rows);
+    if flipped {
         // 左右はそのまま、上下だけ返す（EXIF の向きの 4）。
         img.apply_orientation(4);
     }
@@ -273,6 +278,9 @@ fn decode_with(
     );
     img.curve = options.curve;
     img.metadata = metadata(&hdus, &image, frame);
+    if flipped {
+        img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
+    }
     img.metadata.entries.extend(calibrated.entries);
     Ok(img)
 }

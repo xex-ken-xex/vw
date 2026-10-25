@@ -13,6 +13,9 @@ pub fn title(lang: Language, name: &'static str, path: Option<&std::path::Path>)
     let Some(path) = path else {
         return name.to_owned();
     };
+    if let Some(title) = crate::compose::title(path) {
+        return format!("{name} - {title}");
+    }
     let file = frames::file_of(path);
     let file = file.file_name().unwrap_or_default().to_string_lossy();
     match frames::split(path) {
