@@ -204,6 +204,22 @@ fn dark_is_subtracted_and_flat_divides_after_its_dark_flat() {
     assert!((v[0] - 2000.0).abs() < 1e-3, "{v:?}");
     let used = img.metadata.get(GROUP, "Flat dark").unwrap();
     assert!(used.contains("master_darkflat_2s"), "{used}");
+    assert_eq!(
+        img.metadata.get(GROUP, "Formula"),
+        Some("(light - dark) / flat")
+    );
+    assert_eq!(
+        img.metadata.get(GROUP, "Subtracted (median)"),
+        Some("100.0")
+    );
+    assert_eq!(
+        img.metadata.get(GROUP, "Flat (1-99 %)"),
+        Some("0.500 - 1.000")
+    );
+    assert_eq!(
+        img.metadata.get(GROUP, "Light median"),
+        Some("1100.0 -> 1000.0")
+    );
 }
 
 #[test]
@@ -291,11 +307,10 @@ fn flats_must_have_the_light_s_filter() {
     );
     let (p, _) = plugin(Options {
         use_dark: false,
-        use_bias: false,
+        synthetic_bias: Some(100.0),
         ..Options::default()
     });
     let img = open(&p, &light);
-    assert_eq!(state(&img), Some(NOT_APPLIED));
     assert!(img.metadata.get(GROUP, "Flat").unwrap().contains("Ha"));
 }
 
@@ -476,4 +491,100 @@ fn the_reason_for_a_missing_flat_is_shown_next_to_the_applied_dark() {
     let img = open(&p, &light);
     assert_eq!(state(&img), Some(APPLIED));
     assert_eq!(img.metadata.get(GROUP, "Flat"), Some("no flat found"));
+}
+
+#[test]
+fn a_flat_is_not_used_when_nothing_can_be_subtracted_from_the_light_first() {
+    let dir = temp_dir("flat-alone");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(1100.0));
+    write(
+        &dir.join("flats/master_flat.fits"),
+        &[("IMAGETYP", "'Master Flat'"), ("FILTER", "'Ha'")],
+        &filled(2.0),
+    );
+    let (p, _) = plugin(Options::default());
+    let img = open(&p, &light);
+    assert_eq!(state(&img), Some(NOT_APPLIED));
+    assert_eq!(values(&img)[0], 1100.0);
+    assert!(img
+        .metadata
+        .get(GROUP, "Flat")
+        .unwrap()
+        .contains("subtract"));
+    let (p, _) = plugin(Options {
+        synthetic_bias: Some(100.0),
+        ..Options::default()
+    });
+    assert_eq!(state(&open(&p, &light)), Some(APPLIED));
+}
+
+#[test]
+fn a_dark_chosen_by_hand_is_used_for_the_lights_of_that_folder_until_set_back_to_auto() {
+    let dir = temp_dir("pick");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    let other = write(&dir.join("lights/l2.fits"), LIGHT, &filled(500.0));
+    let dark = |name: &str, temp: &str, v: f32| {
+        write(
+            &dir.join("darks").join(name),
+            &[
+                ("IMAGETYP", "'Master Dark'"),
+                ("EXPTIME", "300.0"),
+                ("CCD-TEMP", temp),
+                ("GAIN", "100"),
+            ],
+            &filled(v),
+        )
+    };
+    dark("near.fits", "-10.0", 10.0);
+    let far = dark("far.fits", "-11.5", 20.0);
+    let (p, calibration) = plugin(Options {
+        use_flat: false,
+        ..Options::default()
+    });
+
+    let img = open(&p, &light);
+    assert_eq!(values(&img)[0], 490.0);
+    let candidates: Vec<&str> = img
+        .metadata
+        .entries
+        .iter()
+        .filter(|(g, k, _)| g == GROUP && k == Role::Dark.candidate_key())
+        .map(|(_, _, v)| v.as_str())
+        .collect();
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    assert!(candidates[0].ends_with("near.fits"), "{candidates:?}");
+    assert_eq!(img.metadata.get(GROUP, CHOSEN), None);
+
+    calibration.choose(&light, Role::Dark, Some(far.clone()));
+    for path in [&light, &other] {
+        let img = open(&p, path);
+        assert_eq!(values(&img)[0], 480.0);
+        assert_eq!(img.metadata.get(GROUP, CHOSEN), Some("Dark"));
+    }
+
+    calibration.choose(&light, Role::Dark, None);
+    assert_eq!(values(&open(&p, &light))[0], 490.0);
+}
+
+#[test]
+fn a_chosen_master_that_no_longer_fits_falls_back_to_the_automatic_one() {
+    let dir = temp_dir("pick-gone");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    write(
+        &dir.join("darks/d.fits"),
+        &[
+            ("IMAGETYP", "'Master Dark'"),
+            ("EXPTIME", "300.0"),
+            ("GAIN", "100"),
+        ],
+        &filled(10.0),
+    );
+    let (p, calibration) = plugin(Options {
+        use_flat: false,
+        ..Options::default()
+    });
+    calibration.choose(&light, Role::Dark, Some(dir.join("darks/gone.fits")));
+    let img = open(&p, &light);
+    assert_eq!(values(&img)[0], 490.0);
+    assert_eq!(img.metadata.get(GROUP, CHOSEN), None);
 }
