@@ -29,7 +29,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 pub use calibration::Calibration;
 pub use header::is_fits;
 use header::Hdu;
-pub use sky::{header_of_file, pixel_offset, sky, ImageHeader, Sky};
+pub use sky::{header_of_file, pixel_map, sky, ImageHeader, Sky};
 pub use stretch::Stretch;
 
 /// 表示の決め方。設定画面で変える。

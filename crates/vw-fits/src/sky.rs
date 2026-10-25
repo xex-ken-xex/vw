@@ -68,30 +68,52 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
     })
 }
 
-/// `reference` の画像の中心が、`other` の画像ではどの画素に写っているか。中心からのずれ
-/// （FITS の画素、x と y）で返す。どちらかに WCS がなければ `None`。
+/// `reference` の画素 (x, y)（FITS の 1 始まり）に写っている空の点が、`other` の画像では
+/// どの画素に写っているかを、`[[a, b, c], [d, e, f]]`（x' = a x + b y + c、y' = d x + e y + f）
+/// で返す。どちらかに WCS がなければ `None`。
 ///
-/// 色ごとに撮った画像を重ねるときの位置合わせに使う。回転や倍率の違いは見ず、ずれだけを求める
-/// （同じ鏡筒とカメラで続けて撮った画像は、ずれ以外がほとんど変わらないため）。
-pub fn pixel_offset(
+/// 色ごとに撮った画像を重ねるときの位置合わせに使う。ずれ・回転・倍率の違いを、`reference` の
+/// 画像の中で 1 次の式に近づける。画素ごとに空の座標を解くと、大きな画像では重すぎるため。
+/// 1 枚の写真の範囲では投影のゆがみは小さく、1 次の式で 0.1 画素も外れない。
+pub fn pixel_map(
     reference: &dyn Fn(&str) -> Option<String>,
     other: &dyn Fn(&str) -> Option<String>,
-) -> Option<[f64; 2]> {
+) -> Option<[[f64; 3]; 2]> {
     let num = |key: &str| number(&reference(key)?);
     let size = ["ZNAXIS", "NAXIS"]
         .iter()
         .find_map(|prefix| Some([num(&format!("{prefix}1"))?, num(&format!("{prefix}2"))?]))?;
     let center = [(size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0];
     let (from, to) = (Wcs::read(reference)?, Wcs::read(other)?);
-    let target = from.to_sky(center[0], center[1])?;
+    // 中心から縦横に画像の 4 分の 1 ずつ離れた点で、1 次の式の傾きを決める。
+    let step = (size[0].max(size[1]) / 4.0).max(1.0);
+    let mut guess = center;
+    let mut map = |x: f64, y: f64| -> Option<[f64; 2]> {
+        let p = pixel_of(&to, from.to_sky(x, y)?, guess)?;
+        guess = p;
+        Some(p)
+    };
+    let o = map(center[0], center[1])?;
+    let ox = map(center[0] + step, center[1])?;
+    let oy = map(center[0], center[1] + step)?;
+    let (a, d) = ((ox[0] - o[0]) / step, (ox[1] - o[1]) / step);
+    let (b, e) = ((oy[0] - o[0]) / step, (oy[1] - o[1]) / step);
+    Some([
+        [a, b, o[0] - a * center[0] - b * center[1]],
+        [d, e, o[1] - d * center[0] - e * center[1]],
+    ])
+}
+
+/// 空の点 `target`（赤経・赤緯、度）が `wcs` の画像で写る画素。`guess` から探す。
+fn pixel_of(wcs: &Wcs, target: [f64; 2], guess: [f64; 2]) -> Option<[f64; 2]> {
     // 空の座標の差を、赤緯の cos を掛けて度の平面にしたもの。
     let miss = |p: [f64; 2]| -> Option<[f64; 2]> {
-        let s = to.to_sky(p[0], p[1])?;
+        let s = wcs.to_sky(p[0], p[1])?;
         let dra = (s[0] - target[0] + 540.0).rem_euclid(360.0) - 180.0;
         Some([dra * target[1].to_radians().cos(), s[1] - target[1]])
     };
     // ずれの式は画素に対してほぼ平らなので、数値で微分したニュートン法がすぐ収まる。
-    let mut p = center;
+    let mut p = guess;
     for _ in 0..20 {
         let r = miss(p)?;
         let (ax, ay) = (miss([p[0] + 1.0, p[1]])?, miss([p[0], p[1] + 1.0])?);
@@ -106,7 +128,7 @@ pub fn pixel_offset(
         ];
         p = [p[0] - step[0], p[1] - step[1]];
         if step[0].hypot(step[1]) < 1e-6 {
-            return Some([p[0] - center[0], p[1] - center[1]]);
+            return Some(p);
         }
     }
     None
@@ -432,17 +454,46 @@ mod tests {
         ("CROTA2", "0.0"),
     ];
 
+    fn apply(m: [[f64; 3]; 2], x: f64, y: f64) -> [f64; 2] {
+        [
+            m[0][0] * x + m[0][1] * y + m[0][2],
+            m[1][0] * x + m[1][1] * y + m[1][2],
+        ]
+    }
+
     #[test]
-    fn offset_finds_where_the_reference_center_lies_in_the_other_image() {
+    fn map_finds_where_reference_pixels_lie_in_a_shifted_image() {
         let mut moved = ORION;
         moved[4] = ("CRPIX1", "103.5");
         moved[5] = ("CRPIX2", "48.5");
-        let d = pixel_offset(&lookup(&ORION), &lookup(&moved)).unwrap();
-        assert!(
-            (d[0] - 3.0).abs() < 1e-6 && (d[1] + 2.0).abs() < 1e-6,
-            "{d:?}"
-        );
-        assert_eq!(pixel_offset(&lookup(&ORION), &lookup(&ORION[..4])), None);
+        let m = pixel_map(&lookup(&ORION), &lookup(&moved)).unwrap();
+        for (x, y) in [(1.0, 1.0), (100.5, 50.5), (200.0, 100.0)] {
+            assert!(close(apply(m, x, y), [x + 3.0, y - 2.0], 1e-3), "{m:?}");
+        }
+        assert_eq!(pixel_map(&lookup(&ORION), &lookup(&ORION[..4])), None);
+    }
+
+    #[test]
+    fn map_follows_a_turned_and_finer_image() {
+        // 90 度回して、画素を半分の大きさにした画像。中心は同じ空の点。
+        let turned = [
+            ("CTYPE1", "RA---TAN"),
+            ("CTYPE2", "DEC--TAN"),
+            ("CRPIX1", "150.5"),
+            ("CRPIX2", "250.5"),
+            ("CRVAL1", "83.8221"),
+            ("CRVAL2", "-5.3911"),
+            ("CDELT1", "-0.005"),
+            ("CDELT2", "0.005"),
+            ("CROTA2", "90.0"),
+        ];
+        let m = pixel_map(&lookup(&ORION), &lookup(&turned)).unwrap();
+        let c = apply(m, 100.5, 50.5);
+        assert!(close(c, [150.5, 250.5], 1e-3), "{c:?}");
+        // 基準で右へ 10 画素は、回した画像では縦へ 20 画素。
+        let r = apply(m, 110.5, 50.5);
+        assert!((r[0] - c[0]).abs() < 0.05, "{r:?}");
+        assert!(((r[1] - c[1]).abs() - 20.0).abs() < 0.05, "{r:?}");
     }
 
     #[test]

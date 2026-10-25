@@ -13,7 +13,6 @@ use crate::i18n::tr;
 pub(super) struct Candidate {
     path: PathBuf,
     filter: Option<String>,
-    size: (u32, u32),
 }
 
 pub(super) struct ComposeDialog {
@@ -29,26 +28,18 @@ impl VwApp {
     /// FITS の `FILTER` で色を決めておく。合成を出しているスロットなら、今の割り当てから始める。
     pub(super) fn open_compose_dialog(&mut self, index: usize) {
         let mut candidates: Vec<Candidate> = Vec::new();
-        let mut push = |path: PathBuf, filter: Option<String>, size: (u32, u32)| {
+        let mut push = |path: PathBuf, filter: Option<String>| {
             if !candidates.iter().any(|c| c.path == path) {
-                candidates.push(Candidate { path, filter, size });
+                candidates.push(Candidate { path, filter });
             }
         };
         let current = self.slots[index]
             .shown
             .as_ref()
             .and_then(|s| s.info.compose.clone());
-        if let Some((c, info)) = self.slots[index]
-            .shown
-            .as_ref()
-            .and_then(|s| Some((s.info.compose.as_ref()?, &s.info)))
-        {
+        if let Some(c) = &current {
             for ch in c.channels.iter().flatten() {
-                push(
-                    ch.path.clone(),
-                    ch.filter.clone(),
-                    (info.width, info.height),
-                );
+                push(ch.path.clone(), ch.filter.clone());
             }
         }
         // 右クリックしたスロットを先に、残りは並んでいる順に。
@@ -58,11 +49,7 @@ impl VwApp {
                 continue;
             };
             if shown.info.compose.is_none() && shown.info.color == ColorModel::Gray {
-                push(
-                    shown.path.clone(),
-                    compose::filter_of(&shown.info.metadata),
-                    (shown.info.width, shown.info.height),
-                );
+                push(shown.path.clone(), compose::filter_of(&shown.info.metadata));
             }
         }
         let picks = match &current {
@@ -155,21 +142,11 @@ impl VwApp {
                 }
                 ui.weak(tr(
                     lang,
-                    "Sizes must match. Images with sky coordinates (WCS) are moved onto the first one.",
+                    "The first image sets the size. Images with sky coordinates (WCS) are moved, turned and scaled onto it; others are centered on it.",
                 ));
                 let files: Files = dialog
                     .picks
                     .map(|p| p.map(|i| dialog.candidates[i].path.clone()));
-                let mut sizes = dialog.picks.iter().flatten().map(|&i| dialog.candidates[i].size);
-                let same_size = sizes
-                    .next()
-                    .is_none_or(|first| sizes.all(|s| s == first));
-                if !same_size {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        tr(lang, "The chosen images differ in size."),
-                    );
-                }
                 let count = files.iter().flatten().count();
                 let distinct = {
                     let mut f: Vec<_> = files.iter().flatten().collect();
@@ -180,7 +157,7 @@ impl VwApp {
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(
-                            count >= 2 && distinct && same_size,
+                            count >= 2 && distinct,
                             egui::Button::new(tr(lang, "Compose")),
                         )
                         .clicked()

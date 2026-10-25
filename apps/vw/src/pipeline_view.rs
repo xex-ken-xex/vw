@@ -1238,13 +1238,26 @@ impl PipelineView {
             Node::LaneAlign(i) => {
                 let ch = channel(i)?;
                 ui.label(tr(lang, ch.aligned.title()));
-                if ch.aligned == compose::Aligned::Wcs {
-                    ui.monospace(format!("{:+} px, {:+} px", ch.shift.0, ch.shift.1));
+                if ch.size != c.size {
+                    ui.monospace(format!(
+                        "{} x {} → {} x {}",
+                        ch.size.0, ch.size.1, c.size.0, c.size.1
+                    ));
                 }
-                ui.weak(tr(
-                    lang,
-                    "Only shifts are matched; rotation and scale are not.",
-                ));
+                if ch.aligned == compose::Aligned::Reference {
+                    return None;
+                }
+                let p = &ch.placement;
+                let [dx, dy] = p.shift(c.size, ch.size);
+                ui.monospace(format!("{} {dx:+.1} px, {dy:+.1} px", tr(lang, "Shift")));
+                if ch.aligned == compose::Aligned::Wcs {
+                    ui.monospace(format!("{} {:+.2}°", tr(lang, "Rotation"), p.rotation()));
+                    ui.monospace(format!("{} ×{:.3}", tr(lang, "Scale"), p.scale()));
+                    ui.weak(tr(
+                        lang,
+                        "Values between pixels are blended from the 4 nearest pixels.",
+                    ));
+                }
                 None
             }
             Node::LaneLevels(i) => {

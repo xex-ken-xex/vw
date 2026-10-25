@@ -135,9 +135,58 @@ pub struct Channel {
     pub calibration: Option<String>,
     /// 黒と白（ファイルの値の単位）。ゲージは黒からこの色までの帯で描く。
     pub levels: Applied,
-    /// 基準（最初の色）の画像に重ねるために動かした画素数（右、下）。
-    pub shift: (i64, i64),
+    /// この画像の大きさ。
+    pub size: (u32, u32),
+    /// 基準（最初の色）の画像に重ねるための動かし方。
+    pub placement: Placement,
     pub aligned: Aligned,
+}
+
+/// 基準の画像の画素 (列, 行) が、この画像のどこに写っているか（画面の向き、画素の中心が整数）。
+/// `[[a, b, c], [d, e, f]]` で、列' = a 列 + b 行 + c、行' = d 列 + e 行 + f。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement(pub [[f64; 3]; 2]);
+
+impl Placement {
+    const SAME: Placement = Placement([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+
+    fn shifted(dx: f64, dy: f64) -> Self {
+        Placement([[1.0, 0.0, dx], [0.0, 1.0, dy]])
+    }
+
+    fn at(&self, col: f64, row: f64) -> [f64; 2] {
+        let m = &self.0;
+        [
+            m[0][0] * col + m[0][1] * row + m[0][2],
+            m[1][0] * col + m[1][1] * row + m[1][2],
+        ]
+    }
+
+    /// 基準の画像の中心が、この画像の中心から何画素ずれて写っているか（右、下）。
+    pub fn shift(&self, reference: (u32, u32), this: (u32, u32)) -> [f64; 2] {
+        let center = |(w, h): (u32, u32)| [(f64::from(w) - 1.0) / 2.0, (f64::from(h) - 1.0) / 2.0];
+        let (r, t) = (center(reference), center(this));
+        let p = self.at(r[0], r[1]);
+        [p[0] - t[0], p[1] - t[1]]
+    }
+
+    /// 基準の画像に対して、この画像が何度回っているか（画面で時計回り）。
+    pub fn rotation(&self) -> f64 {
+        let m = &self.0;
+        // 基準の右向きが、この画像でどちらを向くか。画面は下向きが正なので、時計回りが正の角になる。
+        let d = m[1][0].atan2(m[0][0]).to_degrees();
+        if d.abs() < 1e-9 {
+            0.0
+        } else {
+            d
+        }
+    }
+
+    /// 基準の 1 画素が、この画像の何画素ぶんか（この画像の画素の細かさの比）。
+    pub fn scale(&self) -> f64 {
+        let m = &self.0;
+        (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs().sqrt()
+    }
 }
 
 /// 位置の合わせ方。
@@ -149,6 +198,8 @@ pub enum Aligned {
     Wcs,
     /// WCS がないので、そのまま重ねた。
     Unaligned,
+    /// WCS がなく、大きさが違うので、中心を揃えた。
+    Centered,
 }
 
 impl Aligned {
@@ -157,6 +208,7 @@ impl Aligned {
             Aligned::Reference => "Reference (not moved)",
             Aligned::Wcs => "Moved by the sky coordinates (WCS)",
             Aligned::Unaligned => "Not moved (no WCS in both images)",
+            Aligned::Centered => "Centers put together (no WCS in both images)",
         }
     }
 }
@@ -165,6 +217,8 @@ impl Aligned {
 #[derive(Debug, Clone)]
 pub struct Composite {
     pub channels: [Option<Channel>; 3],
+    /// 合成した画像の大きさ（基準の画像の大きさ）。
+    pub size: (u32, u32),
 }
 
 impl Composite {
@@ -184,7 +238,8 @@ pub fn ramp(channel: usize) -> Arc<Palette> {
 }
 
 /// 読んだ灰色の画像 `images`（赤・緑・青、`None` は使わない色）を重ねる。`windows` は
-/// スロットで色ごとに変えた黒と白。最初の画像を基準にして、ほかは WCS で位置を合わせる。
+/// スロットで色ごとに変えた黒と白。最初の画像を基準にして、その大きさで出す。ほかの画像は、
+/// WCS があればずれ・回転・倍率を合わせ、なければ中心を揃えて重ねる。
 pub fn compose(
     images: [Option<(PathBuf, VwImage)>; 3],
     windows: [Option<(f32, f32)>; 3],
@@ -202,14 +257,6 @@ pub fn compose(
                 name(path)
             ));
         }
-        if (img.width, img.height) != (w, h) {
-            return Err(format!(
-                "{} is {} x {}, not {w} x {h}; images of different sizes cannot be composed yet",
-                name(path),
-                img.width,
-                img.height
-            ));
-        }
     }
     let n = w as usize * h as usize;
     let mut data = vec![f32::NAN; n * 3];
@@ -219,27 +266,17 @@ pub fn compose(
         let Some((path, img)) = entry else {
             continue;
         };
-        let (shift, aligned) = if std::ptr::eq(img, &reference.1) {
-            ((0, 0), Aligned::Reference)
+        let (placement, aligned) = if std::ptr::eq(img, &reference.1) {
+            (Placement::SAME, Aligned::Reference)
         } else {
-            match offset(&reference.1, img) {
-                Some(s) => (s, Aligned::Wcs),
-                None => ((0, 0), Aligned::Unaligned),
-            }
+            place(&reference.1, img)
         };
         let values = samples(img);
-        for y in 0..h as i64 {
-            let sy = y + shift.1;
-            if sy < 0 || sy >= h as i64 {
-                continue;
-            }
-            for x in 0..w as i64 {
-                let sx = x + shift.0;
-                if sx < 0 || sx >= w as i64 {
-                    continue;
-                }
-                let at = (y * w as i64 + x) as usize;
-                data[at * 3 + c] = values[(sy * w as i64 + sx) as usize];
+        for row in 0..h as usize {
+            for col in 0..w as usize {
+                let [sx, sy] = placement.at(col as f64, row as f64);
+                data[(row * w as usize + col) * 3 + c] =
+                    bilinear(&values, img.width, img.height, sx, sy);
             }
         }
         let file_window = vw_core::display::window_of(img, &Default::default());
@@ -262,7 +299,8 @@ pub fn compose(
                 curve: img.curve,
                 scale: Scale::of(&img.metadata),
             },
-            shift,
+            size: (img.width, img.height),
+            placement,
             aligned,
         });
     }
@@ -271,7 +309,33 @@ pub fn compose(
     out.channel_windows = Some(channel_windows);
     out.curve = reference.1.curve;
     out.metadata = metadata(&channels, &reference.1.metadata);
-    Ok((out, Composite { channels }))
+    Ok((
+        out,
+        Composite {
+            channels,
+            size: (w, h),
+        },
+    ))
+}
+
+/// `values`（`w` × `h`）の (x, y) の値を、まわりの 4 画素から線形に補う。画像の外は `NaN`。
+fn bilinear(values: &[f32], w: u32, h: u32, x: f64, y: f64) -> f32 {
+    let (wf, hf) = (f64::from(w), f64::from(h));
+    if !(x >= -0.5 && x <= wf - 0.5 && y >= -0.5 && y <= hf - 0.5) {
+        return f32::NAN;
+    }
+    let (x, y) = (x.clamp(0.0, wf - 1.0), y.clamp(0.0, hf - 1.0));
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w as usize - 1), (y0 + 1).min(h as usize - 1));
+    let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
+    let at = |x: usize, y: usize| values[y * w as usize + x];
+    // 画素にちょうど重なるときは隣を混ぜない（隣の NaN を 0 倍しても NaN になるため）。
+    let lerp = |a: f32, b: f32, t: f32| if t == 0.0 { a } else { a + (b - a) * t };
+    lerp(
+        lerp(at(x0, y0), at(x1, y0), fx),
+        lerp(at(x0, y1), at(x1, y1), fx),
+        fy,
+    )
 }
 
 fn name(path: &Path) -> String {
@@ -290,26 +354,45 @@ fn samples(img: &VwImage) -> Vec<f32> {
     }
 }
 
-/// `other` を `reference` に重ねるとき、`other` の何画素先を取ればよいか（画面の右と下）。
-fn offset(reference: &VwImage, other: &VwImage) -> Option<(i64, i64)> {
-    let d = vw_fits::pixel_offset(&lookup(&reference.metadata), &lookup(&other.metadata))?;
-    // FITS の y は下から上へ数える。行を返さずに出した画像では画面の下へ向かう向きと同じ、
-    // 返した画像では逆になる。
-    let down = |m: &Metadata| {
-        if flipped(m) {
-            -1.0
+/// `other` を `reference` に重ねる動かし方。
+fn place(reference: &VwImage, other: &VwImage) -> (Placement, Aligned) {
+    match wcs_placement(reference, other) {
+        Some(p) => (p, Aligned::Wcs),
+        None if (reference.width, reference.height) == (other.width, other.height) => {
+            (Placement::SAME, Aligned::Unaligned)
+        }
+        None => (
+            Placement::shifted(
+                (f64::from(other.width) - f64::from(reference.width)) / 2.0,
+                (f64::from(other.height) - f64::from(reference.height)) / 2.0,
+            ),
+            Aligned::Centered,
+        ),
+    }
+}
+
+/// WCS で決めた動かし方。FITS の画素（1 始まり、y は下から上）と画面の画素（0 始まり、
+/// 行は上から下。行を返して出した画像は逆）の向きの違いも、ここで繋ぐ。
+fn wcs_placement(reference: &VwImage, other: &VwImage) -> Option<Placement> {
+    let m = vw_fits::pixel_map(&lookup(&reference.metadata), &lookup(&other.metadata))?;
+    // 画面の行 → FITS の y：y = s 行 + t。
+    let rows = |img: &VwImage| {
+        if flipped(&img.metadata) {
+            (-1.0, f64::from(img.height))
         } else {
-            1.0
+            (1.0, 1.0)
         }
     };
-    if flipped(&reference.metadata) != flipped(&other.metadata) {
-        // 行の向きが違う 2 枚は、ずれだけでは重ならない。
-        return None;
-    }
-    Some((
-        d[0].round() as i64,
-        (d[1] * down(&other.metadata)).round() as i64,
-    ))
+    let (rs, rt) = rows(reference);
+    let (os, ot) = rows(other);
+    // 基準の画面 (列, 行) → 基準の FITS (列 + 1, rs 行 + rt) → 相手の FITS (x', y')
+    // → 相手の画面 (x' - 1, (y' - ot) / os)。
+    let fits = |r: [f64; 3]| [r[0], r[1] * rs, r[0] + r[1] * rt + r[2]];
+    let (fx, fy) = (fits(m[0]), fits(m[1]));
+    Some(Placement([
+        [fx[0], fx[1], fx[2] - 1.0],
+        [fy[0] / os, fy[1] / os, (fy[2] - ot) / os],
+    ]))
 }
 
 fn flipped(m: &Metadata) -> bool {
@@ -453,17 +536,71 @@ mod tests {
             panic!()
         };
         let g = comp.channels[1].as_ref().unwrap();
-        assert_eq!((g.shift, g.aligned), ((1, 0), Aligned::Wcs));
+        assert_eq!(g.aligned, Aligned::Wcs);
+        let [dx, dy] = g.placement.shift((4, 3), (4, 3));
+        assert!((dx - 1.0).abs() < 1e-6 && dy.abs() < 1e-6, "{dx} {dy}");
         // 基準の (0, 0) には、緑の (1, 0) が重なる。右端は重なるものがない。
         assert_eq!((v[0], v[1]), (0.0, 1.0));
         assert!(v[3 * 3 + 1].is_nan());
     }
 
     #[test]
-    fn images_of_different_sizes_are_refused() {
+    fn images_of_another_size_without_wcs_are_centered() {
         let a = gray(vec![0.0; 12], 4, 3, &[]);
-        let b = gray(vec![0.0; 6], 3, 2, &[]);
-        let err = compose([Some((p("a"), a)), Some((p("b"), b)), None], [None; 3]).unwrap_err();
-        assert!(err.contains("different sizes"), "{err}");
+        let values: Vec<f32> = (0..30).map(|i| i as f32).collect();
+        let b = gray(values, 6, 5, &[]);
+        let (img, comp) = compose([Some((p("a"), a)), Some((p("b"), b)), None], [None; 3]).unwrap();
+        assert_eq!((img.width, img.height), (4, 3));
+        let PixelData::F32(v) = &img.data else {
+            panic!()
+        };
+        // 基準の (0, 0) には、6 x 5 の画像の (1, 1) が重なる。
+        assert_eq!(v[1], 7.0);
+        assert_eq!(
+            comp.channels[1].as_ref().unwrap().aligned,
+            Aligned::Centered
+        );
+    }
+
+    #[test]
+    fn images_with_wcs_are_turned_and_scaled_onto_the_reference() {
+        let values: Vec<f32> = (0..12).map(|i| i as f32).collect();
+        let r = gray(values, 4, 3, &WCS);
+        // 90 度回して、画素を半分の大きさにした 8 x 6 の画像。
+        let turned = [
+            ("NAXIS1", "6"),
+            ("NAXIS2", "8"),
+            ("CTYPE1", "RA---TAN"),
+            ("CTYPE2", "DEC--TAN"),
+            ("CRPIX1", "3.5"),
+            ("CRPIX2", "4.5"),
+            ("CRVAL1", "83.8"),
+            ("CRVAL2", "-5.4"),
+            ("CDELT1", "-0.005"),
+            ("CDELT2", "0.005"),
+            ("CROTA2", "90.0"),
+        ];
+        let g = gray(vec![1.0; 48], 6, 8, &turned);
+        let (_, comp) = compose([Some((p("r"), r)), Some((p("g"), g)), None], [None; 3]).unwrap();
+        let g = comp.channels[1].as_ref().unwrap();
+        assert_eq!(g.aligned, Aligned::Wcs);
+        assert!(
+            (g.placement.scale() - 2.0).abs() < 1e-3,
+            "{:?}",
+            g.placement
+        );
+        assert!(
+            (g.placement.rotation().abs() - 90.0).abs() < 0.1,
+            "{:?}",
+            g.placement
+        );
+    }
+
+    #[test]
+    fn rotation_is_clockwise_on_the_screen() {
+        // 基準の右向きが、この画像では下向き（画面で時計回りに 90 度）。
+        let p = Placement([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0]]);
+        assert!((p.rotation() - 90.0).abs() < 1e-9);
+        assert!((p.scale() - 1.0).abs() < 1e-9);
     }
 }
