@@ -44,6 +44,7 @@ impl VwApp {
                     .iter()
                     .map(|p| p.name.as_str())
                     .collect(),
+                color_rules: &self.color_rules,
             })
         });
         let commands = self.pipeline.ui(ui, lang, target);
@@ -67,6 +68,14 @@ impl VwApp {
                 }
                 Command::ToggleCalibration => {
                     self.toggle_calibration(self.active);
+                    continue;
+                }
+                Command::ColorMap(pick) => {
+                    self.set_color_pick(self.active, pick);
+                    continue;
+                }
+                Command::Window(window) => {
+                    self.set_slot_window(self.active, window);
                     continue;
                 }
                 Command::Closed => {
@@ -508,7 +517,7 @@ impl VwApp {
     pub(super) fn start_fullscreen(&mut self, ctx: &egui::Context, root: PathBuf) {
         self.stop_playback();
         self.next_id += 1;
-        let (show, problems) = crate::fullscreen::Show::start(
+        let (mut show, problems) = crate::fullscreen::Show::start(
             root.clone(),
             &self.settings().fullscreen,
             self.loader.registry(),
@@ -520,6 +529,10 @@ impl VwApp {
         }
         self.log
             .info(format!("Fullscreen slideshow: {}", root.display()));
+        show.look = Some(crate::colormap::Look {
+            rules: self.color_rules.clone(),
+            choice: Default::default(),
+        });
         self.fullscreen = Some(show);
         self.last_fullscreen_root = Some(root);
         self.show_fullscreen_setup = false;

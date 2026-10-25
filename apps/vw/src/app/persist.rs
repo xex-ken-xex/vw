@@ -30,6 +30,7 @@ impl VwApp {
         self.tree.set_order(self.settings().tree.order());
         self.apply_probe_extensions();
         self.apply_fits_options();
+        self.apply_color_rules();
         self.apply_texture_options();
         self.apply_archive_dir();
         self.apply_image_size_limit();
@@ -90,6 +91,36 @@ impl VwApp {
         self.reload_fits_slots();
     }
 
+    /// 画素の変換の設定（色の表の段）が変わったら、表示中の灰色の画像を読み直す。
+    pub(super) fn apply_color_rules(&mut self) {
+        if self.settings().pipeline == self.color_settings {
+            return;
+        }
+        self.color_settings = self.settings().pipeline.clone();
+        self.color_rules = Arc::new(crate::colormap::Rules::new(&self.color_settings));
+        let gray: Vec<usize> = (0..self.slots.len())
+            .filter(|&i| {
+                self.slots[i]
+                    .shown
+                    .as_ref()
+                    .is_some_and(|d| d.info.look.is_some())
+            })
+            .collect();
+        for index in gray {
+            self.reload_slot(index);
+        }
+    }
+
+    /// スロットの表示中の画像を、同じ大きさのまま読み直す（色の表や黒と白を変えたとき）。
+    pub(super) fn reload_slot(&mut self, index: usize) {
+        let Some(shown) = &self.slots[index].shown else {
+            return;
+        };
+        let path = shown.path.clone();
+        let full = self.cell_needs_full() || shown.full.is_some();
+        self.start_load(index, path, full);
+    }
+
     /// 表示中の FITS を読み直す。
     pub(super) fn reload_fits_slots(&mut self) {
         let full = self.cell_needs_full();
@@ -143,6 +174,7 @@ impl VwApp {
                 self.tree.set_order(self.settings().tree.order());
                 self.apply_probe_extensions();
                 self.apply_fits_options();
+                self.apply_color_rules();
                 self.apply_texture_options();
                 self.apply_archive_dir();
                 self.apply_image_size_limit();

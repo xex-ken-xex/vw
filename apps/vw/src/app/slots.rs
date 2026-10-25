@@ -485,7 +485,7 @@ impl VwApp {
                 shown.full = None;
             }
             if plan.request.contains(&s.id) {
-                request_full(&self.loader, &mut self.next_id, s);
+                request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
             }
         }
     }
@@ -514,6 +514,43 @@ impl VwApp {
         ));
         let full = self.cell_needs_full();
         self.start_load(index, path, full);
+    }
+
+    /// スロット `index` の色の表を `pick` にする。
+    pub(super) fn set_color_pick(&mut self, index: usize, pick: crate::colormap::Pick) {
+        let slot = &mut self.slots[index];
+        if slot.color.pick == pick {
+            return;
+        }
+        slot.color.pick = pick;
+        self.reload_slot(index);
+    }
+
+    /// スロット `index` の色の表を、メニューの並びで次のものにする。
+    pub(super) fn next_color_map(&mut self, index: usize) {
+        let Some(applied) = self.slots[index]
+            .shown
+            .as_ref()
+            .and_then(|s| s.info.look.as_ref())
+        else {
+            return;
+        };
+        let next = self.color_rules.next_after(applied.palette_name());
+        if let Some(name) = next.map(str::to_owned) {
+            self.log
+                .info(format!("Color map: {}", vw_core::palette::title(&name)));
+            self.set_color_pick(index, crate::colormap::Pick::Palette(name));
+        }
+    }
+
+    /// スロット `index` の黒と白の値をゲージで変えた値にする。`None` はファイルの値に戻す。
+    pub(super) fn set_slot_window(&mut self, index: usize, window: Option<(f32, f32)>) {
+        let slot = &mut self.slots[index];
+        if slot.color.window == window {
+            return;
+        }
+        slot.color.window = window;
+        self.reload_slot(index);
     }
 
     /// スロット `index` のライトのフォルダで、`role` のマスターを `file` に替える（`None` は自動）。
@@ -552,7 +589,7 @@ impl VwApp {
         if let Some((request, _)) = s.full_request.take() {
             self.loader.cancel(request);
         }
-        request_full(&self.loader, &mut self.next_id, s);
+        request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
     }
 
     /// スロットをグリッドに並べて描く。
@@ -665,6 +702,11 @@ impl VwApp {
                     people: &people,
                     ai_ready,
                     colors,
+                    gauge: self.show_gauge.then_some(crate::viewer::Gauge {
+                        side: self.color_settings.gauge_side,
+                        on_gray: self.color_settings.gauge_on_gray,
+                    }),
+                    color_rules: &self.color_rules,
                 },
             );
             cells.push((rect, i));
@@ -743,6 +785,12 @@ impl VwApp {
             if resp.toggle_calibration {
                 self.toggle_calibration(i);
             }
+            if let Some(pick) = resp.color_pick {
+                self.set_color_pick(i, pick);
+            }
+            if let Some(window) = resp.window {
+                self.set_slot_window(i, window);
+            }
             if resp.close {
                 close = Some(i);
             }
@@ -793,6 +841,8 @@ impl VwApp {
                         people: &[],
                         ai_ready: false,
                         colors,
+                        gauge: None,
+                        color_rules: &self.color_rules,
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));

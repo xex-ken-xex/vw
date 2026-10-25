@@ -138,6 +138,63 @@ pub fn file_params(g: &Gray, image: &VwImage, decoded: &Decoded) -> Params {
     }
 }
 
+/// 黒と白をスロットのゲージで `window`（画素の値の単位）に変えたときの値の組。
+/// 中心と幅は物理量で書き、ファイルの VOI LUT Function が LINEAR ならそのまま LINEAR で、
+/// それ以外は LINEAR_EXACT で表す（どちらも黒から白まで直線で、標準の表示と同じになる）。
+pub fn with_window(file: Params, image: &VwImage, decoded: &Decoded, window: (f32, f32)) -> Params {
+    let (a, b) = modality_window(image, decoded, window);
+    let (lo, hi) = (a.min(b), a.max(b));
+    let function = match file.function {
+        VoiFunction::Linear => VoiFunction::Linear,
+        _ => VoiFunction::LinearExact,
+    };
+    let (center, width) = match function {
+        VoiFunction::Linear => (f64::midpoint(lo, hi) + 0.5, hi - lo + 1.0),
+        _ => (f64::midpoint(lo, hi), hi - lo),
+    };
+    Params {
+        center,
+        width,
+        function,
+        ..file
+    }
+}
+
+/// [`with_window`] の逆。値の組の中心と幅を、ゲージの黒と白（画素の値の単位）にする。
+pub fn pixel_window(p: &Params, image: &VwImage, decoded: &Decoded) -> (f32, f32) {
+    let (lo, hi) = match p.function {
+        VoiFunction::Linear => {
+            let half = (p.width - 1.0) / 2.0;
+            (p.center - 0.5 - half, p.center - 0.5 + half)
+        }
+        _ => (p.center - p.width / 2.0, p.center + p.width / 2.0),
+    };
+    let (a, b) = match &image.data {
+        PixelData::F32(_) if decoded.negated => (-hi, -lo),
+        PixelData::F32(_) => (lo, hi),
+        _ if decoded.slope == 0.0 => (lo, hi),
+        _ => (
+            (lo - decoded.intercept) / decoded.slope,
+            (hi - decoded.intercept) / decoded.slope,
+        ),
+    };
+    (a.min(b) as f32, a.max(b) as f32)
+}
+
+/// 画素の値の単位の黒と白を、物理量にする。MONOCHROME1 の画素は符号を反転して持っているので、
+/// 黒と白も入れ替わる（反転は Presentation の段が戻す）。
+fn modality_window(image: &VwImage, decoded: &Decoded, (lo, hi): (f32, f32)) -> (f64, f64) {
+    let (lo, hi) = (f64::from(lo), f64::from(hi));
+    match &image.data {
+        PixelData::F32(_) if decoded.negated => (-hi, -lo),
+        PixelData::F32(_) => (lo, hi),
+        _ => (
+            lo * decoded.slope + decoded.intercept,
+            hi * decoded.slope + decoded.intercept,
+        ),
+    }
+}
+
 /// ウィンドウがないときに vw-core が当てる範囲を、物理量で表したもの。
 fn full_range(image: &VwImage, decoded: &Decoded, g: &Gray) -> (f64, f64) {
     match &image.data {
@@ -596,6 +653,75 @@ mod tests {
         );
         let mono1 = plain().monochrome1().window(1000.0, 3000.0);
         assert_eq!(file_values_match(&mono1.bytes()), Ok(()));
+    }
+
+    fn slot_window_matches(bytes: &[u8], window: (f32, f32)) -> Result<(), Mismatch> {
+        let (mut image, g) = synth_image(bytes);
+        image.window = Some(window);
+        let decoded = Decoded::of(&g);
+        let file = file_params(&g, &image, &decoded);
+        let p = with_window(file, &image, &decoded, window);
+        check_standard(
+            &float_of_params(&image, &decoded, &p),
+            &standard_display(&image),
+        )
+    }
+
+    #[test]
+    fn black_and_white_changed_in_the_slot_reproduce_the_slot_display() {
+        use vw_dicom::synth::{Synth, CT_IMAGE};
+        let ct = || {
+            Synth::ct(16, 16)
+                .pixels_i16(&ramp_i16(256, -100, 9))
+                .rescale(1.0, -1024.0)
+        };
+        assert_eq!(
+            slot_window_matches(&ct().window(40.0, 400.0).bytes(), (-1000.0, -200.0)),
+            Ok(())
+        );
+        assert_eq!(
+            slot_window_matches(
+                &ct().window(40.0, 400.0).voi_function("SIGMOID").bytes(),
+                (-900.0, 300.0)
+            ),
+            Ok(())
+        );
+        let unsigned: Vec<u16> = (0..256).map(|i| i * 16).collect();
+        let plain = || Synth::new(CT_IMAGE, 16, 16).pixels_u16(&unsigned, 12);
+        assert_eq!(
+            slot_window_matches(&plain().bytes(), (500.0, 3000.0)),
+            Ok(())
+        );
+        let mono1 = plain().monochrome1().window(1000.0, 3000.0);
+        let (image, _) = synth_image(&mono1.bytes());
+        let negated = match &image.data {
+            PixelData::F32(v) => v.iter().copied().fold(f32::MAX, f32::min),
+            _ => 0.0,
+        };
+        assert_eq!(
+            slot_window_matches(&mono1.bytes(), (negated, negated + 2000.0)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn slot_black_and_white_go_through_the_window_center_and_width_and_back() {
+        let (image, g) = synth_image(
+            &vw_dicom::synth::Synth::ct(16, 16)
+                .pixels_i16(&ramp_i16(256, -100, 9))
+                .rescale(1.0, -1024.0)
+                .window(40.0, 400.0)
+                .bytes(),
+        );
+        let decoded = Decoded::of(&g);
+        let file = file_params(&g, &image, &decoded);
+        assert_eq!(pixel_window(&file, &image, &decoded), image.window.unwrap());
+        let p = with_window(file, &image, &decoded, (-160.0, 239.0));
+        assert_eq!(
+            (p.center, p.width, p.function),
+            (40.0, 400.0, VoiFunction::Linear)
+        );
+        assert_eq!(pixel_window(&p, &image, &decoded), (-160.0, 239.0));
     }
 
     #[test]

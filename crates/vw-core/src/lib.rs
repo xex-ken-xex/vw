@@ -17,8 +17,11 @@ pub mod display;
 pub mod exif;
 pub mod image;
 pub mod limits;
+pub mod palette;
+mod palette_tables;
 pub mod plugin;
 
 pub use display::{DisplayImage, DisplayParams};
 pub use image::{ColorModel, Curve, Metadata, PixelData, VwImage};
+pub use palette::Palette;
 pub use plugin::{DecodeError, DecoderPlugin, ProbeExtensions, Registry};

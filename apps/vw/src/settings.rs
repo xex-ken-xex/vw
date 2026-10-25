@@ -804,6 +804,210 @@ impl FitsCurve {
     }
 }
 
+/// 色の表のゲージを出す場所（スロットの中の端）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GaugeSide {
+    #[default]
+    Right,
+    Top,
+    Bottom,
+}
+
+impl GaugeSide {
+    pub const ALL: [GaugeSide; 3] = [GaugeSide::Right, GaugeSide::Top, GaugeSide::Bottom];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            GaugeSide::Right => "Right",
+            GaugeSide::Top => "Top",
+            GaugeSide::Bottom => "Bottom",
+        }
+    }
+}
+
+/// 1 つの種類の画像に、色の表の段を初めから入れるかと、その色。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ColorNode {
+    pub color_node: bool,
+    /// [`vw_core::palette::BUILTIN`] の名前か、[`PipelineSettings::palettes`] の名前。
+    pub palette: String,
+}
+
+impl ColorNode {
+    fn new(color_node: bool, palette: &str) -> Self {
+        Self {
+            color_node,
+            palette: palette.to_owned(),
+        }
+    }
+
+    /// `[section]` の 2 項目。表の名前は、組み込みか `custom` にあるものだけを受け付ける。
+    fn read(r: &mut Reader<'_>, section: &'static str, d: &Self, custom: &[CustomPalette]) -> Self {
+        let mut r = r.at(section);
+        let known = |name: &String| {
+            vw_core::palette::BUILTIN.contains(&name.as_str())
+                || custom.iter().any(|c| &c.name == name)
+        };
+        Self {
+            color_node: r.get("color_node").unwrap_or(d.color_node),
+            palette: r
+                .get_valid("palette", known, "must be a built-in or custom color map")
+                .unwrap_or_else(|| d.palette.clone()),
+        }
+    }
+}
+
+/// DICOM の画像。PT はほかと既定が違うので分けて持つ。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DicomColorNodes {
+    pub color_node: bool,
+    pub palette: String,
+    /// TOML では表になるので、値の項目より後に置く。
+    pub pt: ColorNode,
+}
+
+/// 設定で足した色の表。色の点は「位置 #rrggbb」（[`vw_core::palette::parse_stop`]）。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CustomPalette {
+    pub name: String,
+    pub colors: Vec<String>,
+}
+
+impl CustomPalette {
+    /// 設定画面での 1 行の区切り。色の区切りにカンマを使わないのは、位置の小数点をカンマで書く人がいるため。
+    const NAME_END: char = '=';
+    const COLOR_SEPARATOR: char = ';';
+
+    pub fn palette(&self) -> Result<vw_core::Palette, String> {
+        if self.name.trim().is_empty() {
+            return Err("name is empty".to_owned());
+        }
+        if vw_core::palette::BUILTIN.contains(&self.name.as_str()) {
+            return Err("name is a built-in color map".to_owned());
+        }
+        let stops = self
+            .colors
+            .iter()
+            .map(|c| vw_core::palette::parse_stop(c))
+            .collect::<Result<Vec<_>, _>>()?;
+        vw_core::Palette::from_stops(&self.name, &stops)
+    }
+
+    /// `name = 0 #000000; 1 #ffffff` の形の 1 行を読む。
+    pub fn parse_line(line: &str) -> Option<Self> {
+        let (name, colors) = line.split_once(Self::NAME_END)?;
+        let custom = Self {
+            name: name.trim().to_owned(),
+            colors: colors
+                .split(Self::COLOR_SEPARATOR)
+                .map(|c| c.trim().to_owned())
+                .filter(|c| !c.is_empty())
+                .collect(),
+        };
+        custom.palette().is_ok().then_some(custom)
+    }
+
+    pub fn to_line(&self) -> String {
+        let sep = format!("{} ", Self::COLOR_SEPARATOR);
+        format!(
+            "{} {} {}",
+            self.name,
+            Self::NAME_END,
+            self.colors.join(&sep)
+        )
+    }
+}
+
+/// 画素の変換（`[pipeline]`）。どの種類の画像に、どの段を初めから入れるか。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PipelineSettings {
+    /// 種類ごとの `color_node` に従って、色の表の段を初めから入れる。外すと、どの画像も
+    /// スロットで選ぶまで灰色のまま。
+    pub color_node: bool,
+    pub gauge_side: GaugeSide,
+    /// 色の表を当てていない灰色の画像にもゲージを出す。
+    pub gauge_on_gray: bool,
+    /// TOML では表になるので、値の項目より後に置く。
+    pub fits: ColorNode,
+    pub dicom: DicomColorNodes,
+    /// ほかの形式の灰色の画像（16bit の PNG や TIFF など）。
+    pub gray: ColorNode,
+    pub palettes: Vec<CustomPalette>,
+}
+
+impl Default for PipelineSettings {
+    fn default() -> Self {
+        Self {
+            color_node: true,
+            gauge_side: GaugeSide::Right,
+            gauge_on_gray: false,
+            fits: ColorNode::new(true, "inferno"),
+            dicom: DicomColorNodes {
+                color_node: false,
+                palette: vw_core::palette::GRAY.to_owned(),
+                pt: ColorNode::new(true, "hot_iron"),
+            },
+            gray: ColorNode::new(false, vw_core::palette::GRAY),
+            palettes: Vec::new(),
+        }
+    }
+}
+
+impl PipelineSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let palettes = {
+            let mut s = r.at("pipeline");
+            match s.get::<Vec<CustomPalette>>("palettes") {
+                None => d.palettes.clone(),
+                Some(list) => {
+                    let mut names = std::collections::HashSet::new();
+                    list.into_iter()
+                        .filter(|c| match c.palette() {
+                            Err(e) => {
+                                s.problem("palettes", format!("{:?}: {e} (ignored)", c.name));
+                                false
+                            }
+                            Ok(_) if !names.insert(c.name.clone()) => {
+                                s.problem(
+                                    "palettes",
+                                    format!("{:?}: same name twice (ignored)", c.name),
+                                );
+                                false
+                            }
+                            Ok(_) => true,
+                        })
+                        .collect()
+                }
+            }
+        };
+        let (color_node, gauge_side, gauge_on_gray) = {
+            let mut s = r.at("pipeline");
+            (
+                s.get("color_node").unwrap_or(d.color_node),
+                s.get("gauge_side").unwrap_or(d.gauge_side),
+                s.get("gauge_on_gray").unwrap_or(d.gauge_on_gray),
+            )
+        };
+        let dicom_base = ColorNode::new(d.dicom.color_node, &d.dicom.palette);
+        let dicom = ColorNode::read(r, "pipeline.dicom", &dicom_base, &palettes);
+        Self {
+            color_node,
+            gauge_side,
+            gauge_on_gray,
+            fits: ColorNode::read(r, "pipeline.fits", &d.fits, &palettes),
+            dicom: DicomColorNodes {
+                color_node: dicom.color_node,
+                palette: dicom.palette,
+                pt: ColorNode::read(r, "pipeline.dicom.pt", &d.dicom.pt, &palettes),
+            },
+            gray: ColorNode::read(r, "pipeline.gray", &d.gray, &palettes),
+            palettes,
+        }
+    }
+}
+
 /// 天体の画像（FITS）の表示。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Fits {
@@ -1550,6 +1754,7 @@ pub struct Settings {
     pub labels: Labels,
     pub dicom: Dicom,
     pub fits: Fits,
+    pub pipeline: PipelineSettings,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
@@ -1578,6 +1783,7 @@ impl Settings {
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
         let fits = Fits::read(&mut r);
+        let pipeline = PipelineSettings::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
@@ -1607,6 +1813,7 @@ impl Settings {
                 labels,
                 dicom,
                 fits,
+                pipeline,
                 dicom_send,
                 dataset,
                 fullscreen,
@@ -1988,6 +2195,57 @@ mod tests {
         s.dataset.search_groups.clear();
         let (back, _) = Settings::from_toml(&s.to_toml()).unwrap();
         assert!(back.dataset.search_groups.is_empty());
+    }
+
+    #[test]
+    fn pipeline_settings_are_written_and_read_back_with_custom_color_maps() {
+        let mut s = Settings::default();
+        s.pipeline.palettes.push(CustomPalette {
+            name: "Ice".into(),
+            colors: vec!["0 #000000".into(), "1 #80c0ff".into()],
+        });
+        s.pipeline.dicom.pt.palette = "Ice".into();
+        s.pipeline.gauge_side = GaugeSide::Bottom;
+        s.pipeline.fits.color_node = false;
+        let text = s.to_toml();
+        assert!(text.contains("[pipeline.dicom.pt]"), "{text}");
+        let (back, problems) = Settings::from_toml(&text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.pipeline, s.pipeline);
+    }
+
+    #[test]
+    fn unknown_color_maps_and_broken_custom_ones_fall_back_one_by_one() {
+        let text = r#"
+            [pipeline.fits]
+            palette = "nonexistent"
+            [pipeline.dicom.pt]
+            palette = "viridis"
+            [[pipeline.palettes]]
+            name = "bad"
+            colors = ["0 #000000"]
+            [[pipeline.palettes]]
+            name = "inferno"
+            colors = ["0 #000000", "1 #ffffff"]
+        "#;
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.pipeline.fits.palette, "inferno");
+        assert_eq!(s.pipeline.dicom.pt.palette, "viridis");
+        assert!(s.pipeline.palettes.is_empty());
+        assert_eq!(problems.len(), 3, "{problems:?}");
+    }
+
+    #[test]
+    fn custom_color_map_line_is_a_name_and_stops() {
+        let c = CustomPalette::parse_line("Ice = 0 #000000; 1 #80c0ff").unwrap();
+        assert_eq!(c.name, "Ice");
+        assert_eq!(c.colors, ["0 #000000", "1 #80c0ff"]);
+        assert_eq!(CustomPalette::parse_line(&c.to_line()), Some(c));
+        assert_eq!(CustomPalette::parse_line("Ice = 0 #000000"), None);
+        assert_eq!(
+            CustomPalette::parse_line("gray = 0 #000000; 1 #ffffff"),
+            None
+        );
     }
 
     #[test]

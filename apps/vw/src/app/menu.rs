@@ -105,7 +105,7 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 6] = [
+                let groups: [&[Action]; 7] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -116,6 +116,7 @@ impl VwApp {
                         Action::ZoomOut,
                     ],
                     &[Action::DevelopRaw, Action::ToggleCalibration],
+                    &[Action::NextColorMap, Action::ToggleColorGauge],
                     &[Action::ReadQrCodes],
                 ];
                 for (i, group) in groups.into_iter().enumerate() {
@@ -123,9 +124,14 @@ impl VwApp {
                         ui.separator();
                     }
                     for &action in group {
-                        if self.menu_item(ui, action, None) {
+                        let checked =
+                            (action == Action::ToggleColorGauge).then_some(self.show_gauge);
+                        if self.menu_item(ui, action, checked) {
                             chosen = Some(action);
                         }
+                    }
+                    if group.contains(&Action::ToggleColorGauge) {
+                        self.color_map_menu(ui);
                     }
                 }
             });
@@ -316,6 +322,30 @@ impl VwApp {
             .clicked()
     }
 
+    /// 「画像」メニューの、アクティブなスロットの色の表を選ぶ小メニュー。
+    fn color_map_menu(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang();
+        let index = self.active;
+        let applied = self.slots[index]
+            .shown
+            .as_ref()
+            .and_then(|s| s.info.look.as_ref());
+        let enabled = applied.is_some();
+        let mut pick = None;
+        ui.add_enabled_ui(enabled, |ui| {
+            vw_ui::menu::submenu(ui, tr(lang, "Color map"), |ui| {
+                if let Some(a) = applied {
+                    pick = crate::colormap_ui::pick_menu(ui, lang, a, &self.color_rules);
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(tr(lang, "Only for gray images"));
+        if let Some(p) = pick {
+            self.set_color_pick(index, p);
+        }
+    }
+
     /// 左端の、アイコンが縦に並ぶ固定幅の列。
     pub(super) fn tool_column(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
@@ -368,6 +398,13 @@ impl VwApp {
             {
                 let next = self.filter.next(&self.settings().labels.tags);
                 self.set_filter(ui.ctx(), next);
+            }
+            let tip = self.with_key(tr(lang, "Color scale gauge"), Action::ToggleColorGauge);
+            if tool_button(ui, self.show_gauge, true, big(icon::GRADIENT))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                self.show_gauge ^= true;
             }
             ui.separator();
             let tip = self.with_key(tr(lang, "New slot"), Action::NewSlot);

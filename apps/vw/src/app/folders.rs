@@ -41,6 +41,7 @@ impl VwApp {
             full,
             develop: false,
             fit_side: None,
+            look: Some(look_of(&self.color_rules, slot)),
         });
     }
 

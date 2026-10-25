@@ -57,6 +57,9 @@ impl Stage {
     }
 }
 
+/// 表示のための黒と白を決める段の名前。計測の道はこの段より前で分かれる。
+pub const BLACK_AND_WHITE: &str = "Black and white";
+
 /// `info` の形式の段。先頭は格納値、末尾の「表示」は含まない。
 pub fn stages(info: &ImageInfo) -> Vec<Stage> {
     let m = &info.metadata;
@@ -247,7 +250,7 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
             if get("ROWORDER").is_some_and(|v| v.trim() == "BOTTOM-UP") {
                 out.push(Stage::new("Orientation").note("Rows are turned upside down."));
             }
-            out.push(Stage::new("Black and white").note(
+            out.push(Stage::new(BLACK_AND_WHITE).note(
                 "Chosen from the distribution of the values (Astronomy images (FITS) in the settings).",
             ));
         }
@@ -426,6 +429,7 @@ mod tests {
             read: Default::default(),
             decode: Default::default(),
             convert: Default::default(),
+            look: None,
         }
     }
 

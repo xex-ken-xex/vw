@@ -97,6 +97,7 @@ impl VwApp {
         let full = self.cell_needs_full();
         // 先読みには、表示中の画像のフル解像度と同じ上限の半分まで使う。
         let budget = self.settings().viewer.full_image_limit_bytes() / 2;
+        let look = look_of(&self.color_rules, &self.slots[index]);
         let pb = self.playback.as_mut().expect("checked above");
         let step = pb.clock.advance(now);
         let mut show = None;
@@ -141,6 +142,7 @@ impl VwApp {
                 full,
                 develop: false,
                 fit_side: None,
+                look: Some(look.clone()),
             });
         }
         let finished = step.finished && pb.clock.shown();
