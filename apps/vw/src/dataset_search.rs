@@ -5,9 +5,13 @@
 //! 持つ組の番号をたどる。ファイルを 1 つずつ開き直さないので、数千ファイルのデータセットでも
 //! 入力のたびに結果を出し直せる。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
+use rayon::prelude::*;
 
 use crate::catalog::{self, Catalog};
 
@@ -23,7 +27,101 @@ pub struct Progress {
 /// 見つけたデータセット 1 つ。
 pub struct Entry {
     pub dir: PathBuf,
-    pub catalog: Catalog,
+    pub catalog: Arc<Catalog>,
+    /// メタデータの組を小文字にしたもの。入力のたびに全部の値を小文字にし直さないため。
+    lower: Arc<Lower>,
+}
+
+impl Entry {
+    pub fn new(dir: PathBuf, catalog: Catalog) -> Self {
+        let lower = Arc::new(Lower::of(&catalog));
+        Self {
+            dir,
+            catalog: Arc::new(catalog),
+            lower,
+        }
+    }
+}
+
+/// [`Catalog::meta`] と同じ並びの、小文字の種類・キー・値。キーには DICOM のタグの名前も入れる
+/// （番号でも名前でも指せるように）。
+#[derive(Default)]
+struct Lower {
+    kinds: Vec<String>,
+    keys: Vec<(String, Option<String>)>,
+    values: Vec<String>,
+    /// 種類とキーの組（元の綴り、重複なし）。候補の一覧を作るたびに全部の組をたどらないため。
+    pairs: Vec<(String, String)>,
+}
+
+impl Lower {
+    fn of(c: &Catalog) -> Self {
+        let mut l = Lower::default();
+        for (kind, key, value) in &c.meta {
+            l.kinds.push(kind.to_lowercase());
+            l.keys.push((
+                key.to_lowercase(),
+                vw_dicom::tag_name(key).map(|n| n.to_lowercase()),
+            ));
+            l.values.push(value.to_lowercase());
+        }
+        let pairs: BTreeSet<(&str, &str)> = c
+            .meta
+            .iter()
+            .map(|(k, key, _)| (k.as_str(), key.as_str()))
+            .collect();
+        l.pairs = pairs
+            .into_iter()
+            .map(|(k, key)| (k.to_owned(), key.to_owned()))
+            .collect();
+        l
+    }
+}
+
+/// 読んだカタログ。ファイルの更新時刻と大きさが同じなら、画面を開き直しても読み直さない。
+/// 数十 MB のカタログでは、フォルダをたどるのと同じくらい JSON の読み込みに時間がかかるため。
+struct Loaded {
+    modified: SystemTime,
+    len: u64,
+    catalog: Arc<Catalog>,
+    lower: Arc<Lower>,
+}
+
+static LOADED: Mutex<Option<HashMap<PathBuf, Loaded>>> = Mutex::new(None);
+
+/// `dir` のカタログを、前に読んだものが変わっていなければそれを使って読む。`force` なら必ず読み直す
+/// （vw が書き換えた直後。更新時刻の細かさが粗いドライブでは、同じ大きさの書き換えを見分けられないため）。
+fn load_cached(dir: &Path, force: bool) -> Result<Entry, String> {
+    let path = catalog::path_in(dir);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (modified, len) = (meta.modified().ok(), meta.len());
+    let entry = |l: &Loaded| Entry {
+        dir: dir.to_path_buf(),
+        catalog: l.catalog.clone(),
+        lower: l.lower.clone(),
+    };
+    {
+        let cache = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(l) = cache.as_ref().and_then(|c| c.get(dir)).filter(|_| !force) {
+            if Some(l.modified) == modified && l.len == len {
+                return Ok(entry(l));
+            }
+        }
+    }
+    let fresh = Entry::new(dir.to_path_buf(), catalog::load(dir)?);
+    if let Some(modified) = modified {
+        let mut cache = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get_or_insert_with(HashMap::new).insert(
+            dir.to_path_buf(),
+            Loaded {
+                modified,
+                len,
+                catalog: fresh.catalog.clone(),
+                lower: fresh.lower.clone(),
+            },
+        );
+    }
+    Ok(fresh)
 }
 
 /// 見つけたデータセットの一覧と、入力の候補。
@@ -52,9 +150,7 @@ impl Index {
     /// 1 つのデータセットのフォルダ以下を探す。データセットのフォルダごとに別のスレッドで
     /// 探し、[`Index::merge`] でまとめるのに使う。
     pub fn walk_root(root: &Path, progress: &Progress) -> Self {
-        let mut index = Index::default();
-        index.walk(root, progress);
-        index
+        walk(root, progress)
     }
 
     /// フォルダごとに探した結果をまとめる。データセットのフォルダが入れ子になっていると
@@ -79,53 +175,17 @@ impl Index {
         index
     }
 
-    fn walk(&mut self, dir: &Path, progress: &Progress) {
-        progress.folders.fetch_add(1, Ordering::Relaxed);
-        if catalog::exists_in(dir) {
-            match catalog::load(dir) {
-                Ok(c) => {
-                    progress.found.fetch_add(1, Ordering::Relaxed);
-                    self.entries.push(Entry {
-                        dir: dir.to_path_buf(),
-                        catalog: c,
-                    })
-                }
-                Err(e) => self.problems.push(e),
-            }
-        }
-        let Ok(read) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in read.flatten() {
-            let bin = crate::tree::is_recycle_bin(&e.file_name().to_string_lossy());
-            if !bin && e.file_type().is_ok_and(|t| t.is_dir()) {
-                self.walk(&e.path(), progress);
-            }
-        }
-    }
-
     fn collect_keys(&mut self) {
-        let keys: BTreeSet<(String, String)> = self
-            .entries
-            .iter()
-            .flat_map(|e| {
-                e.catalog
-                    .meta
-                    .iter()
-                    .map(|(k, key, _)| (k.clone(), key.clone()))
-            })
-            .collect();
-        self.meta_keys = keys.into_iter().collect();
+        let keys: BTreeSet<&(String, String)> =
+            self.entries.iter().flat_map(|e| &e.lower.pairs).collect();
+        self.meta_keys = keys.into_iter().cloned().collect();
     }
 
     /// 1 つのデータセットを読み直す（更新や編集の後）。なくなっていれば外す。
     pub fn reload(&mut self, dir: &Path) {
         self.entries.retain(|e| e.dir != dir);
-        if let Ok(c) = catalog::load(dir) {
-            self.entries.push(Entry {
-                dir: dir.to_path_buf(),
-                catalog: c,
-            });
+        if let Ok(e) = load_cached(dir, true) {
+            self.entries.push(e);
             self.entries.sort_by(|a, b| a.dir.cmp(&b.dir));
         }
         self.collect_keys();
@@ -159,13 +219,20 @@ impl Index {
         let set: BTreeSet<&String> = self
             .entries
             .iter()
-            .flat_map(|e| &e.catalog.meta)
-            .filter(|(k, kk, v)| {
-                (kind.is_empty() || k.to_lowercase() == kind)
-                    && key_matches(kk, &key)
-                    && !v.is_empty()
+            .flat_map(|e| {
+                let (l, kind, key) = (&e.lower, &kind, &key);
+                e.catalog
+                    .meta
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(i, (_, _, v))| {
+                        let (k, name) = &l.keys[i];
+                        ((kind.is_empty() || l.kinds[i] == *kind)
+                            && (k == key || name.as_ref() == Some(key))
+                            && !v.is_empty())
+                        .then_some(v)
+                    })
             })
-            .map(|(_, _, v)| v)
             .collect();
         set.into_iter().cloned().collect()
     }
@@ -294,6 +361,15 @@ impl Matcher {
         })
     }
 
+    /// `lower` は `value` を小文字にしたもの（前もって作ってある）。
+    fn matches_lower(&self, value: &str, lower: &str) -> bool {
+        match self {
+            Matcher::Contains(s) => lower.contains(s),
+            Matcher::Equals(s) => lower.trim() == *s,
+            _ => self.matches(value),
+        }
+    }
+
     fn matches(&self, value: &str) -> bool {
         match self {
             Matcher::Contains(s) => value.to_lowercase().contains(s),
@@ -321,7 +397,7 @@ fn leading_number(value: &str) -> Option<f64> {
 
 /// データセットにかける条件。メタデータの条件はファイルの単位で数える。
 enum Check {
-    Dataset(Box<dyn Fn(&Catalog) -> bool>),
+    Dataset(Box<dyn Fn(&Catalog) -> bool + Send + Sync>),
     Meta {
         kind: String,
         key: String,
@@ -340,17 +416,59 @@ pub fn search(index: &Index, query: &Query) -> Result<Vec<Hit>, String> {
     for c in query.conditions.iter().filter(|c| !c.is_blank()) {
         checks.push(condition_check(c)?);
     }
-    let mut hits = Vec::new();
-    for (i, e) in index.entries.iter().enumerate() {
-        if let Some((files, narrowed)) = evaluate(&e.catalog, &checks) {
-            hits.push(Hit {
+    Ok(index
+        .entries
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let (files, narrowed) = evaluate(&e.catalog, &e.lower, &checks)?;
+            Some(Hit {
                 entry: i,
                 files,
                 narrowed,
-            });
+            })
+        })
+        .collect())
+}
+
+/// `dir` 以下を探す。サブフォルダは並列にたどる（ネットワークドライブでは、1 つずつ一覧を
+/// 待つより、いくつも同時に頼んだほうがずっと速いため）。カタログはフォルダの一覧の名前で
+/// 見つけ、フォルダごとにファイルがあるかを問い合わせ直さない。
+fn walk(dir: &Path, progress: &Progress) -> Index {
+    progress.folders.fetch_add(1, Ordering::Relaxed);
+    let mut index = Index::default();
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return index;
+    };
+    let mut subdirs = Vec::new();
+    let mut has_catalog = false;
+    for e in read.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let Ok(kind) = e.file_type() else {
+            continue;
+        };
+        if kind.is_dir() && !crate::tree::is_recycle_bin(&name) {
+            subdirs.push(e.path());
+        } else if !kind.is_dir() && name == catalog::FILE_NAME {
+            has_catalog = true;
         }
     }
-    Ok(hits)
+    if has_catalog {
+        match load_cached(dir, false) {
+            Ok(e) => {
+                progress.found.fetch_add(1, Ordering::Relaxed);
+                index.entries.push(e);
+            }
+            Err(e) => index.problems.push(e),
+        }
+    }
+    let parts: Vec<Index> = subdirs.par_iter().map(|d| walk(d, progress)).collect();
+    for p in parts {
+        index.entries.extend(p.entries);
+        index.problems.extend(p.problems);
+    }
+    index
 }
 
 /// 簡易検索の 1 語。
@@ -382,7 +500,7 @@ fn condition_check(c: &Condition) -> Result<Check, String> {
 
 /// 当たれば、条件に合うファイルの添字と、ファイルで絞り込んだかを返す。メタデータの条件が
 /// あれば、そのすべてに合うファイルだけ。
-fn evaluate(c: &Catalog, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
+fn evaluate(c: &Catalog, lower: &Lower, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
     let mut wanted: Vec<Vec<bool>> = Vec::new();
     for check in checks {
         match check {
@@ -398,7 +516,11 @@ fn evaluate(c: &Catalog, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
                     || c.tags.iter().any(|t| has(t))
                     || c.fields.values().any(|v| has(v));
                 if !in_dataset {
-                    let ok: Vec<bool> = c.meta.iter().map(|(_, _, v)| has(v)).collect();
+                    let ok: Vec<bool> = lower
+                        .values
+                        .iter()
+                        .map(|v| v.contains(needle.as_str()))
+                        .collect();
                     if !ok.iter().any(|&b| b) {
                         return None;
                     }
@@ -406,13 +528,12 @@ fn evaluate(c: &Catalog, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
                 }
             }
             Check::Meta { kind, key, matcher } => {
-                let ok: Vec<bool> = c
-                    .meta
-                    .iter()
-                    .map(|(k, kk, v)| {
-                        (kind.is_empty() || k.to_lowercase() == *kind)
-                            && (key.is_empty() || key_matches(kk, key))
-                            && matcher.matches(v)
+                let ok: Vec<bool> = (0..c.meta.len())
+                    .map(|i| {
+                        let (k, name) = &lower.keys[i];
+                        (kind.is_empty() || lower.kinds[i] == *kind)
+                            && (key.is_empty() || k == key || name.as_ref() == Some(key))
+                            && matcher.matches_lower(&c.meta[i].2, &lower.values[i])
                     })
                     .collect();
                 if !ok.iter().any(|&b| b) {
@@ -439,12 +560,6 @@ fn evaluate(c: &Catalog, checks: &[Check]) -> Option<(Vec<usize>, bool)> {
         .map(|(i, _)| i)
         .collect();
     (!files.is_empty()).then_some((files, true))
-}
-
-/// キーの一致。DICOM のタグは番号（`0010,0020`）のほか名前（`PatientID`）でも指せる。
-fn key_matches(key: &str, wanted: &str) -> bool {
-    key.to_lowercase() == wanted
-        || vw_dicom::tag_name(key).is_some_and(|n| n.to_lowercase() == wanted)
 }
 
 #[cfg(test)]
@@ -484,10 +599,7 @@ mod tests {
         let mut i = Index {
             entries: catalogs
                 .into_iter()
-                .map(|c| Entry {
-                    dir: PathBuf::from(format!("/d/{}", c.name)),
-                    catalog: c,
-                })
+                .map(|c| Entry::new(PathBuf::from(format!("/d/{}", c.name)), c))
                 .collect(),
             ..Index::default()
         };
@@ -797,5 +909,46 @@ mod tests {
         assert_eq!(i.tags(), ["a", "b"]);
         assert_eq!(i.field_names(&["Source".into()]), ["Source", "Other"]);
         assert_eq!(i.field_values()["Other"], ["x"]);
+    }
+
+    #[test]
+    fn reopening_reuses_unchanged_catalogs_and_rereads_changed_ones() {
+        let tmp = crate::test_util::TempDir::new();
+        let dir = tmp.mkdir("set");
+        let named = |name: &str| Catalog {
+            name: name.into(),
+            ..Catalog::default()
+        };
+        catalog::save(&dir, &named("first")).unwrap();
+        let roots = [tmp.path().to_path_buf()];
+        let a = Index::discover(&roots);
+        let b = Index::discover(&roots);
+        assert!(Arc::ptr_eq(&a.entries[0].catalog, &b.entries[0].catalog));
+        catalog::save(&dir, &named("second, longer")).unwrap();
+        let c = Index::discover(&roots);
+        assert_eq!(c.entries[0].catalog.name, "second, longer");
+    }
+
+    #[test]
+    fn reloading_after_an_edit_rereads_even_when_the_size_and_time_match() {
+        let tmp = crate::test_util::TempDir::new();
+        let dir = tmp.mkdir("set");
+        let named = |name: &str| Catalog {
+            name: name.into(),
+            ..Catalog::default()
+        };
+        catalog::save(&dir, &named("abc")).unwrap();
+        let mut index = Index::discover(&[tmp.path().to_path_buf()]);
+        let modified = std::fs::metadata(catalog::path_in(&dir))
+            .and_then(|m| m.modified())
+            .unwrap();
+        catalog::save(&dir, &named("abd")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(catalog::path_in(&dir))
+            .and_then(|f| f.set_modified(modified))
+            .unwrap();
+        index.reload(&dir);
+        assert_eq!(index.entries[0].catalog.name, "abd");
     }
 }
