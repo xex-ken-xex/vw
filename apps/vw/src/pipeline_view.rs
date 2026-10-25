@@ -741,6 +741,15 @@ impl PipelineView {
                         ui.close();
                     }
                 }
+                ui.menu_button(tr(lang, "Astronomy"), |ui| {
+                    for kind in nodes::Node::ASTRO_KINDS {
+                        if ui.button(tr(lang, nodes::Node::title(kind))).clicked() {
+                            self.add_node(kind);
+                            added = true;
+                            ui.close();
+                        }
+                    }
+                });
             });
         });
         if background.double_clicked() {
@@ -765,6 +774,7 @@ impl PipelineView {
                 let filter = self.add_filter.trim().to_lowercase();
                 let matching: Vec<&str> = nodes::Node::KINDS
                     .into_iter()
+                    .chain(nodes::Node::ASTRO_KINDS)
                     .filter(|k| {
                         let title = tr(lang, nodes::Node::title(k));
                         filter.is_empty()
@@ -1210,6 +1220,11 @@ impl PipelineView {
         info: &ImageInfo,
     ) -> bool {
         if let Node::Chain(i) = node {
+            if let Err((at, e)) = nodes::split_at_stretch(&self.chain) {
+                if at == i {
+                    ui.colored_label(ui.visuals().error_fg_color, tr_text(lang, &e));
+                }
+            }
             return match self.chain.get_mut(i) {
                 Some(n) => chain_body(ui, lang, n),
                 None => false,
@@ -2412,6 +2427,74 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
                 edited |= unit(ui, curve, -1.0, 1.0, 0.005);
                 ui.end_row();
             });
+        }
+        nodes::Node::Stretch => {
+            ui.label(tr(
+                lang,
+                "The black and white and the curve of the file stages are applied here.",
+            ));
+            ui.weak(tr(
+                lang,
+                "Nodes before this get the linear values before black and white cut them (FITS: the physical values; 8- and 16-bit images: 0..1 of the full range).",
+            ));
+        }
+        nodes::Node::Denoise {
+            strength,
+            threshold,
+        } => {
+            egui::Grid::new("denoise").num_columns(2).show(ui, |ui| {
+                for (j, s) in strength.iter_mut().enumerate() {
+                    ui.label(format!("{} {} px", tr(lang, "Detail"), 1 << j));
+                    edited |= unit(ui, s, 0.0, 1.0, 0.005);
+                    ui.end_row();
+                }
+                ui.label(tr(lang, "Threshold (× noise)"));
+                edited |= unit(ui, threshold, 0.0, 10.0, 0.01);
+                ui.end_row();
+            });
+            ui.weak(tr(
+                lang,
+                "Weakens the small details of each size that are below the threshold. Stars and edges above it stay.",
+            ));
+        }
+        nodes::Node::Sharpen { amount, radius } => {
+            egui::Grid::new("sharpen").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Amount"));
+                edited |= unit(ui, amount, 0.0, 5.0, 0.005);
+                ui.end_row();
+                ui.label(tr(lang, "Radius (px)"));
+                edited |= unit(ui, radius, 0.1, 20.0, 0.02);
+                ui.end_row();
+            });
+            ui.weak(tr(
+                lang,
+                "Unsharp mask. Noise gets stronger too, so put it after noise reduction.",
+            ));
+        }
+        nodes::Node::StarReduce {
+            amount,
+            size,
+            threshold,
+        } => {
+            egui::Grid::new("star_reduce")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label(tr(lang, "Amount"));
+                    edited |= unit(ui, amount, 0.0, 1.0, 0.005);
+                    ui.end_row();
+                    ui.label(tr(lang, "Size (px)"));
+                    edited |= ui
+                        .add(egui::DragValue::new(size).range(1..=8).speed(0.05))
+                        .changed();
+                    ui.end_row();
+                    ui.label(tr(lang, "Threshold (× noise)"));
+                    edited |= unit(ui, threshold, 0.5, 20.0, 0.02);
+                    ui.end_row();
+                });
+            ui.weak(tr(
+                lang,
+                "Finds stars from the small bright details and shrinks only them. A higher threshold finds fewer stars.",
+            ));
         }
         nodes::Node::Mix { matrix } => {
             ui.weak(tr(lang, "Output = matrix × (r, g, b)"));

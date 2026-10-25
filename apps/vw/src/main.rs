@@ -11,6 +11,7 @@ mod ai_models;
 mod ai_tags;
 mod app;
 mod archive;
+mod astro;
 mod autoload;
 mod background;
 mod catalog;

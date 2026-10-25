@@ -281,6 +281,101 @@ pub fn float_of_params(image: &VwImage, decoded: &Decoded, p: &Params) -> Float 
     Float::new(w, h, 1, data)
 }
 
+/// 鎖の伸縮ノードで当てる、表示のための黒と白と曲線。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stretch {
+    /// DICOM 以外の画像と、カラーの DICOM。チャンネルごとの黒と白（線形の値の単位）と曲線。
+    Display {
+        windows: [(f32, f32); 3],
+        curve: vw_core::Curve,
+    },
+    /// DICOM のグレースケール。物理量に VOI（と反転）を当てる。
+    Voi(Params),
+}
+
+impl Stretch {
+    /// 線形の値を表示の 0〜1 にする。
+    pub fn apply(&self, img: &mut Float) {
+        let n = img.channels;
+        match self {
+            Stretch::Display { windows, curve } => {
+                let shades =
+                    windows.map(|(lo, hi)| (lo, if hi > lo { 1.0 / (hi - lo) } else { 0.0 }));
+                for (i, v) in img.data.iter_mut().enumerate() {
+                    let (lo, scale) = shades[i % n];
+                    let t = ((*v - lo) * scale).clamp(0.0, 1.0);
+                    // NaN（合成で重ならない所など）は標準の表示と同じく黒。
+                    *v = if t.is_nan() { 0.0 } else { curve.apply(t) };
+                }
+            }
+            Stretch::Voi(p) => {
+                for v in &mut img.data {
+                    *v = unit_brightness(f64::from(*v), p) as f32;
+                }
+            }
+        }
+    }
+}
+
+/// 伸縮の前の線形の値と、それを表示の値にする伸縮。FITS と実数の画像はファイルの値のまま、
+/// ほかの 8・16bit の画像は全範囲を 0〜1 にした値（[`float_of_display`] と同じ黒と白と曲線を伸縮に持つ）。
+///
+/// 8・16bit を 0〜1 にそろえるのは、伸縮の前に置いたレベルや式のノードを、ビット深度の違う画像にも
+/// 同じ意味で当てられるようにするため。FITS の整数を割らないのは、物理量（BSCALE・BZERO を当てた値）の
+/// まま見せる約束だから。
+pub fn linear_of_display(image: &VwImage) -> (Float, Stretch) {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let samples = image.color.channels();
+    let channels = if samples >= 3 { 3 } else { 1 };
+    let fits = image.metadata.get(vw_fits::GROUP, "BITPIX").is_some();
+    let n = w * h;
+    let mut data = Vec::with_capacity(n * channels);
+    let mut push = |sample: &dyn Fn(usize) -> f32| {
+        for i in 0..n {
+            for c in 0..channels {
+                data.push(sample(i * samples + c));
+            }
+        }
+    };
+    let (full, scale) = match &image.data {
+        PixelData::U8(_) => ((0.0, 255.0), if fits { 1.0 } else { 1.0 / 255.0 }),
+        PixelData::U16(_) => {
+            let max = ((1u32 << image.significant_bits.clamp(1, 16)) - 1) as f32;
+            ((0.0, max), if fits { 1.0 } else { 1.0 / max })
+        }
+        PixelData::F32(v) => (
+            v.iter()
+                .filter(|x| x.is_finite())
+                .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x))),
+            1.0,
+        ),
+    };
+    match &image.data {
+        PixelData::U8(v) => push(&|i| f32::from(v[i]) * scale),
+        PixelData::U16(v) => push(&|i| f32::from(v[i]) * scale),
+        PixelData::F32(v) => push(&|i| v[i]),
+    }
+    let window = image.window.unwrap_or(full);
+    let windows = match image.channel_windows.filter(|_| samples >= 3) {
+        Some(w) => w,
+        None => [window; 3],
+    };
+    let stretch = Stretch::Display {
+        windows: windows.map(|(lo, hi)| (lo * scale, hi * scale)),
+        curve: image.curve,
+    };
+    (Float::new(w, h, channels, data), stretch)
+}
+
+/// DICOM のグレースケールの、伸縮の前の物理量（Modality LUT の後）と、`p` の VOI の伸縮。
+pub fn linear_of_params(image: &VwImage, decoded: &Decoded, p: &Params) -> (Float, Stretch) {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let data = (0..w * h)
+        .map(|i| (decoded.stored(&image.data, i) * p.slope + p.intercept) as f32)
+        .collect();
+    (Float::new(w, h, 1, data), Stretch::Voi(*p))
+}
+
 /// 標準の写し方（[`vw_core::display::to_display`] と同じ式、曲線も含む）で 0〜1 にした表示の値。
 /// DICOM 以外の画像と、カラーの DICOM に使う。U16 は有効ビットの全範囲、F32 は
 /// 画像の窓か最小〜最大を 0〜1 に写すので、8bit に落とす前の階調が残る。
@@ -352,6 +447,23 @@ pub fn standard_display(image: &VwImage) -> Vec<u8> {
         ..Default::default()
     };
     vw_core::display::to_display(image, &params).rgba
+}
+
+/// 幅 `width` の RGBA を [`Float::shrink`] と同じ大きさ（`factor` 画素おき）に間引く。
+/// アルファを合わせるのに使うだけなので、平均せずに左上の画素を取る。
+pub fn shrink_rgba(rgba: &[u8], width: usize, factor: usize) -> Vec<u8> {
+    if factor <= 1 || width == 0 {
+        return rgba.to_vec();
+    }
+    let height = rgba.len() / 4 / width;
+    let mut out = Vec::with_capacity(width.div_ceil(factor) * height.div_ceil(factor) * 4);
+    for y in (0..height).step_by(factor) {
+        for x in (0..width).step_by(factor) {
+            let i = (y * width + x) * 4;
+            out.extend_from_slice(&rgba[i..i + 4]);
+        }
+    }
+    out
 }
 
 /// `float` を丸めた表示と、標準の表示のアルファを合わせた画像。
@@ -757,6 +869,59 @@ mod tests {
 
     fn plain_matches(image: &VwImage) -> Result<(), Mismatch> {
         check_standard(&float_of_display(image), &standard_display(image))
+    }
+
+    fn stretched_matches(image: &VwImage) -> Result<(), Mismatch> {
+        let (mut linear, stretch) = linear_of_display(image);
+        stretch.apply(&mut linear);
+        check_standard(&linear, &standard_display(image))
+    }
+
+    #[test]
+    fn linear_values_stretched_reproduce_the_standard_display() {
+        use vw_core::ColorModel;
+        let gray8 =
+            VwImage::new(256, 1, ColorModel::Gray, PixelData::U8((0..=255).collect())).unwrap();
+        assert_eq!(stretched_matches(&gray8), Ok(()));
+        let rgb8: Vec<u8> = (0..768).map(|i| (i * 7 % 256) as u8).collect();
+        let rgb = VwImage::new(256, 1, ColorModel::Rgb, PixelData::U8(rgb8)).unwrap();
+        assert_eq!(stretched_matches(&rgb), Ok(()));
+        let mut img = VwImage::new(
+            4096,
+            1,
+            ColorModel::Gray,
+            PixelData::U16((0..4096).collect()),
+        )
+        .unwrap();
+        img.significant_bits = 12;
+        assert_eq!(stretched_matches(&img), Ok(()));
+        img.window = Some((100.0, 3000.0));
+        img.curve = vw_core::Curve::Asinh;
+        assert_eq!(stretched_matches(&img), Ok(()));
+        let values: Vec<f32> = (0..2000).map(|i| i as f32 * 0.37 - 100.0).collect();
+        let mut f = VwImage::new(2000, 1, ColorModel::Gray, PixelData::F32(values)).unwrap();
+        assert_eq!(stretched_matches(&f), Ok(()));
+        f.window = Some((-50.0, 300.0));
+        f.curve = vw_core::Curve::Log;
+        assert_eq!(stretched_matches(&f), Ok(()));
+    }
+
+    #[test]
+    fn linear_values_are_file_values_for_fits_and_0_to_1_for_other_integers() {
+        use vw_core::ColorModel;
+        let mut img = VwImage::new(2, 1, ColorModel::Gray, PixelData::U16(vec![0, 65535])).unwrap();
+        img.significant_bits = 16;
+        assert_eq!(linear_of_display(&img).0.data, [0.0, 1.0]);
+        img.metadata.push(vw_fits::GROUP, "BITPIX", "16");
+        let (linear, stretch) = linear_of_display(&img);
+        assert_eq!(linear.data, [0.0, 65535.0]);
+        assert_eq!(
+            stretch,
+            Stretch::Display {
+                windows: [(0.0, 65535.0); 3],
+                curve: vw_core::Curve::Linear
+            }
+        );
     }
 
     #[test]

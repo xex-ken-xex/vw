@@ -213,11 +213,7 @@ impl VwApp {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
                 palette: shown.info.look.as_ref().and_then(|a| a.palette.as_ref()),
-                edited: slot
-                    .derive
-                    .as_ref()
-                    .and_then(|d| d.ready_for(shown))
-                    .map(|r| &r.full),
+                edited: slot.derive.as_ref().and_then(|d| d.full_for(shown)),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
                 // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
@@ -262,11 +258,7 @@ impl VwApp {
                     .as_ref()
                     .and_then(|d| d.edit_for(&shown.path))
                     .map(|(p, _)| p),
-                derived: slot
-                    .derive
-                    .as_ref()
-                    .and_then(|d| d.ready_for(shown))
-                    .map(|r| &r.full),
+                derived: slot.derive.as_ref().and_then(|d| d.full_for(shown)),
                 target_roi: slot.roi_of(crate::roi::Kind::Target),
                 background_roi: slot.roi_of(crate::roi::Kind::Background),
             })

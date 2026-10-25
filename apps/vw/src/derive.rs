@@ -51,6 +51,18 @@ struct Key {
     palette: Option<Arc<vw_core::Palette>>,
     /// スロットのゲージで変えた黒と白。ファイルの VOI の代わりに使う。
     window: Option<(f32, f32)>,
+    /// 値を動かしている間の、表示の大きさに縮めた画像での下描き。
+    preview: bool,
+}
+
+/// ノードに渡す最初の値。
+enum Start {
+    /// ファイルの値の表示の値（標準の表示と同じ。確かめに使ったものをそのまま使う）。
+    AtFile,
+    /// 図で変えたファイルの段の値で描いた表示の値。
+    Display(nodes::Float),
+    /// 鎖に伸縮ノードがあるときの、伸縮の前の線形の値と、伸縮ノードで当てる伸縮。
+    Linear((nodes::Float, pixel_pipeline::Stretch)),
 }
 
 struct Rendered {
@@ -66,7 +78,10 @@ struct Rendered {
 
 pub struct Ready {
     key: Key,
+    /// フル解像度の色導出。下描きのときは表示の大きさしかない（[`Ready::preview`]）。
     pub full: Arc<ColorImage>,
+    /// 値を動かしている間の、縮めた画像での下描き。コピーや定量評価には使わない。
+    pub preview: bool,
     pub derived: TextureHandle,
     pub difference: TextureHandle,
     /// 差の最大（0..=255）。
@@ -102,7 +117,15 @@ pub struct Derive {
     failed: Option<(Key, (usize, String))>,
     /// 一度でも色導出を出した。入るときの確かめで食い違ったら、モードに入らずにやめる。
     entered: bool,
+    /// 色導出のウインドウで最後に値を変えた時刻。少しの間は重いノードを縮めた画像で下描きする。
+    edited_at: Option<std::time::Instant>,
 }
+
+/// 値を変えてからこの間は、重いノードを縮めた画像で下描きする。手を止めたら全画素で描き直す。
+const PREVIEW_FOR: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// 下描きの長辺の上限。スロットのテクスチャは大きな画像でも縮めないことがあるので、別に決める。
+const PREVIEW_SIDE: usize = 1024;
 
 impl Derive {
     pub fn new(preset: Option<String>, values: Values) -> Self {
@@ -118,6 +141,7 @@ impl Derive {
             ready: None,
             failed: None,
             entered: false,
+            edited_at: None,
         }
     }
 
@@ -158,13 +182,25 @@ impl Derive {
             Some(Header::Plain) => None,
             _ => return event,
         };
+        let size = full.texture.size();
+        let (w, h) = (full.image.width as usize, full.image.height as usize);
+        let smaller = w.max(h) > PREVIEW_SIDE;
+        let editing = self
+            .edited_at
+            .map(|at| at.elapsed())
+            .filter(|&e| e < PREVIEW_FOR);
+        let preview = smaller && editing.is_some() && self.values.chain.iter().any(|n| n.heavy());
+        if let Some(elapsed) = editing.filter(|_| preview) {
+            ctx.request_repaint_after(PREVIEW_FOR - elapsed);
+        }
         let key = Key {
             path: shown.path.clone(),
             image: Arc::as_ptr(&full.image) as usize,
             values: self.values.clone(),
-            size: full.texture.size(),
+            size,
             palette: shown.info.look.as_ref().and_then(|a| a.palette.clone()),
             window: shown.info.look.as_ref().and_then(|a| a.slot_window()),
+            preview,
         };
         let done = self.ready.as_ref().is_some_and(|r| r.key == key)
             || self.failed.as_ref().is_some_and(|(k, _)| *k == key);
@@ -212,6 +248,7 @@ impl Derive {
                 ready.difference.set(r.difference, options);
                 ready.max = r.max;
                 ready.full = r.full;
+                ready.preview = key.preview;
                 ready.key = key;
             }
             None => {
@@ -220,6 +257,7 @@ impl Derive {
                     difference: ctx.load_texture("derived-difference", r.difference, options),
                     max: r.max,
                     full: r.full,
+                    preview: key.preview,
                     key,
                 });
             }
@@ -267,7 +305,16 @@ impl Derive {
 
     /// 描いている途中（スロットに印を出すため）。
     pub fn busy(&self) -> bool {
-        self.reading.is_some() || self.rendering.is_some()
+        self.reading.is_some()
+            || self.rendering.is_some()
+            || self.ready.as_ref().is_some_and(|r| r.preview)
+    }
+
+    /// 表示中の画像 `shown` の、全画素で描いた色導出（コピーや定量評価に使う）。下描きなら `None`。
+    pub fn full_for(&self, shown: &Shown) -> Option<&Arc<ColorImage>> {
+        self.ready_for(shown)
+            .filter(|r| !r.preview)
+            .map(|r| &r.full)
     }
 
     /// 今の値でノードが当てられなかった理由（ノードの番号と文）。
@@ -301,6 +348,7 @@ pub fn edit(derive: &mut Option<Derive>, values: Values, presets: &[Preset]) {
         Some(d) => {
             d.values = values;
             d.modified = true;
+            d.edited_at = Some(std::time::Instant::now());
             d.sync(presets);
         }
     }
@@ -366,14 +414,17 @@ pub fn render_once(
         size: [image.width as usize, image.height as usize],
         palette,
         window: None,
+        preview: false,
     };
     let r = render(image, header.as_deref(), &key);
     (r.checked.is_ok() && r.error.is_none()).then_some(r.derived)
 }
 
 fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
-    let standard = pixel_pipeline::standard_display(image);
-    let (at_file, mut float) = match info {
+    let mut standard = pixel_pipeline::standard_display(image);
+    let split = nodes::split_at_stretch(&key.values.chain);
+    let staged = matches!(split, Ok(Some(_)));
+    let (at_file, start) = match info {
         Some(g) => {
             let decoded = Decoded::of(g);
             let file = pixel_pipeline::file_params(g, image, &decoded);
@@ -382,25 +433,52 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
                 None => file,
             };
             let at_file = pixel_pipeline::float_of_params(image, &decoded, &file);
-            let float = match key.values.params {
-                Some(p) if p != file => pixel_pipeline::float_of_params(image, &decoded, &p),
-                _ => at_file.clone(),
+            let p = key.values.params.unwrap_or(file);
+            let start = if staged {
+                Start::Linear(pixel_pipeline::linear_of_params(image, &decoded, &p))
+            } else if p != file {
+                Start::Display(pixel_pipeline::float_of_params(image, &decoded, &p))
+            } else {
+                Start::AtFile
             };
-            (at_file, float)
+            (at_file, start)
         }
         None => {
-            let f = pixel_pipeline::float_of_display(image);
-            (f.clone(), f)
+            let start = match staged {
+                true => Start::Linear(pixel_pipeline::linear_of_display(image)),
+                false => Start::AtFile,
+            };
+            (pixel_pipeline::float_of_display(image), start)
         }
     };
     let checked = pixel_pipeline::check_standard(&at_file, &standard);
-    drop(at_file);
-    let error = nodes::apply(&key.values.chain, &mut float).err();
+    let (mut float, stretch) = match start {
+        Start::AtFile => (at_file, None),
+        Start::Display(f) => (f, None),
+        Start::Linear((f, s)) => (f, Some(s)),
+    };
+    let mut chain = std::borrow::Cow::Borrowed(&key.values.chain);
+    if key.preview {
+        let factor = float.shrink([PREVIEW_SIDE; 2]);
+        standard = pixel_pipeline::shrink_rgba(&standard, image.width as usize, factor);
+        chain = std::borrow::Cow::Owned(chain.iter().map(|n| n.scaled(factor)).collect());
+    }
+    let error = match nodes::split_at_stretch(&chain) {
+        Err(e) => Some(e),
+        Ok(None) => nodes::apply(&chain, &mut float).err(),
+        Ok(Some(staged)) => nodes::apply(staged.before, &mut float).err().or_else(|| {
+            if let Some(s) = &stretch {
+                s.apply(&mut float);
+            }
+            nodes::apply(staged.after, &mut float)
+                .err()
+                .map(|(i, e)| (i + staged.offset, e))
+        }),
+    };
     let mut derived = pixel_pipeline::to_color_image(&float, &standard);
     // 色の表は灰色のまま出てきたときだけ引く（混合などで RGB になったら、その色を出す）。
     let gray = float.channels == 1;
     drop(float);
-    let mut standard = standard;
     if let Some(p) = &key.palette {
         p.recolor(&mut standard);
         if gray {
@@ -445,6 +523,52 @@ mod tests {
             name: name.into(),
             values,
         }
+    }
+
+    fn render_gray(values: Vec<f32>, chain: Vec<crate::nodes::Node>) -> Rendered {
+        use vw_core::{ColorModel, PixelData};
+        let mut image = VwImage::new(
+            values.len() as u32,
+            1,
+            ColorModel::Gray,
+            PixelData::F32(values),
+        )
+        .unwrap();
+        image.window = Some((0.0, 100.0));
+        let key = Key {
+            path: PathBuf::from("a.fits"),
+            image: 0,
+            values: Values {
+                params: None,
+                chain,
+            },
+            size: [4, 1],
+            palette: None,
+            window: None,
+            preview: false,
+        };
+        render(&image, None, &key)
+    }
+
+    #[test]
+    fn nodes_before_the_stretch_node_see_values_beyond_white() {
+        use crate::nodes::Node;
+        let half = || Node::Expression {
+            text: "v / 2".into(),
+        };
+        let reds = |r: &Rendered| r.full.pixels.iter().map(|c| c.r()).collect::<Vec<_>>();
+        let staged = render_gray(vec![0.0, 50.0, 100.0, 200.0], vec![half(), Node::Stretch]);
+        assert_eq!(staged.error, None);
+        assert_eq!(reds(&staged), [0, 64, 128, 255]);
+        let after = render_gray(vec![0.0, 50.0, 100.0, 200.0], vec![half()]);
+        assert_eq!(reds(&after), [0, 64, 128, 128]);
+    }
+
+    #[test]
+    fn a_second_stretch_node_is_reported() {
+        use crate::nodes::Node;
+        let r = render_gray(vec![1.0], vec![Node::Stretch, Node::Stretch]);
+        assert_eq!(r.error.map(|(i, _)| i), Some(1));
     }
 
     #[test]
