@@ -20,6 +20,8 @@ pub struct Stage {
     pub choices: Vec<Pick>,
     /// 値が長い段（ファイル名など）。名前の下に値を折り返して出す。
     pub stacked: bool,
+    /// 灰色の画像の、表示のための黒と白と曲線を図の中で変えられる段。
+    pub levels: bool,
 }
 
 /// 図の中で選び直せるマスター。
@@ -43,6 +45,7 @@ impl Stage {
             switch: None,
             choices: Vec::new(),
             stacked: false,
+            levels: false,
         }
     }
 
@@ -250,13 +253,45 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
             if get("ROWORDER").is_some_and(|v| v.trim() == "BOTTOM-UP") {
                 out.push(Stage::new("Orientation").note("Rows are turned upside down."));
             }
-            out.push(Stage::new(BLACK_AND_WHITE).note(
-                "Chosen from the distribution of the values (Astronomy images (FITS) in the settings).",
-            ));
+            let mut levels = Stage::new(BLACK_AND_WHITE).note(
+                "Chosen from the distribution of the values when the image opens (Astronomy images (FITS) in the settings).",
+            );
+            for key in [
+                vw_fits::STRETCH,
+                vw_fits::BLACK_PERCENTILE,
+                vw_fits::WHITE_PERCENTILE,
+            ] {
+                if let Some(v) = get(key) {
+                    levels = levels.line(key, v);
+                }
+            }
+            levels.levels = info.look.is_some();
+            out.push(levels);
         }
         _ => out.push(stored),
     }
+    if info.look.is_some() && info.plugin != "FITS" {
+        out.push(gray_levels(info.bits_per_sample, info.significant_bits));
+    }
     out
+}
+
+/// FITS 以外の灰色の画像の、表示のための黒と白の段（[`vw_core::display::window_of`] の既定）。
+fn gray_levels(bits_per_sample: u32, significant_bits: u32) -> Stage {
+    let stage = Stage::new(BLACK_AND_WHITE);
+    let mut stage = if bits_per_sample == 32 {
+        stage
+            .line("Black and white", "Minimum to maximum")
+            .note("Floating-point values have no fixed range; the smallest is black and the largest is white.")
+    } else {
+        let bits = significant_bits.clamp(1, 16);
+        stage
+            .line("Black and white", "Full range of the bit depth")
+            .line("Range", &format!("0 – {}", (1u32 << bits) - 1))
+            .note("0 is black and the largest value of the bit depth is white.")
+    };
+    stage.levels = true;
+    stage
 }
 
 /// FITS のダーク・フラットの段。当てていれば「ダークを引く」と「フラットで割る」に分け、
@@ -621,6 +656,86 @@ mod tests {
         let s = stages(&indexed);
         assert_eq!(titles(&s), ["Stored values", "Samples"]);
         assert!(s[1].note.unwrap().contains("palette"));
+    }
+
+    fn gray_look() -> crate::colormap::Applied {
+        crate::colormap::Applied {
+            kind: crate::colormap::Kind::Gray,
+            palette: None,
+            pick: crate::colormap::Pick::Auto,
+            window: (0.0, 65535.0),
+            file_window: (0.0, 65535.0),
+            range: None,
+            curve: vw_core::Curve::Linear,
+            file_curve: vw_core::Curve::Linear,
+            scale: crate::colormap::Scale {
+                factor: 1.0,
+                unit: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn fits_black_and_white_tells_how_it_was_chosen_and_can_be_changed() {
+        let mut fits = info(
+            "FITS",
+            &[
+                ("FITS", "BITPIX", "16"),
+                ("FITS", vw_fits::STRETCH, "Percentiles"),
+                ("FITS", vw_fits::BLACK_PERCENTILE, "0.5 %"),
+                ("FITS", vw_fits::WHITE_PERCENTILE, "99.5 %"),
+            ],
+        );
+        fits.color = vw_core::ColorModel::Gray;
+        fits.look = Some(gray_look());
+        let s = stages(&fits);
+        let levels = s.last().unwrap();
+        assert_eq!(levels.title, BLACK_AND_WHITE);
+        assert!(levels.levels);
+        assert_eq!(
+            levels.lines,
+            [
+                ("Black and white".to_owned(), "Percentiles".to_owned()),
+                ("Black percentile".to_owned(), "0.5 %".to_owned()),
+                ("White percentile".to_owned(), "99.5 %".to_owned()),
+            ]
+        );
+        assert_eq!(s.iter().filter(|s| s.title == BLACK_AND_WHITE).count(), 1);
+    }
+
+    #[test]
+    fn gray_images_of_other_formats_get_a_black_and_white_stage() {
+        let mut sixteen = info(
+            "PNG",
+            &[
+                ("PNG", "Color type", "Grayscale"),
+                ("PNG", "Bit depth", "16"),
+            ],
+        );
+        sixteen.color = vw_core::ColorModel::Gray;
+        sixteen.bits_per_sample = 16;
+        sixteen.significant_bits = 12;
+        sixteen.look = Some(gray_look());
+        let levels = stages(&sixteen).pop().unwrap();
+        assert_eq!(levels.title, BLACK_AND_WHITE);
+        assert!(levels.levels);
+        assert!(levels
+            .lines
+            .contains(&("Range".to_owned(), "0 – 4095".to_owned())));
+        let mut float = info("TIFF", &[]);
+        float.color = vw_core::ColorModel::Gray;
+        float.bits_per_sample = 32;
+        float.look = Some(gray_look());
+        let levels = stages(&float).pop().unwrap();
+        assert_eq!(
+            levels.lines,
+            [(
+                "Black and white".to_owned(),
+                "Minimum to maximum".to_owned()
+            )]
+        );
+        let color = info("PNG", &[("PNG", "Color type", "RGB")]);
+        assert!(stages(&color).iter().all(|s| s.title != BLACK_AND_WHITE));
     }
 
     #[test]

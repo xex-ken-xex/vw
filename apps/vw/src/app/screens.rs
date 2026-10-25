@@ -45,6 +45,10 @@ impl VwApp {
                     .map(|p| p.name.as_str())
                     .collect(),
                 color_rules: &self.color_rules,
+                scale_filters: (
+                    self.settings.settings.viewer.magnify_filter,
+                    self.settings.settings.viewer.minify_filter,
+                ),
             })
         });
         let commands = self.pipeline.ui(ui, lang, target);
@@ -76,6 +80,14 @@ impl VwApp {
                 }
                 Command::Window(window) => {
                     self.set_slot_window(self.active, window);
+                    continue;
+                }
+                Command::Curve(curve) => {
+                    self.set_slot_curve(self.active, curve);
+                    continue;
+                }
+                Command::ResetLevels => {
+                    self.set_slot_levels(self.active, None, None);
                     continue;
                 }
                 Command::Compose(files) => {
@@ -192,6 +204,7 @@ impl VwApp {
             Some(crate::quality::Reference {
                 path,
                 image: shown.full.as_ref().map(|f| &f.image),
+                palette: shown.info.look.as_ref().and_then(|a| a.palette.as_ref()),
             })
         });
         let input = self.slots.get(self.active).and_then(|slot| {
@@ -199,6 +212,7 @@ impl VwApp {
             Some(crate::quality::Input {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
+                palette: shown.info.look.as_ref().and_then(|a| a.palette.as_ref()),
                 edited: slot
                     .derive
                     .as_ref()
@@ -541,6 +555,14 @@ impl VwApp {
             rules: self.color_rules.clone(),
             choice: Default::default(),
         });
+        // 全画面は、入ったときのスロットの色導出を、どの画像にも同じように当てる。
+        if let Some(d) = self.slots.get(self.active).and_then(|s| s.derive.as_ref()) {
+            show.derive = Some(d.values.clone());
+            self.log.info(format!(
+                "Fullscreen uses the pixel pipeline of the active slot: {}",
+                d.preset.as_deref().unwrap_or("(unsaved)")
+            ));
+        }
         self.fullscreen = Some(show);
         self.last_fullscreen_root = Some(root);
         self.show_fullscreen_setup = false;

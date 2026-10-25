@@ -11,7 +11,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use eframe::egui;
-use vw_core::{display, DisplayParams, VwImage};
+use vw_core::{display, DisplayParams, Palette, VwImage};
 use vw_quality::{Image, Metric, Region};
 
 /// 表示の明るさの最大。
@@ -23,6 +23,8 @@ pub struct Input<'a> {
     pub path: &'a Path,
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
+    /// スロットで灰色の画像に当てている色の表。変更前の明るさは、これを通した色から求める。
+    pub palette: Option<&'a Arc<Palette>>,
     /// 色導出で描いた画像（当てているときだけ）。
     pub edited: Option<&'a Arc<egui::ColorImage>>,
     pub target_roi: Option<Region>,
@@ -34,6 +36,7 @@ pub struct Input<'a> {
 pub struct Reference<'a> {
     pub path: &'a Path,
     pub image: Option<&'a Arc<VwImage>>,
+    pub palette: Option<&'a Arc<Palette>>,
 }
 
 /// 値が出せない理由。
@@ -118,10 +121,11 @@ impl Report {
 struct Key {
     path: PathBuf,
     image: usize,
+    palette: Option<usize>,
     edited: Option<usize>,
     target: Option<Region>,
     background: Option<Region>,
-    reference: Option<(PathBuf, Option<usize>)>,
+    reference: Option<(PathBuf, Option<usize>, Option<usize>)>,
 }
 
 impl Key {
@@ -129,6 +133,7 @@ impl Key {
         Self {
             path: input.path.to_path_buf(),
             image: Arc::as_ptr(image) as usize,
+            palette: input.palette.map(|p| Arc::as_ptr(p) as usize),
             edited: input.edited.map(|e| Arc::as_ptr(e) as usize),
             target: input.target_roi,
             background: input.background_roi,
@@ -136,6 +141,7 @@ impl Key {
                 (
                     r.path.to_path_buf(),
                     r.image.map(|i| Arc::as_ptr(i) as usize),
+                    r.palette.map(|p| Arc::as_ptr(p) as usize),
                 )
             }),
         }
@@ -151,11 +157,15 @@ pub struct Evaluation {
 /// 裏のスレッドに渡す、`Input` の写し。
 struct Pending {
     image: Arc<VwImage>,
+    palette: Option<Arc<Palette>>,
     edited: Option<Arc<egui::ColorImage>>,
     target: Option<Region>,
     background: Option<Region>,
-    reference: Option<(PathBuf, Option<Arc<VwImage>>)>,
+    reference: Option<PendingReference>,
 }
+
+/// 基準のスロットのパス、画像（読み込み中は `None`）、色の表。
+type PendingReference = (PathBuf, Option<Arc<VwImage>>, Option<Arc<Palette>>);
 
 impl Evaluation {
     /// 解析か色導出のウインドウが開いている間、毎フレーム呼ぶ。条件が変わっていたら裏で求め直す。
@@ -180,13 +190,14 @@ impl Evaluation {
         }
         let pending = Pending {
             image: image.clone(),
+            palette: input.palette.cloned(),
             edited: input.edited.cloned(),
             target: input.target_roi,
             background: input.background_roi,
             reference: input
                 .reference
                 .as_ref()
-                .map(|r| (r.path.to_path_buf(), r.image.cloned())),
+                .map(|r| (r.path.to_path_buf(), r.image.cloned(), r.palette.cloned())),
         };
         let rx = crate::background::compute(ctx, move || evaluate(&pending));
         self.computing = Some((key, rx));
@@ -223,20 +234,25 @@ fn luma_of_color_image(img: &egui::ColorImage) -> Vec<f32> {
         .collect()
 }
 
-fn shown(image: &VwImage) -> Vec<f32> {
-    luma_of_rgba(&display::to_display(image, &DisplayParams::default()).rgba)
+/// スロットに標準で見えている明るさ（色の表を当てていれば、その色の明るさ）。
+fn shown(image: &VwImage, palette: Option<&Palette>) -> Vec<f32> {
+    let mut d = display::to_display(image, &DisplayParams::default());
+    if let Some(p) = palette {
+        p.recolor(&mut d.rgba);
+    }
+    luma_of_rgba(&d.rgba)
 }
 
 fn evaluate(p: &Pending) -> Report {
     let (w, h) = (p.image.width, p.image.height);
-    let before_px = shown(&p.image);
+    let before_px = shown(&p.image, p.palette.as_deref());
     let before = Image::new(w, h, &before_px);
     let after_px = p.edited.as_deref().map(luma_of_color_image);
     let after = after_px.as_deref().map(|px| Image::new(w, h, px));
-    let reference_px = p
-        .reference
-        .as_ref()
-        .map(|(_, img)| img.as_ref().map(|img| (img.width, img.height, shown(img))));
+    let reference_px = p.reference.as_ref().map(|(_, img, palette)| {
+        img.as_ref()
+            .map(|img| (img.width, img.height, shown(img, palette.as_deref())))
+    });
     // 基準: 別のスロットがあればその画像。なければ変更前で、そのとき変更前の列は空になる。
     let (basis, reference, missing_reference) = match &reference_px {
         Some(Some((rw, rh, px))) if (*rw, *rh) == (w, h) => (
@@ -337,6 +353,7 @@ mod tests {
     fn pending(image: Arc<VwImage>) -> Pending {
         Pending {
             image,
+            palette: None,
             edited: None,
             target: None,
             background: None,
@@ -365,18 +382,28 @@ mod tests {
     #[test]
     fn a_reference_slot_fills_the_before_column_and_a_different_size_is_refused() {
         let mut p = pending(ramp(16, 8));
-        p.reference = Some(("ref.png".into(), Some(ramp(16, 8))));
+        p.reference = Some(("ref.png".into(), Some(ramp(16, 8)), None));
         let r = evaluate(&p);
         assert_eq!(r.basis, Basis::Slot("ref.png".into()));
         assert_eq!(r.rows[0].before, Some(f64::INFINITY));
-        p.reference = Some(("ref.png".into(), Some(ramp(8, 8))));
+        p.reference = Some(("ref.png".into(), Some(ramp(8, 8)), None));
         let r = evaluate(&p);
         assert_eq!(r.rows[0].missing, Some(Missing::ReferenceSizeDiffers));
-        p.reference = Some(("ref.png".into(), None));
+        p.reference = Some(("ref.png".into(), None, None));
         assert_eq!(
             evaluate(&p).rows[1].missing,
             Some(Missing::ReferenceLoading)
         );
+    }
+
+    #[test]
+    fn the_before_column_reads_the_color_map_the_slot_shows() {
+        let mut p = pending(ramp(16, 8));
+        // 明るさを逆にする表を当てると、基準（表なし）との差が出る。
+        p.palette = Some(Arc::new(Palette::builtin("gray_inverted").unwrap()));
+        p.reference = Some(("ref.png".into(), Some(ramp(16, 8)), None));
+        let r = evaluate(&p);
+        assert!(r.rows[0].before.unwrap() < 10.0, "{:?}", r.rows[0]);
     }
 
     #[test]

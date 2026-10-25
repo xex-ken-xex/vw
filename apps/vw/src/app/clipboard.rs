@@ -24,29 +24,61 @@ impl VwApp {
         self.copied(ctx, what);
     }
 
-    /// スロットの画像を元の解像度でコピーする。
-    /// フル解像度の画像を捨ててあったときは読み直し、届いたときにコピーする。
+    /// スロットに見えている画像（色の表、色導出の結果）を元の解像度でコピーする。
+    /// フル解像度の画像を捨ててあったときは読み直し、色導出を描き直しているときはそれを待って、
+    /// 揃ったときにコピーする（[`Self::copy_pending`]）。
     pub(super) fn copy_image(&mut self, ctx: &egui::Context, index: usize) {
         let s = &mut self.slots[index];
-        let Some(shown) = &s.shown else {
+        if s.shown.is_none() {
             return;
-        };
-        let Some(full) = &shown.full else {
-            s.copy_when_full = true;
-            if s.full_request.is_none() {
-                request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
+        }
+        s.copy_when_full = true;
+        if s.shown.as_ref().is_some_and(|sh| sh.full.is_none()) && s.full_request.is_none() {
+            request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
+        }
+        self.copy_pending(ctx);
+    }
+
+    /// 頼まれていたコピーのうち、画像が揃ったものをコピーする。毎フレーム呼ぶ。
+    pub(super) fn copy_pending(&mut self, ctx: &egui::Context) {
+        for index in 0..self.slots.len() {
+            if !self.slots[index].copy_when_full {
+                continue;
             }
-            return;
-        };
-        let image = copy::full_resolution(&full.image);
-        let what = format!(
-            "image {} ({}x{})",
-            shown.path.display(),
-            image.size[0],
-            image.size[1]
-        );
-        ctx.copy_image(image);
-        self.copied(ctx, &what);
+            let Some((path, image)) = self.slot_copy_image(index) else {
+                continue;
+            };
+            self.slots[index].copy_when_full = false;
+            let what = format!(
+                "image {} ({}x{})",
+                path.display(),
+                image.size[0],
+                image.size[1]
+            );
+            ctx.copy_image(image);
+            self.copied(ctx, &what);
+        }
+    }
+
+    /// スロット `index` に見えている画像の元の解像度のもの。まだ揃っていなければ `None`。
+    fn slot_copy_image(&self, index: usize) -> Option<(std::path::PathBuf, egui::ColorImage)> {
+        let slot = &self.slots[index];
+        let shown = slot.shown.as_ref()?;
+        let full = shown.full.as_ref()?;
+        if let Some(d) = &slot.derive {
+            if let Some(ready) = d.ready_for(shown) {
+                return Some((shown.path.clone(), (*ready.full).clone()));
+            }
+            // 描き直している間は待つ（標準の表示を写すと、見えているものと違ってしまう）。
+            if d.busy() {
+                return None;
+            }
+        }
+        let palette = shown.info.look.as_ref().and_then(|a| a.palette.as_deref());
+        Some((
+            shown.path.clone(),
+            copy::full_resolution(&full.image, palette),
+        ))
     }
 
     /// コピーしたことをログとカーソル付近の表示で知らせる。

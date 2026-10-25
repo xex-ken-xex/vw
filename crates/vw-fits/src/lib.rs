@@ -96,6 +96,11 @@ pub const GROUP: &str = "FITS";
 /// 画面の行と FITS の y 座標の向きが逆になるので、WCS で位置を合わせるときに使う。
 pub const ROWS: &str = "Rows";
 pub const ROWS_FLIPPED: &str = "Turned upside down";
+/// 表示の黒と白の決め方（[`Stretch::title`]）をメタデータに書く鍵。
+pub const STRETCH: &str = "Black and white";
+/// [`Stretch::Percentile`] のときに、黒と白にした割合を書く鍵。
+pub const BLACK_PERCENTILE: &str = "Black percentile";
+pub const WHITE_PERCENTILE: &str = "White percentile";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -280,6 +285,15 @@ fn decode_with(
     img.metadata = metadata(&hdus, &image, frame);
     if flipped {
         img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
+    }
+    img.metadata.push(GROUP, STRETCH, options.stretch.title());
+    if options.stretch == Stretch::Percentile {
+        for (key, percent) in [
+            (BLACK_PERCENTILE, options.low_percent),
+            (WHITE_PERCENTILE, options.high_percent),
+        ] {
+            img.metadata.push(GROUP, key, format!("{percent} %"));
+        }
     }
     img.metadata.entries.extend(calibrated.entries);
     Ok(img)

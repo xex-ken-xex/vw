@@ -99,6 +99,16 @@ impl Palette {
     }
 
     /// 灰色の表か（引いても色が変わらない）。
+    /// 色の並びを逆にした表（表示の明るさを反転したときのゲージに使う）。
+    pub fn reversed(&self) -> Self {
+        let mut colors = self.colors;
+        colors.reverse();
+        Self {
+            name: self.name.clone(),
+            colors,
+        }
+    }
+
     pub fn is_gray(&self) -> bool {
         self.colors
             .iter()

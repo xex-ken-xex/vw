@@ -288,6 +288,12 @@ fn newest_of(files: &[PathBuf]) -> Option<(SystemTime, PathBuf)> {
         .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
 }
 
+/// 色導出を描いている 1 枚。
+struct Rendering {
+    rx: Receiver<Option<egui::ColorImage>>,
+    loaded: Box<crate::loader::Loaded>,
+}
+
 /// 読み込んだ 1 枚（ファイルかフレーム）。
 struct Picture {
     texture: TextureHandle,
@@ -309,6 +315,10 @@ const FRAMES_AHEAD: usize = 4;
 pub struct Show {
     /// 灰色の画像に当てる色の表（設定の種類ごとの既定）。
     pub look: Option<crate::colormap::Look>,
+    /// 全画面に入ったときのスロットの色導出の値。どの画像にも同じ値を当てる。
+    pub derive: Option<crate::pipelines::Values>,
+    /// 色導出を描いている画像。描き終わるまでは前の画像を出し続ける。
+    rendering: HashMap<PathBuf, Rendering>,
     root: PathBuf,
     settings: Fullscreen,
     order: Order,
@@ -388,6 +398,8 @@ impl Show {
         };
         let show = Self {
             look: None,
+            derive: None,
+            rendering: HashMap::new(),
             root,
             settings: settings.clone(),
             order,
@@ -428,25 +440,38 @@ impl Show {
         self.pending.remove(&request)?;
         match result {
             Ok(loaded) => {
-                let image = loaded.full.map(|f| f.display).or(loaded.thumb)?;
-                // 画面に合わせて縮めてあるので、拡大するときもなめらかにする（スロットのように
-                // 画素を 1 つずつ見る使い方ではないため）。
-                let texture = ctx.load_texture(
-                    format!("{}#fullscreen", path.display()),
-                    image,
-                    TextureOptions {
-                        mipmap_mode: Some(egui::TextureFilter::Linear),
-                        ..TextureOptions::LINEAR
-                    },
-                );
-                self.failed.remove(&path);
-                self.pictures.insert(
-                    path,
-                    Picture {
-                        texture,
-                        info: loaded.info,
-                    },
-                );
+                if let (Some(values), Some(full)) = (&self.derive, &loaded.full) {
+                    let (image, values) = (full.image.clone(), values.clone());
+                    let palette = loaded.info.look.as_ref().and_then(|a| a.palette.clone());
+                    let (dicom, side) = (
+                        loaded.info.plugin == "DICOM",
+                        full.display.size[0].max(full.display.size[1]) as u32,
+                    );
+                    let p = path.clone();
+                    let rx = crate::background::compute(ctx, move || {
+                        let derived =
+                            crate::derive::render_once(&p, &image, dicom, &values, palette)?;
+                        let d = vw_core::display::DisplayImage {
+                            width: derived.size[0] as u32,
+                            height: derived.size[1] as u32,
+                            rgba: derived.as_raw().to_vec(),
+                        };
+                        let d = vw_core::display::shrink(&d, side);
+                        Some(egui::ColorImage::from_rgba_unmultiplied(
+                            [d.width as usize, d.height as usize],
+                            &d.rgba,
+                        ))
+                    });
+                    self.rendering.insert(
+                        path,
+                        Rendering {
+                            rx,
+                            loaded: Box::new(loaded),
+                        },
+                    );
+                    return None;
+                }
+                self.attach(ctx, path, loaded, None);
                 None
             }
             Err(e) => {
@@ -461,6 +486,51 @@ impl Show {
                 (entry.0 == 1).then(|| format!("{}: {e}", path.display()))
             }
         }
+    }
+
+    /// 描き終わった色導出を受け取る。当てられなかった画像は標準の表示で出す。
+    fn poll_rendering(&mut self, ctx: &egui::Context) {
+        let done: Vec<(PathBuf, Option<egui::ColorImage>)> = self
+            .rendering
+            .iter()
+            .filter_map(|(p, r)| r.rx.try_recv().ok().map(|img| (p.clone(), img)))
+            .collect();
+        for (path, image) in done {
+            if let Some(r) = self.rendering.remove(&path) {
+                self.attach(ctx, path, *r.loaded, image);
+            }
+        }
+    }
+
+    /// 読んだ画像を出せるようにする。`derived` があれば標準の表示の代わりにそれを出す。
+    fn attach(
+        &mut self,
+        ctx: &egui::Context,
+        path: PathBuf,
+        loaded: crate::loader::Loaded,
+        derived: Option<egui::ColorImage>,
+    ) {
+        let Some(image) = derived.or(loaded.full.map(|f| f.display)).or(loaded.thumb) else {
+            return;
+        };
+        // 画面に合わせて縮めてあるので、拡大するときもなめらかにする（スロットのように
+        // 画素を 1 つずつ見る使い方ではないため）。
+        let texture = ctx.load_texture(
+            format!("{}#fullscreen", path.display()),
+            image,
+            TextureOptions {
+                mipmap_mode: Some(egui::TextureFilter::Linear),
+                ..TextureOptions::LINEAR
+            },
+        );
+        self.failed.remove(&path);
+        self.pictures.insert(
+            path,
+            Picture {
+                texture,
+                info: loaded.info,
+            },
+        );
     }
 
     fn lens(&self) -> Vec<usize> {
@@ -655,7 +725,10 @@ impl Show {
         let now = Instant::now();
         let newest_mode = self.settings.mode == FullscreenMode::Newest;
         for path in &keep {
-            if self.pictures.contains_key(path) || self.pending.values().any(|p| p == path) {
+            if self.pictures.contains_key(path)
+                || self.rendering.contains_key(path)
+                || self.pending.values().any(|p| p == path)
+            {
                 continue;
             }
             if let Some((count, at, _)) = self.failed.get(path) {
@@ -739,6 +812,7 @@ impl Show {
     ) -> Vec<Request> {
         let ctx = ui.ctx().clone();
         let mut out = Vec::new();
+        self.poll_rendering(&ctx);
         self.poll_scan();
         self.poll_watch(loader.registry());
 

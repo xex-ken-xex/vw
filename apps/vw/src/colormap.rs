@@ -122,6 +122,8 @@ pub struct Choice {
     pub window: Option<(f32, f32)>,
     /// 色を重ねた合成で、赤・緑・青ごとに変えた黒と白。
     pub channels: [Option<(f32, f32)>; 3],
+    /// 図の「黒と白」の段で変えた曲線。`None` はファイル（と設定）のまま。
+    pub curve: Option<Curve>,
 }
 
 /// 読み込みに渡す、色の表の当て方。
@@ -174,6 +176,8 @@ pub struct Applied {
     /// 画像の値の最小と最大。黒と白の外の値があるかをゲージの端の三角で示す。
     pub range: Option<(f32, f32)>,
     pub curve: Curve,
+    /// スロットで変える前の曲線。
+    pub file_curve: Curve,
     pub scale: Scale,
 }
 
@@ -186,6 +190,11 @@ impl Applied {
     pub fn slot_window(&self) -> Option<(f32, f32)> {
         (self.window != self.file_window).then_some(self.window)
     }
+
+    /// スロットで変えた曲線。ファイルのままなら `None`。
+    pub fn slot_curve(&self) -> Option<Curve> {
+        (self.curve != self.file_curve).then_some(self.curve)
+    }
 }
 
 /// `image` が灰色なら、黒と白の値をスロットで変えた値にし、当てる表を決める。
@@ -196,8 +205,12 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
     }
     let kind = Kind::of(plugin, &image.metadata);
     let file_window = display::window_of(image, &DisplayParams::default());
+    let file_curve = image.curve;
     if let Some(w) = look.choice.window {
         image.window = Some(w);
+    }
+    if let Some(c) = look.choice.curve {
+        image.curve = c;
     }
     let name = match &look.choice.pick {
         Pick::Auto => look.rules.default_for(kind),
@@ -215,8 +228,20 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
         file_window,
         range: display::gray_range(image),
         curve: image.curve,
+        file_curve,
         scale: Scale::of(&image.metadata),
     })
+}
+
+/// 明るさを反転したときのゲージ用に、色の並びを逆にしたもの（表がなければ灰色を逆に）。
+pub fn flipped(applied: &Applied) -> Applied {
+    let gray = vw_core::Palette::builtin(vw_core::palette::GRAY).expect("gray is built in");
+    Applied {
+        palette: Some(Arc::new(
+            applied.palette.as_deref().unwrap_or(&gray).reversed(),
+        )),
+        ..applied.clone()
+    }
 }
 
 /// ゲージの目盛り。`(帯の位置 0〜1, 書く値)` を、黒から白の向きに並べる。
@@ -345,6 +370,7 @@ mod tests {
             pick: Pick::Off,
             window: None,
             channels: [None; 3],
+            curve: None,
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, off)).unwrap();
         assert_eq!(a.palette_name(), None);
@@ -352,9 +378,31 @@ mod tests {
             pick: Pick::Palette("viridis".into()),
             window: None,
             channels: [None; 3],
+            curve: None,
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "PNG", &look(&s, viridis)).unwrap();
         assert_eq!(a.palette_name(), Some("viridis"));
+    }
+
+    #[test]
+    fn a_slot_can_change_the_curve_and_still_knows_the_file_curve() {
+        let s = PipelineSettings::default();
+        let mut img = gray(vec![0.0, 1.0]);
+        let choice = Choice {
+            curve: Some(Curve::Asinh),
+            ..Choice::default()
+        };
+        let a = prepare(&mut img, "PNG", &look(&s, choice)).unwrap();
+        assert_eq!(img.curve, Curve::Asinh);
+        assert_eq!((a.curve, a.file_curve), (Curve::Asinh, Curve::Linear));
+        assert_eq!(a.slot_curve(), Some(Curve::Asinh));
+        let a = prepare(
+            &mut gray(vec![0.0, 1.0]),
+            "PNG",
+            &look(&s, Choice::default()),
+        )
+        .unwrap();
+        assert_eq!(a.slot_curve(), None);
     }
 
     #[test]
@@ -364,6 +412,7 @@ mod tests {
             pick: Pick::Palette("gray".into()),
             window: None,
             channels: [None; 3],
+            curve: None,
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, choice)).unwrap();
         assert_eq!(a.palette_name(), None);
@@ -392,6 +441,7 @@ mod tests {
             pick: Pick::Auto,
             window: Some((20.0, 40.0)),
             channels: [None; 3],
+            curve: None,
         };
         let a = prepare(&mut img, "FITS", &look(&s, choice)).unwrap();
         assert_eq!(img.window, Some((20.0, 40.0)));
@@ -435,6 +485,7 @@ mod tests {
             file_window: window,
             range: None,
             curve,
+            file_curve: curve,
             scale: Scale {
                 factor,
                 unit: String::new(),

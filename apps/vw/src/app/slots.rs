@@ -413,24 +413,26 @@ impl VwApp {
     /// フル解像度の画像をスロットに持たせる。上限を超えるときは持たずに縮小画像のままにする
     /// （コピー待ちならコピーだけ済ませる）。
     pub(super) fn attach_full(&mut self, ctx: &egui::Context, index: usize, full: FullImage) {
-        let s = &mut self.slots[index];
-        let Some(shown) = &mut s.shown else {
+        if self.slots[index].shown.is_none() {
             return;
-        };
-        if std::mem::take(&mut s.copy_when_full) {
-            let image = copy::full_resolution(&full.image);
-            let what = format!(
-                "image {} ({}x{})",
-                shown.path.display(),
-                image.size[0],
-                image.size[1]
-            );
-            ctx.copy_image(image);
-            self.copied(ctx, &what);
         }
         let bytes = full.bytes();
         let limit = self.settings().viewer.full_image_limit_bytes();
         if !memory::fits(&self.full_states(), bytes, limit) {
+            // 持てないときは、コピー待ちなら標準の表示（と色の表）だけ写しておく。
+            let s = &mut self.slots[index];
+            if let (true, Some(shown)) = (std::mem::take(&mut s.copy_when_full), &s.shown) {
+                let palette = shown.info.look.as_ref().and_then(|a| a.palette.as_deref());
+                let image = copy::full_resolution(&full.image, palette);
+                let what = format!(
+                    "image {} ({}x{})",
+                    shown.path.display(),
+                    image.size[0],
+                    image.size[1]
+                );
+                ctx.copy_image(image);
+                self.copied(ctx, &what);
+            }
             return;
         }
         let s = &mut self.slots[index];
@@ -560,11 +562,28 @@ impl VwApp {
     }
 
     pub(super) fn set_slot_window(&mut self, index: usize, window: Option<(f32, f32)>) {
+        let curve = self.slots[index].color.curve;
+        self.set_slot_levels(index, window, curve);
+    }
+
+    pub(super) fn set_slot_curve(&mut self, index: usize, curve: Option<vw_core::Curve>) {
+        let window = self.slots[index].color.window;
+        self.set_slot_levels(index, window, curve);
+    }
+
+    /// スロットの黒と白と曲線を変えて読み直す。`None` はファイル（と設定）のまま。
+    pub(super) fn set_slot_levels(
+        &mut self,
+        index: usize,
+        window: Option<(f32, f32)>,
+        curve: Option<vw_core::Curve>,
+    ) {
         let slot = &mut self.slots[index];
-        if slot.color.window == window {
+        if (slot.color.window, slot.color.curve) == (window, curve) {
             return;
         }
         slot.color.window = window;
+        slot.color.curve = curve;
         self.reload_slot(index);
     }
 

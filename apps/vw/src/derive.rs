@@ -248,6 +248,23 @@ impl Derive {
         }
     }
 
+    /// 色導出で、表示の明るさの向きが標準の表示と逆になっているか（ゲージの色の向きを合わせるため）。
+    /// 「Presentation」の段の反転と、ノードの「反転」を数える。
+    pub fn inverted(&self, path: &Path) -> bool {
+        let presentation = match (self.headers.get(path), self.values.params) {
+            (Some(Header::Gray(g)), Some(p)) => p.invert != g.presentation.invert,
+            (Some(Header::Plain), _) => false,
+            _ => return false,
+        };
+        let nodes = self
+            .values
+            .chain
+            .iter()
+            .filter(|n| matches!(n, nodes::Node::Invert))
+            .count();
+        presentation != (nodes % 2 == 1)
+    }
+
     /// 描いている途中（スロットに印を出すため）。
     pub fn busy(&self) -> bool {
         self.reading.is_some() || self.rendering.is_some()
@@ -323,6 +340,35 @@ impl Derive {
             Some(p) => self.modified = self.values != p.values,
         }
     }
+}
+
+/// スロットを持たずに（全画面のスライドショーで）、色導出の値 `values` で `image` を描く。
+/// 当てられないとき（ファイルの値で標準の表示が再現できない、段が読めない、ノードの誤り）は
+/// `None` で、そのときは標準の表示を出す。
+pub fn render_once(
+    path: &Path,
+    image: &VwImage,
+    dicom: bool,
+    values: &Values,
+    palette: Option<Arc<vw_core::Palette>>,
+) -> Option<ColorImage> {
+    let header = match dicom {
+        true => match pixel_pipeline::read(path).ok()? {
+            Pipeline::Gray(g) => Some(g),
+            Pipeline::Color(_) => None,
+        },
+        false => None,
+    };
+    let key = Key {
+        path: path.to_path_buf(),
+        image: 0,
+        values: values.clone(),
+        size: [image.width as usize, image.height as usize],
+        palette,
+        window: None,
+    };
+    let r = render(image, header.as_deref(), &key);
+    (r.checked.is_ok() && r.error.is_none()).then_some(r.derived)
 }
 
 fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
@@ -466,5 +512,26 @@ mod tests {
             (follows.preset.as_deref(), &follows.values),
             (None, &window(-700.0, 1600.0))
         );
+    }
+
+    #[test]
+    fn an_odd_number_of_invert_nodes_flips_the_brightness() {
+        let path = Path::new("a.png");
+        let with = |n: usize| {
+            let mut d = Derive::new(
+                None,
+                Values {
+                    params: None,
+                    chain: vec![crate::nodes::Node::Invert; n],
+                },
+            );
+            d.headers.insert(path.to_path_buf(), Header::Plain);
+            d.inverted(path)
+        };
+        assert!(!with(0));
+        assert!(with(1));
+        assert!(!with(2));
+        // ヘッダを読む前（どの段を当てるか分からない）は反転していないものとして扱う。
+        assert!(!Derive::new(None, Values::default()).inverted(path));
     }
 }
