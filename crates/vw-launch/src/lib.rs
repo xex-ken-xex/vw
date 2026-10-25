@@ -1,6 +1,22 @@
-//! ファイルやフォルダを OS の既定のアプリで開く。
+//! ファイルやフォルダを、OS の既定のアプリや、設定で決めたアプリで開く。
 
+pub mod args;
+pub mod assoc;
+
+use std::ffi::OsString;
 use std::path::Path;
+
+/// `program` を `args` を付けて起動する。終わるのは待たない。
+///
+/// シェル（cmd や sh）を通さないのは、パスに `&` や `;` があると、そこで別のコマンドとして
+/// 読まれてしまうため。
+pub fn run(program: &Path, args: &[OsString]) -> std::io::Result<()> {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+}
 
 /// ファイルを、拡張子に関連付けられたアプリで開く。
 #[cfg(windows)]

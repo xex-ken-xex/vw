@@ -70,6 +70,15 @@ pub enum Action {
     ToggleColorGauge,
     TrashBadImages,
     CancelSending,
+    SendToApp1,
+    SendToApp2,
+    SendToApp3,
+    SendToApp4,
+    SendToApp5,
+    SendToApp6,
+    SendToApp7,
+    SendToApp8,
+    SendToApp9,
     FullscreenSlideshow,
     FullscreenExit,
     FullscreenNext,
@@ -111,7 +120,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 84] = [
+    pub const ALL: [Action; 93] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -168,6 +177,15 @@ impl Action {
         Action::ExportImages,
         Action::TrashBadImages,
         Action::CancelSending,
+        Action::SendToApp1,
+        Action::SendToApp2,
+        Action::SendToApp3,
+        Action::SendToApp4,
+        Action::SendToApp5,
+        Action::SendToApp6,
+        Action::SendToApp7,
+        Action::SendToApp8,
+        Action::SendToApp9,
         Action::NewSlot,
         Action::CloseSlot,
         Action::CloseAllSlots,
@@ -256,6 +274,15 @@ impl Action {
             Action::ToggleColorGauge => "toggle_color_gauge",
             Action::TrashBadImages => "trash_bad_images",
             Action::CancelSending => "cancel_sending",
+            Action::SendToApp1 => "send_to_app_1",
+            Action::SendToApp2 => "send_to_app_2",
+            Action::SendToApp3 => "send_to_app_3",
+            Action::SendToApp4 => "send_to_app_4",
+            Action::SendToApp5 => "send_to_app_5",
+            Action::SendToApp6 => "send_to_app_6",
+            Action::SendToApp7 => "send_to_app_7",
+            Action::SendToApp8 => "send_to_app_8",
+            Action::SendToApp9 => "send_to_app_9",
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
@@ -349,6 +376,15 @@ impl Action {
             Action::ExportImages => "Export images...",
             Action::TrashBadImages => "Move bad images to trash...",
             Action::CancelSending => "Cancel sending",
+            Action::SendToApp1 => "Send to app 1",
+            Action::SendToApp2 => "Send to app 2",
+            Action::SendToApp3 => "Send to app 3",
+            Action::SendToApp4 => "Send to app 4",
+            Action::SendToApp5 => "Send to app 5",
+            Action::SendToApp6 => "Send to app 6",
+            Action::SendToApp7 => "Send to app 7",
+            Action::SendToApp8 => "Send to app 8",
+            Action::SendToApp9 => "Send to app 9",
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
@@ -428,6 +464,22 @@ impl Action {
             Action::Tag9,
         ];
         TAGS.iter().position(|a| *a == self)
+    }
+
+    /// 「送り先のアプリ n」のキーなら、送り先の一覧での位置（0 から）。
+    pub fn send_app_index(self) -> Option<usize> {
+        const APPS: [Action; 9] = [
+            Action::SendToApp1,
+            Action::SendToApp2,
+            Action::SendToApp3,
+            Action::SendToApp4,
+            Action::SendToApp5,
+            Action::SendToApp6,
+            Action::SendToApp7,
+            Action::SendToApp8,
+            Action::SendToApp9,
+        ];
+        APPS.iter().position(|a| *a == self)
     }
 
     /// タグ付けモードの間だけ働く操作。普段は ↑ ↓ や数字キーを押しても何も起きないようにして、
@@ -533,6 +585,15 @@ impl Action {
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
             Action::CancelSending => vec![],
+            Action::SendToApp1 => vec![],
+            Action::SendToApp2 => vec![],
+            Action::SendToApp3 => vec![],
+            Action::SendToApp4 => vec![],
+            Action::SendToApp5 => vec![],
+            Action::SendToApp6 => vec![],
+            Action::SendToApp7 => vec![],
+            Action::SendToApp8 => vec![],
+            Action::SendToApp9 => vec![],
             Action::TogglePixelPipeline => vec![],
             Action::ToggleHistogram => vec![],
             Action::ToggleZoomMap => vec![],

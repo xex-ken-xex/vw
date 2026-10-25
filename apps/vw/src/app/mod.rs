@@ -188,6 +188,11 @@ pub struct VwApp {
     settings_ui: SettingsUi,
     /// 他の機器への送信（数えている・確かめている・送っている）。一度に 1 つだけ。
     send_job: Option<crate::dicom_send::Job>,
+    /// たくさん起動する前に確かめている、アプリへの送り。
+    launch_question: Option<crate::send_app::Launch>,
+    /// OS の関連付けから作った送り先のアプリ（設定で一覧をまだ決めていないときに使う）。
+    associated_apps: Option<Vec<crate::settings::SendApp>>,
+    associated_rx: Option<std::sync::mpsc::Receiver<Vec<crate::settings::SendApp>>>,
     /// 画素の変換の図のウインドウ。
     pipeline: crate::pipeline_view::PipelineView,
     histogram: crate::histogram_view::HistogramView,
@@ -668,6 +673,9 @@ impl VwApp {
             settings,
             settings_ui: SettingsUi::default(),
             send_job: None,
+            launch_question: None,
+            associated_apps: None,
+            associated_rx: None,
             about: Default::default(),
             ai_models: Default::default(),
             ai_store,
@@ -851,6 +859,19 @@ impl VwApp {
             Action::ExportImages => self.open_export(),
             Action::TrashBadImages => self.ask_trash_bad(),
             Action::CancelSending => self.cancel_send(),
+            Action::SendToApp1
+            | Action::SendToApp2
+            | Action::SendToApp3
+            | Action::SendToApp4
+            | Action::SendToApp5
+            | Action::SendToApp6
+            | Action::SendToApp7
+            | Action::SendToApp8
+            | Action::SendToApp9 => {
+                if let Some(i) = action.send_app_index() {
+                    self.send_active_to_app(i);
+                }
+            }
             Action::TogglePixelPipeline => self.toggle_pipeline(),
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
@@ -1064,6 +1085,8 @@ impl eframe::App for VwApp {
             .show(ui, |ui| self.menu_bar(ui));
         self.activity_line(ui);
         self.send_ui(&ctx);
+        self.launch_ui(&ctx);
+        self.fill_send_apps(&ctx);
         self.update_evaluation(&ctx);
         self.map_tick(&ctx);
         self.sky_tick();

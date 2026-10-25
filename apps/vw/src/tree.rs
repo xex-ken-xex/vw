@@ -50,8 +50,10 @@ struct View<'a> {
     dicom_extensions: &'a [&'a str],
     /// まだ読んでいないフォルダの下に項目があるか（[`Peeker`]）。
     peeks: &'a HashMap<PathBuf, Peek>,
-    /// 右クリックの「送信 ▸」に並べる送信先の名前。
+    /// 右クリックの「送る ▸」に並べる送信先の名前。
     destinations: &'a [String],
+    /// 右クリックの「送る ▸」に並べるアプリ。
+    apps: &'a [crate::settings::SendApp],
     /// AI のモデルが全部揃っているか。
     ai_ready: bool,
     /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
@@ -142,9 +144,9 @@ pub enum TreeAction {
     },
     /// データセットの登録・編集・更新。
     Dataset(crate::dataset_ui::Request),
-    /// ファイルやフォルダを送信先へ送る（右クリックの「送信 ▸」）。
+    /// ファイルやフォルダを送信先やアプリへ送る（右クリックの「送る ▸」）。
     Send {
-        choice: crate::dicom_send::Choice,
+        choice: crate::send_app::Choice,
         targets: Vec<PathBuf>,
     },
 }
@@ -400,10 +402,12 @@ fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Vec<TreeA
     });
 }
 
-/// フォルダや ZIP の右クリックメニューの「送信 ▸」。中の DICOM ファイルを送る。
+/// フォルダや ZIP の右クリックメニューの「送る ▸」。ネットワークへは中の DICOM ファイルを送る。
 fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Vec<TreeAction>) {
     ui.separator();
-    if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
+    let folder = !crate::archive::is_archive(path);
+    let offer = crate::send_app::Offer::for_path(view.apps, Some(view.destinations), path, folder);
+    if let Some(choice) = crate::send_app::menu(ui, view.lang, &offer) {
         out.push(TreeAction::Send {
             choice,
             targets: vec![path.to_owned()],
@@ -414,7 +418,10 @@ fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Vec<TreeActi
 /// 検査・シリーズの右クリックメニュー。その全ファイルを送る。
 fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Vec<TreeAction>) {
     vw_ui::menu::context(r, |ui| {
-        if let Some(choice) = crate::dicom_send::menu(ui, view.lang, view.destinations) {
+        let first = files.first().map(PathBuf::as_path).unwrap_or(Path::new(""));
+        let offer =
+            crate::send_app::Offer::for_path(view.apps, Some(view.destinations), first, false);
+        if let Some(choice) = crate::send_app::menu(ui, view.lang, &offer) {
             out.push(TreeAction::Send {
                 choice,
                 targets: files.clone(),
@@ -535,6 +542,7 @@ pub struct Context<'a> {
     pub active_image: Option<&'a Path>,
     pub lang: Language,
     pub destinations: &'a [String],
+    pub apps: &'a [crate::settings::SendApp],
     /// AI のモデルが全部揃っているか。揃うまで AI の項目は押せない。
     pub ai_ready: bool,
     pub click_expands: bool,
@@ -666,6 +674,7 @@ impl FolderTree {
             dicom_extensions: dicom_extensions(cx.registry),
             peeks: &peeker.known,
             destinations: cx.destinations,
+            apps: cx.apps,
             ai_ready: cx.ai_ready,
             scans: Vec::new(),
             peeks_wanted: Vec::new(),

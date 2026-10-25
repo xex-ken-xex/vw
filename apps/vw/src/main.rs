@@ -66,6 +66,7 @@ mod quality;
 mod quality_view;
 mod quantity;
 mod roi;
+mod send_app;
 mod series;
 mod settings;
 mod settings_ui;

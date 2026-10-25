@@ -688,6 +688,7 @@ impl VwApp {
         let lang = self.lang();
         let hint = empty_slot_hint(self.current.is_some());
         let destinations = self.destination_names();
+        let apps = self.send_apps().to_vec();
         let ai_ready = self.ai_ready();
         let people = self.people.names();
         let mut send = None;
@@ -730,6 +731,7 @@ impl VwApp {
                     roi: self.tool == Tool::Roi,
                     pan: matches!(self.tool, Tool::Pan | Tool::PixelProbe),
                     destinations: &destinations,
+                    apps: &apps,
                     presets: self.presets.presets(),
                     texture_options: self.texture_options,
                     faces: &faces,
@@ -872,6 +874,7 @@ impl VwApp {
                         roi: false,
                         pan: false,
                         destinations: &[],
+                        apps: &[],
                         presets: &[],
                         texture_options: self.texture_options,
                         faces: &[],

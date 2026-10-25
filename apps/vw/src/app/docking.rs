@@ -382,6 +382,7 @@ impl VwApp {
         // フレームを出しているときは、そのファイルのシリーズを選択として見せる。
         let active_image = self.active_image().map(|p| frames::file_of(&p));
         let destinations = self.destination_names();
+        let apps = self.send_apps().to_vec();
         let ai_ready = self.ai_ready();
         let click_expands = self.settings.settings.tree.click_expands;
         let drawn = egui::ScrollArea::both()
@@ -396,6 +397,7 @@ impl VwApp {
                         active_image: active_image.as_deref(),
                         lang,
                         destinations: &destinations,
+                        apps: &apps,
                         ai_ready,
                         click_expands,
                     },

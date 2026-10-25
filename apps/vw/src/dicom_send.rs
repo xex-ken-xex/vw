@@ -27,21 +27,19 @@ pub enum Choice {
     Configure,
 }
 
-/// 右クリックメニューの「送信 ▸」。`destinations` は送信先の名前。
-pub fn menu(ui: &mut egui::Ui, lang: Language, destinations: &[String]) -> Option<Choice> {
+/// 「送る ▸」の中の、ネットワークの送信先の項目。`destinations` は送信先の名前。
+pub fn menu_items(ui: &mut egui::Ui, lang: Language, destinations: &[String]) -> Option<Choice> {
     let mut chosen = None;
-    ui.menu_button(tr(lang, "Send to"), |ui| {
-        if destinations.is_empty() && ui.button(tr(lang, "Set up destinations...")).clicked() {
-            chosen = Some(Choice::Configure);
+    if destinations.is_empty() && ui.button(tr(lang, "Set up destinations...")).clicked() {
+        chosen = Some(Choice::Configure);
+        ui.close();
+    }
+    for (i, name) in destinations.iter().enumerate() {
+        if ui.button(name).clicked() {
+            chosen = Some(Choice::To(i));
             ui.close();
         }
-        for (i, name) in destinations.iter().enumerate() {
-            if ui.button(name).clicked() {
-                chosen = Some(Choice::To(i));
-                ui.close();
-            }
-        }
-    });
+    }
     chosen
 }
 
