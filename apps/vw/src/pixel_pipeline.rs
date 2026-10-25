@@ -479,12 +479,16 @@ pub fn read_in_background(
     ctx: &eframe::egui::Context,
     path: &std::path::Path,
 ) -> std::sync::mpsc::Receiver<Result<Pipeline, String>> {
+    let path = path.to_path_buf();
+    crate::background::compute(ctx, move || read(&path))
+}
+
+/// ファイルの段を読む（フレームのパスなら、そのフレームの段）。
+pub fn read(path: &std::path::Path) -> Result<Pipeline, String> {
     let (file, frame) = frames::split(path).unwrap_or_else(|| (path.to_path_buf(), 0));
-    crate::background::compute(ctx, move || {
-        std::fs::read(&file)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| vw_dicom::pipeline::read(&bytes, frame).map_err(|e| e.to_string()))
-    })
+    std::fs::read(&file)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| vw_dicom::pipeline::read(&bytes, frame).map_err(|e| e.to_string()))
 }
 
 /// 物理量の単位。CT は HU、PET は Units の値。

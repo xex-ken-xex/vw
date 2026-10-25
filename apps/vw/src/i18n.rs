@@ -1455,7 +1455,7 @@ const JA: &[(&str, &str)] = &[
     ("Only the look changes. Probe, ROI and analysis values stay the file values.", "変わるのは見た目だけです。十字・ROI・解析の値はファイルの値のままです。"),
     ("Same values as the black and white of the slot's color gauge. Shown only, never written to the file.", "スロットの色のゲージの黒と白と同じ値です。表示だけに使い、ファイルには書きません。"),
     ("Measurement", "計測"),
-    ("Read by: the slot and the analysis brightness axis. Full screen, copy and quality evaluation still use the standard display without the nodes.", "読むもの: スロットの表示と、解析の明るさの軸。全画面・コピー・定量評価は、まだノードを通さない標準の表示を使います。"),
+    ("Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Full screen applies the active slot's values to every image.", "読むもの: スロットの表示、コピー（Ctrl+C）、解析の明るさの軸、定量評価の変更後の列。全画面は、入ったときのスロットの値をどの画像にも当てます。"),
     ("Read by: probe crosses, ROI statistics, and the analysis physical value axis.", "読むもの: 十字の値、ROI の統計、解析の物理量の軸。"),
     ("Read by: probe crosses and ROI statistics.", "読むもの: 十字の値と ROI の統計。"),
     ("PET values are shown in SUVbw and Bq/ml.", "PET の値は SUVbw と Bq/ml で出します。"),

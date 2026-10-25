@@ -58,12 +58,15 @@ pub fn tsv(rows: &[(String, String)]) -> String {
 /// コピー用の画像。元画像の全体を縮小せずに RGBA8 にする。
 ///
 /// 表示用のテクスチャを使い回さないのは、GPU の上限に合わせて縮小されていることがあるため。
-pub fn full_resolution(image: &VwImage) -> ColorImage {
+pub fn full_resolution(image: &VwImage, palette: Option<&vw_core::Palette>) -> ColorImage {
     let params = DisplayParams {
         max_side: u32::MAX,
         ..DisplayParams::default()
     };
-    let d = display::to_display(image, &params);
+    let mut d = display::to_display(image, &params);
+    if let Some(p) = palette {
+        p.recolor(&mut d.rgba);
+    }
     ColorImage::from_rgba_unmultiplied([d.width as usize, d.height as usize], &d.rgba)
 }
 
@@ -124,8 +127,17 @@ mod tests {
             PixelData::U8(vec![128; width as usize]),
         )
         .unwrap();
-        let copied = full_resolution(&image);
+        let copied = full_resolution(&image, None);
         assert_eq!(copied.size, [width as usize, 1]);
         assert_eq!(copied.pixels[0], eframe::egui::Color32::from_gray(128));
+    }
+
+    #[test]
+    fn copied_gray_image_has_the_color_map_of_the_slot() {
+        let image = VwImage::new(1, 1, ColorModel::Gray, PixelData::U8(vec![255])).unwrap();
+        let palette = vw_core::Palette::builtin("inferno").unwrap();
+        let copied = full_resolution(&image, Some(&palette));
+        let [r, g, b] = palette.colors[255];
+        assert_eq!(copied.pixels[0], eframe::egui::Color32::from_rgb(r, g, b));
     }
 }

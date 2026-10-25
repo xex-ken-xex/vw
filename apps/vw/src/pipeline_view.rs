@@ -349,6 +349,20 @@ impl PipelineView {
         crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref())
     }
 
+    /// 段とノードで、表示の明るさの向きが標準の表示と逆になっているか。
+    fn inverted(&self) -> bool {
+        let presentation = match &self.loaded {
+            Some(Loaded::Gray(g)) => g.params.invert != g.in_file.invert,
+            _ => false,
+        };
+        let nodes = self
+            .chain
+            .iter()
+            .filter(|n| matches!(n, nodes::Node::Invert))
+            .count();
+        presentation != (nodes % 2 == 1)
+    }
+
     /// 図の中で値を変えられる段か。
     fn editable(&self, node: Node) -> bool {
         match (node, &self.loaded) {
@@ -1192,6 +1206,14 @@ impl PipelineView {
         }
         if node == Node::ColorMap {
             if let (Some(applied), Some(rules)) = (&info.look, &self.color_rules) {
+                // 前の段で明るさを反転していれば、ゲージの色もスロットと同じく逆に並べる。
+                let flipped;
+                let applied = if self.inverted() {
+                    flipped = colormap::flipped(applied);
+                    &flipped
+                } else {
+                    applied
+                };
                 if let Some(c) = color_map_body(ui, lang, applied, rules, &mut self.gauge_drag) {
                     self.calibration = Some(c);
                 }
@@ -1230,7 +1252,7 @@ impl PipelineView {
             ui.separator();
             ui.weak(tr(
                 lang,
-                "Read by: the slot and the analysis brightness axis. Full screen, copy and quality evaluation still use the standard display without the nodes.",
+                "Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Full screen applies the active slot's values to every image.",
             ));
         }
         edited

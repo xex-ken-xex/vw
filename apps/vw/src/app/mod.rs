@@ -1139,6 +1139,7 @@ impl eframe::App for VwApp {
 
         self.docked_ui(ui);
         self.copy_selection(&ctx);
+        self.copy_pending(&ctx);
         self.export_window(&ctx);
         self.toast_ui(&ctx);
         self.folder_load_dialog(&ctx);

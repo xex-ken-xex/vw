@@ -1442,6 +1442,19 @@ impl Slot {
             self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
         ) {
             if (applied.palette.is_some() || g.on_gray) && crate::colormap_ui::fits(body, g.side) {
+                let inverted = self.shown.as_ref().is_some_and(|s| {
+                    self.derive
+                        .as_ref()
+                        .is_some_and(|d| d.ready_for(s).is_some() && d.inverted(&s.path))
+                });
+                // 色導出で明るさを反転しているときは、ゲージの色もそれに合わせて逆に並べる。
+                let flipped;
+                let applied = if inverted {
+                    flipped = crate::colormap::flipped(applied);
+                    &flipped
+                } else {
+                    applied
+                };
                 let id = ui.id().with(("gauge", self.id));
                 let event = crate::colormap_ui::gauge(
                     ui,

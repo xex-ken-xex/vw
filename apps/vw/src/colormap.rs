@@ -219,6 +219,17 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
     })
 }
 
+/// 明るさを反転したときのゲージ用に、色の並びを逆にしたもの（表がなければ灰色を逆に）。
+pub fn flipped(applied: &Applied) -> Applied {
+    let gray = vw_core::Palette::builtin(vw_core::palette::GRAY).expect("gray is built in");
+    Applied {
+        palette: Some(Arc::new(
+            applied.palette.as_deref().unwrap_or(&gray).reversed(),
+        )),
+        ..applied.clone()
+    }
+}
+
 /// ゲージの目盛り。`(帯の位置 0〜1, 書く値)` を、黒から白の向きに並べる。
 /// 目盛りは書く値（倍率を掛けた値）で切りのよい数にする。2 つ目は目盛りの刻み（[`tick_text`] に渡す）。
 pub fn ticks(applied: &Applied, count: usize) -> (Vec<(f32, f64)>, f64) {
