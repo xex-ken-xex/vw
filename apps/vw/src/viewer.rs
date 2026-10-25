@@ -307,6 +307,8 @@ pub struct SlotResponse {
     pub wants_full: bool,
     /// 右クリックメニューで「現像」が選ばれた。
     pub develop: bool,
+    /// 右クリックメニューで、ダーク・フラットを当てるかの切り替えが選ばれた。
+    pub toggle_calibration: bool,
     /// ダブルクリックされた（最大化の切り替え）。
     pub toggle_maximize: bool,
     /// ホイールで送る枚数。負なら前へ。
@@ -1542,6 +1544,22 @@ impl Slot {
                     out.develop = true;
                     ui.close();
                 }
+                let calibration = self.shown.as_ref().and_then(|s| {
+                    s.info
+                        .metadata
+                        .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
+                });
+                if let Some(state) = calibration.filter(|&s| s != vw_fits::calibration::NOT_APPLIED)
+                {
+                    let on = state == vw_fits::calibration::APPLIED;
+                    if ui
+                        .checkbox(&mut on.clone(), tr(lang, "Apply dark and flat"))
+                        .clicked()
+                    {
+                        out.toggle_calibration = true;
+                        ui.close();
+                    }
+                }
                 let dicom = self
                     .shown
                     .as_ref()
@@ -1671,6 +1689,41 @@ impl Slot {
             );
             film.on_hover_text(tr(lang, "Developing RAW..."));
             labels_right = film_rect.left();
+        }
+
+        let calibration = self.shown.as_ref().and_then(|s| {
+            s.info
+                .metadata
+                .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
+        });
+        if let Some(state) = calibration.filter(|&s| s != vw_fits::calibration::NOT_APPLIED) {
+            let applied = state == vw_fits::calibration::APPLIED;
+            let mark_rect = next_rect(labels_right);
+            let mark = ui.interact(
+                mark_rect,
+                ui.id().with(("calibrated", self.id)),
+                Sense::hover(),
+            );
+            painter.text(
+                mark_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::APERTURE,
+                egui::FontId::proportional(14.0),
+                if applied {
+                    visuals.selection.stroke.color
+                } else {
+                    visuals.weak_text_color()
+                },
+            );
+            mark.on_hover_text(tr(
+                lang,
+                if applied {
+                    "Dark and flat applied"
+                } else {
+                    "Calibration off for this image"
+                },
+            ));
+            labels_right = mark_rect.left();
         }
 
         if let Some(d) = &self.derive {

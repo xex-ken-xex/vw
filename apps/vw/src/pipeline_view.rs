@@ -61,6 +61,13 @@ pub enum Command {
     SaveAs(String, Values),
     Overwrite(String, Values),
     Delete(String),
+    /// アクティブなスロットの FITS の、ダーク・フラットを当てるかを切り替える。
+    ToggleCalibration,
+    /// アクティブなスロットの FITS のフォルダで、`role` のマスターに `file` を使う。`None` は自動。
+    ChooseCalibration {
+        role: vw_fits::calibration::Role,
+        file: Option<PathBuf>,
+    },
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
 }
@@ -187,6 +194,8 @@ impl Node {
 
 const NODE_WIDTH: f32 = 210.0;
 const NODE_GAP: f32 = 40.0;
+/// ファイルの段を広げる上限。EXIF の長い文などで、図が横に伸びすぎないように。
+const NODE_MAX_WIDTH: f32 = 520.0;
 
 struct GrayState {
     info: Gray,
@@ -241,6 +250,8 @@ pub struct PipelineView {
     transform: Option<TSTransform>,
     /// キャンバスの倍率。
     scale: f32,
+    /// このフレームで、ダーク・フラットの段で押されたもの。
+    calibration: Option<Command>,
 }
 
 impl PipelineView {
@@ -310,6 +321,7 @@ impl PipelineView {
                 out.insert(0, Command::Edit(values));
             }
         }
+        out.extend(self.calibration.take());
         out
     }
 
@@ -735,13 +747,21 @@ impl PipelineView {
         // 形式ごとの段も同じ（形式が変わると数が変わる）。表示のノードは覚えた位置を、
         // 鎖の長さと「段が 1 つのとき」からの増えた分だけ右にずらす。
         let stage_count = flow.iter().filter(|n| matches!(n, Node::Stage(_))).count();
+        let widths: Vec<f32> = flow
+            .iter()
+            .map(|&n| self.node_width(&canvas, lang, n))
+            .collect();
+        let widened: f32 = widths.iter().map(|w| w - NODE_WIDTH).sum();
         let chain_shift = vec2(
-            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP),
+            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP)
+                + widened,
             0.0,
         );
         let mut chain_edit: Option<(usize, ChainEdit)> = None;
+        let mut x = 0.0;
         for (i, &node) in flow.iter().enumerate() {
-            let default = pos2(i as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
+            let default = pos2(x, 0.0);
+            x += widths[i] + NODE_GAP;
             let shift = match node {
                 Node::Display => chain_shift,
                 _ => Vec2::ZERO,
@@ -821,7 +841,7 @@ impl PipelineView {
         let mut moved = Vec2::ZERO;
         let collapsed = self.collapsed.contains(&node);
         let mut toggle = false;
-        let width = NODE_WIDTH * scale;
+        let width = self.node_width(ui, lang, node) * scale;
         let area = Rect::from_min_size(pos, vec2(width, 4000.0 * scale));
         let margin = egui::Margin::symmetric((8.0 * scale) as i8, (6.0 * scale) as i8);
         let inner = ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
@@ -906,6 +926,52 @@ impl PipelineView {
         (inner.response.rect, moved, edited, chain_edit)
     }
 
+    /// ノードの幅（キャンバスの座標）。ファイルの段は、値やファイル名が切れないよう、
+    /// 一番長い行に合わせて [`NODE_MAX_WIDTH`] まで広げる。説明の文は折り返すので数えない。
+    /// DICOM の段と鎖のノードは、つまみやグラフの幅が決まっているので決まった幅のまま。
+    fn node_width(&self, ui: &egui::Ui, lang: Language, node: Node) -> f32 {
+        let (Node::Stage(i), Some(Loaded::Plain(stages))) = (node, &self.loaded) else {
+            return NODE_WIDTH;
+        };
+        let Some(stage) = stages.get(i) else {
+            return NODE_WIDTH;
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let text_width = |text: &str| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        };
+        let spacing = ui.spacing();
+        // 箱の枠と矢印の分。
+        let combo = 2.0 * spacing.button_padding.x + spacing.icon_width + spacing.item_spacing.x;
+        let mut widest: f32 = 0.0;
+        for p in &stage.choices {
+            // 箱に出すのはファイル名まで（条件は箱の下に折り返す）。
+            let file = p.current.split(" (").next().unwrap_or_default();
+            widest = widest.max(text_width(&format!("{}: {file}", tr(lang, "Auto"))) + combo);
+            for c in &p.candidates {
+                let name = c.file_name().unwrap_or_default().to_string_lossy();
+                let label = format!("{name}  ({})", tr(lang, "best match"));
+                widest = widest.max(text_width(&label) + combo);
+            }
+        }
+        for (name, value) in &stage.lines {
+            let name = text_width(tr_text(lang, name).as_ref());
+            let value = text_width(value);
+            widest = widest.max(if stage.stacked {
+                name.max(value)
+            } else {
+                name + 8.0 + value
+            });
+        }
+        // ノードの余白と、端数で切れないための少しのゆとり。
+        let margin = 2.0 * 8.0 * self.scale + 4.0;
+        // 文字の大きさはキャンバスの倍率で変わっているので、倍率 1 の幅に戻す。
+        ((widest + margin) / self.scale).clamp(NODE_WIDTH, NODE_MAX_WIDTH)
+    }
+
     fn node_title(&self, lang: Language, node: Node) -> String {
         match node {
             Node::Chain(i) => {
@@ -946,7 +1012,9 @@ impl PipelineView {
                 false
             }
             Some(Loaded::Plain(stages)) => {
-                plain_body(ui, lang, node, info, stages);
+                if let Some(c) = plain_body(ui, lang, node, info, stages) {
+                    self.calibration = Some(c);
+                }
                 false
             }
             _ => false,
@@ -1360,12 +1428,27 @@ fn gray_body(
 }
 
 /// DICOM 以外の形式。ファイルの段は変えられないので、メタデータから組んだ段の値を出す。
-fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, stages: &[Stage]) {
+/// 切り替えられる段（FITS のダーク・フラット）で押されたものを返す。
+fn plain_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    node: Node,
+    info: &ImageInfo,
+    stages: &[Stage],
+) -> Option<Command> {
+    let mut command = None;
     match node {
         Node::Stage(i) => {
-            let Some(stage) = stages.get(i) else {
-                return;
-            };
+            let stage = stages.get(i)?;
+            if let Some(mut on) = stage.switch {
+                // 押した印はすぐ変え、読み直した画像が届くと段の状態がそれに追いつく。
+                if ui
+                    .checkbox(&mut on, tr(lang, "Apply dark and flat"))
+                    .clicked()
+                {
+                    command = Some(Command::ToggleCalibration);
+                }
+            }
             if i == 0 {
                 ui.label(format!(
                     "{} × {}  {} bit  {}",
@@ -1375,7 +1458,17 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
                     color_name(lang, info.color)
                 ));
             }
-            if !stage.lines.is_empty() {
+            if stage.stacked {
+                for (name, value) in &stage.lines {
+                    ui.weak(tr_text(lang, name));
+                    match stage.choices.iter().find(|p| p.role.key() == name) {
+                        Some(pick) => command = command.or(pick_box(ui, lang, i, pick)),
+                        None => {
+                            ui.add(egui::Label::new(value).wrap());
+                        }
+                    }
+                }
+            } else if !stage.lines.is_empty() {
                 egui::Grid::new(("stage", i))
                     .num_columns(2)
                     .spacing([8.0, 2.0])
@@ -1391,7 +1484,7 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
             if let Some(note) = stage.note {
                 ui.weak(tr(lang, note));
             }
-            if i == 0 {
+            if i == 0 && stages.iter().all(|s| s.switch.is_none()) {
                 ui.weak(tr(lang, "This format has no editable file stages."));
             }
         }
@@ -1408,6 +1501,71 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
         }
         _ => {}
     }
+    command
+}
+
+/// 使うマスターを選び直す箱。並ぶのは条件に合う候補だけ。
+fn pick_box(
+    ui: &mut egui::Ui,
+    lang: Language,
+    stage: usize,
+    pick: &format_stages::Pick,
+) -> Option<Command> {
+    let name = |p: &Path| {
+        p.file_name().map_or_else(
+            || p.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )
+    };
+    // 箱にはファイル名だけを出し、条件はその下に折り返す（箱の幅では切れて読めないため）。
+    let (file, conditions) = match pick.current.find(" (") {
+        Some(at) => pick.current.split_at(at),
+        None => (pick.current.as_str(), ""),
+    };
+    let shown = if pick.manual {
+        file.to_owned()
+    } else {
+        format!("{}: {file}", tr(lang, "Auto"))
+    };
+    let mut command = None;
+    egui::ComboBox::from_id_salt(("calibration pick", stage, pick.role.key()))
+        .selected_text(shown)
+        .width(ui.available_width())
+        .truncate()
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(!pick.manual, tr(lang, "Auto"))
+                .clicked()
+                && pick.manual
+            {
+                command = Some(None);
+            }
+            for (n, path) in pick.candidates.iter().enumerate() {
+                let current = pick.manual && pick.current.starts_with(&name(path));
+                // 候補は合う順。先頭が「自動」で選ばれるもの。
+                let label = if n == 0 {
+                    format!("{}  ({})", name(path), tr(lang, "best match"))
+                } else {
+                    name(path)
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(path.display().to_string())
+                    .clicked()
+                    && !current
+                {
+                    command = Some(Some(path.clone()));
+                }
+            }
+        });
+    let conditions = conditions.trim();
+    if !conditions.is_empty() {
+        ui.add(egui::Label::new(conditions).wrap());
+    }
+    command.map(|file| Command::ChooseCalibration {
+        role: pick.role,
+        file,
+    })
 }
 
 fn color_name(lang: Language, color: vw_core::ColorModel) -> &'static str {

@@ -14,9 +14,10 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, ColorFormat, FitsCurve, FitsStretch, Fullscreen, FullscreenMode, HeaderClick,
-    HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay,
-    SearchGroup, Settings, ThemeChoice, Tree, Viewer,
+    parse_hex_color, CalibrationApply, ColorFormat, DarkScaling, FitsCalibration, FitsCurve,
+    FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode, HeaderClick, HeadingStyle,
+    Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup,
+    Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -97,7 +98,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 81] = [
+const ITEMS: [Item; 96] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -286,6 +287,13 @@ const ITEMS: [Item; 81] = [
         title: "Archive extraction folder",
         description: "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
         widget: archive_dir_widget,
+    },
+    Item {
+        section: Section::Behavior,
+        key: "behavior.archive_size_limit_gb",
+        title: "Archive size limit",
+        description: "Archives larger than this when extracted (GB) are extracted only after you confirm. Archives that do not fit in the free space of the extraction folder are not extracted.",
+        widget: archive_size_limit_widget,
     },
     Item {
         section: Section::Metadata,
@@ -594,6 +602,104 @@ const ITEMS: [Item; 81] = [
         title: "Color from the Bayer pattern",
         description: "Turn images from color cameras (with BAYERPAT) into color. When off, they are shown as the gray mosaic stored in the file.",
         widget: fits_demosaic_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.apply",
+        title: "Dark and flat",
+        description: "When dark, flat and bias masters that fit an opened light frame are found, apply them before the colors and the stretch. The slot shows a mark, and Apply dark and flat (right-click or a key) shows the image without them to compare.",
+        widget: calib_apply_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.search_nearby",
+        title: "Look near the opened folder",
+        description: "Look for masters in the opened folder, its parent, and folders named darks, flats, biases, darkflats, calibration or masters next to them (as N.I.N.A. and Siril arrange them).",
+        widget: calib_nearby_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.library",
+        title: "Calibration library",
+        description: "Folders where masters are kept and reused across nights, one per line. Subfolders are searched too.",
+        widget: calib_library_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.use_dark",
+        title: "Use darks",
+        description: "Subtract a master dark from the light.",
+        widget: calib_use_dark_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.use_flat",
+        title: "Use flats",
+        description: "Divide the light by a master flat.",
+        widget: calib_use_flat_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.use_bias",
+        title: "Use biases",
+        description: "Subtract a master bias from the flat (when there is no dark flat) and from the light (when there is no dark).",
+        widget: calib_use_bias_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.exposure_tolerance_secs",
+        title: "Exposure difference allowed",
+        description: "A dark is used only when its EXPTIME differs from the light's by at most this (seconds).",
+        widget: calib_exposure_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.temperature_tolerance",
+        title: "Temperature difference allowed",
+        description: "A dark is used only when its CCD-TEMP (or SET-TEMP) differs from the light's by at most this (°C). Files without a temperature are not compared.",
+        widget: calib_temperature_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.match_gain_offset",
+        title: "Match GAIN and OFFSET",
+        description: "Use only darks and biases with the light's GAIN and OFFSET, when both files have them.",
+        widget: calib_gain_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.dark_scaling",
+        title: "Darks of another exposure",
+        description: "Same exposure only is the usual way, because the amp glow of CMOS sensors does not grow with the exposure. Scale by exposure stretches a dark of another exposure after removing the bias (needs a bias or a constant bias).",
+        widget: calib_scaling_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.flat_match",
+        title: "Choosing flats",
+        description: "Flats must have the light's size, binning and FILTER. With Same night too, they must also be taken the same night (noon to noon).",
+        widget: calib_flat_match_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.flat_normalize",
+        title: "Flat normalized by",
+        description: "The flat is divided by this value so that it is about 1.",
+        widget: calib_normalize_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.equalize_cfa",
+        title: "Even out color flats",
+        description: "Normalize the flat of a color camera separately for each position of the Bayer pattern, which removes the color cast of the flat panel.",
+        widget: calib_equalize_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.synthetic_bias",
+        title: "Constant bias",
+        description: "A value subtracted instead of a master bias when there is none (for example 2048). Empty: nothing.",
+        widget: calib_synthetic_widget,
     },
     Item {
         section: Section::Dicom,
@@ -1203,6 +1309,163 @@ fn fits_demosaic_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
         .changed()
 }
 
+fn calib_apply_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.fits.calibration;
+    let before = c.apply;
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut c.apply, CalibrationApply::Auto, tr(lang, "When found"));
+        ui.radio_value(&mut c.apply, CalibrationApply::Off, tr(lang, "Off"));
+    });
+    c.apply != before
+}
+
+fn calib_nearby_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.search_nearby, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_library_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let hint = if cfg!(windows) {
+        "D:\\astro\\masters"
+    } else {
+        "/data/astro/masters"
+    };
+    folder_list_widget(
+        &mut s.fits.calibration.library,
+        "fits.calibration.library",
+        hint,
+        ui,
+    )
+}
+
+fn calib_use_dark_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.use_dark, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_use_flat_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.use_flat, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_use_bias_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.use_bias, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_exposure_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    tolerance_widget(&mut s.fits.calibration.exposure_tolerance_secs, " s", ui)
+}
+
+fn calib_temperature_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    tolerance_widget(&mut s.fits.calibration.temperature_tolerance, " °C", ui)
+}
+
+fn tolerance_widget(v: &mut f64, suffix: &str, ui: &mut egui::Ui) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(v)
+            .range(FitsCalibration::TOLERANCE_RANGE)
+            .speed(0.1)
+            .fixed_decimals(1)
+            .prefix("± ")
+            .suffix(suffix),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn calib_gain_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(
+        &mut s.fits.calibration.match_gain_offset,
+        tr(lang, "Enabled"),
+    )
+    .changed()
+}
+
+fn calib_scaling_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.fits.calibration;
+    let before = c.dark_scaling;
+    ui.horizontal(|ui| {
+        ui.radio_value(
+            &mut c.dark_scaling,
+            DarkScaling::None,
+            tr(lang, "Same exposure only"),
+        );
+        ui.radio_value(
+            &mut c.dark_scaling,
+            DarkScaling::Exposure,
+            tr(lang, "Scale by exposure"),
+        );
+    });
+    c.dark_scaling != before
+}
+
+fn calib_flat_match_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.fits.calibration;
+    let before = c.flat_match;
+    ui.horizontal(|ui| {
+        ui.radio_value(
+            &mut c.flat_match,
+            FlatMatch::Filter,
+            tr(lang, "Same filter"),
+        );
+        ui.radio_value(
+            &mut c.flat_match,
+            FlatMatch::FilterAndNight,
+            tr(lang, "Same filter and night"),
+        );
+    });
+    c.flat_match != before
+}
+
+fn calib_normalize_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.fits.calibration;
+    let before = c.flat_normalize;
+    ui.horizontal(|ui| {
+        ui.radio_value(
+            &mut c.flat_normalize,
+            FlatNormalize::Median,
+            tr(lang, "Median value"),
+        );
+        ui.radio_value(
+            &mut c.flat_normalize,
+            FlatNormalize::Mean,
+            tr(lang, "Mean value"),
+        );
+    });
+    c.flat_normalize != before
+}
+
+fn calib_equalize_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.equalize_cfa, tr(lang, "Enabled"))
+        .changed()
+}
+
+/// 数でないあいだは赤くして、数か空になったときだけ設定にする。
+fn calib_synthetic_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let id = ui.id().with("synthetic_bias_draft");
+    let current = &mut s.fits.calibration.synthetic_bias;
+    let mut draft = ui
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| current.clone());
+    let valid = FitsCalibration::valid_bias(&draft);
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut draft)
+            .hint_text("2048")
+            .desired_width(100.0)
+            .text_color_opt((!valid).then_some(Color32::from_rgb(230, 80, 80))),
+    );
+    let mut changed = false;
+    if FitsCalibration::valid_bias(&draft) && draft.trim() != current {
+        *current = draft.trim().to_owned();
+        changed = true;
+    }
+    if !r.has_focus() && FitsCalibration::valid_bias(&draft) {
+        draft = current.clone();
+    }
+    ui.data_mut(|d| d.insert_temp(id, draft));
+    changed
+}
+
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.develop_raw, tr(lang, "Enabled"))
         .changed()
@@ -1340,6 +1603,16 @@ fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
 
 /// 展開先のフォルダ。入力中の文字列は egui の一時データに持ち、確定したときに反映する。
 /// 1 文字ごとに反映すると、打っている途中のパスごとに展開先が変わり、ログも流れてしまうため。
+fn archive_size_limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.behavior.archive_size_limit_gb)
+            .range(crate::settings::Behavior::ARCHIVE_SIZE_RANGE_GB)
+            .speed(1.0)
+            .suffix(" GB"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
 fn archive_dir_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let id = ui.make_persistent_id("behavior.archive_dir.edit");
     let picker_id = id.with("picker");
@@ -1448,17 +1721,23 @@ fn tags_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 }
 
 fn dataset_roots_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
-    let id = ui.make_persistent_id("dataset.roots.edit");
+    let hint = if cfg!(windows) {
+        "D:\\datasets"
+    } else {
+        "/data/datasets"
+    };
+    folder_list_widget(&mut s.dataset.roots, "dataset.roots", hint, ui)
+}
+
+/// 1 行に 1 つのフォルダ。打っているあいだは反映せず、欄を離れたときに設定にする。
+fn folder_list_widget(list: &mut Vec<String>, key: &str, hint: &str, ui: &mut egui::Ui) -> bool {
+    let id = ui.make_persistent_id((key, "edit"));
     let mut text: String = ui
         .data_mut(|d| d.get_temp(id))
-        .unwrap_or_else(|| s.dataset.roots.join("\n"));
+        .unwrap_or_else(|| list.join("\n"));
     let r = ui.add(
         egui::TextEdit::multiline(&mut text)
-            .hint_text(if cfg!(windows) {
-                "D:\\datasets"
-            } else {
-                "/data/datasets"
-            })
+            .hint_text(hint)
             .desired_rows(3)
             .desired_width(420.0),
     );
@@ -1471,8 +1750,8 @@ fn dataset_roots_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, text));
     } else {
-        if r.lost_focus() && parsed != s.dataset.roots {
-            s.dataset.roots = parsed;
+        if r.lost_focus() && parsed != *list {
+            *list = parsed;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));
@@ -2340,7 +2619,7 @@ mod tests {
     fn setting_keys_point_at_real_toml_entries() {
         let toml = Settings::default().to_toml();
         for i in &ITEMS {
-            let (table, field) = i.key.split_once('.').unwrap();
+            let (table, field) = i.key.rsplit_once('.').unwrap();
             // 表の配列（検索のグループなど）は `[[table.field]]`、入れ子の表（判定の閾値）は
             // `[table.field]` の見出しで書かれる。
             let as_value =

@@ -61,6 +61,14 @@ impl VwApp {
                     }
                     continue;
                 }
+                Command::ChooseCalibration { role, file } => {
+                    self.choose_calibration(self.active, role, file);
+                    continue;
+                }
+                Command::ToggleCalibration => {
+                    self.toggle_calibration(self.active);
+                    continue;
+                }
                 Command::Closed => {
                     for slot in &mut self.slots {
                         crate::derive::revert(&mut slot.derive, self.presets.presets());

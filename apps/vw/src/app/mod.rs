@@ -143,6 +143,16 @@ struct PasswordPrompt {
     focused: bool,
 }
 
+/// 展開すると大きさの上限を超えるので、展開するか尋ねているアーカイブ。
+struct LargeArchivePrompt {
+    zip: PathBuf,
+    /// 展開後の大きさ。tar 系のように書いてないものは `None`。
+    size: Option<u64>,
+    limit: u64,
+    /// 暗号化されていれば、入力されたパスワード。展開し直すときに使う。
+    password: Option<String>,
+}
+
 pub struct VwApp {
     loader: Loader,
     tree: FolderTree,
@@ -150,6 +160,10 @@ pub struct VwApp {
     probe_extensions: String,
     /// 天体の画像のプラグインと共有する表示の決め方。変わったら表示中の FITS を読み直す。
     fits: vw_fits::SharedOptions,
+    /// 天体の画像のプラグインと共有する校正の決め方と、「校正なし」にした画像。
+    calibration: vw_fits::Calibration,
+    /// 校正の結果をログに出したフォルダ。同じフォルダのライトを次々に見ても 1 回だけ出す。
+    calibration_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
     texture_options: TextureOptions,
     /// 画像フィールドの枠。常に 1 つ以上ある。
@@ -314,6 +328,7 @@ pub struct VwApp {
     pending_trash: Option<discard::Pending>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
+    large_archive_prompt: Option<LargeArchivePrompt>,
     dataset_dialog: Option<crate::dataset_ui::DatasetDialog>,
     trash_job: Option<TrashJob>,
     /// 裏で進めているドラッグでの移動・コピー。
@@ -498,6 +513,7 @@ impl VwApp {
         cc: &eframe::CreationContext<'_>,
         registry: Registry,
         fits: vw_fits::SharedOptions,
+        calibration: vw_fits::Calibration,
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
@@ -595,6 +611,7 @@ impl VwApp {
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
         fits.set(settings.settings.fits.options());
+        calibration.set_options(settings.settings.fits.calibration.options());
         vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
@@ -606,7 +623,8 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("labels"));
         let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
-        let archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
+        let mut archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
+        archives.set_size_limit(settings.settings.behavior.archive_size_limit_bytes());
         let settings_dir = settings
             .path
             .as_deref()
@@ -627,6 +645,8 @@ impl VwApp {
             tree,
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
             fits,
+            calibration,
+            calibration_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
             slots: vec![Slot::new(0)],
             active: 0,
@@ -723,6 +743,7 @@ impl VwApp {
             export: None,
             pending_trash: None,
             password_prompt: None,
+            large_archive_prompt: None,
             dataset_dialog: None,
             trash_job: None,
             transfer_jobs: Vec::new(),
@@ -915,6 +936,7 @@ impl VwApp {
             Action::ActualSize => self.slots[self.active].actual_size(),
             Action::DevelopRaw => self.develop_slot(self.active),
             Action::ReadQrCodes => self.read_qr_codes_active(ctx),
+            Action::ToggleCalibration => self.toggle_calibration(self.active),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),
@@ -1109,6 +1131,7 @@ impl eframe::App for VwApp {
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
         self.password_dialog(&ctx);
+        self.large_archive_dialog(&ctx);
         self.meta_new_group_ui(&ctx);
         self.next_queued_update(&ctx);
         self.dataset_window(&ctx);

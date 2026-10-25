@@ -115,7 +115,7 @@ impl VwApp {
                         Action::ZoomIn,
                         Action::ZoomOut,
                     ],
-                    &[Action::DevelopRaw],
+                    &[Action::DevelopRaw, Action::ToggleCalibration],
                     &[Action::ReadQrCodes],
                 ];
                 for (i, group) in groups.into_iter().enumerate() {

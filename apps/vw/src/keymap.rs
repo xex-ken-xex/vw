@@ -65,6 +65,7 @@ pub enum Action {
     ParentFolder,
     DevelopRaw,
     ReadQrCodes,
+    ToggleCalibration,
     TrashBadImages,
     CancelSending,
     FullscreenSlideshow,
@@ -108,7 +109,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 81] = [
+    pub const ALL: [Action; 82] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -125,6 +126,7 @@ impl Action {
         Action::ZoomOut,
         Action::DevelopRaw,
         Action::ReadQrCodes,
+        Action::ToggleCalibration,
         Action::LayoutAuto,
         Action::Layout1x1,
         Action::Layout1x2,
@@ -245,6 +247,7 @@ impl Action {
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
             Action::ReadQrCodes => "read_qr_codes",
+            Action::ToggleCalibration => "toggle_calibration",
             Action::TrashBadImages => "trash_bad_images",
             Action::CancelSending => "cancel_sending",
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
@@ -309,6 +312,7 @@ impl Action {
             Action::ZoomOut => "Zoom out",
             Action::DevelopRaw => "Develop RAW from sensor data",
             Action::ReadQrCodes => "Read QR codes",
+            Action::ToggleCalibration => "Apply dark and flat",
             Action::LayoutAuto => "Layout: auto",
             Action::Layout1x1 => "Layout: 1 x 1",
             Action::Layout1x2 => "Layout: 1 x 2",
@@ -489,6 +493,7 @@ impl Action {
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
             Action::DevelopRaw => vec![KeyCombo::plain(D)],
             Action::ReadQrCodes => vec![],
+            Action::ToggleCalibration => vec![],
             Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
             Action::Layout1x1 => vec![KeyCombo::alt(Num1)],
             Action::Layout1x2 => vec![KeyCombo::alt(Num2)],

@@ -4699,6 +4699,7 @@ dependencies = [
  "egui-phosphor",
  "encoding_rs",
  "flate2",
+ "libc",
  "lzma-rust2",
  "notify",
  "ort",

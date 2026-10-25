@@ -50,6 +50,7 @@ DisplayImage (RGBA8)
 `vw_core::DecoderPlugin` トレイト:
 
 - `name()` / `extensions()` / `probe(header)` / `decode(bytes)` / `read_metadata(bytes)`
+- `decode_frame_at(path, bytes, frame)`: 場所の分かるファイルの読み込み。既定は場所を使わない。FITS は、近くのダーク・フラットのマスターを探して当てるのに使う（`vw-fits` の `calibration`）
 - `Registry` が中身（マジックナンバー）→ 拡張子の順でプラグインを選ぶ
 - ツリーに出すファイルは、拡張子でプラグインが決まるものはそのまま、決まらないもののうち設定の正規表現に合う拡張子のものは先頭を読んで判定する。拡張子が当てにならない形式があるため
 
