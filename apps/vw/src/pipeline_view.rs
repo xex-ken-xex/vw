@@ -745,13 +745,21 @@ impl PipelineView {
         // 形式ごとの段も同じ（形式が変わると数が変わる）。表示のノードは覚えた位置を、
         // 鎖の長さと「段が 1 つのとき」からの増えた分だけ右にずらす。
         let stage_count = flow.iter().filter(|n| matches!(n, Node::Stage(_))).count();
+        let widths: Vec<f32> = flow
+            .iter()
+            .map(|&n| self.node_width(&canvas, lang, n))
+            .collect();
+        let widened: f32 = widths.iter().map(|w| w - NODE_WIDTH).sum();
         let chain_shift = vec2(
-            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP),
+            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP)
+                + widened,
             0.0,
         );
         let mut chain_edit: Option<(usize, ChainEdit)> = None;
+        let mut x = 0.0;
         for (i, &node) in flow.iter().enumerate() {
-            let default = pos2(i as f32 * (NODE_WIDTH + NODE_GAP), 0.0);
+            let default = pos2(x, 0.0);
+            x += widths[i] + NODE_GAP;
             let shift = match node {
                 Node::Display => chain_shift,
                 _ => Vec2::ZERO,
@@ -831,7 +839,7 @@ impl PipelineView {
         let mut moved = Vec2::ZERO;
         let collapsed = self.collapsed.contains(&node);
         let mut toggle = false;
-        let width = NODE_WIDTH * scale;
+        let width = self.node_width(ui, lang, node) * scale;
         let area = Rect::from_min_size(pos, vec2(width, 4000.0 * scale));
         let margin = egui::Margin::symmetric((8.0 * scale) as i8, (6.0 * scale) as i8);
         let inner = ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
@@ -914,6 +922,50 @@ impl PipelineView {
             }
         }
         (inner.response.rect, moved, edited, chain_edit)
+    }
+
+    /// ノードの幅（キャンバスの座標）。マスターを選ぶ箱のある段は、ファイル名が切れないよう
+    /// 一番長い候補に合わせて広げる。ほかは決まった幅（値は切り詰めるか折り返す）。
+    fn node_width(&self, ui: &egui::Ui, lang: Language, node: Node) -> f32 {
+        let (Node::Stage(i), Some(Loaded::Plain(stages))) = (node, &self.loaded) else {
+            return NODE_WIDTH;
+        };
+        let Some(stage) = stages.get(i) else {
+            return NODE_WIDTH;
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let text_width = |text: String| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), Color32::WHITE)
+                .size()
+                .x
+        };
+        let widest = stage
+            .choices
+            .iter()
+            .flat_map(|p| {
+                // 箱に出すのはファイル名まで（条件は箱の下に折り返す）。
+                let file = p.current.split(" (").next().unwrap_or_default();
+                let shown = std::iter::once(format!("{}: {file}", tr(lang, "Auto")));
+                shown.chain(p.candidates.iter().map(|c| {
+                    let name = c.file_name().unwrap_or_default().to_string_lossy();
+                    format!("{name}  ({})", tr(lang, "best match"))
+                }))
+            })
+            .map(text_width)
+            .fold(0.0, f32::max);
+        if widest == 0.0 {
+            return NODE_WIDTH;
+        }
+        let spacing = ui.spacing();
+        // 箱の枠と矢印、ノードの余白の分。
+        let chrome = 2.0 * spacing.button_padding.x
+            + spacing.icon_width
+            + spacing.item_spacing.x
+            + 2.0 * 8.0 * self.scale
+            + 4.0;
+        // 文字の大きさはキャンバスの倍率で変わっているので、倍率 1 の幅に戻す。
+        ((widest + chrome) / self.scale).max(NODE_WIDTH)
     }
 
     fn node_title(&self, lang: Language, node: Node) -> String {
