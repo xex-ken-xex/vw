@@ -29,6 +29,41 @@ impl Float {
         }
     }
 
+    /// 幅と高さが `size` に収まるよう、整数分の 1 に縮める（ブロックの平均、NaN は除く）。縮めた倍率を返す。
+    pub fn shrink(&mut self, size: [usize; 2]) -> usize {
+        let fit = |len: usize, to: usize| len.div_ceil(to.max(1));
+        let factor = fit(self.width, size[0]).max(fit(self.height, size[1]));
+        if factor <= 1 {
+            return 1;
+        }
+        let (w, h, n) = (self.width, self.height, self.channels);
+        let (ow, oh) = (w.div_ceil(factor), h.div_ceil(factor));
+        let mut data = Vec::with_capacity(ow * oh * n);
+        for by in 0..oh {
+            for bx in 0..ow {
+                for c in 0..n {
+                    let (mut sum, mut count) = (0.0f32, 0u32);
+                    for y in by * factor..((by + 1) * factor).min(h) {
+                        for x in bx * factor..((bx + 1) * factor).min(w) {
+                            let v = self.data[(y * w + x) * n + c];
+                            if !v.is_nan() {
+                                sum += v;
+                                count += 1;
+                            }
+                        }
+                    }
+                    data.push(if count == 0 {
+                        f32::NAN
+                    } else {
+                        sum / count as f32
+                    });
+                }
+            }
+        }
+        *self = Float::new(ow, oh, n, data);
+        factor
+    }
+
     /// 0〜1 を 0〜255 に丸めた RGB（アルファなし、画素ごとに 3 バイト）。
     pub fn to_rgb8(&self) -> Vec<u8> {
         let level = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -96,6 +131,56 @@ pub enum Node {
         #[serde(default)]
         curve: f32,
     },
+    /// 伸縮（表示のための黒と白と曲線）を当てる位置。これより前のノードは、黒と白で切る前の
+    /// 線形の値にかかる。鎖にないときは、鎖の先頭で当てたのと同じ。
+    Stretch,
+    /// スターレットによるノイズ除去（[`crate::astro::denoise`]）。
+    Denoise {
+        #[serde(default = "default_denoise")]
+        strength: [f32; crate::astro::LEVELS],
+        #[serde(default = "default_threshold")]
+        threshold: f32,
+    },
+    /// アンシャープマスク。`radius` は σ（画素）。
+    Sharpen {
+        #[serde(default = "half")]
+        amount: f32,
+        #[serde(default = "default_sharpen_radius")]
+        radius: f32,
+    },
+    /// 星の縮小（[`crate::astro::reduce_stars`]）。`size` は削る半径（画素）。
+    StarReduce {
+        #[serde(default = "half")]
+        amount: f32,
+        #[serde(default = "two")]
+        size: u32,
+        #[serde(default = "default_star_threshold")]
+        threshold: f32,
+    },
+}
+
+fn default_denoise() -> [f32; crate::astro::LEVELS] {
+    [0.8, 0.6, 0.3, 0.0]
+}
+
+fn default_threshold() -> f32 {
+    3.0
+}
+
+fn default_star_threshold() -> f32 {
+    4.0
+}
+
+fn default_sharpen_radius() -> f32 {
+    1.5
+}
+
+fn half() -> f32 {
+    0.5
+}
+
+fn two() -> u32 {
+    2
 }
 
 fn default_sigma() -> f32 {
@@ -121,6 +206,9 @@ impl Node {
         "tone",
     ];
 
+    /// 「天体」のまとまりに並べる順。
+    pub const ASTRO_KINDS: [&'static str; 4] = ["stretch", "denoise", "sharpen", "star_reduce"];
+
     pub fn new(kind: &str) -> Option<Self> {
         Some(match kind {
             "expression" => Node::Expression { text: "v".into() },
@@ -142,6 +230,20 @@ impl Node {
                 contrast: 1.0,
                 curve: 0.0,
             },
+            "stretch" => Node::Stretch,
+            "denoise" => Node::Denoise {
+                strength: default_denoise(),
+                threshold: default_threshold(),
+            },
+            "sharpen" => Node::Sharpen {
+                amount: half(),
+                radius: default_sharpen_radius(),
+            },
+            "star_reduce" => Node::StarReduce {
+                amount: half(),
+                size: two(),
+                threshold: default_star_threshold(),
+            },
             _ => return None,
         })
     }
@@ -156,6 +258,10 @@ impl Node {
             Node::Noise { .. } => "noise",
             Node::Median { .. } => "median",
             Node::Tone { .. } => "tone",
+            Node::Stretch => "stretch",
+            Node::Denoise { .. } => "denoise",
+            Node::Sharpen { .. } => "sharpen",
+            Node::StarReduce { .. } => "star_reduce",
         }
     }
 
@@ -170,8 +276,48 @@ impl Node {
             "noise" => "Add noise",
             "median" => "Median",
             "tone" => "Tone",
+            "stretch" => "Stretch",
+            "denoise" => "Noise reduction",
+            "sharpen" => "Sharpen",
+            "star_reduce" => "Star reduction",
             _ => "Node",
         }
+    }
+
+    /// `factor` 分の 1 に縮めた画像に当てるときの値。画素で決まる半径を縮め、縮めた下描きでも
+    /// 全画素で描いたときと同じくらいの効き方に見せる（ノイズ除去の階層やメディアンの窓は
+    /// 整数の画素でしか決められないので、そのまま）。
+    pub fn scaled(&self, factor: usize) -> Node {
+        let f = factor.max(1) as f32;
+        match self.clone() {
+            Node::Blur { radius } => Node::Blur { radius: radius / f },
+            Node::Sharpen { amount, radius } => Node::Sharpen {
+                amount,
+                radius: radius / f,
+            },
+            Node::StarReduce {
+                amount,
+                size,
+                threshold,
+            } => Node::StarReduce {
+                amount,
+                size: ((size as f32 / f).round() as u32).max(1),
+                threshold,
+            },
+            other => other,
+        }
+    }
+
+    /// 大きな画像では時間のかかるノード。値を動かしている間は縮めた画像で計算する。
+    pub fn heavy(&self) -> bool {
+        matches!(
+            self,
+            Node::Blur { .. }
+                | Node::Median { .. }
+                | Node::Denoise { .. }
+                | Node::Sharpen { .. }
+                | Node::StarReduce { .. }
+        )
     }
 
     fn apply(&self, img: &mut Float) -> Result<(), String> {
@@ -226,6 +372,18 @@ impl Node {
                     *v = (t + curve * (s - t)).clamp(0.0, 1.0);
                 }
             }
+            // 伸縮は画像の黒と白を知っている呼び手が当てる（[`split_at_stretch`]）。
+            Node::Stretch => {}
+            Node::Denoise {
+                strength,
+                threshold,
+            } => crate::astro::denoise(img, *strength, *threshold),
+            Node::Sharpen { amount, radius } => crate::astro::sharpen(img, *amount, *radius),
+            Node::StarReduce {
+                amount,
+                size,
+                threshold,
+            } => crate::astro::reduce_stars(img, *amount, *size, *threshold),
         }
         Ok(())
     }
@@ -244,7 +402,7 @@ fn for_row_bands(img: &mut Float, f: impl Fn(usize, &mut [f32]) + Sync) {
 }
 
 /// ガウスぼかし。横と縦に分けて 2 回かける（2 次元の畳み込みより半径に対して速い）。
-fn blur(img: &mut Float, sigma: f32) {
+pub(crate) fn blur(img: &mut Float, sigma: f32) {
     if sigma <= 0.0 || img.data.is_empty() {
         return;
     }
@@ -442,6 +600,36 @@ pub fn apply(chain: &[Node], img: &mut Float) -> Result<(), (usize, String)> {
     Ok(())
 }
 
+/// 伸縮ノードで分けた鎖。
+#[derive(Debug, PartialEq)]
+pub struct Staged<'a> {
+    pub before: &'a [Node],
+    pub after: &'a [Node],
+    /// `after` の先頭の、鎖の中の番号（誤りを鎖の番号で返すため）。
+    pub offset: usize,
+}
+
+/// 鎖を伸縮ノードの前と後ろに分ける。伸縮ノードがなければ `None`。
+/// 伸縮ノードが 2 つ以上あるときは誤り（2 つ目の番号と理由）。
+pub fn split_at_stretch(chain: &[Node]) -> Result<Option<Staged<'_>>, (usize, String)> {
+    let mut at = chain
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n, Node::Stretch))
+        .map(|(i, _)| i);
+    let Some(first) = at.next() else {
+        return Ok(None);
+    };
+    if let Some(second) = at.next() {
+        return Err((second, "Only one stretch node can be used.".into()));
+    }
+    Ok(Some(Staged {
+        before: &chain[..first],
+        after: &chain[first + 1..],
+        offset: first + 1,
+    }))
+}
+
 /// 式ノードの文法の確認（図に赤で出すため）。
 pub fn check(node: &Node) -> Option<String> {
     match node {
@@ -476,6 +664,57 @@ mod tests {
         };
         apply(&[node], &mut img).unwrap();
         assert_eq!(img.data, vec![0.5]);
+    }
+
+    #[test]
+    fn the_chain_is_split_at_the_one_stretch_node() {
+        assert_eq!(split_at_stretch(&[Node::Invert]), Ok(None));
+        let chain = [Node::Invert, Node::Stretch, Node::Invert, Node::Invert];
+        let staged = split_at_stretch(&chain).unwrap().unwrap();
+        assert_eq!(
+            (staged.before.len(), staged.after.len(), staged.offset),
+            (1, 2, 2)
+        );
+        let twice = [Node::Stretch, Node::Invert, Node::Stretch];
+        assert_eq!(split_at_stretch(&twice).unwrap_err().0, 2);
+    }
+
+    #[test]
+    fn shrinking_averages_blocks_and_skips_nan() {
+        let mut img = Float::new(4, 2, 1, vec![1.0, 3.0, 5.0, f32::NAN, 1.0, 3.0, 5.0, 7.0]);
+        assert_eq!(img.shrink([2, 1]), 2);
+        assert_eq!((img.width, img.height), (2, 1));
+        assert_eq!(img.data, [2.0, 17.0 / 3.0]);
+        assert_eq!(img.shrink([10, 10]), 1);
+    }
+
+    #[test]
+    fn preview_shrinks_pixel_radii_with_the_image() {
+        let blur = Node::Blur { radius: 4.0 }.scaled(4);
+        assert_eq!(blur, Node::Blur { radius: 1.0 });
+        let stars = Node::StarReduce {
+            amount: 0.5,
+            size: 2,
+            threshold: 4.0,
+        }
+        .scaled(8);
+        assert!(matches!(stars, Node::StarReduce { size: 1, .. }));
+    }
+
+    #[test]
+    fn astronomy_nodes_are_saved_with_their_values() {
+        for kind in Node::ASTRO_KINDS {
+            let node = Node::new(kind).unwrap();
+            assert_eq!(node.kind(), kind);
+            let text = toml::to_string(&Wrap { node: node.clone() }).unwrap();
+            let back: Wrap = toml::from_str(&text).unwrap();
+            assert_eq!(back.node, node, "{text}");
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct Wrap {
+        node: Node,
     }
 
     #[test]

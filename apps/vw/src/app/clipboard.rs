@@ -66,8 +66,8 @@ impl VwApp {
         let shown = slot.shown.as_ref()?;
         let full = shown.full.as_ref()?;
         if let Some(d) = &slot.derive {
-            if let Some(ready) = d.ready_for(shown) {
-                return Some((shown.path.clone(), (*ready.full).clone()));
+            if let Some(full) = d.full_for(shown) {
+                return Some((shown.path.clone(), (**full).clone()));
             }
             // 描き直している間は待つ（標準の表示を写すと、見えているものと違ってしまう）。
             if d.busy() {
