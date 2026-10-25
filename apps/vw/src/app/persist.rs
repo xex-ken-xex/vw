@@ -76,14 +76,22 @@ impl VwApp {
         vw_core::limits::set_max_image_bytes(self.settings().viewer.image_size_limit_bytes());
     }
 
-    /// 天体の画像の表示の決め方が変わったら、表示中の FITS を読み直してすぐ反映する。
-    /// 黒と白や上下、色はデコードのときに決まるので、読み直すほかない。
+    /// 天体の画像の表示や校正の決め方が変わったら、表示中の FITS を読み直してすぐ反映する。
+    /// 黒と白や上下、色、校正はデコードのときに決まるので、読み直すほかない。
     pub(super) fn apply_fits_options(&mut self) {
         let options = self.settings().fits.options();
-        if options == self.fits.get() {
+        let calibration = self.settings().fits.calibration.options();
+        if options == self.fits.get() && calibration == self.calibration.options() {
             return;
         }
         self.fits.set(options);
+        self.calibration.set_options(calibration);
+        self.calibration_logged.clear();
+        self.reload_fits_slots();
+    }
+
+    /// 表示中の FITS を読み直す。
+    pub(super) fn reload_fits_slots(&mut self) {
         let full = self.cell_needs_full();
         let fits: Vec<(usize, PathBuf)> = self
             .slots

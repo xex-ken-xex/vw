@@ -22,9 +22,14 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// `[name]` の表。ないときと、表でないとき（報告する）は `None`。
+    /// `[name]` の表。`fits.calibration` のように `.` で区切れば入れ子の表。
+    /// ないときと、表でないとき（報告する）は `None`。
     pub fn section(&mut self, name: &str) -> Option<&'a toml::Table> {
-        match self.table.get(name)? {
+        let (outer, inner) = match name.rsplit_once('.') {
+            Some((outer, inner)) => (self.section(outer)?, inner),
+            None => (self.table, name),
+        };
+        match outer.get(inner)? {
             toml::Value::Table(t) => Some(t),
             other => {
                 if !self.bad_sections.iter().any(|s| s == name) {
@@ -88,7 +93,12 @@ pub struct Section<'r, 'a> {
     section: &'static str,
 }
 
-impl Section<'_, '_> {
+impl<'a> Section<'_, 'a> {
+    /// 入れ子の節を読むための、元の読み取り。
+    pub fn reader(&mut self) -> &mut Reader<'a> {
+        self.reader
+    }
+
     pub fn get<T: DeserializeOwned>(&mut self, key: &str) -> Option<T> {
         self.reader.get(self.section, key)
     }
@@ -123,6 +133,15 @@ mod tests {
         let t = table("[a]\nx = 3");
         let mut r = Reader::new(&t);
         assert_eq!(r.get::<i64>("a", "x"), Some(3));
+        assert!(r.problems.is_empty());
+    }
+
+    #[test]
+    fn nested_sections_are_read_with_dotted_names() {
+        let t = table("[a.b]\nx = 3");
+        let mut r = Reader::new(&t);
+        assert_eq!(r.get::<i64>("a.b", "x"), Some(3));
+        assert_eq!(r.get::<i64>("a", "x"), None);
         assert!(r.problems.is_empty());
     }
 

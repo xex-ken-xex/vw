@@ -47,7 +47,7 @@ fn decode(data: &[u8]) -> VwImage {
 }
 
 fn decode_opts(data: &[u8], options: Options) -> VwImage {
-    decode_with(data, 0, options).unwrap()
+    decode_with(data, 0, options, None).unwrap()
 }
 
 fn f32s(img: &VwImage) -> Vec<f32> {
