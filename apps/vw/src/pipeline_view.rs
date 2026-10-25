@@ -61,6 +61,13 @@ pub enum Command {
     SaveAs(String, Values),
     Overwrite(String, Values),
     Delete(String),
+    /// アクティブなスロットの FITS の、ダーク・フラットを当てるかを切り替える。
+    ToggleCalibration,
+    /// アクティブなスロットの FITS のフォルダで、`role` のマスターに `file` を使う。`None` は自動。
+    ChooseCalibration {
+        role: vw_fits::calibration::Role,
+        file: Option<PathBuf>,
+    },
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
 }
@@ -241,6 +248,8 @@ pub struct PipelineView {
     transform: Option<TSTransform>,
     /// キャンバスの倍率。
     scale: f32,
+    /// このフレームで、ダーク・フラットの段で押されたもの。
+    calibration: Option<Command>,
 }
 
 impl PipelineView {
@@ -310,6 +319,7 @@ impl PipelineView {
                 out.insert(0, Command::Edit(values));
             }
         }
+        out.extend(self.calibration.take());
         out
     }
 
@@ -946,7 +956,9 @@ impl PipelineView {
                 false
             }
             Some(Loaded::Plain(stages)) => {
-                plain_body(ui, lang, node, info, stages);
+                if let Some(c) = plain_body(ui, lang, node, info, stages) {
+                    self.calibration = Some(c);
+                }
                 false
             }
             _ => false,
@@ -1360,12 +1372,27 @@ fn gray_body(
 }
 
 /// DICOM 以外の形式。ファイルの段は変えられないので、メタデータから組んだ段の値を出す。
-fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, stages: &[Stage]) {
+/// 切り替えられる段（FITS のダーク・フラット）で押されたものを返す。
+fn plain_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    node: Node,
+    info: &ImageInfo,
+    stages: &[Stage],
+) -> Option<Command> {
+    let mut command = None;
     match node {
         Node::Stage(i) => {
-            let Some(stage) = stages.get(i) else {
-                return;
-            };
+            let stage = stages.get(i)?;
+            if let Some(mut on) = stage.switch {
+                // 押した印はすぐ変え、読み直した画像が届くと段の状態がそれに追いつく。
+                if ui
+                    .checkbox(&mut on, tr(lang, "Apply dark and flat"))
+                    .clicked()
+                {
+                    command = Some(Command::ToggleCalibration);
+                }
+            }
             if i == 0 {
                 ui.label(format!(
                     "{} × {}  {} bit  {}",
@@ -1375,7 +1402,17 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
                     color_name(lang, info.color)
                 ));
             }
-            if !stage.lines.is_empty() {
+            if stage.stacked {
+                for (name, value) in &stage.lines {
+                    ui.weak(tr_text(lang, name));
+                    match stage.choices.iter().find(|p| p.role.key() == name) {
+                        Some(pick) => command = command.or(pick_box(ui, lang, i, pick)),
+                        None => {
+                            ui.add(egui::Label::new(value).wrap());
+                        }
+                    }
+                }
+            } else if !stage.lines.is_empty() {
                 egui::Grid::new(("stage", i))
                     .num_columns(2)
                     .spacing([8.0, 2.0])
@@ -1391,7 +1428,7 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
             if let Some(note) = stage.note {
                 ui.weak(tr(lang, note));
             }
-            if i == 0 {
+            if i == 0 && stages.iter().all(|s| s.switch.is_none()) {
                 ui.weak(tr(lang, "This format has no editable file stages."));
             }
         }
@@ -1408,6 +1445,71 @@ fn plain_body(ui: &mut egui::Ui, lang: Language, node: Node, info: &ImageInfo, s
         }
         _ => {}
     }
+    command
+}
+
+/// 使うマスターを選び直す箱。並ぶのは条件に合う候補だけ。
+fn pick_box(
+    ui: &mut egui::Ui,
+    lang: Language,
+    stage: usize,
+    pick: &format_stages::Pick,
+) -> Option<Command> {
+    let name = |p: &Path| {
+        p.file_name().map_or_else(
+            || p.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )
+    };
+    // 箱にはファイル名だけを出し、条件はその下に折り返す（箱の幅では切れて読めないため）。
+    let (file, conditions) = match pick.current.find(" (") {
+        Some(at) => pick.current.split_at(at),
+        None => (pick.current.as_str(), ""),
+    };
+    let shown = if pick.manual {
+        file.to_owned()
+    } else {
+        format!("{}: {file}", tr(lang, "Auto"))
+    };
+    let mut command = None;
+    egui::ComboBox::from_id_salt(("calibration pick", stage, pick.role.key()))
+        .selected_text(shown)
+        .width(ui.available_width())
+        .truncate()
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(!pick.manual, tr(lang, "Auto"))
+                .clicked()
+                && pick.manual
+            {
+                command = Some(None);
+            }
+            for (n, path) in pick.candidates.iter().enumerate() {
+                let current = pick.manual && pick.current.starts_with(&name(path));
+                // 候補は合う順。先頭が「自動」で選ばれるもの。
+                let label = if n == 0 {
+                    format!("{}  ({})", name(path), tr(lang, "best match"))
+                } else {
+                    name(path)
+                };
+                if ui
+                    .selectable_label(current, label)
+                    .on_hover_text(path.display().to_string())
+                    .clicked()
+                    && !current
+                {
+                    command = Some(Some(path.clone()));
+                }
+            }
+        });
+    let conditions = conditions.trim();
+    if !conditions.is_empty() {
+        ui.add(egui::Label::new(conditions).wrap());
+    }
+    command.map(|file| Command::ChooseCalibration {
+        role: pick.role,
+        file,
+    })
 }
 
 fn color_name(lang: Language, color: vw_core::ColorModel) -> &'static str {

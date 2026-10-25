@@ -516,6 +516,29 @@ impl VwApp {
         self.start_load(index, path, full);
     }
 
+    /// スロット `index` のライトのフォルダで、`role` のマスターを `file` に替える（`None` は自動）。
+    /// 同じフォルダのライトを全部これで見るので、表示中の FITS を読み直す。
+    pub(super) fn choose_calibration(
+        &mut self,
+        index: usize,
+        role: vw_fits::calibration::Role,
+        file: Option<PathBuf>,
+    ) {
+        let Some(shown) = &self.slots[index].shown else {
+            return;
+        };
+        let light = frames::file_of(&shown.path);
+        self.log.info(format!(
+            "Calibration {} for the lights in {}: {}",
+            role.key(),
+            light.parent().unwrap_or(&light).display(),
+            file.as_ref()
+                .map_or("auto".to_owned(), |f| f.display().to_string())
+        ));
+        self.calibration.choose(&light, role, file);
+        self.reload_fits_slots();
+    }
+
     pub(super) fn develop_slot(&mut self, index: usize) {
         let s = &mut self.slots[index];
         let Some(shown) = &mut s.shown else {
@@ -975,8 +998,10 @@ fn file_label(path: &Path) -> String {
 /// ダーク・フラットを当てた（当てられなかった）ことの、フォルダごとに 1 回出すログ。
 /// 切ってあるときは、自分で切ったので出さない。
 fn calibration_note(path: &Path, metadata: &vw_core::Metadata) -> Option<(PathBuf, String)> {
-    use vw_fits::calibration::{APPLIED, GROUP, NOT_APPLIED, STATE};
+    use vw_fits::calibration::{Role, APPLIED, GROUP, NOT_APPLIED, STATE};
     let state = metadata.get(GROUP, STATE)?;
+    // 候補の一覧はメタデータ欄と図で見られるので、ログを長くしないよう出さない。
+    let candidate = |k: &str| Role::ALL.iter().any(|r| r.candidate_key() == k);
     if state != APPLIED && state != NOT_APPLIED {
         return None;
     }
@@ -984,7 +1009,7 @@ fn calibration_note(path: &Path, metadata: &vw_core::Metadata) -> Option<(PathBu
     let details: Vec<String> = metadata
         .entries
         .iter()
-        .filter(|(g, k, _)| g == GROUP && k != STATE)
+        .filter(|(g, k, _)| g == GROUP && k != STATE && !candidate(k))
         .map(|(_, k, v)| format!("{k}: {v}"))
         .collect();
     let what = if state == APPLIED {

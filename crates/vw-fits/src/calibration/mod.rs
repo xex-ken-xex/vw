@@ -8,7 +8,7 @@ mod frame;
 mod search;
 mod select;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
@@ -29,6 +29,49 @@ pub const APPLIED: &str = "Applied";
 pub const TURNED_OFF: &str = "Off for this image";
 /// [`STATE`] の値: 合うマスターがない。
 pub const NOT_APPLIED: &str = "Not applied";
+
+/// 当てるマスターの役目。手で選び直すときの単位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// ライトから引くダーク。
+    Dark,
+    /// ライトを割るフラット。
+    Flat,
+    /// フラットから引くダークフラットかバイアス。
+    FlatDark,
+    /// ダークがないときなどに、ライトから引くバイアス。
+    Bias,
+}
+
+impl Role {
+    pub const ALL: [Role; 4] = [Role::Dark, Role::Flat, Role::FlatDark, Role::Bias];
+
+    /// メタデータの項目名。
+    pub fn key(self) -> &'static str {
+        match self {
+            Role::Dark => "Dark",
+            Role::Flat => "Flat",
+            Role::FlatDark => "Flat dark",
+            Role::Bias => "Bias",
+        }
+    }
+
+    /// 候補を並べるメタデータの項目名。
+    pub fn candidate_key(self) -> &'static str {
+        match self {
+            Role::Dark => "Dark candidate",
+            Role::Flat => "Flat candidate",
+            Role::FlatDark => "Flat dark candidate",
+            Role::Bias => "Bias candidate",
+        }
+    }
+}
+
+/// メタデータの、手で選んだマスターの役目を並べる項目名（値は [`Role::key`]）。
+pub const CHOSEN: &str = "Chosen by hand";
+
+/// フォルダごとに手で選んだマスター。
+type Picks = HashMap<Role, PathBuf>;
 
 /// 露出が違うダークをどうするか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -112,6 +155,9 @@ struct Shared {
     options: RwLock<Options>,
     /// 「校正なし」にしたファイル。
     off: RwLock<HashSet<PathBuf>>,
+    /// ライトのフォルダごとに、手で選んだマスター。同じ夜のライトは同じマスターで見たいので、
+    /// 1 枚ごとではなくフォルダごとに持つ。
+    picks: RwLock<HashMap<PathBuf, Picks>>,
     index: Mutex<Index>,
     masters: Mutex<Masters>,
 }
@@ -149,6 +195,32 @@ impl Calibration {
         }
     }
 
+    /// `light` のフォルダのライトに、`role` のマスターとして `file` を使う。`None` なら自動に戻す。
+    pub fn choose(&self, light: &Path, role: Role, file: Option<PathBuf>) {
+        let Some(dir) = light.parent() else {
+            return;
+        };
+        let mut picks = self.0.picks.write().unwrap_or_else(|e| e.into_inner());
+        let folder = picks.entry(dir.to_path_buf()).or_default();
+        match file {
+            Some(f) => {
+                folder.insert(role, f);
+            }
+            None => {
+                folder.remove(&role);
+            }
+        }
+    }
+
+    fn picks(&self, light: &Path) -> Picks {
+        let picks = self.0.picks.read().unwrap_or_else(|e| e.into_inner());
+        light
+            .parent()
+            .and_then(|d| picks.get(d))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// 校正の結果をメタデータに書き、当てた値を返す。当てないときは `pixels` のまま。
     /// `get` はライトのヘッダのカード、`bayer` はモザイクの画像か。
     pub(crate) fn calibrate(
@@ -180,7 +252,8 @@ impl Calibration {
                 },
             )
         };
-        let plan = plan(&light, &frames, &o);
+        let picks = self.picks(path);
+        let plan = plan(&light, &frames, &o, &picks);
         let Some(plan) = plan else {
             metadata.push(GROUP, STATE, NOT_APPLIED);
             for (role, why) in reasons(&light, &frames, &o) {
@@ -242,24 +315,45 @@ struct Plan<'a> {
 }
 
 /// バイアスのマスターか、なければ定数のオフセット。
-fn offset_for<'a>(of: &Frame, frames: &'a [Frame], o: &Options) -> Offset<'a> {
+fn offset_for<'a>(of: &Frame, frames: &'a [Frame], o: &Options, pick: Option<&Path>) -> Offset<'a> {
     if o.use_bias {
-        if let Ok(b) = select::bias(of, frames, o) {
-            return Offset::Frame(b);
+        if let Ok(b) = select::biases(of, frames, o) {
+            return Offset::Frame(Choice::pick(b, pick));
         }
     }
     o.synthetic_bias.map_or(Offset::None, Offset::Constant)
 }
 
+/// フラットから引くもの。ダークフラットを先に、バイアスを後に並べた候補から選ぶ。
+fn flat_offset<'a>(
+    flat: &Frame,
+    frames: &'a [Frame],
+    o: &Options,
+    pick: Option<&Path>,
+) -> Offset<'a> {
+    let mut ranked = Vec::new();
+    if o.use_dark {
+        ranked.extend(select::dark_flats(flat, frames, o).unwrap_or_default());
+    }
+    if o.use_bias {
+        ranked.extend(select::biases(flat, frames, o).unwrap_or_default());
+    }
+    if ranked.is_empty() {
+        return o.synthetic_bias.map_or(Offset::None, Offset::Constant);
+    }
+    Offset::Frame(Choice::pick(ranked, pick))
+}
+
 /// 何を当てるか。何も当てられなければ `None`。
-fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options) -> Option<Plan<'a>> {
+fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options, picks: &Picks) -> Option<Plan<'a>> {
+    let pick = |role: Role| picks.get(&role).map(PathBuf::as_path);
     let mut plan = Plan {
         dark: None,
         offset: Offset::None,
         flat: None,
     };
     if o.use_dark {
-        if let Ok(d) = select::dark(light, frames, o) {
+        if let Ok(d) = select::dark(light, frames, o, pick(Role::Dark)) {
             let ratio = match (light.exposure, d.frame.exposure) {
                 (Some(l), Some(e)) if e > 0.0 && o.dark_scaling == DarkScaling::Exposure => l / e,
                 _ => 1.0,
@@ -268,7 +362,7 @@ fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options) -> Option<Plan<'a>>
                 plan.dark = Some((d, 1.0));
             } else {
                 // 伸ばす前にバイアスを抜かないと、バイアスまで伸ばしてしまう。
-                let offset = offset_for(light, frames, o);
+                let offset = offset_for(light, frames, o, pick(Role::Bias));
                 if offset != Offset::None {
                     plan.dark = Some((d, ratio));
                     plan.offset = offset;
@@ -277,36 +371,47 @@ fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options) -> Option<Plan<'a>>
         }
     }
     if plan.dark.is_none() {
-        plan.offset = match offset_for(light, frames, o) {
+        plan.offset = match offset_for(light, frames, o, pick(Role::Bias)) {
             // ダークもバイアスもなければ、定数だけ引いてもフラットの補正にしかならない。
             Offset::Constant(_) if !o.use_flat => Offset::None,
             other => other,
         };
     }
-    if o.use_flat {
-        if let Ok(f) = select::flat(light, frames, o) {
-            let flat_offset = match select::dark_flat(f.frame, frames, o) {
-                Ok(df) if o.use_dark => Offset::Frame(df),
-                _ => offset_for(f.frame, frames, o),
-            };
-            plan.flat = Some((f, flat_offset));
+    // ライトから何も引けないのにフラットで割ると、センサーの土台（バイアス）まで割られて、
+    // 周辺減光が逆向きに付く。フラットはライトから何か引けるときだけ当てる。
+    let subtracted = plan.dark.is_some() || plan.offset != Offset::None;
+    if o.use_flat && subtracted {
+        if let Ok(f) = select::flat(light, frames, o, pick(Role::Flat)) {
+            let offset = flat_offset(f.frame, frames, o, pick(Role::FlatDark));
+            plan.flat = Some((f, offset));
         }
     }
     let nothing = plan.dark.is_none() && plan.flat.is_none() && plan.offset == Offset::None;
     (!nothing).then_some(plan)
 }
 
+/// ライトから引けるもの（ダークかバイアスか定数）があるか。
+fn can_subtract(light: &Frame, frames: &[Frame], o: &Options) -> bool {
+    (o.use_dark && select::dark(light, frames, o, None).is_ok())
+        || offset_for(light, frames, o, None) != Offset::None
+}
+
 /// 当てられなかったわけ（種類ごと）。
 fn reasons(light: &Frame, frames: &[Frame], o: &Options) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if o.use_dark {
-        if let Err(e) = select::dark(light, frames, o) {
+        if let Err(e) = select::dark(light, frames, o, None) {
             out.push(("Dark", e));
         }
     }
     if o.use_flat {
-        if let Err(e) = select::flat(light, frames, o) {
-            out.push(("Flat", e));
+        match select::flat(light, frames, o, None) {
+            Err(e) => out.push(("Flat", e)),
+            Ok(_) if !can_subtract(light, frames, o) => out.push((
+                "Flat",
+                "not used: no dark, bias or constant bias to subtract from the light first".into(),
+            )),
+            Ok(_) => {}
         }
     }
     if out.is_empty() {
@@ -367,16 +472,20 @@ impl Plan<'_> {
                 Sub::Values(v) => v[i],
             }
         };
-        for (i, v) in values.iter_mut().enumerate().take(n) {
-            let mut x = *v;
+        let subtracted = |i: usize| -> f32 {
             match &dark {
-                Some((d, ratio)) if *ratio == 1.0 => x -= d[i],
+                Some((d, ratio)) if *ratio == 1.0 => d[i],
                 Some((d, ratio)) => {
                     let b = base(i);
-                    x -= b + (*ratio as f32) * (d[i] - b);
+                    b + (*ratio as f32) * (d[i] - b)
                 }
-                None => x -= base(i),
+                None => base(i),
             }
+        };
+        let before = sampled(n, |i| values[i]);
+        let taken = sampled(n, subtracted);
+        for (i, v) in values.iter_mut().enumerate().take(n) {
+            let mut x = *v - subtracted(i);
             if let Some(f) = &flat {
                 let f = f[i];
                 if f > 1e-6 {
@@ -409,8 +518,91 @@ impl Plan<'_> {
                 },
             ));
         }
+        // 手で選び直せるように、候補と、手で選んだ役目を残す。
+        let mut chosen = Vec::new();
+        let mut list = |role: Role, c: &Choice| {
+            if c.candidates.len() > 1 {
+                for f in &c.candidates {
+                    notes.push((role.candidate_key(), f.path.display().to_string()));
+                }
+            }
+            if c.manual {
+                chosen.push(role.key());
+            }
+        };
+        if let Some((c, _)) = &self.dark {
+            list(Role::Dark, c);
+        }
+        if let Offset::Frame(c) = &self.offset {
+            list(Role::Bias, c);
+        }
+        if let Some((c, flat_offset)) = &self.flat {
+            list(Role::Flat, c);
+            if let Offset::Frame(c) = flat_offset {
+                list(Role::FlatDark, c);
+            }
+        }
+        if !chosen.is_empty() {
+            notes.push((CHOSEN, chosen.join(", ")));
+        }
+        // 当てた効き目を数で見せる（画素の変換の図とメタデータ欄に出す）。
+        let formula = match (
+            self.dark.is_some() || self.offset != Offset::None,
+            flat.is_some(),
+        ) {
+            (true, true) => "(light - dark) / flat",
+            (true, false) => "light - dark",
+            (false, _) => "light / flat",
+        };
+        notes.push(("Formula", formula.into()));
+        if self.dark.is_some() || self.offset != Offset::None {
+            notes.push(("Subtracted (median)", value_text(percentile(&taken, 0.5))));
+        }
+        if let Some(f) = &flat {
+            let f = sampled(n, |i| f[i]);
+            notes.push((
+                "Flat (1-99 %)",
+                format!("{:.3} - {:.3}", percentile(&f, 0.01), percentile(&f, 0.99)),
+            ));
+        }
+        let after = sampled(n, |i| values[i]);
+        notes.push((
+            "Light median",
+            format!(
+                "{} -> {}",
+                value_text(percentile(&before, 0.5)),
+                value_text(percentile(&after, 0.5))
+            ),
+        ));
         Ok(notes)
     }
+}
+
+/// 数えるのに使う画素の上限。全画素を並べ替えると数千万画素で重いので、間引いて見る。
+const SAMPLES: usize = 100_000;
+
+/// `n` 画素から等間隔に取った値（NaN を除き、小さい順）。
+fn sampled(n: usize, value: impl Fn(usize) -> f32) -> Vec<f32> {
+    let step = n.div_ceil(SAMPLES).max(1);
+    let mut v: Vec<f32> = (0..n)
+        .step_by(step)
+        .map(value)
+        .filter(|v| v.is_finite())
+        .collect();
+    v.sort_by(f32::total_cmp);
+    v
+}
+
+/// 小さい順の `sorted` の `q`（0〜1）の位置の値。
+fn percentile(sorted: &[f32], q: f64) -> f32 {
+    if sorted.is_empty() {
+        return f32::NAN;
+    }
+    sorted[((sorted.len() - 1) as f64 * q).round() as usize]
+}
+
+fn value_text(v: f32) -> String {
+    format!("{v:.1}")
 }
 
 fn flat_offset_key(o: &Offset) -> String {
