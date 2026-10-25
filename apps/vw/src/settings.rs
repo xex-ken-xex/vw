@@ -1295,7 +1295,8 @@ pub struct SendApp {
     pub args: String,
     #[serde(default)]
     pub accepts: Accepts,
-    /// 受け付ける拡張子を `|` か `,` で区切ったもの（`nef|arw|jpg`）。空なら何でも。
+    /// 受け付ける拡張子の正規表現（`nef|arw|jpg`、`cr[23]`）。`.` を除いた拡張子全体と、
+    /// 大文字小文字を区別せずに照らす。空なら何でも。
     #[serde(default)]
     pub extensions: String,
 }
@@ -1331,6 +1332,8 @@ impl SendApp {
             Some("program is empty")
         } else if vw_launch::args::split(&self.args).is_err() {
             Some("a \" in the arguments is not closed")
+        } else if self.extension_pattern().is_err() {
+            Some("extensions is not a valid regular expression")
         } else {
             None
         }
@@ -1349,16 +1352,20 @@ impl SendApp {
         if self.accepts == Accepts::Folders {
             return false;
         }
-        let mut listed = self
-            .extensions
-            .split(['|', ',', ' '])
-            .map(|e| e.trim().trim_start_matches('.'))
-            .filter(|e| !e.is_empty())
-            .peekable();
-        if listed.peek().is_none() {
-            return true;
+        match self.extension_pattern() {
+            Ok(None) => true,
+            Ok(Some(pattern)) => extension.is_some_and(|ext| pattern.is_match(ext)),
+            Err(_) => false,
         }
-        extension.is_some_and(|ext| listed.any(|e| e.eq_ignore_ascii_case(ext)))
+    }
+
+    /// 拡張子の正規表現。空なら `None`。`nef` が `nefx` に当たらないよう、全体の一致にする。
+    fn extension_pattern(&self) -> Result<Option<regex::Regex>, regex::Error> {
+        let text = self.extensions.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        regex::Regex::new(&format!("(?i)^(?:{text})$")).map(Some)
     }
 }
 
@@ -2437,13 +2444,37 @@ args = '"{path}'
     #[test]
     fn send_app_takes_listed_extensions_in_any_case() {
         let app = SendApp {
-            extensions: ".NEF, arw".into(),
+            extensions: "NEF|arw".into(),
             ..Default::default()
         };
         assert!(app.takes(false, Some("nef")));
         assert!(app.takes(false, Some("ARW")));
         assert!(!app.takes(false, Some("jpg")));
         assert!(!app.takes(false, None));
+    }
+
+    #[test]
+    fn send_app_extensions_are_a_regex_matched_against_the_whole_extension() {
+        let app = SendApp {
+            extensions: "cr[23]|jpe?g".into(),
+            ..Default::default()
+        };
+        assert!(app.takes(false, Some("cr3")));
+        assert!(app.takes(false, Some("JPEG")));
+        assert!(!app.takes(false, Some("crw")));
+        assert!(!app.takes(false, Some("jpgx")));
+    }
+
+    #[test]
+    fn send_app_with_a_broken_extension_regex_is_a_problem() {
+        let app = SendApp {
+            name: "a".into(),
+            program: "a".into(),
+            extensions: "nef(".into(),
+            ..Default::default()
+        };
+        assert!(app.problem().is_some());
+        assert!(!app.takes(false, Some("nef")));
     }
 
     #[test]

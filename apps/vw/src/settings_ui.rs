@@ -2507,7 +2507,7 @@ impl SettingsUi {
                 title_line(ui, tr(lang, "Send to apps"), "send.apps");
                 ui.weak(tr(
                     lang,
-                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: e.g. nef|arw|jpg; empty means any file.",
+                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file.",
                 ));
                 self.send_apps.ui(ui, settings, out);
             });
@@ -3264,6 +3264,14 @@ impl SendApps {
                                 .min_size(egui::vec2(110.0, 0.0))
                                 .hint_text(tr(lang, "any")),
                         );
+                        if problem == Some("extensions is not a valid regular expression") {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                2.0,
+                                egui::Stroke::new(1.0, red),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
                         edited |= r.changed();
                         if ui
                             .add_enabled(i > 0, egui::Button::new(icon::ARROW_UP))
