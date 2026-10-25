@@ -1387,7 +1387,7 @@ const JA: &[(&str, &str)] = &[
     ("Timeout", "タイムアウト"),
     ("Seconds to wait for a destination to connect and answer.", "送信先がつながって応えるまで待つ秒数。"),
     ("Destinations", "送信先"),
-    ("Where Send to in the right-click menu sends files. Test sends a C-ECHO to check the settings.", "右クリックの「送信」で送る相手。[接続確認] で C-ECHO を送って設定を確かめます。"),
+    ("Where Send to in the right-click menu sends files. Test sends a C-ECHO to check the settings.", "右クリックの「送る」で送る相手。[接続確認] で C-ECHO を送って設定を確かめます。"),
     ("Host", "ホスト"),
     ("Port", "ポート"),
     ("AE title", "AE タイトル"),
