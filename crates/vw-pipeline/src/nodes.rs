@@ -308,6 +308,11 @@ impl Node {
         }
     }
 
+    /// 周りの画素も見るノード（色だけで決まらないので、3D LUT にできない）。
+    pub fn spatial(&self) -> bool {
+        self.heavy() || matches!(self, Node::Noise { .. })
+    }
+
     /// 大きな画像では時間のかかるノード。値を動かしている間は縮めた画像で計算する。
     pub fn heavy(&self) -> bool {
         matches!(
@@ -402,7 +407,7 @@ fn for_row_bands(img: &mut Float, f: impl Fn(usize, &mut [f32]) + Sync) {
 }
 
 /// ガウスぼかし。横と縦に分けて 2 回かける（2 次元の畳み込みより半径に対して速い）。
-pub(crate) fn blur(img: &mut Float, sigma: f32) {
+pub fn blur(img: &mut Float, sigma: f32) {
     if sigma <= 0.0 || img.data.is_empty() {
         return;
     }

@@ -89,6 +89,34 @@ pub enum Command {
     ChannelWindow(usize, Option<(f32, f32)>),
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
+    /// パイプラインを 1 つ分のファイル（`.vwpipe`）に書く。スロットの見た目も入れる。
+    ExportFile(PathBuf, Values),
+    /// パイプラインのファイルを読んで、保存したパイプラインの一覧に足す。
+    ImportFile(PathBuf),
+    /// ノードの色の処理を 3D LUT に書く。
+    ExportLut(PathBuf, Values, LutFormat),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LutFormat {
+    Cube,
+    Clf,
+}
+
+impl LutFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            LutFormat::Cube => "cube",
+            LutFormat::Clf => "clf",
+        }
+    }
+}
+
+/// ファイルを選ぶ窓を開いている用事。
+enum FileTask {
+    Export(Values),
+    Import,
+    Lut(Values, LutFormat),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -319,6 +347,10 @@ pub struct PipelineView {
     levels_drag: Option<(f32, f32)>,
     /// 合成の色ごとの黒と白の段のゲージで、ドラッグしている黒と白。
     lane_drags: [Option<(f32, f32)>; 3],
+    /// ファイルに書き出す・ファイルから読むときの、ファイルを選ぶ窓。
+    file_picker: Option<(FileTask, Box<vw_tree::picker::Picker>)>,
+    /// 最後にファイルを選んだフォルダ（次に窓を開くところ）。
+    file_dir: Option<PathBuf>,
 }
 
 impl PipelineView {
@@ -421,7 +453,97 @@ impl PipelineView {
         }
         out.extend(self.calibration.take());
         out.extend(self.send_window(ui));
+        out.extend(self.show_file_picker(ui.ctx()));
         out
+    }
+
+    fn show_file_picker(&mut self, ctx: &egui::Context) -> Option<Command> {
+        let (_, picker) = self.file_picker.as_mut()?;
+        let path = match picker.show(ctx) {
+            vw_tree::picker::Outcome::Open => return None,
+            vw_tree::picker::Outcome::Cancelled => {
+                self.file_picker = None;
+                return None;
+            }
+            vw_tree::picker::Outcome::Chosen(path) => path,
+        };
+        let (task, _) = self.file_picker.take()?;
+        self.file_dir = path.parent().map(Path::to_path_buf);
+        Some(match task {
+            FileTask::Export(values) => Command::ExportFile(path, values),
+            FileTask::Import => Command::ImportFile(path),
+            FileTask::Lut(values, format) => Command::ExportLut(path, values, format),
+        })
+    }
+
+    /// ファイルに書き出す・ファイルから読む。
+    fn file_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        values: &Values,
+        preset: Option<(&str, bool)>,
+    ) {
+        use vw_tree::picker::{Mode, Picker};
+        let name = preset.map_or("pipeline", |(n, _)| n);
+        let labels = || crate::settings_ui::picker_labels(lang);
+        let save = |extension: &str| Mode::SaveFile {
+            extensions: vec![extension.to_owned()],
+            name: format!("{name}.{extension}"),
+        };
+        let lut = vw_pipeline::lut::sample(&values.chain).err();
+        let mut chosen = None;
+        vw_ui::menu::button(ui, tr(lang, "File"), |ui| {
+            if ui.button(tr(lang, "Export to file...")).clicked() {
+                let mode = save(vw_pipeline::preset::FILE_EXTENSION);
+                chosen = Some((
+                    FileTask::Export(values.clone()),
+                    tr(lang, "Export the pipeline"),
+                    mode,
+                ));
+                ui.close();
+            }
+            if ui.button(tr(lang, "Read from file...")).clicked() {
+                let mode = Mode::OpenFile {
+                    extensions: vec![vw_pipeline::preset::FILE_EXTENSION.to_owned()],
+                };
+                chosen = Some((FileTask::Import, tr(lang, "Read a pipeline"), mode));
+                ui.close();
+            }
+            ui.separator();
+            for format in [LutFormat::Cube, LutFormat::Clf] {
+                let text = match format {
+                    LutFormat::Cube => tr(lang, "Export the colors as .cube..."),
+                    LutFormat::Clf => tr(lang, "Export the colors as CLF..."),
+                };
+                let button = ui
+                    .add_enabled(lut.is_none(), egui::Button::new(text))
+                    .on_hover_text(tr(
+                        lang,
+                        "A 3D LUT of the nodes (per-pixel color changes only), for other software",
+                    ));
+                let button = match &lut {
+                    Some(reason) => button.on_disabled_hover_text(tr_text(lang, reason)),
+                    None => button,
+                };
+                if button.clicked() {
+                    let mode = save(format.extension());
+                    chosen = Some((FileTask::Lut(values.clone(), format), text, mode));
+                    ui.close();
+                }
+            }
+        });
+        if let Some((task, title, mode)) = chosen {
+            // 初めは、見ている画像のフォルダから（作業フォルダは使う人には分かりにくいため）。
+            let start = self.file_dir.clone().or_else(|| {
+                self.path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+            });
+            let picker = Picker::new(title, mode, start.as_deref(), labels());
+            self.file_picker = Some((task, Box::new(picker)));
+        }
     }
 
     /// VOI の段で変えた中心と幅を、スロットの黒と白にして送る。ドラッグの間は間を空けて送る
@@ -646,6 +768,7 @@ impl PipelineView {
             ui.horizontal(|ui| {
                 if let Some(values) = &values {
                     self.save_buttons(ui, lang, values, preset, saved, out);
+                    self.file_menu(ui, lang, values, preset);
                     ui.separator();
                 }
                 let slot_window = info
@@ -2037,6 +2160,20 @@ fn plain_body(
 }
 
 /// 灰色の画像の「黒と白」の段で、スロットの黒と白と曲線を変える欄。色の表の段のゲージと同じ値を変える。
+/// 保存したパイプラインで決めた黒と白の決め方（読み込んだときの決め方の行より優先する）。
+fn saved_method(lang: Language, method: vw_pipeline::look::BlackWhite) -> Option<String> {
+    use vw_pipeline::look::BlackWhite;
+    Some(match method {
+        BlackWhite::File => return None,
+        BlackWhite::Percentile { black, white } => {
+            format!("{} {black} – {white} %", tr(lang, "Percentiles"))
+        }
+        BlackWhite::Zscale => "zscale".to_owned(),
+        BlackWhite::MinMax => tr(lang, "Minimum to maximum").to_owned(),
+        BlackWhite::Values { .. } => tr(lang, "Fixed values").to_owned(),
+    })
+}
+
 fn levels_body(
     ui: &mut egui::Ui,
     lang: Language,
@@ -2056,6 +2193,11 @@ fn levels_body(
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
+            if let Some(method) = saved_method(lang, applied.black_white) {
+                ui.weak(tr(lang, "Saved pipeline"));
+                ui.label(method);
+                ui.end_row();
+            }
             for (name, value, range) in [
                 ("Black", &mut black, f64::NEG_INFINITY..=shown(hi)),
                 ("White", &mut white, shown(lo)..=f64::INFINITY),

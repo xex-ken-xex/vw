@@ -68,6 +68,7 @@ jobs:
         run: |
           cargo about generate -c packaging/about.toml packaging/about.hbs --manifest-path apps/vw/Cargo.toml -o THIRD-PARTY-LICENSES.txt
           cargo about generate -c packaging/about.toml packaging/about-dicoamplio.hbs --manifest-path apps/dicoamplio/Cargo.toml -o THIRD-PARTY-LICENSES-dicoamplio.txt
+          cargo about generate -c packaging/about.toml packaging/about-vwbatch.hbs --manifest-path apps/vwbatch/Cargo.toml -o THIRD-PARTY-LICENSES-vwbatch.txt
 
       - name: Check setup scripts
         if: runner.os == 'Linux'
@@ -89,7 +90,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/vw dist/dicoamplio
-          cp target/release/vw README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
+          # vwbatch は vw で保存したパイプラインをかけるツールなので、別の書庫にせず vw と一緒に配る
+          cp target/release/vw target/release/vwbatch README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt THIRD-PARTY-LICENSES-vwbatch.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
           cp target/release/dicoamplio apps/dicoamplio/README.md apps/dicoamplio/Readme.html LICENSE-MIT LICENSE-APACHE dist/dicoamplio/
           cp THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
@@ -100,7 +102,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/vw, dist/dicoamplio | Out-Null
-          Copy-Item target/release/vw.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt dist/vw/
+          Copy-Item target/release/vw.exe, target/release/vwbatch.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt, THIRD-PARTY-LICENSES-vwbatch.txt dist/vw/
           # 起動しない PC で原因を調べるスクリプト。起動できないと vw の中からは何も調べられないので、zip に同梱する
           Copy-Item -Recurse packaging/windows/check dist/vw/check
           Compress-Archive -Path dist/vw -DestinationPath dist/${{ matrix.package }}

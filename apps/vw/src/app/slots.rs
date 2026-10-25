@@ -561,6 +561,70 @@ impl VwApp {
         self.reload_slot(index);
     }
 
+    /// スロット `index` の今の見た目を、パイプラインのファイルに入れる形にする。灰色の画像でなければ `None`。
+    /// 設定で決まっている値（FITS の黒と白の決め方、既定の色の表）も、そのときの値として書き込む
+    /// （ほかの PC やまとめてかけるツールでも、同じ見た目になるように）。
+    pub(super) fn slot_look(&self, index: usize) -> Option<crate::pipelines::Look> {
+        use vw_pipeline::look::{BlackWhite, CurveName, COLOR_MAP_OFF};
+        let slot = self.slots.get(index)?;
+        let shown = slot.shown.as_ref()?;
+        let applied = shown.info.look.as_ref()?;
+        let choice = &slot.color;
+        let fits = &self.settings().fits;
+        let black_white = match (choice.window, choice.black_white) {
+            (Some((black, white)), _) => BlackWhite::Values { black, white },
+            (None, BlackWhite::File) if applied.kind == crate::colormap::Kind::Fits => {
+                match fits.stretch {
+                    crate::settings::FitsStretch::Percentile => BlackWhite::Percentile {
+                        black: fits.low_percent,
+                        white: fits.high_percent,
+                    },
+                    crate::settings::FitsStretch::Zscale => BlackWhite::Zscale,
+                    crate::settings::FitsStretch::MinMax => BlackWhite::MinMax,
+                }
+            }
+            (None, method) => method,
+        };
+        let color_map = applied.palette_name().unwrap_or(COLOR_MAP_OFF).to_owned();
+        let color_map_stops = self
+            .settings()
+            .pipeline
+            .palettes
+            .iter()
+            .find(|p| p.name == color_map)
+            .map(|p| p.colors.clone())
+            .unwrap_or_default();
+        Some(crate::pipelines::Look {
+            black_white,
+            curve: Some(CurveName::from(applied.curve)),
+            color_map: Some(color_map),
+            color_map_stops,
+        })
+    }
+
+    /// 保存したパイプラインの見た目を、スロット `index` に当てて読み直す。
+    pub(super) fn apply_look(&mut self, index: usize, look: &crate::pipelines::Look) {
+        use crate::colormap::Pick;
+        let Some(slot) = self.slots.get_mut(index) else {
+            return;
+        };
+        let mut choice = slot.color.clone();
+        choice.window = None;
+        choice.black_white = look.black_white;
+        if let Some(curve) = look.curve {
+            choice.curve = Some(curve.into());
+        }
+        match look.color_map.as_deref() {
+            None => {}
+            Some(vw_pipeline::look::COLOR_MAP_OFF) => choice.pick = Pick::Off,
+            Some(name) => choice.pick = Pick::Palette(name.to_owned()),
+        }
+        if choice != slot.color {
+            slot.color = choice;
+            self.reload_slot(index);
+        }
+    }
+
     pub(super) fn set_slot_window(&mut self, index: usize, window: Option<(f32, f32)>) {
         let curve = self.slots[index].color.curve;
         self.set_slot_levels(index, window, curve);
@@ -584,6 +648,19 @@ impl VwApp {
         }
         slot.color.window = window;
         slot.color.curve = curve;
+        self.reload_slot(index);
+    }
+
+    /// 黒と白と曲線を、保存したパイプラインで決めた決め方も含めて、読み込んだときのものに戻す。
+    pub(super) fn reset_slot_levels(&mut self, index: usize) {
+        let slot = &mut self.slots[index];
+        if slot.color.black_white.is_file() {
+            self.set_slot_levels(index, None, None);
+            return;
+        }
+        slot.color.window = None;
+        slot.color.curve = None;
+        slot.color.black_white = vw_pipeline::look::BlackWhite::File;
         self.reload_slot(index);
     }
 
@@ -751,6 +828,9 @@ impl VwApp {
             }
             if let Some(event) = resp.derive {
                 self.log_derive(event);
+            }
+            if let Some(look) = &resp.look {
+                self.apply_look(i, look);
             }
             if resp.pipeline {
                 self.active = i;

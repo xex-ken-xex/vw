@@ -27,6 +27,7 @@ vw-dock = { path = "crates/vw-dock" }
 vw-log = { path = "crates/vw-log" }
 vw-launch = { path = "crates/vw-launch" }
 vw-renderer = { path = "crates/vw-renderer" }
+vw-pipeline = { path = "crates/vw-pipeline" }
 
 [profile.release]
 lto = "thin"

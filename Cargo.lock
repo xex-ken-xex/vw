@@ -4727,6 +4727,7 @@ dependencies = [
  "vw-jpeg",
  "vw-launch",
  "vw-log",
+ "vw-pipeline",
  "vw-png",
  "vw-quality",
  "vw-raw",
@@ -4828,6 +4829,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vw-pipeline"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "toml 1.1.8+spec-1.1.0",
+ "vw-core",
+ "vw-dicom",
+ "vw-fits",
+]
+
+[[package]]
 name = "vw-png"
 version = "0.8.0"
 dependencies = [
@@ -4889,6 +4901,29 @@ version = "0.8.0"
 dependencies = [
  "image-webp",
  "vw-core",
+]
+
+[[package]]
+name = "vwbatch"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "jpeg-encoder 0.7.1",
+ "png",
+ "rayon",
+ "tiff",
+ "vw-bmp",
+ "vw-core",
+ "vw-dicom",
+ "vw-fits",
+ "vw-gif",
+ "vw-jpeg",
+ "vw-pipeline",
+ "vw-png",
+ "vw-raw",
+ "vw-tiff",
+ "vw-webp",
+ "walkdir",
 ]
 
 [[package]]

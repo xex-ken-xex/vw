@@ -554,6 +554,7 @@ mod tests {
                 window: None,
                 channels: [None; 3],
                 curve: None,
+                ..Choice::default()
             },
         };
         let registry = crate::test_util::all_registry();

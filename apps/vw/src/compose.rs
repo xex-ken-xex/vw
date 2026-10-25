@@ -299,6 +299,7 @@ pub fn compose(
                 curve: img.curve,
                 file_curve: img.curve,
                 scale: Scale::of(&img.metadata),
+                black_white: Default::default(),
             },
             size: (img.width, img.height),
             placement,

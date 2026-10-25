@@ -339,6 +339,8 @@ pub struct SlotResponse {
     pub send: Option<crate::send_app::Choice>,
     /// 右クリックメニューで「画素の変換」が選ばれた。
     pub pipeline: bool,
+    /// 見た目の入った保存したパイプラインを選んだ。スロットの黒と白・曲線・色の表に当てる。
+    pub look: Option<crate::pipelines::Look>,
     /// 右クリックメニューで「評価の基準にする」が選ばれた。
     pub reference: bool,
     /// 右クリックメニューで「QR コードを読む」が選ばれた。
@@ -1027,6 +1029,7 @@ impl Slot {
                 d.view = view;
                 d.split = split;
                 self.derive = Some(d);
+                out.look = p.look.clone();
             }
             None => {}
         }
