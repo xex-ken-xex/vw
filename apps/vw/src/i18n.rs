@@ -37,6 +37,8 @@ const JA: &[(&str, &str)] = &[
     // vw について
     ("Help", "ヘルプ"),
     ("About vw", "vw について"),
+    ("Image quality metrics help", "画質の評価のヘルプ"),
+    ("Help on the metrics", "指標の説明"),
     ("Fast image viewer", "高速画像ビューワ"),
     ("Author", "作者"),
     ("License", "ライセンス"),
@@ -1167,7 +1169,45 @@ const JA: &[(&str, &str)] = &[
     ("Name", "名前"),
     ("Memo", "メモ"),
     ("Separate with commas", "カンマ区切り"),
-    ("Stopped reading {}.", "{} の読み込みを止めました。"),
+    (
+        "Stopped reading {}. Register or update it again to continue from there.",
+        "{} の読み込みを中断しました。もう一度登録か更新をすると、続きから読みます。",
+    ),
+    (
+        "The previous reading stopped partway ({} files done).",
+        "前回の読み込みが途中で止まっています（{} ファイル済み）。",
+    ),
+    (
+        "vw stopped while reading {}. It will be skipped.",
+        "{} を読んでいる途中で vw が止まりました。このファイルは飛ばします。",
+    ),
+    ("Continue from where it stopped", "続きから読む"),
+    ("Read QR codes", "QR コードを読む"),
+    ("QR codes", "QR コード"),
+    ("Unreadable", "読めなかったもの"),
+    ("Found", "見つかったもの"),
+    ("(paused)", "（一時中断中）"),
+    ("Pause reading", "一時中断"),
+    ("Resume reading", "再開"),
+    ("Continue reading the files.", "続きを読みます。"),
+    (
+        "Stop reading for now. Even if vw is closed while paused, reading continues from here the next time.",
+        "読むのを止めておきます。止めたまま vw を閉じても、次はここから続けて読みます。",
+    ),
+    (
+        "Stop reading and discard the files read so far. The next time, reading starts over.",
+        "読むのをやめて、ここまで読んだ分を捨てます。次は最初から読みます。",
+    ),
+    ("Cancelled reading {}.", "{} の読み込みをキャンセルしました。"),
+    (
+        "Registering this dataset stopped partway. Open the folder to continue.",
+        "データセットの登録が途中で止まっています。フォルダを開くと続けられます。",
+    ),
+    (
+        "Registering this folder as a dataset stopped partway ({} files done). Continue from there?",
+        "このフォルダのデータセットの登録が途中で止まっています（{} ファイル済み）。続きから読みますか？",
+    ),
+    ("Continue", "続きから読む"),
     ("Skip", "スキップ"),
     (
         "Finish the open dataset dialog first.",

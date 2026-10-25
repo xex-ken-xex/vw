@@ -51,6 +51,7 @@ mod people_ui;
 mod persist;
 mod playback;
 mod positions;
+mod qr_reading;
 mod screens;
 mod send;
 mod slots;
@@ -200,6 +201,7 @@ pub struct VwApp {
     /// モデルの置き場。設定ファイルの場所が決まらない環境では `None`。
     ai_store: Option<crate::ai_models::Store>,
     ai_tags: crate::ai_tags::AiTagStore,
+    qr: qr_reading::QrReading,
     /// 走っている AI タグ付け。一度に 1 つ。
     ai_job: Option<ai_tagging::Job>,
     /// 走っている仕事が終わったら処理する画像。
@@ -240,6 +242,10 @@ pub struct VwApp {
     dataset_queue: Vec<PathBuf>,
     /// 取り出した先を含むデータセット。更新するか聞いている間だけ。
     outer_to_update: Option<PathBuf>,
+    /// 開いたフォルダのデータセットの登録が途中で止まっているので、続けるか聞く（フォルダ, 読み終えた数）。
+    resume_offer: Option<(PathBuf, usize)>,
+    /// 続けるかを聞いて「あとで」と答えたフォルダ。起動している間は聞き直さない。
+    resume_declined: Vec<PathBuf>,
     /// 最後にデータセットを取り出した出力先の親フォルダ。次の出力先の初期値に使う。
     last_extract_dir: Option<PathBuf>,
     log: Log,
@@ -655,6 +661,7 @@ impl VwApp {
             ai_models: Default::default(),
             ai_store,
             ai_tags: crate::ai_tags::AiTagStore::new(ai_tag_fallback),
+            qr: Default::default(),
             ai_job: None,
             ai_queue: Vec::new(),
             people,
@@ -690,6 +697,8 @@ impl VwApp {
             last_fullscreen_root: saved.fullscreen_root.clone(),
             dataset_queue: Vec::new(),
             outer_to_update: None,
+            resume_offer: None,
+            resume_declined: Vec::new(),
             last_extract_dir: saved.extract_dir.clone(),
             log,
             started,
@@ -839,6 +848,7 @@ impl VwApp {
             }
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
+            Action::OpenQualityHelp => self.open_help(crate::help::Page::Quality),
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
             Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
@@ -925,6 +935,7 @@ impl VwApp {
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
             Action::DevelopRaw => self.develop_slot(self.active),
+            Action::ReadQrCodes => self.read_qr_codes_active(ctx),
             Action::ToggleCalibration => self.toggle_calibration(self.active),
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
@@ -1044,6 +1055,7 @@ impl eframe::App for VwApp {
         self.sky_tick();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
+        self.qr_ui();
         let lang = self.lang();
         if let Some(e) = self.about.ui(&ctx, lang, &self.settings.settings.map) {
             self.log
@@ -1124,6 +1136,7 @@ impl eframe::App for VwApp {
         self.next_queued_update(&ctx);
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
+        self.resume_offer_dialog(&ctx);
         self.finish_trash_job();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);

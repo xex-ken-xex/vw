@@ -71,6 +71,9 @@ impl VwApp {
             self.next_id
         };
         self.log.info(format!("Opened folder {}", path.display()));
+        if !self.resume_declined.contains(&path) {
+            self.resume_offer = crate::catalog::unfinished(&path).map(|u| (path.clone(), u.done));
+        }
         let ctx = ctx.clone();
         self.folder_load = Some(FolderLoad::start(
             path,

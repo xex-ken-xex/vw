@@ -111,6 +111,51 @@ impl VwApp {
         }
     }
 
+    /// 開いたフォルダのデータセットの登録が途中で止まっていれば、続きから読むか聞く。
+    pub(super) fn resume_offer_dialog(&mut self, ctx: &egui::Context) {
+        let Some((dir, done)) = &self.resume_offer else {
+            return;
+        };
+        if let Some(dialog) = &self.dataset_dialog {
+            // そのフォルダを一時中断しているダイアログが開いていれば、そこで再開できる。
+            if dialog.dir() == dir.as_path() {
+                self.resume_offer = None;
+            }
+            return;
+        }
+        let lang = self.settings().appearance.language;
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("resume_dataset")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(tr1(
+                lang,
+                "Registering this folder as a dataset stopped partway ({} files done). Continue from there?",
+                &done.to_string(),
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Continue")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Later")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        if let Some(resume) = answer {
+            if let Some((dir, _)) = self.resume_offer.take() {
+                if resume {
+                    self.open_dataset_dialog(ctx, crate::dataset_ui::Request::Resume(dir));
+                } else {
+                    self.resume_declined.push(dir);
+                }
+            }
+        }
+    }
+
     /// Datasets 画面から、データセット `dir` の検索で当たったファイル（カタログのパス）だけを
     /// 1 件 1 スロットで並べる。
     ///

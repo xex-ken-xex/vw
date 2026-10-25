@@ -164,6 +164,23 @@ impl VwApp {
         }
     }
 
+    /// 同梱のヘルプページを、表示の言語で開く。書き出し先は設定のフォルダの help
+    /// （設定のフォルダがなければ一時フォルダ）。
+    pub(super) fn open_help(&mut self, page: crate::help::Page) {
+        let dir = self
+            .settings
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map_or_else(|| std::env::temp_dir().join("vw-help"), |d| d.join("help"));
+        let opened = crate::help::write_page(&dir, page, self.lang())
+            .and_then(|path| vw_launch::open_file(&path).map(|()| path));
+        match opened {
+            Ok(path) => self.log.info(format!("Help: opened {}", path.display())),
+            Err(e) => self.log.error(format!("Help: {}: {e}", dir.display())),
+        }
+    }
+
     /// ログ欄の中身。文字はドラッグで行をまたいで範囲選択でき、Ctrl+C でコピーする
     /// （コピーは egui のラベル選択に任せる）。
     pub(super) fn log_ui(&mut self, ui: &mut egui::Ui) {

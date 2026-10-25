@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>画質の評価 - vw ヘルプ</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --panel: #f6f8fa; --good: #3f8f4f; --caution: #a5781d; --bad: #b5463f; --accent: #2f6fb3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1f22; --fg: #dfe1e5; --muted: #9aa0a6; --line: #3a3d42;
+      --panel: #26282c; --good: #6eb478; --caution: #d2aa46; --bad: #d25a5a; --accent: #6ea8e6;
+    }
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+    font: 15px/1.7 "Segoe UI", "Yu Gothic UI", "Noto Sans JP", "Hiragino Sans", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 36px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 24px 0 4px; }
+  p, li { margin: 6px 0; }
+  .lead { color: var(--muted); }
+  nav { background: var(--panel); border: 1px solid var(--line); padding: 8px 16px; margin: 16px 0; }
+  nav a { margin-right: 14px; white-space: nowrap; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+  th, td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .formula { background: var(--panel); border-left: 3px solid var(--accent); padding: 10px 16px; margin: 10px 0; overflow-x: auto; }
+  math { font-size: 1.1em; }
+  .good { color: var(--good); font-weight: 600; }
+  .caution { color: var(--caution); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .note { border: 1px solid var(--line); padding: 8px 14px; margin: 12px 0; }
+  code, kbd { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.92em;
+    background: var(--panel); border: 1px solid var(--line); padding: 0 4px; }
+  pre { background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; overflow-x: auto; }
+  pre code { border: none; padding: 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>画質の評価</h1>
+<p class="lead">解析ウインドウの「評価」タブと、画素の変換のウインドウに出る 5 つの指標の意味・式・目安。</p>
+
+<nav>
+  <a href="#use">使い方</a>
+  <a href="#psnr">PSNR</a>
+  <a href="#ssim">SSIM</a>
+  <a href="#snr">SNR</a>
+  <a href="#cnr">CNR</a>
+  <a href="#sharpness">鮮鋭度</a>
+  <a href="#verdict">判定と目安</a>
+  <a href="#measure">何の値で測るか</a>
+</nav>
+
+<h2 id="use">使い方</h2>
+<ol>
+  <li><strong>表示 → 解析</strong> を開き、<strong>評価</strong> のタブを選ぶ。アクティブなスロットの画像を評価する。</li>
+  <li>表の列は <strong>変更前</strong>（ふつうの表示）と <strong>変更後</strong>（画素の変換で値を変えた結果）。</li>
+  <li>PSNR と SSIM は 2 枚を比べる指標で、既定では変更前を基準にして変更後を測る。別の画像（撮り直しや別の処理の結果）と比べたいときは、そのスロットを右クリックして <strong>評価の基準にする</strong>。大きさ（幅・高さ）が同じ画像でないと比べられない。</li>
+  <li>SNR と CNR には ROI が要る。左のツール列の <strong>ROI</strong>（<kbd>R</kbd>）を選び、スロットの上をドラッグすると <strong>対象</strong>（赤の破線）、<kbd>Shift</kbd> を押しながらドラッグすると <strong>背景</strong>（青の破線）。<kbd>Delete</kbd> で消す。ROI はフレームごとに持つ。</li>
+  <li><strong>CSV にコピー</strong> で、表をそのまま表計算ソフトへ貼れる。</li>
+</ol>
+<p>計算は裏で行う。値を動かしている間は縮小した画像で追いかけ、止まったら全画素で計算し直す。</p>
+
+<h2 id="psnr">PSNR（ピーク信号対雑音比）</h2>
+<p>基準の画像との画素ごとの差の大きさ。差が小さいほど大きくなる。単位は dB。2 枚がまったく同じなら無限大（∞）。</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>MSE</mi><mo>=</mo><mfrac><mn>1</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><msup><mrow><mo>(</mo><msub><mi>a</mi><mi>i</mi></msub><mo>−</mo><msub><mi>b</mi><mi>i</mi></msub><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+<math display="block">
+  <mrow><mi>PSNR</mi><mo>=</mo><mn>10</mn><mo>&#x2062;</mo><msub><mi>log</mi><mn>10</mn></msub><mfrac><msup><mi>P</mi><mn>2</mn></msup><mi>MSE</mi></mfrac></mrow>
+</math>
+</div>
+<p><i>a</i>・<i>b</i> は 2 枚の画素、<i>N</i> は画素の数、<i>P</i> は画素の取りうる最大値（vw では表示の明るさの 255）。</p>
+<p>画像全体の平均の差しか見ないので、目立つ所のわずかな崩れも目立たない所の大きな崩れも同じに数える。見た目の印象とずれるときは SSIM と合わせて見る。</p>
+
+<h2 id="ssim">SSIM（構造的類似度）</h2>
+<p>基準の画像と、明るさ・コントラスト・模様（構造）がどれだけ似ているか。1 が同一で、似ていないほど小さくなる。Wang ら（2004）の式。</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>SSIM</mi><mo>(</mo><mi>x</mi><mo>,</mo><mi>y</mi><mo>)</mo><mo>=</mo>
+  <mfrac>
+    <mrow><mo>(</mo><mn>2</mn><msub><mi>μ</mi><mi>x</mi></msub><msub><mi>μ</mi><mi>y</mi></msub><mo>+</mo><msub><mi>C</mi><mn>1</mn></msub><mo>)</mo><mo>(</mo><mn>2</mn><msub><mi>σ</mi><mrow><mi>x</mi><mi>y</mi></mrow></msub><mo>+</mo><msub><mi>C</mi><mn>2</mn></msub><mo>)</mo></mrow>
+    <mrow><mo>(</mo><msubsup><mi>μ</mi><mi>x</mi><mn>2</mn></msubsup><mo>+</mo><msubsup><mi>μ</mi><mi>y</mi><mn>2</mn></msubsup><mo>+</mo><msub><mi>C</mi><mn>1</mn></msub><mo>)</mo><mo>(</mo><msubsup><mi>σ</mi><mi>x</mi><mn>2</mn></msubsup><mo>+</mo><msubsup><mi>σ</mi><mi>y</mi><mn>2</mn></msubsup><mo>+</mo><msub><mi>C</mi><mn>2</mn></msub><mo>)</mo></mrow>
+  </mfrac></mrow>
+</math>
+<math display="block">
+  <mrow><msub><mi>C</mi><mn>1</mn></msub><mo>=</mo><msup><mrow><mo>(</mo><mn>0.01</mn><mi>P</mi><mo>)</mo></mrow><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><msub><mi>C</mi><mn>2</mn></msub><mo>=</mo><msup><mrow><mo>(</mo><mn>0.03</mn><mi>P</mi><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+</div>
+<ul>
+  <li><i>μ</i>・<i>σ</i>²・<i>σ<sub>xy</sub></i> は、各画素のまわりの 11×11 のガウス窓（σ = 1.5）で重みをつけた平均・分散・共分散。</li>
+  <li>画素ごとに求めた値を、窓が画像に収まる範囲で平均したものを出す。</li>
+  <li>元の実装と同じく、短い辺が 256 画素ほどになるまで整数倍で縮小してから求める。SSIM は見る距離に合った解像度で比べる指標なので、大きな画像を等倍で比べると小さすぎる違いまで拾うため。</li>
+</ul>
+
+<h2 id="snr">SNR（信号対雑音比）</h2>
+<p>対象 ROI の中の、明るさの平均とばらつきの比。ばらつき（ノイズ）が小さいほど大きい。ROI の中が均一なら無限大。</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>SNR</mi><mo>=</mo><mfrac><mrow><mo>|</mo><msub><mi>μ</mi><mtext>対象</mtext></msub><mo>|</mo></mrow><msub><mi>σ</mi><mtext>対象</mtext></msub></mfrac></mrow>
+</math>
+</div>
+<p><i>μ</i> は ROI の中の平均、<i>σ</i> は標準偏差（母標準偏差）。対象 ROI は、本来は一様に写るはずの所（平らな面、均一な部材）に置く。模様のある所に置くと、模様までノイズに数えてしまう。</p>
+
+<h2 id="cnr">CNR（コントラスト対雑音比）</h2>
+<p>対象と背景の明るさの差が、背景のノイズの何倍あるか。見分けたい物が雑音に埋もれていないかを見る。</p>
+<div class="formula">
+<math display="block">
+  <mrow><mi>CNR</mi><mo>=</mo><mfrac><mrow><mo>|</mo><msub><mi>μ</mi><mtext>対象</mtext></msub><mo>−</mo><msub><mi>μ</mi><mtext>背景</mtext></msub><mo>|</mo></mrow><msub><mi>σ</mi><mtext>背景</mtext></msub></mfrac></mrow>
+</math>
+</div>
+<p>対象 ROI と背景 ROI の両方が要る。背景のばらつきがなければ無限大。</p>
+
+<h2 id="sharpness">鮮鋭度（ラプラシアンの分散）</h2>
+<p>輪郭のくっきりさ。各画素で 4 近傍のラプラシアンを求め、その分散を出す。ぼけるほど小さくなる。</p>
+<div class="formula">
+<math display="block">
+  <mrow><msub><mi>L</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi></mrow></msub><mo>=</mo><mn>4</mn><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>−</mo><mn>1</mn><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>+</mo><mn>1</mn><mo>,</mo><mi>y</mi></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>−</mo><msub><mi>I</mi><mrow><mi>x</mi><mo>,</mo><mi>y</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow>
+</math>
+<math display="block">
+  <mrow><mtext>鮮鋭度</mtext><mo>=</mo><mi>Var</mi><mo>(</mo><mi>L</mi><mo>)</mo><mo>=</mo><mfrac><mn>1</mn><mi>M</mi></mfrac><mo>∑</mo><msup><mi>L</mi><mn>2</mn></msup><mo>−</mo><msup><mrow><mo>(</mo><mfrac><mn>1</mn><mi>M</mi></mfrac><mo>∑</mo><mi>L</mi><mo>)</mo></mrow><mn>2</mn></msup></mrow>
+</math>
+</div>
+<p>縁の 1 画素は除く（<i>M</i> は残った画素の数）。基準は要らない。ノイズも輪郭として数えるので、ノイズの多い画像では大きく出る。同じ被写体・同じ撮り方の画像どうしで比べる。</p>
+
+<h2 id="verdict">判定と目安</h2>
+<p>どの指標も値が大きいほど良い。値が「適合」の下限以上なら <span class="good">適合</span>、「注意」の下限以上なら <span class="caution">注意</span>、それ未満は <span class="bad">劣化</span>。</p>
+<table>
+  <tr><th>指標</th><th>適合（以上）</th><th>注意（以上）</th><th>設定の名前</th></tr>
+  <tr><td>PSNR</td><td class="num">35 dB</td><td class="num">25 dB</td><td><code>quality.psnr</code></td></tr>
+  <tr><td>SSIM</td><td class="num">0.95</td><td class="num">0.85</td><td><code>quality.ssim</code></td></tr>
+  <tr><td>SNR</td><td class="num">10</td><td class="num">5</td><td><code>quality.snr</code></td></tr>
+  <tr><td>CNR</td><td class="num">3</td><td class="num">1.5</td><td><code>quality.cnr</code></td></tr>
+  <tr><td>鮮鋭度</td><td class="num">500</td><td class="num">100</td><td><code>quality.sharpness</code></td></tr>
+</table>
+<p>表の値は既定の目安（表示の明るさ 0〜255 で測ったとき）。用途によって変わるので、設定で指標ごとに変えられる。変えるとすぐ判定だけが変わる（計算し直さない）。設定ファイルでは次のように書く。</p>
+<pre><code>[quality]
+psnr = { good = 40, caution = 30 }
+cnr = { good = 5, caution = 3 }</code></pre>
+<p>判定の横の帯は、適合の下限で 3/4、その 1.5 倍で満杯になる長さ。閾値の大きさが違う指標を同じ帯で見比べるためのもの。</p>
+<p>目安の考え方:</p>
+<ul>
+  <li><strong>PSNR</strong>: 8bit の画像では、40 dB を超えると違いはほぼ見えず、30 dB 前後で注意して見ると分かり、20 dB を切るとはっきり崩れて見えることが多い。</li>
+  <li><strong>SSIM</strong>: 0.95 以上ならほぼ同じ見た目。0.9 を下回ると、模様の崩れやぼけが見えてくることが多い。</li>
+  <li><strong>SNR</strong>: 画像の分野で「5 以上あれば見分けられる」とされる目安（Rose の基準）を注意の下限にした。</li>
+  <li><strong>CNR</strong>: 1 だと差が雑音と同じ大きさで見落としやすい。3 以上あれば見分けやすい。</li>
+  <li><strong>鮮鋭度</strong>: 被写体と画像の大きさで大きく変わる。絶対値よりも、同じ条件の画像どうしの比べ合いに使う。100 を切る画像はピンぼけを疑う、というのがよく使われる目安。</li>
+</ul>
+
+<h2 id="measure">何の値で測るか</h2>
+<div class="note">
+<p>どの指標も、<strong>表示の明るさ（0〜255）</strong>で測る。カラーの画像は明るさ（Y = 0.2126 R + 0.7152 G + 0.0722 B）にしてから測る。</p>
+<p>「変更後」は画素の変換の結果として、表示の色としてしか存在しないので、変更前と同じ土俵に乗せるには表示の明るさで比べるしかないため。そのため、ROI の横に出る平均・標準偏差（ファイルに書かれた値で求めたもの）とは一致しない。</p>
+</div>
+</main>
+</body>
+</html>

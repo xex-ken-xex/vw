@@ -15,6 +15,8 @@ pub enum Command {
     Copy(String),
     /// 基準を変更前に戻す。
     ClearReference,
+    /// 指標の説明のページを開く。
+    OpenHelp,
 }
 
 fn metric_title(m: Metric) -> &'static str {
@@ -88,6 +90,9 @@ pub fn table(
         ));
         if computing {
             ui.spinner();
+        }
+        if ui.small_button(tr(lang, "Help on the metrics")).clicked() {
+            out = Some(Command::OpenHelp);
         }
     });
     // 表の後ろに置くと、理由の列で広がった幅で折り返してウインドウからはみ出すので、表の前に置く。

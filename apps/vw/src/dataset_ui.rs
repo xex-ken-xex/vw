@@ -28,6 +28,8 @@ pub enum Request {
     Update(PathBuf),
     /// 取り出す。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
     Extract(PathBuf, Option<Vec<String>>),
+    /// 途中で止めた登録か更新を、続きからすぐに読み始める。
+    Resume(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,6 +72,12 @@ pub struct DatasetDialog {
     ai_tag_fallback: Option<PathBuf>,
     /// ラベルをフォルダに書けなかったときの置き場所。
     label_fallback: Option<PathBuf>,
+    /// 前回途中で止めた登録。
+    unfinished: Option<catalog::Unfinished>,
+    /// 前回の続きから読むか。
+    resume: bool,
+    /// キャンセルされたので、止まったら途中の結果を捨てる。
+    discard: bool,
 }
 
 /// 別スレッドでの処理の結果。
@@ -111,7 +119,10 @@ impl DatasetDialog {
         registry: &Registry,
         ctx: &egui::Context,
     ) -> Self {
+        let resuming = matches!(request, Request::Resume(_));
         let (dir, kind, hits) = match request {
+            Request::Resume(d) if catalog::exists_in(&d) => (d, Kind::Update, None),
+            Request::Resume(d) => (d, Kind::Register, None),
             Request::Register(d) => (d, Kind::Register, None),
             Request::Edit(d) => (d, Kind::Edit, None),
             Request::Update(d) => (d, Kind::Update, None),
@@ -136,6 +147,11 @@ impl DatasetDialog {
             hits,
             ai_tag_fallback: ai_tag_fallback.map(Path::to_path_buf),
             label_fallback: label_fallback.map(Path::to_path_buf),
+            unfinished: (kind != Kind::Extract)
+                .then(|| catalog::unfinished(&dir))
+                .flatten(),
+            resume: true,
+            discard: false,
             dir,
             kind,
         };
@@ -146,13 +162,18 @@ impl DatasetDialog {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             dialog.error = catalog::check_can_register(&dialog.dir).err();
+            if let Some(info) = dialog.unfinished.as_ref().and_then(|u| u.info.clone()) {
+                if !info.name.is_empty() {
+                    dialog.fill_info(info);
+                }
+            }
         } else {
             match catalog::load(&dialog.dir) {
                 Ok(c) => dialog.fill(c),
                 Err(e) => dialog.error = Some(e),
             }
         }
-        if kind == Kind::Update && dialog.error.is_none() {
+        if (kind == Kind::Update || resuming) && dialog.error.is_none() {
             dialog.start(registry, ctx, Language::English);
         }
         dialog
@@ -183,16 +204,25 @@ impl DatasetDialog {
     }
 
     fn fill(&mut self, c: Catalog) {
-        self.name = c.name.clone();
-        self.memo = c.memo.clone();
-        self.tags = c.tags.join(", ");
-        for (key, value) in &c.fields {
-            match self.fields.iter_mut().find(|(k, _)| k == key) {
-                Some((_, v)) => v.clone_from(value),
-                None => self.fields.push((key.clone(), value.clone())),
+        self.fill_info(Info {
+            name: c.name.clone(),
+            memo: c.memo.clone(),
+            tags: c.tags.clone(),
+            fields: c.fields.clone(),
+        });
+        self.previous = Some(c);
+    }
+
+    fn fill_info(&mut self, info: Info) {
+        self.name = info.name;
+        self.memo = info.memo;
+        self.tags = info.tags.join(", ");
+        for (key, value) in info.fields {
+            match self.fields.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, v)) => *v = value,
+                None => self.fields.push((key, value)),
             }
         }
-        self.previous = Some(c);
     }
 
     fn info(&self) -> Info {
@@ -244,6 +274,10 @@ impl DatasetDialog {
         let ai_tag_fallback = self.ai_tag_fallback.clone();
         let label_fallback = self.label_fallback.clone();
         let worker_progress = progress.clone();
+        let resume = match (&self.unfinished, self.resume) {
+            (Some(_), true) => catalog::Resume::Continue,
+            _ => catalog::Resume::Fresh,
+        };
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let repaint = ctx.clone();
@@ -271,7 +305,7 @@ impl DatasetDialog {
                     &mut ask_password,
                 )
                 .map(Outcome::Extracted),
-                _ => catalog::scan(
+                _ => catalog::scan_resumable(
                     &dir,
                     info,
                     previous.as_ref(),
@@ -280,8 +314,10 @@ impl DatasetDialog {
                     &labels,
                     &worker_progress,
                     &mut ask_password,
+                    resume,
                 )
                 .and_then(|r| catalog::save(&dir, &r.catalog).map(|()| r))
+                .inspect(|_| catalog::discard_unfinished(&dir))
                 .map(Outcome::Scanned),
             };
             let _ = done.send(outcome);
@@ -324,6 +360,7 @@ impl DatasetDialog {
         let mut run = false;
         let mut save = false;
         let mut cancel = false;
+        let mut discard = false;
         let running = self.job.is_some();
         egui::Window::new(title)
             .pivot(egui::Align2::CENTER_CENTER)
@@ -376,6 +413,23 @@ impl DatasetDialog {
                         self.inputs_ui(ui, lang);
                     });
                 }
+                if let Some(u) = &self.unfinished {
+                    ui.add_space(4.0);
+                    ui.add_enabled_ui(!running && self.kind != Kind::Update, |ui| {
+                        ui.label(tr1(
+                            lang,
+                            "The previous reading stopped partway ({} files done).",
+                            &u.done.to_string(),
+                        ));
+                        if let Some(c) = &u.crashed {
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                tr1(lang, "vw stopped while reading {}. It will be skipped.", c),
+                            );
+                        }
+                        ui.checkbox(&mut self.resume, tr(lang, "Continue from where it stopped"));
+                    });
+                }
                 if let Some(e) = &self.error {
                     ui.add_space(4.0);
                     ui.colored_label(ui.visuals().error_fg_color, e);
@@ -391,13 +445,40 @@ impl DatasetDialog {
                             .lock()
                             .map(|c| c.clone())
                             .unwrap_or_default();
+                        let paused = job.progress.paused();
                         ui.horizontal(|ui| {
+                            let text = if paused {
+                                format!("{done} / {total}  {}", tr(lang, "(paused)"))
+                            } else {
+                                format!("{done} / {total}")
+                            };
                             ui.add(
                                 egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                                    .text(format!("{done} / {total}"))
+                                    .text(text)
                                     .desired_width(300.0),
                             );
-                            cancel = ui.button(tr(lang, "Cancel")).clicked();
+                            if self.kind == Kind::Extract {
+                                cancel = ui.button(tr(lang, "Cancel")).clicked();
+                                return;
+                            }
+                            let (label, hint) = if paused {
+                                ("Resume reading", "Continue reading the files.")
+                            } else {
+                                (
+                                    "Pause reading",
+                                    "Stop reading for now. Even if vw is closed while paused, reading continues from here the next time.",
+                                )
+                            };
+                            if ui.button(tr(lang, label)).on_hover_text(tr(lang, hint)).clicked() {
+                                job.progress.pause.store(!paused, Ordering::Relaxed);
+                            }
+                            discard = ui
+                                .button(tr(lang, "Cancel"))
+                                .on_hover_text(tr(
+                                    lang,
+                                    "Stop reading and discard the files read so far. The next time, reading starts over.",
+                                ))
+                                .clicked();
                         });
                         ui.add(egui::Label::new(egui::RichText::new(current).weak()).truncate());
                     }
@@ -439,6 +520,10 @@ impl DatasetDialog {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if cancel {
+            self.cancel();
+        }
+        if discard {
+            self.discard = true;
             self.cancel();
         }
         if !open {
@@ -607,12 +692,25 @@ impl DatasetDialog {
                 ));
                 Some(false)
             }
+            Err(e) if e == "Cancelled" && self.discard => {
+                // 読んでいたスレッドは終わっているので、ここで消しても書き戻されない。
+                catalog::discard_unfinished(&self.dir);
+                self.discard = false;
+                self.unfinished = None;
+                log.info(tr1(
+                    lang,
+                    "Cancelled reading {}.",
+                    &self.dir.display().to_string(),
+                ));
+                Some(self.kind == Kind::Update)
+            }
             Err(e) if e == "Cancelled" => {
                 log.info(tr1(
                     lang,
-                    "Stopped reading {}.",
+                    "Stopped reading {}. Register or update it again to continue from there.",
                     &self.dir.display().to_string(),
                 ));
+                self.unfinished = catalog::unfinished(&self.dir);
                 Some(self.kind == Kind::Update)
             }
             Err(e) => {
