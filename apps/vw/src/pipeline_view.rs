@@ -349,6 +349,19 @@ impl PipelineView {
         crate::sub_window::title(lang, "Pixel pipeline", self.path.as_deref())
     }
 
+    /// 図の中で値を変えられる段か。
+    fn editable(&self, node: Node) -> bool {
+        match (node, &self.loaded) {
+            (Node::Chain(_) | Node::ColorMap, _) => true,
+            (Node::LaneLevels(_) | Node::Compose, Some(Loaded::Compose(_))) => true,
+            (Node::Modality | Node::Voi | Node::Presentation, Some(Loaded::Gray(_))) => true,
+            (Node::Stage(i), Some(Loaded::Plain(stages))) => stages
+                .get(i)
+                .is_some_and(|s| s.switch.is_some() || !s.choices.is_empty()),
+            _ => false,
+        }
+    }
+
     /// 1 フレーム分。欄の中を描き、スロットと保存したパイプラインに当てる操作を返す。
     pub fn ui(
         &mut self,
@@ -636,6 +649,7 @@ impl PipelineView {
                 if ui.button(tr(lang, "Zoom map")).clicked() {
                     self.open_zoom_map = true;
                 }
+                legend(ui, lang);
                 ui.weak(tr(
                     lang,
                     "Changed values are only shown, never written to the file. Closing the window drops values that are not saved.",
@@ -1070,6 +1084,24 @@ impl PipelineView {
                     }
                 })
         });
+        // 見出しの上端の色で、図の中で値を変えられる段と、ファイルやライブラリが決めて
+        // 変えられない段を分ける。
+        let rect = inner.response.rect;
+        let strip = Rect::from_min_size(rect.min, vec2(rect.width(), (2.0 * scale).max(2.0)));
+        ui.painter().rect_filled(
+            strip,
+            egui::CornerRadius {
+                nw: 3,
+                ne: 3,
+                sw: 0,
+                se: 0,
+            },
+            if self.editable(node) {
+                editable_color(&visuals)
+            } else {
+                fixed_color(&visuals)
+            },
+        );
         if toggle {
             if collapsed {
                 self.collapsed.remove(&node);
@@ -1831,6 +1863,29 @@ fn gray_body(
         g.window_edit = Some((g.params.center, g.params.width));
     }
     edited
+}
+
+/// 値を変えられる段の見出しの色。
+fn editable_color(visuals: &egui::Visuals) -> Color32 {
+    visuals.selection.stroke.color
+}
+
+/// 変えられない段の見出しの色。
+fn fixed_color(visuals: &egui::Visuals) -> Color32 {
+    visuals.weak_text_color()
+}
+
+/// 見出しの色の意味。
+fn legend(ui: &mut egui::Ui, lang: Language) {
+    for (color, text) in [
+        (editable_color(ui.visuals()), "Can be changed"),
+        (fixed_color(ui.visuals()), "Fixed by the file or library"),
+    ] {
+        let (rect, _) = ui.allocate_exact_size(vec2(14.0, 4.0), Sense::hover());
+        ui.painter().rect_filled(rect, 1.0, color);
+        ui.weak(tr(lang, text));
+    }
+    ui.separator();
 }
 
 /// DICOM 以外の形式。ファイルの段は変えられないので、メタデータから組んだ段の値を出す。

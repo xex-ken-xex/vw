@@ -1509,6 +1509,9 @@ const JA: &[(&str, &str)] = &[
     ("Also show the gauge on gray images without a color map, to read the values of black and white.", "色の表を当てていない灰色の画像にもゲージを出します。黒と白の値を読むのに使えます。"),
     ("Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff", "自分の色の表を 1 行に 1 つ書きます。名前、=、そのあとに「位置（0〜1） #rrggbb」を ; で区切って並べます。間の色はなめらかにつなぎます。例: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff"),
     ("Write each line as name = position #rrggbb; position #rrggbb, with a different name that is not a built-in color map.", "1 行ずつ「名前 = 位置 #rrggbb; 位置 #rrggbb」の形で、組み込みの色の表とも重ならない別々の名前にしてください。"),
+    // 画素の変換の図の見出しの色
+    ("Can be changed", "変えられる"),
+    ("Fixed by the file or library", "ファイルやライブラリが決める（変えられない）"),
     // 色の合成
     ("Compose colors", "色の合成"),
     ("Compose colors...", "色を合成..."),
