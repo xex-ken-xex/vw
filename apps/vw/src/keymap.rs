@@ -64,6 +64,7 @@ pub enum Action {
     ExportImages,
     ParentFolder,
     DevelopRaw,
+    ToggleCalibration,
     TrashBadImages,
     CancelSending,
     FullscreenSlideshow,
@@ -106,7 +107,7 @@ pub enum Scope {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 79] = [
+    pub const ALL: [Action; 80] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -122,6 +123,7 @@ impl Action {
         Action::ZoomIn,
         Action::ZoomOut,
         Action::DevelopRaw,
+        Action::ToggleCalibration,
         Action::LayoutAuto,
         Action::Layout1x1,
         Action::Layout1x2,
@@ -240,6 +242,7 @@ impl Action {
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
+            Action::ToggleCalibration => "toggle_calibration",
             Action::TrashBadImages => "trash_bad_images",
             Action::CancelSending => "cancel_sending",
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
@@ -302,6 +305,7 @@ impl Action {
             Action::ZoomIn => "Zoom in",
             Action::ZoomOut => "Zoom out",
             Action::DevelopRaw => "Develop RAW from sensor data",
+            Action::ToggleCalibration => "Apply dark and flat",
             Action::LayoutAuto => "Layout: auto",
             Action::Layout1x1 => "Layout: 1 x 1",
             Action::Layout1x2 => "Layout: 1 x 2",
@@ -480,6 +484,7 @@ impl Action {
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
             Action::DevelopRaw => vec![KeyCombo::plain(D)],
+            Action::ToggleCalibration => vec![],
             Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
             Action::Layout1x1 => vec![KeyCombo::alt(Num1)],
             Action::Layout1x2 => vec![KeyCombo::alt(Num2)],

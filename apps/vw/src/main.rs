@@ -90,8 +90,8 @@ use std::time::Instant;
 use vw_core::Registry;
 
 /// 組み込みのデコーダプラグインを登録する。新しい形式はここに 1 行足す。
-/// `fits` は FITS のプラグインと共有する、設定画面で変える表示の決め方。
-fn registry(fits: &vw_fits::SharedOptions) -> Registry {
+/// `fits` と `calibration` は FITS のプラグインと共有する、設定画面で変える表示と校正の決め方。
+fn registry(fits: &vw_fits::SharedOptions, calibration: &vw_fits::Calibration) -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
     registry.register(Arc::new(vw_jpeg::JpegPlugin));
@@ -99,7 +99,10 @@ fn registry(fits: &vw_fits::SharedOptions) -> Registry {
     registry.register(Arc::new(vw_webp::WebpPlugin::default()));
     registry.register(Arc::new(vw_gif::GifPlugin::default()));
     registry.register(Arc::new(vw_tiff::TiffPlugin));
-    registry.register(Arc::new(vw_fits::FitsPlugin::new(fits.clone())));
+    registry.register(Arc::new(vw_fits::FitsPlugin::new(
+        fits.clone(),
+        calibration.clone(),
+    )));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry
@@ -137,10 +140,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let fits = vw_fits::SharedOptions::default();
+            let calibration = vw_fits::Calibration::default();
             Ok(Box::new(app::VwApp::new(
                 cc,
-                registry(&fits),
+                registry(&fits, &calibration),
                 fits,
+                calibration,
                 initial,
                 started,
             )))

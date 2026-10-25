@@ -801,6 +801,8 @@ pub struct Fits {
     pub flip_rows: bool,
     /// `BAYERPAT` のモザイクをカラーにする。
     pub demosaic: bool,
+    /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
+    pub calibration: FitsCalibration,
 }
 
 impl Default for Fits {
@@ -813,6 +815,7 @@ impl Default for Fits {
             curve: FitsCurve::Linear,
             flip_rows: d.flip_rows,
             demosaic: d.demosaic,
+            calibration: FitsCalibration::default(),
         }
     }
 }
@@ -844,6 +847,7 @@ impl Fits {
             curve: r.get("curve").unwrap_or(d.curve),
             flip_rows: r.get("flip_rows").unwrap_or(d.flip_rows),
             demosaic: r.get("demosaic").unwrap_or(d.demosaic),
+            calibration: FitsCalibration::read(r.reader()),
         }
     }
 
@@ -859,6 +863,176 @@ impl Fits {
             curve: self.curve.curve(),
             flip_rows: self.flip_rows,
             demosaic: self.demosaic,
+        }
+    }
+}
+
+/// 校正用の画像が見つかったときにどうするか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationApply {
+    /// 見つかれば当てる。
+    #[default]
+    Auto,
+    Off,
+}
+
+/// 露出が違うダークをどうするか（[`vw_fits::calibration::DarkScaling`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DarkScaling {
+    #[default]
+    None,
+    Exposure,
+}
+
+/// フラットの選び方（[`vw_fits::calibration::FlatMatch`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlatMatch {
+    #[default]
+    Filter,
+    FilterAndNight,
+}
+
+/// フラットを 1 前後にするときの割る数（[`vw_fits::calibration::FlatNormalize`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlatNormalize {
+    #[default]
+    Median,
+    Mean,
+}
+
+/// 天体の画像のダーク・フラット・バイアス（`[fits.calibration]`）。既定は撮影と処理のソフトの慣習どおり。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FitsCalibration {
+    pub apply: CalibrationApply,
+    /// 開いたフォルダの近くの種類別のフォルダ（darks、flats など）を探す。
+    pub search_nearby: bool,
+    /// マスターを貯めておくフォルダ。
+    pub library: Vec<String>,
+    pub use_dark: bool,
+    pub use_flat: bool,
+    pub use_bias: bool,
+    pub exposure_tolerance_secs: f64,
+    /// ℃。
+    pub temperature_tolerance: f64,
+    pub match_gain_offset: bool,
+    pub dark_scaling: DarkScaling,
+    pub flat_match: FlatMatch,
+    pub flat_normalize: FlatNormalize,
+    pub equalize_cfa: bool,
+    /// バイアスがないときに引く定数。空なら引かない。
+    pub synthetic_bias: String,
+}
+
+impl Default for FitsCalibration {
+    fn default() -> Self {
+        let d = vw_fits::calibration::Options::default();
+        Self {
+            apply: CalibrationApply::Auto,
+            search_nearby: d.search_nearby,
+            library: Vec::new(),
+            use_dark: d.use_dark,
+            use_flat: d.use_flat,
+            use_bias: d.use_bias,
+            exposure_tolerance_secs: d.exposure_tolerance_secs,
+            temperature_tolerance: d.temperature_tolerance,
+            match_gain_offset: d.match_gain_offset,
+            dark_scaling: DarkScaling::None,
+            flat_match: FlatMatch::Filter,
+            flat_normalize: FlatNormalize::Median,
+            equalize_cfa: d.equalize_cfa,
+            synthetic_bias: String::new(),
+        }
+    }
+}
+
+impl FitsCalibration {
+    pub const TOLERANCE_RANGE: std::ops::RangeInclusive<f64> = 0.0..=3600.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("fits.calibration");
+        let tolerance = |v: &f64| FitsCalibration::TOLERANCE_RANGE.contains(v);
+        Self {
+            apply: r.get("apply").unwrap_or(d.apply),
+            search_nearby: r.get("search_nearby").unwrap_or(d.search_nearby),
+            library: r.get("library").unwrap_or_else(|| d.library.clone()),
+            use_dark: r.get("use_dark").unwrap_or(d.use_dark),
+            use_flat: r.get("use_flat").unwrap_or(d.use_flat),
+            use_bias: r.get("use_bias").unwrap_or(d.use_bias),
+            exposure_tolerance_secs: r
+                .get_valid("exposure_tolerance_secs", tolerance, "must be 0 to 3600")
+                .unwrap_or(d.exposure_tolerance_secs),
+            temperature_tolerance: r
+                .get_valid("temperature_tolerance", tolerance, "must be 0 to 3600")
+                .unwrap_or(d.temperature_tolerance),
+            match_gain_offset: r.get("match_gain_offset").unwrap_or(d.match_gain_offset),
+            dark_scaling: r.get("dark_scaling").unwrap_or(d.dark_scaling),
+            flat_match: r.get("flat_match").unwrap_or(d.flat_match),
+            flat_normalize: r.get("flat_normalize").unwrap_or(d.flat_normalize),
+            equalize_cfa: r.get("equalize_cfa").unwrap_or(d.equalize_cfa),
+            synthetic_bias: r
+                .get_valid(
+                    "synthetic_bias",
+                    |v: &String| Self::bias_value(v).is_ok(),
+                    "must be empty or a number",
+                )
+                .unwrap_or(d.synthetic_bias),
+        }
+    }
+
+    /// `synthetic_bias` に書ける値か（空か数）。
+    pub fn valid_bias(text: &str) -> bool {
+        Self::bias_value(text).is_ok()
+    }
+
+    /// `synthetic_bias` の値。空なら `None`。
+    fn bias_value(text: &str) -> Result<Option<f64>, ()> {
+        let t = text.trim();
+        if t.is_empty() {
+            return Ok(None);
+        }
+        t.parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .map(Some)
+            .ok_or(())
+    }
+
+    pub fn options(&self) -> vw_fits::calibration::Options {
+        use vw_fits::calibration as c;
+        c::Options {
+            apply: self.apply == CalibrationApply::Auto,
+            search_nearby: self.search_nearby,
+            library: self
+                .library
+                .iter()
+                .filter(|p| !p.trim().is_empty())
+                .map(PathBuf::from)
+                .collect(),
+            use_dark: self.use_dark,
+            use_flat: self.use_flat,
+            use_bias: self.use_bias,
+            exposure_tolerance_secs: self.exposure_tolerance_secs,
+            temperature_tolerance: self.temperature_tolerance,
+            match_gain_offset: self.match_gain_offset,
+            dark_scaling: match self.dark_scaling {
+                DarkScaling::None => c::DarkScaling::None,
+                DarkScaling::Exposure => c::DarkScaling::Exposure,
+            },
+            flat_match: match self.flat_match {
+                FlatMatch::Filter => c::FlatMatch::Filter,
+                FlatMatch::FilterAndNight => c::FlatMatch::FilterAndNight,
+            },
+            flat_normalize: match self.flat_normalize {
+                FlatNormalize::Median => c::FlatNormalize::Median,
+                FlatNormalize::Mean => c::FlatNormalize::Mean,
+            },
+            equalize_cfa: self.equalize_cfa,
+            synthetic_bias: Self::bias_value(&self.synthetic_bias).ok().flatten(),
         }
     }
 }
@@ -2408,6 +2582,52 @@ mod fits_tests {
     #[test]
     fn sky_chart_is_on_by_default() {
         assert!(Settings::default().sky.enabled);
+    }
+
+    #[test]
+    fn calibration_defaults_follow_the_usual_practice() {
+        let o = Settings::default().fits.calibration.options();
+        assert!(o.apply && o.search_nearby && o.use_dark && o.use_flat && o.use_bias);
+        assert_eq!(o.dark_scaling, vw_fits::calibration::DarkScaling::None);
+        assert_eq!(
+            o.flat_normalize,
+            vw_fits::calibration::FlatNormalize::Median
+        );
+        assert_eq!(o.exposure_tolerance_secs, 0.5);
+        assert_eq!(o.temperature_tolerance, 2.0);
+        assert!(!o.equalize_cfa);
+        assert_eq!(o.synthetic_bias, None);
+    }
+
+    #[test]
+    fn calibration_settings_are_read_from_their_own_table() {
+        let text = "[fits.calibration]\napply = \"off\"\nlibrary = [\"/masters\"]\n\
+                    dark_scaling = \"exposure\"\nflat_match = \"filter_and_night\"\n\
+                    flat_normalize = \"mean\"\nsynthetic_bias = \"2048\"\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let o = s.fits.calibration.options();
+        assert!(!o.apply);
+        assert_eq!(o.library, vec![PathBuf::from("/masters")]);
+        assert_eq!(o.dark_scaling, vw_fits::calibration::DarkScaling::Exposure);
+        assert_eq!(
+            o.flat_match,
+            vw_fits::calibration::FlatMatch::FilterAndNight
+        );
+        assert_eq!(o.flat_normalize, vw_fits::calibration::FlatNormalize::Mean);
+        assert_eq!(o.synthetic_bias, Some(2048.0));
+        let again = Settings::from_toml(&s.to_toml()).unwrap().0;
+        assert_eq!(again.fits.calibration, s.fits.calibration);
+    }
+
+    #[test]
+    fn a_constant_bias_that_is_not_a_number_falls_back_to_none() {
+        let text = "[fits.calibration]\nsynthetic_bias = \"about 2000\"\n\
+                    temperature_tolerance = -1.0\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.fits.calibration, FitsCalibration::default());
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems.iter().all(|p| p.starts_with("fits.calibration.")));
     }
 
     #[test]

@@ -9,8 +9,10 @@
 //! - `BAYERPAT` のモザイクは、設定に従って RGB にする
 //! - 最初の黒と白を画素の分布から決める（[`stretch`]）
 //! - tile 圧縮（RICE、GZIP）の `.fz` と、ファイル全体を gzip した `.fits.gz` も読む
+//! - 場所の分かるライトには、近くやライブラリのダーク・フラット・バイアスを当てる（[`calibration`]）
 
 mod bayer;
+pub mod calibration;
 mod header;
 mod sky;
 pub mod stretch;
@@ -18,11 +20,13 @@ mod tile;
 
 use std::borrow::Cow;
 use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 pub use vw_core::Curve;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+pub use calibration::Calibration;
 pub use header::is_fits;
 use header::Hdu;
 pub use sky::{header_of_file, sky, ImageHeader, Sky};
@@ -74,11 +78,15 @@ impl SharedOptions {
 #[derive(Default)]
 pub struct FitsPlugin {
     options: SharedOptions,
+    calibration: Calibration,
 }
 
 impl FitsPlugin {
-    pub fn new(options: SharedOptions) -> Self {
-        Self { options }
+    pub fn new(options: SharedOptions, calibration: Calibration) -> Self {
+        Self {
+            options,
+            calibration,
+        }
     }
 }
 
@@ -109,7 +117,21 @@ impl DecoderPlugin for FitsPlugin {
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
-        decode_with(&gunzip(data)?, frame, self.options.get())
+        decode_with(&gunzip(data)?, frame, self.options.get(), None)
+    }
+
+    fn decode_frame_at(
+        &self,
+        path: &Path,
+        data: &[u8],
+        frame: usize,
+    ) -> Result<VwImage, DecodeError> {
+        decode_with(
+            &gunzip(data)?,
+            frame,
+            self.options.get(),
+            Some((&self.calibration, path)),
+        )
     }
 
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
@@ -200,7 +222,12 @@ fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
     Err(DecodeError::Unsupported("FITS file has no image".into()))
 }
 
-fn decode_with(data: &[u8], frame: usize, options: Options) -> Result<VwImage, DecodeError> {
+fn decode_with(
+    data: &[u8],
+    frame: usize,
+    options: Options,
+    calibration: Option<(&Calibration, &Path)>,
+) -> Result<VwImage, DecodeError> {
     let hdus = header::hdus(data)?;
     let image = find_image(&hdus)?;
     if frame >= image.planes {
@@ -213,9 +240,22 @@ fn decode_with(data: &[u8], frame: usize, options: Options) -> Result<VwImage, D
     };
     let (w, h) = (image.width, image.height);
     let mut pixels = to_pixels(stored, image.hdu);
+    let pattern = bayer_pattern(image.hdu);
+    let mut calibrated = Metadata::default();
+    // キューブの面ごとに合うマスターはないので、1 面の画像だけに当てる。
+    if let Some((calibration, path)) = calibration.filter(|_| image.planes == 1) {
+        let get = |key: &str| {
+            image
+                .hdu
+                .get(key)
+                .or_else(|| hdus[0].get(key))
+                .map(str::to_owned)
+        };
+        pixels = calibration.calibrate(path, &get, pattern.is_some(), pixels, &mut calibrated);
+    }
     let mut color = ColorModel::Gray;
     if options.demosaic && image.planes == 1 {
-        if let Some(pattern) = bayer_pattern(image.hdu) {
+        if let Some(pattern) = pattern {
             pixels = demosaic(pixels, w, h, pattern);
             color = ColorModel::Rgb;
         }
@@ -233,7 +273,25 @@ fn decode_with(data: &[u8], frame: usize, options: Options) -> Result<VwImage, D
     );
     img.curve = options.curve;
     img.metadata = metadata(&hdus, &image, frame);
+    img.metadata.entries.extend(calibrated.entries);
     Ok(img)
+}
+
+/// 1 面目の値を、`BSCALE`・`BZERO` をかけたモザイクのまま実数で返す（校正のマスター用）。
+pub(crate) fn mosaic_values(data: &[u8]) -> Result<Vec<f32>, DecodeError> {
+    let data = gunzip(data)?;
+    let hdus = header::hdus(&data)?;
+    let image = find_image(&hdus)?;
+    let stored = if image.compressed {
+        compressed_plane(&data, &image, 0)?
+    } else {
+        plain_plane(&data, &image, 0)?
+    };
+    Ok(match to_pixels(stored, image.hdu) {
+        PixelData::U8(v) => v.into_iter().map(f32::from).collect(),
+        PixelData::U16(v) => v.into_iter().map(f32::from).collect(),
+        PixelData::F32(v) => v,
+    })
 }
 
 /// 最初の行が下か。`ROWORDER` が書いてあればそれに従い、なければ設定に従う。

@@ -366,6 +366,7 @@ impl VwApp {
                 ms(texture),
             ),
         );
+        let calibration_note = calibration_note(&path, &loaded.info.metadata);
         // 1 枚のスロットで開いたマルチフレームのファイルは、フレームの並びのスロットにする。
         // フォルダスロットの中では並べ替えない。フォルダの中を送れなくなるため。
         let mut path = path;
@@ -401,6 +402,11 @@ impl VwApp {
         }
         if self.settings().viewer.develop_raw {
             self.develop_slot(index);
+        }
+        if let Some((dir, note)) = calibration_note {
+            if self.calibration_logged.insert(dir) {
+                self.log.info(note);
+            }
         }
     }
 
@@ -486,6 +492,30 @@ impl VwApp {
 
     /// スロットのカメラ RAW を現像し、届いたら埋め込みプレビューと差し替える。
     /// 現像できない画像と、現像を頼んだあとの画像では何もしない。
+    /// スロットの FITS の、ダーク・フラットを当てるかを切り替えて読み直す。
+    pub(super) fn toggle_calibration(&mut self, index: usize) {
+        let Some(shown) = &self.slots[index].shown else {
+            return;
+        };
+        if shown
+            .info
+            .metadata
+            .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
+            .is_none_or(|s| s == vw_fits::calibration::NOT_APPLIED)
+        {
+            return;
+        }
+        let path = shown.path.clone();
+        let off = self.calibration.toggle(&frames::file_of(&path));
+        self.log.info(format!(
+            "Calibration {} for {}",
+            if off { "off" } else { "on" },
+            path.display()
+        ));
+        let full = self.cell_needs_full();
+        self.start_load(index, path, full);
+    }
+
     pub(super) fn develop_slot(&mut self, index: usize) {
         let s = &mut self.slots[index];
         let Some(shown) = &mut s.shown else {
@@ -681,6 +711,9 @@ impl VwApp {
             }
             if resp.develop {
                 self.develop_slot(i);
+            }
+            if resp.toggle_calibration {
+                self.toggle_calibration(i);
             }
             if resp.close {
                 close = Some(i);
@@ -937,4 +970,34 @@ fn file_label(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// ダーク・フラットを当てた（当てられなかった）ことの、フォルダごとに 1 回出すログ。
+/// 切ってあるときは、自分で切ったので出さない。
+fn calibration_note(path: &Path, metadata: &vw_core::Metadata) -> Option<(PathBuf, String)> {
+    use vw_fits::calibration::{APPLIED, GROUP, NOT_APPLIED, STATE};
+    let state = metadata.get(GROUP, STATE)?;
+    if state != APPLIED && state != NOT_APPLIED {
+        return None;
+    }
+    let dir = path.parent()?.to_path_buf();
+    let details: Vec<String> = metadata
+        .entries
+        .iter()
+        .filter(|(g, k, _)| g == GROUP && k != STATE)
+        .map(|(_, k, v)| format!("{k}: {v}"))
+        .collect();
+    let what = if state == APPLIED {
+        "applied"
+    } else {
+        "not applied"
+    };
+    Some((
+        dir.clone(),
+        format!(
+            "Calibration {what} in {} ({})",
+            dir.display(),
+            details.join("; ")
+        ),
+    ))
 }

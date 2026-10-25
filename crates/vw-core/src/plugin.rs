@@ -70,6 +70,17 @@ pub trait DecoderPlugin: Send + Sync {
         }
     }
 
+    /// ファイルの場所が分かっているときの [`Self::decode_frame`]。同じフォルダや近くの
+    /// ファイルを使う形式（天体の画像の校正など）だけが上書きする。既定は場所を使わない。
+    fn decode_frame_at(
+        &self,
+        _path: &Path,
+        data: &[u8],
+        frame: usize,
+    ) -> Result<VwImage, DecodeError> {
+        self.decode_frame(data, frame)
+    }
+
     /// [`Self::decode`] の画像の代わりに、時間をかけて精細な画像を作る（カメラ RAW の
     /// センサーのデータの現像）。作れるかどうかは [`VwImage::develop_size`] で分かる。
     fn develop(&self, _data: &[u8]) -> Result<VwImage, DecodeError> {
@@ -232,7 +243,7 @@ impl Registry {
         let plugin = self
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
-        Ok((plugin.decode_frame(data, frame)?, plugin.name()))
+        Ok((plugin.decode_frame_at(path, data, frame)?, plugin.name()))
     }
 
     /// プラグインを選んで [`DecoderPlugin::develop`] し、画像と使ったプラグイン名を返す。
@@ -380,6 +391,41 @@ mod tests {
             r.decode_frame_bytes(path, b"AAA", 1),
             Err(DecodeError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn decoding_from_the_registry_tells_the_plugin_where_the_file_is() {
+        struct Where;
+        impl DecoderPlugin for Where {
+            fn name(&self) -> &str {
+                "WHERE"
+            }
+            fn extensions(&self) -> &[&str] {
+                &["where"]
+            }
+            fn probe(&self, _header: &[u8]) -> bool {
+                false
+            }
+            fn decode(&self, _data: &[u8]) -> Result<VwImage, DecodeError> {
+                Err(DecodeError::Invalid("path not given".into()))
+            }
+            fn decode_frame_at(
+                &self,
+                path: &Path,
+                _data: &[u8],
+                _frame: usize,
+            ) -> Result<VwImage, DecodeError> {
+                let mut img = VwImage::new(1, 1, ColorModel::Gray, PixelData::U8(vec![0]))
+                    .map_err(DecodeError::Invalid)?;
+                img.metadata
+                    .push("WHERE", "path", path.display().to_string());
+                Ok(img)
+            }
+        }
+        let mut r = Registry::new();
+        r.register(Arc::new(Where));
+        let (img, _) = r.decode_bytes(Path::new("/d/x.where"), b"").unwrap();
+        assert_eq!(img.metadata.get("WHERE", "path"), Some("/d/x.where"));
     }
 
     #[test]
