@@ -64,6 +64,41 @@ pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
     }
 }
 
+/// [`to_display`] が黒と白に使う値 `(黒, 白)`。
+pub fn window_of(img: &VwImage, params: &DisplayParams) -> (f32, f32) {
+    params
+        .window
+        .or(img.window)
+        .unwrap_or_else(|| match &img.data {
+            PixelData::U8(_) => (0.0, 255.0),
+            PixelData::U16(_) => (
+                0.0,
+                ((1u32 << img.significant_bits.clamp(1, 16)) - 1) as f32,
+            ),
+            PixelData::F32(v) => min_max(v),
+        })
+}
+
+/// 灰色の画像の、NaN を除いた値の最小と最大。灰色でない画像と、値が 1 つもない画像は `None`。
+pub fn gray_range(img: &VwImage) -> Option<(f32, f32)> {
+    if !matches!(img.color, ColorModel::Gray | ColorModel::GrayAlpha) {
+        return None;
+    }
+    let step = img.color.channels();
+    let (lo, hi) = match &img.data {
+        PixelData::U8(v) => fold_range(v.iter().step_by(step).map(|&x| f32::from(x))),
+        PixelData::U16(v) => fold_range(v.iter().step_by(step).map(|&x| f32::from(x))),
+        PixelData::F32(v) => fold_range(v.iter().step_by(step).copied()),
+    };
+    (lo <= hi).then_some((lo, hi))
+}
+
+fn fold_range(values: impl Iterator<Item = f32>) -> (f32, f32) {
+    values
+        .filter(|x| x.is_finite())
+        .fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)))
+}
+
 /// 黒 `lo`〜白 `hi` の値を 0〜255 に写す。範囲外は 0 / 255 に張り付き、NaN（欠損）は黒。
 struct Shade {
     lo: f32,
@@ -213,9 +248,7 @@ fn build_lut(size: usize, window: (f32, f32), curve: Curve) -> Vec<u8> {
 
 /// NaN や無限大を除いた最小値と最大値。
 fn min_max(v: &[f32]) -> (f32, f32) {
-    v.iter()
-        .filter(|x| x.is_finite())
-        .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)))
+    fold_range(v.iter().copied())
 }
 
 #[cfg(test)]
@@ -230,6 +263,37 @@ mod tests {
             PixelData::U8(values.to_vec()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn window_falls_back_to_the_full_range_of_the_samples() {
+        let mut img = VwImage::new(2, 1, ColorModel::Gray, PixelData::U16(vec![0, 9])).unwrap();
+        img.significant_bits = 12;
+        assert_eq!(window_of(&img, &DisplayParams::default()), (0.0, 4095.0));
+        img.window = Some((1.0, 5.0));
+        assert_eq!(window_of(&img, &DisplayParams::default()), (1.0, 5.0));
+        let f = VwImage::new(
+            3,
+            1,
+            ColorModel::Gray,
+            PixelData::F32(vec![-2.0, f32::NAN, 7.5]),
+        )
+        .unwrap();
+        assert_eq!(window_of(&f, &DisplayParams::default()), (-2.0, 7.5));
+    }
+
+    #[test]
+    fn gray_range_skips_alpha_and_missing_values() {
+        let img = VwImage::new(
+            2,
+            1,
+            ColorModel::GrayAlpha,
+            PixelData::F32(vec![3.0, 100.0, f32::NAN, 0.0]),
+        )
+        .unwrap();
+        assert_eq!(gray_range(&img), Some((3.0, 3.0)));
+        let rgb = VwImage::new(1, 1, ColorModel::Rgb, PixelData::U8(vec![1, 2, 3])).unwrap();
+        assert_eq!(gray_range(&rgb), None);
     }
 
     #[test]

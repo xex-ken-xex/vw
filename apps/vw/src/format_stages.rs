@@ -426,6 +426,7 @@ mod tests {
             read: Default::default(),
             decode: Default::default(),
             convert: Default::default(),
+            look: None,
         }
     }
 

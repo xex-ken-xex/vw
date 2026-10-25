@@ -307,6 +307,8 @@ const FRAMES_AHEAD: usize = 4;
 
 /// 全画面スライドショーの最中の状態。
 pub struct Show {
+    /// 灰色の画像に当てる色の表（設定の種類ごとの既定）。
+    pub look: Option<crate::colormap::Look>,
     root: PathBuf,
     settings: Fullscreen,
     order: Order,
@@ -385,6 +387,7 @@ impl Show {
             None
         };
         let show = Self {
+            look: None,
             root,
             settings: settings.clone(),
             order,
@@ -672,6 +675,7 @@ impl Show {
                 full: true,
                 develop: false,
                 fit_side: Some(self.screen_side.max(1)),
+                look: self.look.clone(),
             });
             self.pending.insert(request, path.clone());
         }

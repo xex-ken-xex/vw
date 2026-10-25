@@ -23,6 +23,7 @@ use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
 
 use egui_phosphor::regular as icon;
 
+use crate::colormap;
 use crate::format_stages::{self, Stage};
 use crate::i18n::{tr, tr_text};
 use crate::loader::ImageInfo;
@@ -51,6 +52,8 @@ pub struct Target<'a> {
     pub preset: Option<(&'a str, bool)>,
     /// 保存したパイプラインの名前（同じ名前で保存しないように確かめる）。
     pub saved: Vec<&'a str>,
+    /// 色の表の段で選べる表と、種類ごとの既定。
+    pub color_rules: &'a Arc<colormap::Rules>,
 }
 
 /// ウインドウでの操作。スロットと保存したパイプラインの一覧に当てる。
@@ -68,6 +71,8 @@ pub enum Command {
         role: vw_fits::calibration::Role,
         file: Option<PathBuf>,
     },
+    /// アクティブなスロットの色の表の段を、外すか別の表にする。
+    ColorMap(colormap::Pick),
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
 }
@@ -84,6 +89,8 @@ enum Node {
     Stage(usize),
     /// 自由なノードの鎖の `i` 番目。
     Chain(usize),
+    /// 灰色の画像の、明るさを色にする段（[`colormap`]）。鎖の後ろ、表示の前に置く。
+    ColorMap,
     Display,
     /// PET の、Unit（Bq/ml）から表示の道と分かれて SUVbw に換算する枝。
     Suv,
@@ -186,6 +193,7 @@ impl Node {
             Node::ColorSpace => "color_space",
             Node::Stage(_) => "stage",
             Node::Chain(_) => "chain",
+            Node::ColorMap => "color_map",
             Node::Display => "display",
             Node::Suv => "suv",
         }
@@ -250,8 +258,9 @@ pub struct PipelineView {
     transform: Option<TSTransform>,
     /// キャンバスの倍率。
     scale: f32,
-    /// このフレームで、ダーク・フラットの段で押されたもの。
+    /// このフレームで、ダーク・フラットの段か色の表の段で押されたもの。
     calibration: Option<Command>,
+    color_rules: Option<Arc<colormap::Rules>>,
 }
 
 impl PipelineView {
@@ -259,7 +268,9 @@ impl PipelineView {
     pub fn node_positions(&self) -> BTreeMap<String, [f32; 2]> {
         self.positions
             .iter()
-            .filter(|((_, node), _)| !matches!(node, Node::Chain(_) | Node::Stage(_)))
+            .filter(|((_, node), _)| {
+                !matches!(node, Node::Chain(_) | Node::Stage(_) | Node::ColorMap)
+            })
             .map(|((kind, node), p)| (format!("{}.{}", kind.key(), node.key()), [p.x, p.y]))
             .collect()
     }
@@ -298,6 +309,7 @@ impl PipelineView {
         target: Option<Target<'_>>,
     ) -> Vec<Command> {
         self.follow(&ui.ctx().clone(), target.as_ref());
+        self.color_rules = target.as_ref().map(|t| t.color_rules.clone());
         let mut out = Vec::new();
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
@@ -539,16 +551,18 @@ impl PipelineView {
             Some(Loaded::Plain(s)) => s.len(),
             _ => 0,
         };
+        let Some(info) = info else {
+            return edited;
+        };
+        let color_map = info.look.is_some().then_some(Node::ColorMap);
         let flow: Vec<Node> = kind
             .file_nodes(stages)
             .into_iter()
             .chain((0..self.chain.len()).map(Node::Chain))
+            .chain(color_map)
             .chain([Node::Display])
             .collect();
         let groups = kind.groups(stages, self.chain.len());
-        let Some(info) = info else {
-            return edited;
-        };
         edited |= self.canvas(ui, lang, kind, &flow, &groups, marks, info);
         edited
     }
@@ -747,13 +761,16 @@ impl PipelineView {
         // 形式ごとの段も同じ（形式が変わると数が変わる）。表示のノードは覚えた位置を、
         // 鎖の長さと「段が 1 つのとき」からの増えた分だけ右にずらす。
         let stage_count = flow.iter().filter(|n| matches!(n, Node::Stage(_))).count();
+        let ordered = |n: &Node| matches!(n, Node::Chain(_) | Node::Stage(_) | Node::ColorMap);
+        let color_map = usize::from(flow.contains(&Node::ColorMap));
         let widths: Vec<f32> = flow
             .iter()
             .map(|&n| self.node_width(&canvas, lang, n))
             .collect();
         let widened: f32 = widths.iter().map(|w| w - NODE_WIDTH).sum();
         let chain_shift = vec2(
-            (self.chain.len() + stage_count.saturating_sub(1)) as f32 * (NODE_WIDTH + NODE_GAP)
+            (self.chain.len() + color_map + stage_count.saturating_sub(1)) as f32
+                * (NODE_WIDTH + NODE_GAP)
                 + widened,
             0.0,
         );
@@ -767,7 +784,7 @@ impl PipelineView {
                 _ => Vec2::ZERO,
             };
             let pos = match node {
-                Node::Chain(_) | Node::Stage(_) => default,
+                n if ordered(&n) => default,
                 _ => self
                     .positions
                     .get(&(kind, node))
@@ -778,7 +795,7 @@ impl PipelineView {
             edited |= body_edited;
             chain_edit = chain_edit.or(chain.map(|c| (i, c)));
             self.rects.insert(node, transform.inverse().mul_rect(rect));
-            if moved != Vec2::ZERO && !matches!(node, Node::Chain(_) | Node::Stage(_)) {
+            if moved != Vec2::ZERO && !ordered(&node) {
                 self.positions
                     .insert((kind, node), pos + moved / scale - shift);
             }
@@ -1004,6 +1021,14 @@ impl PipelineView {
                 None => false,
             };
         }
+        if node == Node::ColorMap {
+            if let (Some(applied), Some(rules)) = (&info.look, &self.color_rules) {
+                if let Some(pick) = color_map_body(ui, lang, applied, rules) {
+                    self.calibration = Some(Command::ColorMap(pick));
+                }
+            }
+            return false;
+        }
         let traces = self.traces(marks);
         match &mut self.loaded {
             Some(Loaded::Gray(g)) => gray_body(ui, lang, node, g, &traces, self.scale),
@@ -1174,6 +1199,7 @@ fn node_title(node: Node) -> &'static str {
         Node::ColorSpace => "Color space",
         Node::Stage(_) => "Stage",
         Node::Chain(_) => "Node",
+        Node::ColorMap => "Color map",
         Node::Display => "Display",
         Node::Suv => "SUVbw",
     }
@@ -1422,7 +1448,7 @@ fn gray_body(
                 ));
             }
         }
-        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) => {}
+        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) | Node::ColorMap => {}
     }
     edited
 }
@@ -1503,6 +1529,65 @@ fn plain_body(
     }
     command
 }
+
+/// 色の表の段。入れるか外すかと、表を選ぶ。既定（設定の種類ごとの表）も添える。
+fn color_map_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    applied: &colormap::Applied,
+    rules: &colormap::Rules,
+) -> Option<colormap::Pick> {
+    use crate::colormap::Pick;
+    let mut pick = None;
+    let mut on = applied.palette.is_some();
+    if ui.checkbox(&mut on, tr(lang, "Use a color map")).clicked() {
+        pick = Some(match (on, rules.default_for(applied.kind)) {
+            (false, _) => Pick::Off,
+            (true, Some(name)) if name != vw_core::palette::GRAY => Pick::Auto,
+            // 既定が灰色の種類は、色の付く最初の表にする（灰色を選んでも見た目が変わらないため）。
+            (true, _) => Pick::Palette(FIRST_COLOR_MAP.to_owned()),
+        });
+    }
+    let current = applied
+        .palette_name()
+        .unwrap_or(vw_core::palette::GRAY)
+        .to_owned();
+    vw_ui::menu::combo("color_map")
+        .selected_text(crate::colormap_ui::palette_title(lang, &current))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            for name in rules.names() {
+                let title = crate::colormap_ui::palette_title(lang, name);
+                if ui.selectable_label(name == current, title).clicked() {
+                    pick = Some(Pick::Palette(name.to_owned()));
+                }
+            }
+        });
+    if let Some(p) = rules.palette(&current) {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
+        crate::colormap_ui::paint_strip(ui.painter(), rect, &p, false);
+    }
+    let auto = rules
+        .default_for(applied.kind)
+        .unwrap_or(vw_core::palette::GRAY);
+    ui.weak(format!(
+        "{} ({}): {}",
+        tr(lang, "Default in settings"),
+        tr(lang, applied.kind.title()),
+        crate::colormap_ui::palette_title(lang, auto)
+    ));
+    if applied.pick != Pick::Auto && ui.small_button(tr(lang, "Back to the default")).clicked() {
+        pick = Some(Pick::Auto);
+    }
+    ui.weak(tr(
+        lang,
+        "Only the look changes. Probe, ROI and analysis values stay the file values.",
+    ));
+    pick
+}
+
+/// 既定が灰色の画像で、色の表の段を入れたときに選ぶ表。
+const FIRST_COLOR_MAP: &str = "inferno";
 
 /// 使うマスターを選び直す箱。並ぶのは条件に合う候補だけ。
 fn pick_box(

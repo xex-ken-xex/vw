@@ -47,6 +47,8 @@ struct Key {
     image: usize,
     values: Values,
     size: [usize; 2],
+    /// 色の表の段の表。ノードの後ろで、標準の表示と同じ表を引く。
+    palette: Option<Arc<vw_core::Palette>>,
 }
 
 struct Rendered {
@@ -159,6 +161,7 @@ impl Derive {
             image: Arc::as_ptr(&full.image) as usize,
             values: self.values.clone(),
             size: full.texture.size(),
+            palette: shown.info.look.as_ref().and_then(|a| a.palette.clone()),
         };
         let done = self.ready.as_ref().is_some_and(|r| r.key == key)
             || self.failed.as_ref().is_some_and(|(k, _)| *k == key);
@@ -340,8 +343,20 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
     let checked = pixel_pipeline::check_standard(&at_file, &standard);
     drop(at_file);
     let error = nodes::apply(&key.values.chain, &mut float).err();
-    let derived = pixel_pipeline::to_color_image(&float, &standard);
+    let mut derived = pixel_pipeline::to_color_image(&float, &standard);
+    // 色の表は灰色のまま出てきたときだけ引く（混合などで RGB になったら、その色を出す）。
+    let gray = float.channels == 1;
     drop(float);
+    let mut standard = standard;
+    if let Some(p) = &key.palette {
+        p.recolor(&mut standard);
+        if gray {
+            for c in &mut derived.pixels {
+                let [r, g, b] = p.colors[c.r() as usize];
+                *c = egui::Color32::from_rgba_premultiplied(r, g, b, c.a());
+            }
+        }
+    }
     let (difference, max) = pixel_pipeline::difference(&derived, &standard);
     Rendered {
         derived: crate::loader::fit_color_image(derived.clone(), key.size),

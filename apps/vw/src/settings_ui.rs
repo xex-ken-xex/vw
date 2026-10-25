@@ -14,10 +14,10 @@ use crate::layout::SlotLayout;
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, CalibrationApply, ColorFormat, DarkScaling, FitsCalibration, FitsCurve,
-    FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode, HeaderClick, HeadingStyle,
-    Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle, PathDisplay, SearchGroup,
-    Settings, ThemeChoice, Tree, Viewer,
+    parse_hex_color, CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling,
+    FitsCalibration, FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode,
+    GaugeSide, HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings,
+    LogStyle, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -33,6 +33,7 @@ enum Section {
     Labels,
     Datasets,
     Fullscreen,
+    Pipeline,
     Fits,
     Dicom,
     DicomSend,
@@ -45,7 +46,7 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 17] = [
+    const ALL: [Section; 18] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -54,6 +55,7 @@ impl Section {
         Section::Labels,
         Section::Datasets,
         Section::Fullscreen,
+        Section::Pipeline,
         Section::Fits,
         Section::Dicom,
         Section::DicomSend,
@@ -75,6 +77,7 @@ impl Section {
             Section::Labels => "Flags and tags",
             Section::Datasets => "Datasets",
             Section::Fullscreen => "Fullscreen slideshow",
+            Section::Pipeline => "Pixel pipeline",
             Section::Fits => "Astronomy images (FITS)",
             Section::Dicom => "Medical images (DICOM)",
             Section::DicomSend => "DICOM sending",
@@ -98,7 +101,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 96] = [
+const ITEMS: [Item; 104] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -560,6 +563,62 @@ const ITEMS: [Item; 96] = [
         title: "Path text size",
         description: "Size of the path text.",
         widget: path_size_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.color_node",
+        title: "Color map stage",
+        description: "Insert the color map stage into the pixel pipeline of gray images from the start, for the kinds of images turned on below. The stage turns brightness into colors and also changes the slot; probe, ROI and analysis values stay the file values. Each slot can still turn it on or off and pick another color map (right-click, Image menu, or the stage in the pixel pipeline).",
+        widget: pipeline_color_node_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.fits",
+        title: "FITS images",
+        description: "Astronomy images: insert the color map stage from the start, and its color map.",
+        widget: pipeline_fits_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.dicom",
+        title: "DICOM images",
+        description: "Gray DICOM images other than the subtypes below (CT, MR, X-ray and so on): insert the color map stage from the start, and its color map.",
+        widget: pipeline_dicom_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.dicom.pt",
+        title: "DICOM PT",
+        description: "PET images (Modality PT): insert the color map stage from the start, and its color map. Hot Iron, PET and Hot Metal Blue are the palettes defined by the DICOM standard.",
+        widget: pipeline_pt_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.gray",
+        title: "Other gray images",
+        description: "Gray images in other formats (16-bit PNG, TIFF and so on): insert the color map stage from the start, and its color map.",
+        widget: pipeline_gray_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.gauge_side",
+        title: "Color scale gauge",
+        description: "Where the gauge (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
+        widget: pipeline_gauge_side_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.gauge_on_gray",
+        title: "Gauge on gray images",
+        description: "Also show the gauge on gray images without a color map, to read the values of black and white.",
+        widget: pipeline_gauge_gray_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "pipeline.palettes",
+        title: "Custom color maps",
+        description: "Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
+        widget: pipeline_palettes_widget,
     },
     Item {
         section: Section::Fits,
@@ -1265,6 +1324,136 @@ fn fits_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
         }
     });
     s.fits.stretch != before
+}
+
+fn pipeline_color_node_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(
+        &mut s.pipeline.color_node,
+        tr(lang, "Insert from the start"),
+    )
+    .changed()
+}
+
+/// 「初めから入れる」と、その表。表の一覧は組み込みと自分で足した表。
+fn color_node_widget(
+    node: &mut ColorNode,
+    custom: &[CustomPalette],
+    id: &str,
+    ui: &mut egui::Ui,
+    lang: Language,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        changed |= ui
+            .checkbox(&mut node.color_node, tr(lang, "Insert from the start"))
+            .changed();
+        let names = vw_core::palette::BUILTIN
+            .iter()
+            .map(|n| (*n).to_owned())
+            .chain(custom.iter().map(|c| c.name.clone()));
+        let title = crate::colormap_ui::palette_title(lang, &node.palette);
+        vw_ui::menu::combo(id)
+            .selected_text(title)
+            .show_ui(ui, |ui| {
+                for name in names {
+                    let title = crate::colormap_ui::palette_title(lang, &name);
+                    if ui.selectable_label(node.palette == name, title).clicked() {
+                        node.palette = name;
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
+}
+
+fn pipeline_fits_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let p = &mut s.pipeline;
+    color_node_widget(&mut p.fits, &p.palettes, "pipeline.fits", ui, lang)
+}
+
+fn pipeline_dicom_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let p = &mut s.pipeline;
+    let mut node = ColorNode {
+        color_node: p.dicom.color_node,
+        palette: p.dicom.palette.clone(),
+    };
+    let changed = color_node_widget(&mut node, &p.palettes, "pipeline.dicom", ui, lang);
+    p.dicom.color_node = node.color_node;
+    p.dicom.palette = node.palette;
+    changed
+}
+
+fn pipeline_pt_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let p = &mut s.pipeline;
+    color_node_widget(&mut p.dicom.pt, &p.palettes, "pipeline.dicom.pt", ui, lang)
+}
+
+fn pipeline_gray_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let p = &mut s.pipeline;
+    color_node_widget(&mut p.gray, &p.palettes, "pipeline.gray", ui, lang)
+}
+
+fn pipeline_gauge_side_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.pipeline.gauge_side;
+    ui.horizontal(|ui| {
+        for side in GaugeSide::ALL {
+            ui.radio_value(&mut s.pipeline.gauge_side, side, tr(lang, side.title()));
+        }
+    });
+    s.pipeline.gauge_side != before
+}
+
+fn pipeline_gauge_gray_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.pipeline.gauge_on_gray, tr(lang, "Enabled"))
+        .changed()
+}
+
+/// 1 行に 1 つの表。読めない行や同じ名前があれば知らせ、直すまで書き戻さない。
+/// 消した表を使っていた種類は、読み直したときに既定の表に戻る（設定の読み取りと同じ）。
+fn pipeline_palettes_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let list = &mut s.pipeline.palettes;
+    let id = ui.make_persistent_id("pipeline.palettes.edit");
+    let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| {
+        list.iter()
+            .map(CustomPalette::to_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .hint_text("Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff")
+            .desired_rows(3)
+            .desired_width(420.0),
+    );
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let parsed: Vec<CustomPalette> = lines
+        .iter()
+        .filter_map(|l| CustomPalette::parse_line(l))
+        .collect();
+    let mut names = std::collections::HashSet::new();
+    let unique = parsed.iter().all(|c| names.insert(c.name.as_str()));
+    let valid = parsed.len() == lines.len() && unique;
+    if !valid {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            tr(
+                lang,
+                "Write each line as name = position #rrggbb; position #rrggbb, with a different name that is not a built-in color map.",
+            ),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus() && valid && parsed != *list {
+            *list = parsed;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
 }
 
 fn fits_curve_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

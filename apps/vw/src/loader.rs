@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, ColorImage};
 use vw_core::{display, ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwImage};
 
+use crate::colormap::{self, Look};
 use crate::frames;
 use crate::memory::THUMB_SIDE;
 
@@ -57,6 +58,8 @@ pub struct ImageInfo {
     pub read: Duration,
     pub decode: Duration,
     pub convert: Duration,
+    /// 色の表の段（灰色の画像だけ）。
+    pub look: Option<colormap::Applied>,
 }
 
 impl ImageInfo {
@@ -112,6 +115,8 @@ pub struct Job {
     /// `full` の描画用バッファを、縦横がこの大きさを下回らない範囲で縮める（[`cover_side`]）。
     /// 全画面に出すだけの画像のために、画面より大きなテクスチャを作らないため。
     pub fit_side: Option<u32>,
+    /// 灰色の画像に当てる色の表と、スロットで変えた黒と白の値。`None` は灰色のまま。
+    pub look: Option<Look>,
 }
 
 /// 待っている要求と、取り消された要求。
@@ -264,9 +269,15 @@ fn worker(
         // 永遠に「読み込み中」になる。panic はその 1 枚のエラーにして、スレッドは続ける。
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if job.develop {
-                develop(registry, &job.path)
+                develop(registry, &job.path, job.look.as_ref())
             } else {
-                load_fit(registry, &job.path, job.thumb, job.full, job.fit_side)
+                load_look(
+                    registry,
+                    &job.path,
+                    (job.thumb, job.full),
+                    job.fit_side,
+                    job.look.as_ref(),
+                )
             }
         }))
         .unwrap_or_else(|panic| Err(format!("internal error: {}", panic_text(&panic))));
@@ -309,6 +320,17 @@ pub fn load_fit(
     full: bool,
     fit_side: Option<u32>,
 ) -> Result<Loaded, String> {
+    load_look(registry, path, (thumb, full), fit_side, None)
+}
+
+/// [`load_fit`] に、灰色の画像の色の表 `look` を当てる版。
+fn load_look(
+    registry: &Registry,
+    path: &Path,
+    (thumb, full): (bool, bool),
+    fit_side: Option<u32>,
+    look: Option<&Look>,
+) -> Result<Loaded, String> {
     let t0 = Instant::now();
     let (file, frame) =
         frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
@@ -332,11 +354,12 @@ pub fn load_fit(
         thumb,
         full,
         fit_side,
+        look,
     ))
 }
 
 /// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。縮小画像とフル解像度の画像を返す。
-pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
+pub fn develop(registry: &Registry, path: &Path, look: Option<&Look>) -> Result<Loaded, String> {
     let t0 = Instant::now();
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let t1 = Instant::now();
@@ -354,6 +377,7 @@ pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
         true,
         true,
         None,
+        look,
     ))
 }
 
@@ -361,7 +385,7 @@ pub fn develop(registry: &Registry, path: &Path) -> Result<Loaded, String> {
 /// `times` は読み込みとデコードにかかった時間。
 #[allow(clippy::too_many_arguments)]
 fn finish(
-    image: VwImage,
+    mut image: VwImage,
     plugin: &str,
     frames: usize,
     file_size: usize,
@@ -369,9 +393,14 @@ fn finish(
     thumb: bool,
     full: bool,
     fit_side: Option<u32>,
+    look: Option<&Look>,
 ) -> Loaded {
     let t2 = Instant::now();
-    let d = display::to_display(&image, &DisplayParams::default());
+    let applied = look.and_then(|l| colormap::prepare(&mut image, plugin, l));
+    let mut d = display::to_display(&image, &DisplayParams::default());
+    if let Some(p) = applied.as_ref().and_then(|a| a.palette.as_ref()) {
+        p.recolor(&mut d.rgba);
+    }
     let thumb = thumb.then(|| color_image(&display::shrink(&d, THUMB_SIDE)));
     let full = full.then(|| match fit_side {
         Some(side) => color_image(&display::shrink(
@@ -395,6 +424,7 @@ fn finish(
         read,
         decode,
         convert: t3 - t2,
+        look: applied,
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),
@@ -455,6 +485,41 @@ mod tests {
             second.thumb.unwrap().pixels[0],
             egui::Color32::from_gray(200)
         );
+    }
+
+    #[test]
+    fn gray_images_get_the_chosen_color_map_and_color_images_do_not() {
+        use crate::colormap::{Choice, Pick, Rules};
+        use vw_dicom::synth::{Synth, XA_IMAGE};
+        let dir = TempDir::new();
+        let gray = dir.path().join("gray.dcm");
+        Synth::new(XA_IMAGE, 1, 1)
+            .frames_u8(&[&[200]])
+            .write(&gray)
+            .unwrap();
+        let look = Look {
+            rules: Arc::new(Rules::new(&Default::default())),
+            choice: Choice {
+                pick: Pick::Palette("hot_iron".into()),
+                window: None,
+            },
+        };
+        let registry = crate::test_util::all_registry();
+        let loaded = load_look(&registry, &gray, (true, true), None, Some(&look)).unwrap();
+        let [r, g, b] = vw_core::Palette::builtin("hot_iron").unwrap().colors[200];
+        let colored = egui::Color32::from_rgb(r, g, b);
+        assert_eq!(loaded.thumb.unwrap().pixels[0], colored);
+        assert_eq!(loaded.full.unwrap().display.pixels[0], colored);
+        assert_eq!(loaded.info.look.unwrap().palette_name(), Some("hot_iron"));
+
+        let rgb = dir.path().join("red.png");
+        write_png(&rgb, 1, 1, &[255, 0, 0]);
+        let loaded = load_look(&registry, &rgb, (true, false), None, Some(&look)).unwrap();
+        assert_eq!(
+            loaded.thumb.unwrap().pixels[0],
+            egui::Color32::from_rgb(255, 0, 0)
+        );
+        assert!(loaded.info.look.is_none());
     }
 
     #[test]
@@ -534,7 +599,7 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.path().join("a.png");
         write_png(&path, 1, 1, &[1, 2, 3]);
-        let Err(err) = develop(&png_registry(), &path) else {
+        let Err(err) = develop(&png_registry(), &path, None) else {
             panic!("a PNG has nothing to develop");
         };
         assert!(err.contains("cannot be developed"), "{err}");
@@ -561,6 +626,7 @@ mod tests {
             full: false,
             develop: false,
             fit_side: None,
+            look: None,
         }
     }
 

@@ -241,6 +241,10 @@ pub struct Slot {
     pub derive: Option<Derive>,
     /// 直前のフレームで、色導出の帯を画像に重ねて出したか。
     bar_floating: bool,
+    /// 色の表とゲージで変えた黒と白。起動をまたいでは残さない。
+    pub color: crate::colormap::Choice,
+    /// ゲージの端をドラッグしている間の黒と白の値。離したら読み直しを頼む。
+    gauge_drag: Option<(f32, f32)>,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -272,6 +276,16 @@ pub struct SlotLook<'a> {
     /// AI のモデルが全部揃っているか。揃うまで「AI タグを付ける」「顔を探す」は押せない。
     pub ai_ready: bool,
     pub colors: Colors,
+    /// 色の表のゲージ。`None` はゲージを出さない。
+    pub gauge: Option<Gauge>,
+    pub color_rules: &'a crate::colormap::Rules,
+}
+
+/// ゲージの出し方。
+pub struct Gauge {
+    pub side: crate::settings::GaugeSide,
+    /// 色の表を当てていない灰色の画像にも出す。
+    pub on_gray: bool,
 }
 
 /// 色の値の書き方（十字は `metadata.color_format`、ROI は `roi.color_format`）と、顔の枠の色。
@@ -337,6 +351,10 @@ pub struct SlotResponse {
     pub face: Option<(PathBuf, FaceAction)>,
     /// 色導出から知らせること（ログに出す）。
     pub derive: Option<derive::Event>,
+    /// 色の表を選んだ。
+    pub color_pick: Option<crate::colormap::Pick>,
+    /// ゲージで黒と白の値を変えた（`Some(None)` はファイルの値に戻す）。
+    pub window: Option<Option<(f32, f32)>>,
     /// 画像をドラッグしている（並べ替えやフォルダへの移動の元）。
     pub dragging: bool,
 }
@@ -555,6 +573,8 @@ impl Slot {
             selected_face: None,
             derive: None,
             bar_floating: false,
+            color: Default::default(),
+            gauge_drag: None,
         }
     }
 
@@ -1068,6 +1088,8 @@ impl Slot {
             people,
             ai_ready,
             colors,
+            gauge,
+            color_rules,
         } = look;
         self.colors = colors;
         let mut out = SlotResponse::default();
@@ -1413,6 +1435,29 @@ impl Slot {
             painter.galley(pos2(body.center().x, top), galley, Color32::GRAY);
         }
 
+        if let (Some(g), Some(applied)) = (
+            &gauge,
+            self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
+        ) {
+            if applied.palette.is_some() || g.on_gray {
+                let id = ui.id().with(("gauge", self.id));
+                let event = crate::colormap_ui::gauge(
+                    ui,
+                    id,
+                    body,
+                    g.side,
+                    lang,
+                    applied,
+                    color_rules,
+                    &mut self.gauge_drag,
+                );
+                match event {
+                    Some(crate::colormap_ui::GaugeEvent::Window(w)) => out.window = Some(w),
+                    Some(crate::colormap_ui::GaugeEvent::Pick(p)) => out.color_pick = Some(p),
+                    None => {}
+                }
+            }
+        }
         if bar_height > 0.0 {
             self.derive_overlay(ui, body, lang);
             self.derive_bar(ui, bar, lang, presets, &mut out);
@@ -1564,6 +1609,12 @@ impl Slot {
                     .shown
                     .as_ref()
                     .is_some_and(|s| s.info.plugin == "DICOM");
+                if let Some(applied) = self.shown.as_ref().and_then(|s| s.info.look.as_ref()) {
+                    vw_ui::menu::button(ui, tr(lang, "Color map"), |ui| {
+                        out.color_pick =
+                            crate::colormap_ui::pick_menu(ui, lang, applied, color_rules);
+                    });
+                }
                 if self.shown.is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
                     out.pipeline = true;
                     ui.close();

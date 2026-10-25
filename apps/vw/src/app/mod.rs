@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, vec2, Color32, TextureOptions};
@@ -166,6 +167,11 @@ pub struct VwApp {
     calibration_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
     texture_options: TextureOptions,
+    /// 色の表の段の、種類ごとの既定（設定 `[pipeline]` から作る）。変わったら灰色の画像を読み直す。
+    color_rules: Arc<crate::colormap::Rules>,
+    color_settings: crate::settings::PipelineSettings,
+    /// スロットに色の表のゲージを出す（左の列のボタンとキーで切り替える）。
+    show_gauge: bool,
     /// 画像フィールドの枠。常に 1 つ以上ある。
     slots: Vec<Slot>,
     /// 操作対象のスロットの添字。メタデータ表示とツリーのクリックはこのスロットに対して働く。
@@ -648,6 +654,9 @@ impl VwApp {
             calibration,
             calibration_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
+            color_rules: Arc::new(crate::colormap::Rules::new(&settings.settings.pipeline)),
+            color_settings: settings.settings.pipeline.clone(),
+            show_gauge: true,
             slots: vec![Slot::new(0)],
             active: 0,
             next_id: 1,
@@ -937,6 +946,8 @@ impl VwApp {
             Action::DevelopRaw => self.develop_slot(self.active),
             Action::ReadQrCodes => self.read_qr_codes_active(ctx),
             Action::ToggleCalibration => self.toggle_calibration(self.active),
+            Action::NextColorMap => self.next_color_map(self.active),
+            Action::ToggleColorGauge => self.show_gauge ^= true,
             Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),
@@ -1306,7 +1317,12 @@ fn selection_name(sel: &MetaSelection) -> String {
 
 /// ログ用のミリ秒表記。
 /// スロットの表示中の画像のフル解像度を読み始める。現像を頼んだ画像は現像する。
-fn request_full(loader: &Loader, next_id: &mut u64, s: &mut Slot) {
+fn request_full(
+    loader: &Loader,
+    rules: &Arc<crate::colormap::Rules>,
+    next_id: &mut u64,
+    s: &mut Slot,
+) {
     let Some(shown) = &s.shown else {
         return;
     };
@@ -1325,7 +1341,16 @@ fn request_full(loader: &Loader, next_id: &mut u64, s: &mut Slot) {
         full: true,
         develop: shown.developed,
         fit_side: None,
+        look: Some(look_of(rules, s)),
     });
+}
+
+/// スロット `s` の画像の読み込みに当てる色の表。
+fn look_of(rules: &Arc<crate::colormap::Rules>, s: &Slot) -> crate::colormap::Look {
+    crate::colormap::Look {
+        rules: rules.clone(),
+        choice: s.color.clone(),
+    }
 }
 
 fn ms(d: Duration) -> String {

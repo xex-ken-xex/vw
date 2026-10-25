@@ -34,7 +34,7 @@ impl VwApp {
         let Some(full) = &shown.full else {
             s.copy_when_full = true;
             if s.full_request.is_none() {
-                request_full(&self.loader, &mut self.next_id, s);
+                request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
             }
             return;
         };

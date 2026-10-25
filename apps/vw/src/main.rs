@@ -15,6 +15,8 @@ mod autoload;
 mod background;
 mod catalog;
 mod color_text;
+mod colormap;
+mod colormap_ui;
 mod copy;
 mod dataset_extract;
 mod dataset_search;
