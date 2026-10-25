@@ -1479,6 +1479,25 @@ const JA: &[(&str, &str)] = &[
     ("Also show the gauge on gray images without a color map, to read the values of black and white.", "色の表を当てていない灰色の画像にもゲージを出します。黒と白の値を読むのに使えます。"),
     ("Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff", "自分の色の表を 1 行に 1 つ書きます。名前、=、そのあとに「位置（0〜1） #rrggbb」を ; で区切って並べます。間の色はなめらかにつなぎます。例: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff"),
     ("Write each line as name = position #rrggbb; position #rrggbb, with a different name that is not a built-in color map.", "1 行ずつ「名前 = 位置 #rrggbb; 位置 #rrggbb」の形で、組み込みの色の表とも重ならない別々の名前にしてください。"),
+    // 色の合成
+    ("Compose colors", "色の合成"),
+    ("Compose colors...", "色を合成..."),
+    ("Compose", "合成"),
+    ("Put two or three gray images on red, green and blue.", "灰色の画像 2〜3 枚を赤・緑・青に重ねます。"),
+    ("Choose the gray images for red, green and blue. They are put on top of each other in the slot.", "赤・緑・青に当てる灰色の画像を選びます。スロットの中で重ねて出します。"),
+    ("Show two or three gray images in slots first.", "先に灰色の画像を 2〜3 枚スロットに出してください。"),
+    ("Choose by the FILTER of the files", "ファイルの FILTER で選ぶ"),
+    ("Sizes must match. Images with sky coordinates (WCS) are moved onto the first one.", "大きさは揃っている必要があります。天球座標（WCS）のある画像は、最初の画像に重なるように動かします。"),
+    ("The chosen images differ in size.", "選んだ画像の大きさが揃っていません。"),
+    ("Alignment", "位置合わせ"),
+    ("No FILTER", "FILTER なし"),
+    ("Read as when the file is shown alone (the file's own stages).", "ファイルを単独で出すときと同じに読みます（そのファイルの段）。"),
+    ("Reference (not moved)", "基準（動かさない）"),
+    ("Moved by the sky coordinates (WCS)", "天球座標（WCS）で動かした"),
+    ("Not moved (no WCS in both images)", "動かしていない（両方の画像に WCS がない）"),
+    ("Only shifts are matched; rotation and scale are not.", "合わせるのは平行移動だけで、回転と拡大縮小は合わせません。"),
+    ("Each color keeps its file values and its own black and white.", "色ごとにファイルの値と、その色の黒と白を持ちます。"),
+    ("Red, green and blue are the values of each file after the alignment.", "赤・緑・青は、位置合わせした後の各ファイルの値です。"),
 ];
 
 #[cfg(test)]

@@ -68,6 +68,50 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
     })
 }
 
+/// `reference` の画像の中心が、`other` の画像ではどの画素に写っているか。中心からのずれ
+/// （FITS の画素、x と y）で返す。どちらかに WCS がなければ `None`。
+///
+/// 色ごとに撮った画像を重ねるときの位置合わせに使う。回転や倍率の違いは見ず、ずれだけを求める
+/// （同じ鏡筒とカメラで続けて撮った画像は、ずれ以外がほとんど変わらないため）。
+pub fn pixel_offset(
+    reference: &dyn Fn(&str) -> Option<String>,
+    other: &dyn Fn(&str) -> Option<String>,
+) -> Option<[f64; 2]> {
+    let num = |key: &str| number(&reference(key)?);
+    let size = ["ZNAXIS", "NAXIS"]
+        .iter()
+        .find_map(|prefix| Some([num(&format!("{prefix}1"))?, num(&format!("{prefix}2"))?]))?;
+    let center = [(size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0];
+    let (from, to) = (Wcs::read(reference)?, Wcs::read(other)?);
+    let target = from.to_sky(center[0], center[1])?;
+    // 空の座標の差を、赤緯の cos を掛けて度の平面にしたもの。
+    let miss = |p: [f64; 2]| -> Option<[f64; 2]> {
+        let s = to.to_sky(p[0], p[1])?;
+        let dra = (s[0] - target[0] + 540.0).rem_euclid(360.0) - 180.0;
+        Some([dra * target[1].to_radians().cos(), s[1] - target[1]])
+    };
+    // ずれの式は画素に対してほぼ平らなので、数値で微分したニュートン法がすぐ収まる。
+    let mut p = center;
+    for _ in 0..20 {
+        let r = miss(p)?;
+        let (ax, ay) = (miss([p[0] + 1.0, p[1]])?, miss([p[0], p[1] + 1.0])?);
+        let j = [[ax[0] - r[0], ay[0] - r[0]], [ax[1] - r[1], ay[1] - r[1]]];
+        let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+        if det == 0.0 {
+            return None;
+        }
+        let step = [
+            (j[1][1] * r[0] - j[0][1] * r[1]) / det,
+            (j[0][0] * r[1] - j[1][0] * r[0]) / det,
+        ];
+        p = [p[0] - step[0], p[1] - step[1]];
+        if step[0].hypot(step[1]) < 1e-6 {
+            return Some([p[0] - center[0], p[1] - center[1]]);
+        }
+    }
+    None
+}
+
 /// 表示する画像の HDU と Primary のヘッダ。
 #[derive(Debug, Clone)]
 pub struct ImageHeader {
@@ -387,6 +431,19 @@ mod tests {
         ("CDELT2", "0.01"),
         ("CROTA2", "0.0"),
     ];
+
+    #[test]
+    fn offset_finds_where_the_reference_center_lies_in_the_other_image() {
+        let mut moved = ORION;
+        moved[4] = ("CRPIX1", "103.5");
+        moved[5] = ("CRPIX2", "48.5");
+        let d = pixel_offset(&lookup(&ORION), &lookup(&moved)).unwrap();
+        assert!(
+            (d[0] - 3.0).abs() < 1e-6 && (d[1] + 2.0).abs() < 1e-6,
+            "{d:?}"
+        );
+        assert_eq!(pixel_offset(&lookup(&ORION), &lookup(&ORION[..4])), None);
+    }
 
     #[test]
     fn tan_wcs_puts_the_reference_pixel_at_crval() {

@@ -326,20 +326,26 @@ pub fn gauge(
             outline,
         ));
     }
+    // 切りのよい刻みは頼んだ数より多くなることがあるので、前の数字に重なる数字は書かない。
+    let mut taken: Option<Rect> = None;
     for (t, galley) in galleys {
         let p = at(t);
-        if vertical {
+        let pos = if vertical {
             painter.hline(band.left() - 4.0..=band.left(), p.y, outline);
-            let pos = pos2(
+            pos2(
                 band.left() - 6.0 - galley.size().x,
                 p.y - galley.size().y / 2.0,
-            );
-            painter.galley(pos, galley, text_color);
+            )
         } else {
             painter.vline(p.x, band.bottom()..=band.bottom() + 4.0, outline);
-            let pos = pos2(p.x - galley.size().x / 2.0, band.bottom() + 5.0);
-            painter.galley(pos, galley, text_color);
+            pos2(p.x - galley.size().x / 2.0, band.bottom() + 5.0)
+        };
+        let rect = Rect::from_min_size(pos, galley.size()).expand(2.0);
+        if taken.is_some_and(|r| r.intersects(rect)) {
+            continue;
         }
+        taken = Some(rect);
+        painter.galley(pos, galley, text_color);
     }
     if let Some(u) = unit {
         let pos = if vertical {

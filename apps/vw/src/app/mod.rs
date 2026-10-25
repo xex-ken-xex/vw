@@ -39,6 +39,7 @@ mod activity;
 mod ai_tagging;
 mod ai_tidy;
 mod clipboard;
+mod compose_dialog;
 mod dataset_dialogs;
 mod docking;
 mod export_dialog;
@@ -220,6 +221,7 @@ pub struct VwApp {
     graph_window: people_graph_ui::GraphWindow,
     /// 消してよいか確かめている、フォルダと AI タグの記録がある画像。
     ai_remove: Option<(PathBuf, Vec<PathBuf>)>,
+    compose_dialog: Option<compose_dialog::ComposeDialog>,
     /// 「AI タグの整理」。
     ai_tidy: Option<ai_tidy::TidyWindow>,
     /// メタデータ欄の AI タグのグループ名と、その行ごとのタグ名（タグでない行は `None`）。
@@ -678,6 +680,7 @@ impl VwApp {
             people_window: Default::default(),
             graph_window: Default::default(),
             ai_remove: None,
+            compose_dialog: None,
             ai_tidy: None,
             meta_show_hidden: false,
             meta_closed,
@@ -1148,6 +1151,7 @@ impl eframe::App for VwApp {
         self.dataset_window(&ctx);
         self.outer_update_dialog(&ctx);
         self.resume_offer_dialog(&ctx);
+        self.compose_dialog_ui(&ctx);
         self.finish_trash_job();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);

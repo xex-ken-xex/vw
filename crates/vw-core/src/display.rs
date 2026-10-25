@@ -52,15 +52,27 @@ pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
             let lut = build_lut(65536, window.unwrap_or((0.0, max)), curve);
             convert(img, params, |i| lut[v[i] as usize], |i| (v[i] >> 8) as u8)
         }
-        PixelData::F32(v) => {
-            let shade = Shade::new(window.unwrap_or_else(|| min_max(v)), curve);
-            convert(
-                img,
-                params,
-                |i| shade.of(v[i]),
-                |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
-            )
-        }
+        PixelData::F32(v) => match img.channel_windows.filter(|_| img.color.channels() >= 3) {
+            Some(windows) => {
+                let shades = windows.map(|w| Shade::new(w, curve));
+                let ch = img.color.channels();
+                convert(
+                    img,
+                    params,
+                    |i| shades[i % ch].of(v[i]),
+                    |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
+                )
+            }
+            None => {
+                let shade = Shade::new(window.unwrap_or_else(|| min_max(v)), curve);
+                convert(
+                    img,
+                    params,
+                    |i| shade.of(v[i]),
+                    |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
+                )
+            }
+        },
     }
 }
 
@@ -254,6 +266,20 @@ fn min_max(v: &[f32]) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_color_of_an_rgb_image_can_have_its_own_black_and_white() {
+        let mut img = VwImage::new(
+            1,
+            1,
+            ColorModel::Rgb,
+            PixelData::F32(vec![10.0, 10.0, 10.0]),
+        )
+        .unwrap();
+        img.channel_windows = Some([(0.0, 20.0), (10.0, 30.0), (0.0, 10.0)]);
+        let d = to_display(&img, &DisplayParams::default());
+        assert_eq!(&d.rgba[..4], &[128, 0, 255, 255]);
+    }
 
     fn gray8(values: &[u8]) -> VwImage {
         VwImage::new(

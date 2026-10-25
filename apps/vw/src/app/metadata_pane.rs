@@ -43,7 +43,20 @@ impl VwApp {
             |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
         let frame = frames::split(&shown.path);
         let mut file_rows = vec![
-            row(PATH, frames::file_of(&shown.path).display().to_string()),
+            // 合成は元のファイルが色ごとにあるので、それぞれの名前はメタデータの合成の見出しに出し、
+            // ここにはフォルダを出す。
+            row(
+                PATH,
+                match crate::compose::split(&shown.path) {
+                    Some(_) => shown
+                        .path
+                        .parent()
+                        .unwrap_or(&shown.path)
+                        .display()
+                        .to_string(),
+                    None => frames::file_of(&shown.path).display().to_string(),
+                },
+            ),
             row("Size", format!("{} bytes", info.file_size)),
             row("Plugin", info.plugin.clone()),
             row("Pixels", format!("{} x {}", info.width, info.height)),

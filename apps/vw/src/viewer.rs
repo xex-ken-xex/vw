@@ -341,6 +341,8 @@ pub struct SlotResponse {
     pub reference: bool,
     /// 右クリックメニューで「QR コードを読む」が選ばれた。
     pub read_qr: bool,
+    /// 右クリックメニューで「色を合成」が選ばれた。
+    pub compose: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
@@ -1536,6 +1538,21 @@ impl Slot {
                     out.copy = true;
                     ui.close();
                 }
+                let composable = self.shown.as_ref().is_some_and(|s| {
+                    s.info.compose.is_some() || s.info.color == vw_core::ColorModel::Gray
+                });
+                if composable
+                    && ui
+                        .button(tr(lang, "Compose colors..."))
+                        .on_hover_text(tr(
+                            lang,
+                            "Put two or three gray images on red, green and blue.",
+                        ))
+                        .clicked()
+                {
+                    out.compose = true;
+                    ui.close();
+                }
                 ui.separator();
                 if ui
                     .button(tr(lang, "Use as evaluation reference"))
@@ -1637,8 +1654,10 @@ impl Slot {
             .path
             .as_ref()
             .or(self.folder.as_ref().filter(|_| self.is_closed_folder()))
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
+            .and_then(|p| {
+                crate::compose::title(p)
+                    .or_else(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            })
             .unwrap_or_else(|| tr(lang, "(empty)").into());
         let name = match &self.sequence {
             Some(seq) if seq.kind == SequenceKind::Frames => seq

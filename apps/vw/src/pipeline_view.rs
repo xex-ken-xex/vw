@@ -24,6 +24,7 @@ use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
 use egui_phosphor::regular as icon;
 
 use crate::colormap;
+use crate::compose;
 use crate::format_stages::{self, Stage};
 use crate::i18n::{tr, tr_text};
 use crate::loader::ImageInfo;
@@ -75,6 +76,10 @@ pub enum Command {
     ColorMap(colormap::Pick),
     /// スロットの黒と白（画素の値の単位）を変えた。`None` はファイルの値に戻す。
     Window(Option<(f32, f32)>),
+    /// 合成の色の割り当てを変えた。
+    Compose(compose::Files),
+    /// 合成の 1 色（0〜2）の黒と白を変えた。`None` はファイルの値に戻す。
+    ChannelWindow(usize, Option<(f32, f32)>),
     /// ウインドウを閉じた。保存していない値は捨てる。
     Closed,
 }
@@ -98,6 +103,14 @@ enum Node {
     Suv,
     /// 計測の道の出口。十字・ROI・解析の値の軸が読む値。
     Measure,
+    /// 色の合成の、赤・緑・青（0〜2）の入口のファイル。
+    LaneFile(u8),
+    /// 入口の画像を基準の画像に重ねる位置合わせ。
+    LaneAlign(u8),
+    /// 入口の黒と白。
+    LaneLevels(u8),
+    /// 3 本の入口を 1 枚の色の画像にする。
+    Compose,
 }
 
 /// 関係するノードをまとめる枠。
@@ -122,6 +135,8 @@ enum Kind {
     Color,
     /// DICOM 以外。ファイルの段はメタデータから組む。
     Plain,
+    /// 灰色の画像を色に割り当てて重ねたもの。入口が色ごとに 1 本ずつある。
+    Compose,
 }
 
 impl Kind {
@@ -130,6 +145,7 @@ impl Kind {
             Kind::Gray => "gray",
             Kind::Color => "color",
             Kind::Plain => "plain",
+            Kind::Compose => "compose",
         }
     }
 
@@ -139,6 +155,7 @@ impl Kind {
             Kind::Gray => GRAY_FILE.to_vec(),
             Kind::Color => COLOR_FILE.to_vec(),
             Kind::Plain => (0..stages).map(Node::Stage).collect(),
+            Kind::Compose => vec![Node::Compose],
         }
     }
 
@@ -164,6 +181,12 @@ impl Kind {
                 nodes: (1..stages).map(Node::Stage).collect(),
             }],
             Kind::Plain => Vec::new(),
+            Kind::Compose => (0..3u8)
+                .map(|c| Group {
+                    title: compose::CHANNELS[c as usize],
+                    nodes: vec![Node::LaneFile(c), Node::LaneAlign(c), Node::LaneLevels(c)],
+                })
+                .collect(),
         };
         if chain_len > 0 {
             groups.push(Group {
@@ -202,6 +225,10 @@ impl Node {
             Node::Display => "display",
             Node::Suv => "suv",
             Node::Measure => "measure",
+            Node::LaneFile(_) => "lane_file",
+            Node::LaneAlign(_) => "lane_align",
+            Node::LaneLevels(_) => "lane_levels",
+            Node::Compose => "compose",
         }
     }
 }
@@ -235,6 +262,7 @@ enum Loaded {
     Color(Color),
     /// DICOM 以外。ファイルの段は変えられず、ノードの鎖だけを当てる。
     Plain(Vec<Stage>),
+    Compose(Arc<compose::Composite>),
     Failed(String),
 }
 
@@ -244,6 +272,7 @@ impl Loaded {
             Loaded::Gray(_) => Some(Kind::Gray),
             Loaded::Color(_) => Some(Kind::Color),
             Loaded::Plain(_) => Some(Kind::Plain),
+            Loaded::Compose(_) => Some(Kind::Compose),
             Loaded::Reading(_) | Loaded::Failed(_) => None,
         }
     }
@@ -278,6 +307,8 @@ pub struct PipelineView {
     color_rules: Option<Arc<colormap::Rules>>,
     /// 色の表の段のゲージで、ドラッグしている黒と白。
     gauge_drag: Option<(f32, f32)>,
+    /// 合成の色ごとの黒と白の段のゲージで、ドラッグしている黒と白。
+    lane_drags: [Option<(f32, f32)>; 3],
 }
 
 impl PipelineView {
@@ -294,7 +325,7 @@ impl PipelineView {
 
     /// 前回動かしたノードの位置に戻す。知らない鍵は捨てる。
     pub fn restore_node_positions(&mut self, saved: &BTreeMap<String, [f32; 2]>) {
-        for kind in [Kind::Gray, Kind::Color, Kind::Plain] {
+        for kind in [Kind::Gray, Kind::Color, Kind::Plain, Kind::Compose] {
             for node in Node::ALL {
                 if let Some([x, y]) = saved.get(&format!("{}.{}", kind.key(), node.key())) {
                     self.positions.insert((kind, node), pos2(*x, *y));
@@ -394,7 +425,7 @@ impl PipelineView {
                 };
                 (p != g.file).then_some(p)
             }
-            Loaded::Color(_) | Loaded::Plain(_) => None,
+            Loaded::Color(_) | Loaded::Plain(_) | Loaded::Compose(_) => None,
             Loaded::Reading(_) | Loaded::Failed(_) => return None,
         };
         Some(Values {
@@ -413,6 +444,10 @@ impl PipelineView {
                 "DICOM" => Loaded::Reading(pixel_pipeline::read_in_background(ctx, t.path)),
                 _ => Loaded::Plain(Vec::new()),
             });
+        }
+        // 合成は、色ごとの黒と白を変えるたびに読み直した内訳になるので、毎フレーム合わせる。
+        if let Some(c) = target.and_then(|t| t.info.compose.clone()) {
+            self.loaded = Some(Loaded::Compose(c));
         }
         // RAW は現像が終わると段が増えるので、パスが同じでも段は毎フレーム合わせる。
         if let (Some(Loaded::Plain(stages)), Some(t)) = (&mut self.loaded, target) {
@@ -739,7 +774,7 @@ impl PipelineView {
         let branches = self.branches(flow);
         let content = flow
             .iter()
-            .chain(branches.iter().map(|(_, n)| n))
+            .chain(branches.iter().flat_map(|(a, b)| [a, b]))
             .filter_map(|n| self.rects.get(n))
             .fold(Rect::NOTHING, |a, r| a.union(*r));
         let mut transform = match self.transform {
@@ -850,9 +885,13 @@ impl PipelineView {
             0.0,
         );
         let mut chain_edit: Option<(usize, ChainEdit)> = None;
-        let mut x = 0.0;
+        // 合成は、色ごとの入口（3 列 × 3 段）の右、真ん中の段から表示の道を始める。
+        let (mut x, y) = match kind {
+            Kind::Compose => (3.0 * (NODE_WIDTH + NODE_GAP), LANE_ROW),
+            _ => (0.0, 0.0),
+        };
         for (i, &node) in flow.iter().enumerate() {
-            let default = pos2(x, 0.0);
+            let default = pos2(x, y);
             x += widths[i] + NODE_GAP;
             let shift = match node {
                 Node::Display => chain_shift,
@@ -882,12 +921,30 @@ impl PipelineView {
             .filter_map(|n| self.rects.get(n))
             .map(|r| r.max.y + NODE_GAP)
             .fold(320.0f32, f32::max);
-        for &(from, node) in &branches {
+        let mut placed = Vec::new();
+        // 枝の先の段と、合成の入口のように枝の元にしかならない段を置く。
+        let ends = branches
+            .iter()
+            .flat_map(|&(from, node)| [(from, from), (from, node)]);
+        for (from, node) in ends {
+            // 同じ段へ何本もつながる（合成の計測）ときは、1 度だけ置く。
+            if flow.contains(&node)
+                || placed.contains(&node)
+                || (from == node && lane_position(node).is_none())
+            {
+                continue;
+            }
+            placed.push(node);
             let column = self
                 .rects
                 .get(&from)
                 .map_or(3.0 * (NODE_WIDTH + NODE_GAP), |r| r.max.x + NODE_GAP);
-            let default = pos2(column, below);
+            let default = match (kind, node) {
+                (Kind::Compose, Node::Measure) => {
+                    pos2(3.0 * (NODE_WIDTH + NODE_GAP), 2.0 * LANE_ROW)
+                }
+                _ => lane_position(node).unwrap_or(pos2(column, below)),
+            };
             let pos = self
                 .positions
                 .get(&(kind, node))
@@ -1110,6 +1167,15 @@ impl PipelineView {
             return false;
         }
         let traces = self.traces(marks);
+        if let Some(Loaded::Compose(c)) = &self.loaded {
+            let c = c.clone();
+            if let Some(command) = self.compose_body(ui, lang, node, &c) {
+                self.calibration = Some(command);
+            }
+            if node != Node::Display {
+                return false;
+            }
+        }
         if node == Node::Measure {
             measure_body(ui, lang, &self.loaded, info, &traces);
             return false;
@@ -1138,6 +1204,144 @@ impl PipelineView {
         edited
     }
 
+    /// 合成の入口と「色の合成」の段。
+    fn compose_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        node: Node,
+        c: &compose::Composite,
+    ) -> Option<Command> {
+        let channel = |i: u8| c.channels[i as usize].as_ref();
+        match node {
+            Node::LaneFile(i) => {
+                let ch = channel(i)?;
+                let name = ch.path.file_name().unwrap_or_default().to_string_lossy();
+                ui.add(egui::Label::new(name).truncate());
+                ui.weak(match &ch.filter {
+                    Some(f) => format!("FILTER {f}"),
+                    None => tr(lang, "No FILTER").to_owned(),
+                });
+                if let Some(state) = &ch.calibration {
+                    ui.weak(format!(
+                        "{}: {}",
+                        tr(lang, "Dark and flat"),
+                        tr_text(lang, state)
+                    ));
+                }
+                ui.weak(tr(
+                    lang,
+                    "Read as when the file is shown alone (the file's own stages).",
+                ));
+                None
+            }
+            Node::LaneAlign(i) => {
+                let ch = channel(i)?;
+                ui.label(tr(lang, ch.aligned.title()));
+                if ch.aligned == compose::Aligned::Wcs {
+                    ui.monospace(format!("{:+} px, {:+} px", ch.shift.0, ch.shift.1));
+                }
+                ui.weak(tr(
+                    lang,
+                    "Only shifts are matched; rotation and scale are not.",
+                ));
+                None
+            }
+            Node::LaneLevels(i) => {
+                let ch = channel(i)?;
+                let rules = self.color_rules.clone()?;
+                let drag = &mut self.lane_drags[i as usize];
+                let (body, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
+                let mut command = match crate::colormap_ui::gauge(
+                    ui,
+                    ui.id().with(("lane_gauge", i)),
+                    body,
+                    crate::settings::GaugeSide::Top,
+                    lang,
+                    &ch.levels,
+                    &rules,
+                    drag,
+                ) {
+                    Some(crate::colormap_ui::GaugeEvent::Window(w)) => {
+                        Some(Command::ChannelWindow(i as usize, w))
+                    }
+                    _ => None,
+                };
+                let f = ch.levels.scale.factor;
+                let (lo, hi) = drag.unwrap_or(ch.levels.window);
+                ui.label(format!(
+                    "{} {}  /  {} {}  {}",
+                    tr(lang, "Black"),
+                    crate::histogram::number(f64::from(lo) * f),
+                    tr(lang, "White"),
+                    crate::histogram::number(f64::from(hi) * f),
+                    ch.levels.scale.unit
+                ));
+                if ch.levels.slot_window().is_some()
+                    && ui.small_button(tr(lang, "Reset black and white")).clicked()
+                {
+                    command = Some(Command::ChannelWindow(i as usize, None));
+                }
+                command
+            }
+            Node::Compose => {
+                let files = c.files();
+                let mut chosen = files.clone();
+                let name = |f: &Option<std::path::PathBuf>| match f {
+                    Some(p) => p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    None => tr(lang, "None").to_owned(),
+                };
+                let options: Vec<std::path::PathBuf> = files.iter().flatten().cloned().collect();
+                for (k, pick) in chosen.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, compose::CHANNELS[k]));
+                        vw_ui::menu::combo(("compose_channel", k))
+                            .selected_text(name(pick))
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(pick, None, tr(lang, "None"));
+                                for f in &options {
+                                    ui.selectable_value(
+                                        pick,
+                                        Some(f.clone()),
+                                        name(&Some(f.clone())),
+                                    );
+                                }
+                            });
+                    });
+                }
+                ui.weak(tr(
+                    lang,
+                    "Each color keeps its file values and its own black and white.",
+                ));
+                (chosen != files && chosen.iter().flatten().count() >= 1)
+                    .then_some(Command::Compose(chosen))
+            }
+            Node::Display => {
+                ui.label(tr(lang, "8-bit RGB"));
+                None
+            }
+            Node::Measure => {
+                ui.label(tr(lang, "Read by: probe crosses and ROI statistics."));
+                ui.weak(tr(
+                    lang,
+                    "Red, green and blue are the values of each file after the alignment.",
+                ));
+                ui.weak(tr(
+                    lang,
+                    "Black and white, the color map and the nodes do not change these values.",
+                ));
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// 表示の道から分かれる枝（分かれる段, 枝の段）。計測の道は、表示のための黒と白より前の値を読む。
     /// PET の Bq/ml の画像は、Unit から SUVbw に換算してから計測に行く。
     fn branches(&self, flow: &[Node]) -> Vec<(Node, Node)> {
@@ -1147,6 +1351,17 @@ impl PipelineView {
             }
             Some(Loaded::Gray(_)) => vec![(Node::Unit, Node::Measure)],
             Some(Loaded::Color(_)) => vec![(Node::ColorSpace, Node::Measure)],
+            Some(Loaded::Compose(c)) => (0..3u8)
+                .filter(|&i| c.channels[i as usize].is_some())
+                .flat_map(|i| {
+                    [
+                        (Node::LaneFile(i), Node::LaneAlign(i)),
+                        (Node::LaneAlign(i), Node::LaneLevels(i)),
+                        (Node::LaneLevels(i), Node::Compose),
+                        (Node::LaneAlign(i), Node::Measure),
+                    ]
+                })
+                .collect(),
             Some(Loaded::Plain(stages)) => {
                 let before_display = stages
                     .iter()
@@ -1315,7 +1530,26 @@ fn node_title(node: Node) -> &'static str {
         Node::Display => "Display",
         Node::Suv => "SUVbw",
         Node::Measure => "Measurement",
+        Node::LaneFile(_) => "File",
+        Node::LaneAlign(_) => "Alignment",
+        Node::LaneLevels(_) => "Black and white",
+        Node::Compose => "Compose colors",
     }
+}
+
+/// 合成の入口の 1 段の行の高さ（キャンバスの座標）。
+const LANE_ROW: f32 = 240.0;
+
+/// 合成の入口の段と計測の段の、初めの位置。色ごとに 1 段、左から ファイル・位置合わせ・黒と白。
+fn lane_position(node: Node) -> Option<Pos2> {
+    let column = |i: f32| i * (NODE_WIDTH + NODE_GAP);
+    let (col, row) = match node {
+        Node::LaneFile(c) => (0.0, f32::from(c)),
+        Node::LaneAlign(c) => (1.0, f32::from(c)),
+        Node::LaneLevels(c) => (2.0, f32::from(c)),
+        _ => return None,
+    };
+    Some(pos2(column(col), row * LANE_ROW))
 }
 
 /// ノードの入力（左端）か出力（右端）の丸の位置。見出しの高さに置く。
@@ -1570,7 +1804,15 @@ fn gray_body(
                 ));
             }
         }
-        Node::ColorSpace | Node::Stage(_) | Node::Chain(_) | Node::ColorMap | Node::Measure => {}
+        Node::ColorSpace
+        | Node::Stage(_)
+        | Node::Chain(_)
+        | Node::ColorMap
+        | Node::Measure
+        | Node::LaneFile(_)
+        | Node::LaneAlign(_)
+        | Node::LaneLevels(_)
+        | Node::Compose => {}
     }
     if voi {
         g.window_edit = Some((g.params.center, g.params.width));
