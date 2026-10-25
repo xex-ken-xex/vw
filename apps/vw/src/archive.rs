@@ -7,7 +7,7 @@
 //! フォルダと同じに扱える。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -51,6 +51,14 @@ pub enum Event {
         zip: PathBuf,
         wrong: bool,
     },
+    /// 展開すると上限（[`Archives::set_size_limit`]）を超える。`size` は展開後の大きさで、
+    /// tar 系のように書いてないものは `None`。続けるなら `over_limit` を付けて開き直す。
+    TooLarge {
+        zip: PathBuf,
+        size: Option<u64>,
+        limit: u64,
+        password: Option<String>,
+    },
 }
 
 /// 開けなかった理由。
@@ -78,7 +86,39 @@ struct Pending {
     mount: Mount,
     done: Receiver<Result<usize, ArchiveError>>,
     progress: Arc<Count>,
+    budget: Arc<Budget>,
+    password: Option<String>,
 }
+
+/// 展開してよい大きさ。
+struct Budget {
+    /// 上限。`None` は利用者が上限を超えてよいと確かめたとき。
+    limit: Option<u64>,
+    /// 上限を超えたので止めた。
+    over_limit: std::sync::atomic::AtomicBool,
+    /// 止めたときの展開後の大きさ（アーカイブに書いてあれば）。
+    size: std::sync::Mutex<Option<u64>>,
+}
+
+impl Budget {
+    fn new(limit: Option<u64>) -> Self {
+        Self {
+            limit,
+            over_limit: Default::default(),
+            size: Default::default(),
+        }
+    }
+
+    fn refuse(&self, size: Option<u64>) -> ArchiveError {
+        self.over_limit.store(true, Ordering::Relaxed);
+        *self.size.lock().unwrap_or_else(|e| e.into_inner()) = size;
+        ArchiveError::Other("larger than the archive size limit".into())
+    }
+}
+
+/// 展開してよい大きさの既定値（GiB）。展開すると巨大になるアーカイブで、
+/// 展開先のディスクを使い切らないようにする。
+pub const DEFAULT_SIZE_LIMIT_GIB: u32 = 20;
 
 /// 展開の進み具合（展開後のバイト数）。`total` は目次を読み終えるまで 0。
 ///
@@ -105,6 +145,7 @@ pub struct Archives {
     mounted: Vec<Mount>,
     pending: Vec<Pending>,
     next: u64,
+    size_limit: u64,
 }
 
 impl Archives {
@@ -116,7 +157,13 @@ impl Archives {
             mounted: Vec::new(),
             pending: Vec::new(),
             next: 0,
+            size_limit: u64::from(DEFAULT_SIZE_LIMIT_GIB) << 30,
         }
+    }
+
+    /// これから開くものを展開してよい大きさ（バイト）。超えるものは [`Event::TooLarge`] で知らせる。
+    pub fn set_size_limit(&mut self, bytes: u64) {
+        self.size_limit = bytes;
     }
 
     /// `parent`（`None` なら OS の一時フォルダ）の下に展開する。前回の異常終了で残ったものはここで消す。
@@ -142,11 +189,13 @@ impl Archives {
     }
 
     /// `zip`（ZIP か 7z）を別スレッドで展開し始める。終わったら `wake` を呼ぶ。すでに開いているか
-    /// 展開中なら何もせず `false`。暗号化されたものは `password` で開く。
+    /// 展開中なら何もせず `false`。暗号化されたものは `password` で開く。`over_limit` なら
+    /// 大きさの上限を超えても展開する（空き容量は超えない）。
     pub fn mount(
         &mut self,
         zip: &Path,
         password: Option<String>,
+        over_limit: bool,
         wake: impl Fn() + Send + 'static,
     ) -> bool {
         let busy = |m: &Mount| m.zip == zip;
@@ -167,14 +216,19 @@ impl Archives {
         let (from, to) = (mount.zip.clone(), mount.dir.clone());
         let progress = Arc::new(Count::default());
         let count = progress.clone();
+        let budget = Arc::new(Budget::new((!over_limit).then_some(self.size_limit)));
+        let limit = budget.clone();
+        let key = password.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(extract(&from, &to, password.as_deref(), &count));
+            let _ = tx.send(extract(&from, &to, key.as_deref(), &count, &limit));
             wake();
         });
         self.pending.push(Pending {
             mount,
             done: rx,
             progress,
+            budget,
+            password,
         });
         true
     }
@@ -208,11 +262,26 @@ impl Archives {
                     Err(ArchiveError::Other("extraction stopped".into()))
                 }
             };
-            let Pending { mount, .. } = self.pending.remove(i);
+            let Pending {
+                mount,
+                budget,
+                password,
+                ..
+            } = self.pending.remove(i);
             match result {
                 Ok(files) => {
                     self.mounted.push(mount.clone());
                     events.push(Event::Mounted { mount, files });
+                }
+                Err(_) if budget.over_limit.load(Ordering::Relaxed) => {
+                    let _ = std::fs::remove_dir_all(&mount.dir);
+                    let size = *budget.size.lock().unwrap_or_else(|e| e.into_inner());
+                    events.push(Event::TooLarge {
+                        zip: mount.zip,
+                        size,
+                        limit: budget.limit.unwrap_or(self.size_limit),
+                        password,
+                    });
                 }
                 Err(error) => {
                     let _ = std::fs::remove_dir_all(&mount.dir);
@@ -457,24 +526,57 @@ const SEVEN_ZIP_MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
 ///
 /// tar 系は目次がなく、全部のバイト数は最後まで読まないと分からない。そこで進み具合は、
 /// ZIP・7z は書いたバイト数、tar 系は元のファイルを読んだバイト数で数える。
+///
+/// 書く量には上限を設ける。ZIP・7z は書いてある展開後の大きさを先に見て、空き容量や
+/// `budget` の上限を超えるなら書き始めない。書いてある大きさは偽れるので、書く途中でもそれを
+/// 超えたら止める。tar 系は書いてないので、空き容量と上限までで止める。
 fn extract(
     archive: &Path,
     dir: &Path,
     password: Option<&str>,
     count: &Count,
+    budget: &Budget,
 ) -> Result<usize, ArchiveError> {
     std::fs::create_dir_all(dir)?;
     let streamed = kind(archive).is_some_and(|k| k != Kind::ZipOr7z);
-    let total = if streamed {
-        std::fs::metadata(archive).ok().map(|m| m.len() as usize)
+    let declared = if streamed {
+        None
     } else {
         total_size(archive, password)
     };
-    if let Some(n) = total {
-        count.total.store(n, Ordering::Relaxed);
+    let free = free_space(dir);
+    if let (Some(size), Some(free)) = (declared, free) {
+        if size > free {
+            return Err(ArchiveError::Other(format!(
+                "needs {} but only {} is free in {}",
+                gib(size),
+                gib(free),
+                dir.display()
+            )));
+        }
     }
+    if let (Some(size), Some(limit)) = (declared, budget.limit) {
+        if size > limit {
+            return Err(budget.refuse(Some(size)));
+        }
+    }
+    let total = if streamed {
+        std::fs::metadata(archive).ok().map(|m| m.len())
+    } else {
+        declared
+    };
+    if let Some(n) = total {
+        count.total.store(n as usize, Ordering::Relaxed);
+    }
+    // 先に見た大きさより多く書けたら、書いてある大きさが偽り。
+    let room = [declared, free, budget.limit]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(u64::MAX);
+    let left = AtomicU64::new(room);
     let read = streamed.then_some(&count.done);
-    each_entry(archive, password, read, |relative, data| {
+    let result = each_entry(archive, password, read, |relative, data| {
         let out = dir.join(relative);
         let Some(data) = data else {
             return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
@@ -483,18 +585,109 @@ fn extract(
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::File::create(&out));
-        match target {
-            Ok(mut file) if streamed => copy_entry(data, &mut file),
-            Ok(mut file) => copy_entry(
-                &mut Counted {
-                    inner: data,
-                    count: &count.done,
-                },
-                &mut file,
-            ),
-            Err(e) => Err(EntryError::Other(e.to_string())),
+        let mut target = match target {
+            Ok(file) => Capped {
+                inner: file,
+                left: &left,
+            },
+            Err(e) => return Err(EntryError::Other(e.to_string())),
+        };
+        if streamed {
+            copy_entry(data, &mut target)
+        } else {
+            let mut counted = Counted {
+                inner: data,
+                count: &count.done,
+            };
+            copy_entry(&mut counted, &mut target)
         }
-    })
+    });
+    if result.is_ok() || left.load(Ordering::Relaxed) != OVER {
+        return result;
+    }
+    if declared.is_some() {
+        Err(ArchiveError::Other(
+            "the contents are larger than the archive says".into(),
+        ))
+    } else if budget.limit.is_some_and(|l| free.is_none_or(|f| l <= f)) {
+        Err(budget.refuse(None))
+    } else {
+        Err(ArchiveError::Other(format!(
+            "not enough free space in {}",
+            dir.display()
+        )))
+    }
+}
+
+/// [`Capped`] が書ける量を超えたしるし。
+const OVER: u64 = u64::MAX;
+
+/// 残りの量（`left`）までしか書かない。超えたら `left` を [`OVER`] にして失敗する。
+struct Capped<'a, W> {
+    inner: W,
+    left: &'a AtomicU64,
+}
+
+impl<W: std::io::Write> std::io::Write for Capped<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let left = self.left.load(Ordering::Relaxed);
+        let n = buf.len() as u64;
+        if n > left {
+            self.left.store(OVER, Ordering::Relaxed);
+            return Err(std::io::Error::other("extraction size limit reached"));
+        }
+        let written = self.inner.write(buf)?;
+        self.left.store(left - written as u64, Ordering::Relaxed);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// バイト数を GB（1 GB = 2^30 バイト）で読める形にする。
+pub fn gib(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64)
+}
+
+/// `dir` のあるドライブの空き容量。分からなければ `None`（そのときは空き容量で止めない）。
+#[cfg(unix)]
+fn free_space(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` は NUL で終わる文字列で、`stat` は statvfs が書き込む大きさがある。
+    let ok = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } == 0;
+    if !ok {
+        return None;
+    }
+    // SAFETY: statvfs が成功したので書き込まれている。
+    let stat = unsafe { stat.assume_init() };
+    #[allow(clippy::unnecessary_cast)]
+    Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+#[cfg(windows)]
+fn free_space(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt as _;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` は NUL で終わり、受け取る値は使わないものに null を渡している。
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } != 0;
+    ok.then_some(free)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn free_space(_: &Path) -> Option<u64> {
+    None
 }
 
 /// 読んだバイト数を数えながら読む。
@@ -511,17 +704,23 @@ impl<R: std::io::Read> std::io::Read for Counted<'_, R> {
     }
 }
 
-/// `archive` の中身を展開したときのバイト数の合計。進み具合を出すためだけに使うので、
-/// 読めなければ `None`。
-fn total_size(archive: &Path, password: Option<&str>) -> Option<usize> {
+/// `archive` の中身を展開したときのバイト数の合計（アーカイブに書いてある値）。読めなければ `None`。
+fn total_size(archive: &Path, password: Option<&str>) -> Option<u64> {
     let file = std::fs::File::open(archive).ok()?;
     if let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
         let sizes = (0..zip.len()).filter_map(|i| zip.by_index_raw(i).ok().map(|e| e.size()));
-        return Some(sizes.sum::<u64>() as usize);
+        return Some(sizes.fold(0u64, u64::saturating_add));
     }
     let key = password.map_or_else(sevenz_rust2::Password::empty, sevenz_rust2::Password::from);
     let reader = sevenz_rust2::ArchiveReader::open(archive, key).ok()?;
-    Some(reader.archive().files.iter().map(|f| f.size).sum::<u64>() as usize)
+    Some(
+        reader
+            .archive()
+            .files
+            .iter()
+            .map(|f| f.size)
+            .fold(0u64, u64::saturating_add),
+    )
 }
 
 /// `archive` の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
@@ -797,9 +996,8 @@ fn each_in_7z(
 /// 同じ `io::Error` で返すため。
 pub fn copy_entry(
     data: &mut dyn std::io::Read,
-    target: &mut std::fs::File,
+    target: &mut impl std::io::Write,
 ) -> Result<(), EntryError> {
-    use std::io::Write as _;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = data.read(&mut buf).map_err(EntryError::Read)?;
@@ -935,9 +1133,9 @@ mod tests {
         let zip = tmp.path().join("scans.zip");
         write_zip(&zip, &[("a.png", b"A"), ("sub/b.dcm", b"B")]);
         let mut archives = Archives::new(tmp.path().join("work"));
-        assert!(archives.mount(&zip, None, || {}));
+        assert!(archives.mount(&zip, None, false, || {}));
         assert!(
-            !archives.mount(&zip, None, || {}),
+            !archives.mount(&zip, None, false, || {}),
             "the same zip is opened once"
         );
         let events = wait(&mut archives);
@@ -967,16 +1165,28 @@ mod tests {
             write_encrypted_zip(&zip, "open sesame", aes);
             let out = tmp.path().join("out");
             assert_eq!(
-                extract(&zip, &out, None, &Count::default()),
+                extract(&zip, &out, None, &Count::default(), &Budget::new(None)),
                 Err(ArchiveError::NeedsPassword)
             );
             assert_eq!(
-                extract(&zip, &out, Some("wrong"), &Count::default()),
+                extract(
+                    &zip,
+                    &out,
+                    Some("wrong"),
+                    &Count::default(),
+                    &Budget::new(None)
+                ),
                 Err(ArchiveError::WrongPassword),
                 "aes = {aes}"
             );
             assert_eq!(
-                extract(&zip, &out, Some("open sesame"), &Count::default()),
+                extract(
+                    &zip,
+                    &out,
+                    Some("open sesame"),
+                    &Count::default(),
+                    &Budget::new(None)
+                ),
                 Ok(1)
             );
             assert_eq!(std::fs::read(out.join("secret.png")).unwrap(), [7; 4096]);
@@ -989,13 +1199,13 @@ mod tests {
         let zip = tmp.path().join("secret.zip");
         write_encrypted_zip(&zip, "pw", true);
         let mut archives = Archives::new(tmp.path().join("work"));
-        archives.mount(&zip, None, || {});
+        archives.mount(&zip, None, false, || {});
         let events = wait(&mut archives);
         assert!(
             matches!(&events[0], Event::NeedsPassword { wrong: false, .. }),
             "{events:?}"
         );
-        archives.mount(&zip, Some("pw".into()), || {});
+        archives.mount(&zip, Some("pw".into()), false, || {});
         let events = wait(&mut archives);
         assert!(
             matches!(&events[0], Event::Mounted { files: 1, .. }),
@@ -1028,6 +1238,7 @@ mod tests {
                 &tmp.path().join(name).with_extension("out"),
                 None,
                 &count,
+                &Budget::new(None),
             )
             .unwrap();
             assert_eq!(count.total.load(Ordering::Relaxed), 10, "{name}");
@@ -1041,7 +1252,10 @@ mod tests {
         let archive = tmp.path().join("photos.7z");
         write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
         let out = tmp.path().join("out");
-        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(2));
+        assert_eq!(
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            Ok(2)
+        );
         assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
     }
 
@@ -1052,15 +1266,27 @@ mod tests {
         write_7z(&archive, &[("a.png", &[1; 4096])], Some("pw"));
         let out = tmp.path().join("out");
         assert_eq!(
-            extract(&archive, &out, None, &Count::default()),
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
             Err(ArchiveError::NeedsPassword)
         );
         assert_eq!(
-            extract(&archive, &out, Some("nope"), &Count::default()),
+            extract(
+                &archive,
+                &out,
+                Some("nope"),
+                &Count::default(),
+                &Budget::new(None)
+            ),
             Err(ArchiveError::WrongPassword)
         );
         assert_eq!(
-            extract(&archive, &out, Some("pw"), &Count::default()),
+            extract(
+                &archive,
+                &out,
+                Some("pw"),
+                &Count::default(),
+                &Budget::new(None)
+            ),
             Ok(1)
         );
     }
@@ -1091,7 +1317,10 @@ mod tests {
         let zip = tmp.path().join("evil.zip");
         write_zip(&zip, &[("../escaped.txt", b"x"), ("ok.png", b"y")]);
         let out = tmp.path().join("out");
-        assert_eq!(extract(&zip, &out, None, &Count::default()).unwrap(), 1);
+        assert_eq!(
+            extract(&zip, &out, None, &Count::default(), &Budget::new(None)).unwrap(),
+            1
+        );
         assert!(!tmp.path().join("escaped.txt").exists());
     }
 
@@ -1101,7 +1330,7 @@ mod tests {
         let zip = tmp.path().join("broken.zip");
         std::fs::write(&zip, b"not a zip").unwrap();
         let mut archives = Archives::new(tmp.path().join("work"));
-        archives.mount(&zip, None, || {});
+        archives.mount(&zip, None, false, || {});
         assert!(matches!(wait(&mut archives)[0], Event::Failed { .. }));
         assert!(archives.mount_of(&tmp.path().join("work")).is_none());
     }
@@ -1113,7 +1342,7 @@ mod tests {
         write_zip(&zip, &[("a.png", b"A")]);
         let base = tmp.path().join("work");
         let mut archives = Archives::new(base.clone());
-        archives.mount(&zip, None, || {});
+        archives.mount(&zip, None, false, || {});
         wait(&mut archives);
         drop(archives);
         assert!(!base.exists());
@@ -1126,11 +1355,11 @@ mod tests {
         write_zip(&a, &[("a.png", b"A")]);
         write_zip(&b, &[("b.png", b"B")]);
         let mut archives = Archives::in_dir(Some(&tmp.path().join("first")));
-        archives.mount(&a, None, || {});
+        archives.mount(&a, None, false, || {});
         wait(&mut archives);
         let second = tmp.path().join("second");
         archives.set_parent(Some(&second));
-        archives.mount(&b, None, || {});
+        archives.mount(&b, None, false, || {});
         wait(&mut archives);
 
         let first_dir = archives.mounted_zip(&a).unwrap().dir.clone();
@@ -1148,10 +1377,10 @@ mod tests {
         write_zip(&a, &[("a.png", b"A")]);
         write_zip(&b, &[("b.png", b"B")]);
         let mut archives = Archives::in_dir(Some(&tmp.path().join("first")));
-        archives.mount(&a, None, || {});
+        archives.mount(&a, None, false, || {});
         wait(&mut archives);
         archives.set_parent(Some(&tmp.path().join("second")));
-        archives.mount(&b, None, || {});
+        archives.mount(&b, None, false, || {});
         wait(&mut archives);
         let dirs: Vec<PathBuf> = [&a, &b]
             .map(|z| archives.mounted_zip(z).unwrap().dir.clone())
@@ -1171,7 +1400,7 @@ mod tests {
         let zip = tmp.path().join("a.zip");
         write_zip(&zip, &[("a.png", b"A")]);
         let mut archives = Archives::in_dir(Some(&chosen));
-        archives.mount(&zip, None, || {});
+        archives.mount(&zip, None, false, || {});
         wait(&mut archives);
         drop(archives);
 
@@ -1248,7 +1477,10 @@ mod tests {
         std::fs::write(&archive, tar).unwrap();
         let out = tmp.path().join("out");
 
-        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(2));
+        assert_eq!(
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            Ok(2)
+        );
         assert_eq!(std::fs::read(out.join("a.png")).unwrap(), b"A");
         assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
     }
@@ -1269,7 +1501,7 @@ mod tests {
             let out = tmp.path().join(format!("{name}.out"));
 
             assert_eq!(
-                extract(&archive, &out, None, &Count::default()),
+                extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
                 Ok(2),
                 "{name}"
             );
@@ -1288,7 +1520,13 @@ mod tests {
         std::fs::write(&archive, xz(&tar_bytes(&[(b"a.png", b"A")]))).unwrap();
 
         assert_eq!(
-            extract(&archive, &tmp.path().join("out"), None, &Count::default()),
+            extract(
+                &archive,
+                &tmp.path().join("out"),
+                None,
+                &Count::default(),
+                &Budget::new(None)
+            ),
             Ok(1)
         );
     }
@@ -1310,7 +1548,10 @@ mod tests {
         std::fs::write(&archive, builder.into_inner().unwrap()).unwrap();
         let out = tmp.path().join("out");
 
-        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert_eq!(
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            Ok(1)
+        );
         assert!(std::fs::symlink_metadata(out.join("evil")).is_err());
     }
 
@@ -1321,7 +1562,13 @@ mod tests {
         let gz = gzip(&tar_bytes(&[(b"a.png", &[7u8; 4096])]));
         std::fs::write(&archive, &gz[..gz.len() / 2]).unwrap();
 
-        let result = extract(&archive, &tmp.path().join("out"), None, &Count::default());
+        let result = extract(
+            &archive,
+            &tmp.path().join("out"),
+            None,
+            &Count::default(),
+            &Budget::new(None),
+        );
         assert!(matches!(result, Err(ArchiveError::Other(_))), "{result:?}");
     }
 
@@ -1340,7 +1587,7 @@ mod tests {
             let out = out.join(name);
 
             assert_eq!(
-                extract(&archive, &out, None, &Count::default()),
+                extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
                 Ok(1),
                 "{name}"
             );
@@ -1359,7 +1606,14 @@ mod tests {
         let gz = gzip(&tar_bytes(&[(b"a.png", &[1u8; 5000])]));
         std::fs::write(&archive, &gz).unwrap();
         let count = Count::default();
-        extract(&archive, &tmp.path().join("out"), None, &count).unwrap();
+        extract(
+            &archive,
+            &tmp.path().join("out"),
+            None,
+            &count,
+            &Budget::new(None),
+        )
+        .unwrap();
 
         assert_eq!(count.total.load(Ordering::Relaxed), gz.len());
         assert_eq!(count.done.load(Ordering::Relaxed), gz.len());
@@ -1376,7 +1630,10 @@ mod tests {
         std::fs::write(&archive, tar_bytes(&[(SO_PNG_SJIS, b"A")])).unwrap();
         let out = tmp.path().join("out");
 
-        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert_eq!(
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            Ok(1)
+        );
         assert!(out.join("ソ.png").is_file());
     }
 
@@ -1398,7 +1655,10 @@ mod tests {
         std::fs::write(&archive, patched).unwrap();
         let out = tmp.path().join("out");
 
-        assert_eq!(extract(&archive, &out, None, &Count::default()), Ok(1));
+        assert_eq!(
+            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            Ok(1)
+        );
         assert!(out.join("ソ.png").is_file());
     }
 
@@ -1542,5 +1802,75 @@ mod tests {
         assert!(!archives.base().starts_with(tmp.path().join(FOLDER_NAME)));
         assert!(archives.base().starts_with(tmp.path()));
         assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn an_archive_over_the_size_limit_is_extracted_only_when_allowed() {
+        let tmp = TempDir::new();
+        let zip = tmp.path().join("big.zip");
+        write_zip(&zip, &[("a.png", &[1; 600]), ("b.png", &[2; 600])]);
+        let mut archives = Archives::new(tmp.path().join("x"));
+        archives.set_size_limit(1000);
+
+        archives.mount(&zip, None, false, || {});
+        let events = wait(&mut archives);
+        assert!(
+            matches!(
+                &events[0],
+                Event::TooLarge {
+                    size: Some(1200),
+                    limit: 1000,
+                    password: None,
+                    ..
+                }
+            ),
+            "{events:?}"
+        );
+        assert!(std::fs::read_dir(archives.base()).unwrap().next().is_none());
+
+        archives.mount(&zip, None, true, || {});
+        let events = wait(&mut archives);
+        assert!(
+            matches!(&events[0], Event::Mounted { files: 2, .. }),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_tar_growing_over_the_size_limit_is_stopped_and_removed() {
+        let tmp = TempDir::new();
+        let archive = tmp.path().join("big.tar.gz");
+        let tar = tar_bytes(&[(b"a.png", &[0u8; 4096]), (b"b.png", &[0u8; 4096])]);
+        std::fs::write(&archive, gzip(&tar)).unwrap();
+        let mut archives = Archives::new(tmp.path().join("x"));
+        archives.set_size_limit(5000);
+
+        archives.mount(&archive, None, false, || {});
+        let events = wait(&mut archives);
+        assert!(
+            matches!(
+                &events[0],
+                Event::TooLarge {
+                    size: None,
+                    limit: 5000,
+                    ..
+                }
+            ),
+            "{events:?}"
+        );
+        assert!(std::fs::read_dir(archives.base()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn writing_stops_when_the_bytes_left_run_out() {
+        let left = AtomicU64::new(10);
+        let mut out = Capped {
+            inner: Vec::new(),
+            left: &left,
+        };
+        assert!(copy_entry(&mut &[7u8; 8][..], &mut out).is_ok());
+        assert!(copy_entry(&mut &[7u8; 8][..], &mut out).is_err());
+        assert_eq!(out.inner.len(), 8);
+        assert_eq!(left.load(Ordering::Relaxed), OVER);
     }
 }

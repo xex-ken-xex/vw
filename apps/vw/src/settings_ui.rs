@@ -98,7 +98,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 95] = [
+const ITEMS: [Item; 96] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -287,6 +287,13 @@ const ITEMS: [Item; 95] = [
         title: "Archive extraction folder",
         description: "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
         widget: archive_dir_widget,
+    },
+    Item {
+        section: Section::Behavior,
+        key: "behavior.archive_size_limit_gb",
+        title: "Archive size limit",
+        description: "Archives larger than this when extracted (GB) are extracted only after you confirm. Archives that do not fit in the free space of the extraction folder are not extracted.",
+        widget: archive_size_limit_widget,
     },
     Item {
         section: Section::Metadata,
@@ -1596,6 +1603,16 @@ fn auto_reload_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
 
 /// 展開先のフォルダ。入力中の文字列は egui の一時データに持ち、確定したときに反映する。
 /// 1 文字ごとに反映すると、打っている途中のパスごとに展開先が変わり、ログも流れてしまうため。
+fn archive_size_limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.behavior.archive_size_limit_gb)
+            .range(crate::settings::Behavior::ARCHIVE_SIZE_RANGE_GB)
+            .speed(1.0)
+            .suffix(" GB"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
 fn archive_dir_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let id = ui.make_persistent_id("behavior.archive_dir.edit");
     let picker_id = id.with("picker");
