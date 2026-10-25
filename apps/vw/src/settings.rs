@@ -1257,6 +1257,111 @@ impl FitsCalibration {
     }
 }
 
+/// 「送る」の送り先のアプリ（[`crate::send_app`]）。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct SendSettings {
+    /// `None` はまだ一覧を決めていないこと。そのときは OS の関連付けから作った一覧を使い、
+    /// 設定ファイルに書くまでは起動のたびに作り直す（関連付けを後から変えても追いつくように）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apps: Option<Vec<SendApp>>,
+}
+
+impl SendSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let mut r = r.at("send");
+        let apps = r.get::<Vec<SendApp>>("apps").map(|apps| {
+            apps.into_iter()
+                .filter(|app| match app.problem() {
+                    // 誤ったアプリだけを外し、残りは使えるようにする。
+                    Some(p) => {
+                        r.problem("apps", format!("{:?}: {p} (ignored)", app.name));
+                        false
+                    }
+                    None => true,
+                })
+                .collect()
+        });
+        Self { apps }
+    }
+}
+
+/// 送り先のアプリ 1 つ。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SendApp {
+    pub name: String,
+    pub program: String,
+    /// [`vw_launch::args`] の書き方。`{path}` `{paths}` `{dir}` `{name}` を差し込める。
+    #[serde(default)]
+    pub args: String,
+    #[serde(default)]
+    pub accepts: Accepts,
+    /// 受け付ける拡張子を `|` か `,` で区切ったもの（`nef|arw|jpg`）。空なら何でも。
+    #[serde(default)]
+    pub extensions: String,
+}
+
+/// 送り先のアプリが受け付けるもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Accepts {
+    #[default]
+    Files,
+    Folders,
+    Both,
+}
+
+impl Accepts {
+    pub const ALL: [Accepts; 3] = [Accepts::Files, Accepts::Folders, Accepts::Both];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Accepts::Files => "Files",
+            Accepts::Folders => "Folders",
+            Accepts::Both => "Files and folders",
+        }
+    }
+}
+
+impl SendApp {
+    /// 入力に誤りがあれば、その説明。
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.name.trim().is_empty() {
+            Some("name is empty")
+        } else if self.program.trim().is_empty() {
+            Some("program is empty")
+        } else if vw_launch::args::split(&self.args).is_err() {
+            Some("a \" in the arguments is not closed")
+        } else {
+            None
+        }
+    }
+
+    /// 引数の書き方を区切ったもの。
+    pub fn template(&self) -> Vec<String> {
+        vw_launch::args::split(&self.args).unwrap_or_default()
+    }
+
+    /// フォルダ（`folder`）か、拡張子 `extension` のファイルを受け付けるか。
+    pub fn takes(&self, folder: bool, extension: Option<&str>) -> bool {
+        if folder {
+            return self.accepts != Accepts::Files;
+        }
+        if self.accepts == Accepts::Folders {
+            return false;
+        }
+        let mut listed = self
+            .extensions
+            .split(['|', ',', ' '])
+            .map(|e| e.trim().trim_start_matches('.'))
+            .filter(|e| !e.is_empty())
+            .peekable();
+        if listed.peek().is_none() {
+            return true;
+        }
+        extension.is_some_and(|ext| listed.any(|e| e.eq_ignore_ascii_case(ext)))
+    }
+}
+
 /// 他の機器への送信（[`crate::dicom_send`]）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DicomSend {
@@ -1755,6 +1860,7 @@ pub struct Settings {
     pub dicom: Dicom,
     pub fits: Fits,
     pub pipeline: PipelineSettings,
+    pub send: SendSettings,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
@@ -1784,6 +1890,7 @@ impl Settings {
         let dicom = Dicom::read(&mut r);
         let fits = Fits::read(&mut r);
         let pipeline = PipelineSettings::read(&mut r);
+        let send = SendSettings::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
@@ -1814,6 +1921,7 @@ impl Settings {
                 dicom,
                 fits,
                 pipeline,
+                send,
                 dicom_send,
                 dataset,
                 fullscreen,
@@ -2282,6 +2390,82 @@ keys = []
         assert_eq!(SearchGroup::parse_line("empty = ;"), None);
         assert_eq!(SearchGroup::split_key("exif:Model"), ("exif", "Model"));
         assert_eq!(SearchGroup::split_key("0010,0020"), ("", "0010,0020"));
+    }
+
+    #[test]
+    fn send_apps_are_unset_until_written() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.send.apps, None);
+        assert!(!s.to_toml().contains("[[send.apps]]"));
+    }
+
+    #[test]
+    fn an_empty_send_app_list_stays_empty() {
+        let (s, _) = Settings::from_toml("[send]\napps = []\n").unwrap();
+        assert_eq!(s.send.apps, Some(vec![]));
+        let (again, _) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert_eq!(again.send.apps, Some(vec![]));
+    }
+
+    #[test]
+    fn send_apps_round_trip_and_broken_ones_are_dropped() {
+        let text = r#"
+[[send.apps]]
+name = "Editor"
+program = 'C:\Program Files\Editor\editor.exe'
+args = '--open {paths}'
+accepts = "both"
+extensions = "nef|arw"
+[[send.apps]]
+name = "no program"
+program = ""
+[[send.apps]]
+name = "bad quote"
+program = "x"
+args = '"{path}'
+"#;
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        let apps = s.send.apps.clone().unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].accepts, Accepts::Both);
+        assert_eq!(apps[0].template(), ["--open", "{paths}"]);
+        assert_eq!(problems.len(), 2);
+        let (again, _) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert_eq!(again.send.apps, Some(apps));
+    }
+
+    #[test]
+    fn send_app_takes_listed_extensions_in_any_case() {
+        let app = SendApp {
+            extensions: ".NEF, arw".into(),
+            ..Default::default()
+        };
+        assert!(app.takes(false, Some("nef")));
+        assert!(app.takes(false, Some("ARW")));
+        assert!(!app.takes(false, Some("jpg")));
+        assert!(!app.takes(false, None));
+    }
+
+    #[test]
+    fn send_app_without_extensions_takes_any_file() {
+        let app = SendApp::default();
+        assert!(app.takes(false, Some("png")));
+        assert!(app.takes(false, None));
+    }
+
+    #[test]
+    fn send_app_takes_folders_only_when_it_accepts_them() {
+        let mut app = SendApp {
+            extensions: "jpg".into(),
+            ..Default::default()
+        };
+        assert!(!app.takes(true, None));
+        app.accepts = Accepts::Folders;
+        assert!(app.takes(true, None));
+        assert!(!app.takes(false, Some("jpg")));
+        app.accepts = Accepts::Both;
+        assert!(app.takes(true, None));
+        assert!(app.takes(false, Some("jpg")));
     }
 
     #[test]

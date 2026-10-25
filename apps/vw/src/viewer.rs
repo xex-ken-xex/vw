@@ -263,8 +263,10 @@ pub struct SlotLook<'a> {
     /// 画像の上の左ドラッグで表示位置を動かす（手のひら・画素値の確認ツール）。
     /// 動かさないとき（矢印）は、見出しと同じく画像を運ぶドラッグになる。
     pub pan: bool,
-    /// 右クリックの「送信 ▸」に並べる送信先の名前。
+    /// 右クリックの「送る ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
+    /// 右クリックの「送る ▸」に並べるアプリ。
+    pub apps: &'a [crate::settings::SendApp],
     /// 下の帯のドロップダウンに並べる、保存したパイプライン。
     pub presets: &'a [crate::pipelines::Preset],
     /// 色導出で描いた画像のテクスチャの補間。
@@ -333,8 +335,8 @@ pub struct SlotResponse {
     pub dropped: Option<PathBuf>,
     /// 右クリックメニューで十字の値のコピーが選ばれた。コピーする文字。
     pub copy_text: Option<String>,
-    /// 右クリックメニューで送信先が選ばれた。
-    pub send: Option<crate::dicom_send::Choice>,
+    /// 右クリックメニューで送り先が選ばれた。
+    pub send: Option<crate::send_app::Choice>,
     /// 右クリックメニューで「画素の変換」が選ばれた。
     pub pipeline: bool,
     /// 右クリックメニューで「評価の基準にする」が選ばれた。
@@ -1084,6 +1086,7 @@ impl Slot {
             roi: roi_tool,
             pan: pan_tool,
             destinations,
+            apps,
             presets,
             texture_options,
             faces,
@@ -1636,8 +1639,11 @@ impl Slot {
                     out.pipeline = true;
                     ui.close();
                 }
-                if dicom {
-                    out.send = crate::dicom_send::menu(ui, lang, destinations);
+                if let Some(shown) = &self.shown {
+                    let file = crate::frames::file_of(&shown.path);
+                    let destinations = dicom.then_some(destinations);
+                    let offer = crate::send_app::Offer::for_path(apps, destinations, &file, false);
+                    out.send = crate::send_app::menu(ui, lang, &offer);
                 }
             });
             if delete_mark {

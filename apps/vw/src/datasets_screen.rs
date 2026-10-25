@@ -30,9 +30,34 @@ pub enum Action {
     /// 検索カタログを探し直す。
     Reload,
     /// 送る。検索でファイルを絞り込んでいれば、当たったファイルのパスも渡す。
-    Send(PathBuf, Option<Vec<String>>, crate::dicom_send::Choice),
+    Send(PathBuf, Option<Vec<String>>, crate::send_app::Choice),
     /// 今のメタデータの条件のキーを、検索のグループとして設定に足す（同じ名前なら置き換える）。
     SaveGroup(SearchGroup),
+}
+
+/// 「送る ▸」に並べるもの。
+pub struct SendTo<'a> {
+    pub destinations: &'a [String],
+    pub apps: &'a [crate::settings::SendApp],
+}
+
+impl SendTo<'_> {
+    /// データセットの「送る ▸」。`hits` があれば当たったファイル、なければデータセットのフォルダを送る。
+    fn menu(
+        &self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        hits: Option<&[String]>,
+    ) -> Option<crate::send_app::Choice> {
+        let first = hits.and_then(|h| h.first()).map(Path::new);
+        let offer = crate::send_app::Offer::for_path(
+            self.apps,
+            Some(self.destinations),
+            first.unwrap_or(Path::new("")),
+            first.is_none(),
+        );
+        crate::send_app::menu(ui, lang, &offer)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -210,7 +235,7 @@ impl DatasetsScreen {
         roots: &[String],
         fields: &[String],
         groups: &[SearchGroup],
-        destinations: &[String],
+        send: &SendTo,
     ) -> Option<Action> {
         self.poll();
         self.search();
@@ -270,12 +295,12 @@ impl DatasetsScreen {
             }
             ui.add_space(4.0);
         });
-        if let Some(a) = self.detail_panel(ui, lang, &field_names, destinations) {
+        if let Some(a) = self.detail_panel(ui, lang, &field_names, send) {
             action = Some(a);
         }
         egui::CentralPanel::default().show(ui, |ui| {
             self.status_line(ui, lang, roots);
-            if let Some(a) = self.table_ui(ui, lang, &field_names, destinations) {
+            if let Some(a) = self.table_ui(ui, lang, &field_names, send) {
                 action = Some(a);
             }
         });
@@ -521,7 +546,7 @@ impl DatasetsScreen {
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
-        destinations: &[String],
+        send: &SendTo,
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
         let dir = self.selected.as_ref()?;
@@ -565,7 +590,7 @@ impl DatasetsScreen {
                     if ui.button(tr(lang, "Extract...")).clicked() {
                         action = Some(Action::Extract(entry.dir.clone(), hits.clone()));
                     }
-                    if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
+                    if let Some(choice) = send.menu(ui, lang, hits.as_deref()) {
                         action = Some(Action::Send(entry.dir.clone(), hits.clone(), choice));
                     }
                 });
@@ -659,7 +684,7 @@ impl DatasetsScreen {
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
-        destinations: &[String],
+        send_to: &SendTo,
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
         let mut send = None;
@@ -795,12 +820,9 @@ impl DatasetsScreen {
                             show = Some(e.dir.clone());
                         }
                         vw_ui::menu::context(&row, |ui| {
-                            if let Some(choice) = crate::dicom_send::menu(ui, lang, destinations) {
-                                send = Some(Action::Send(
-                                    e.dir.clone(),
-                                    narrowed_paths(index, h),
-                                    choice,
-                                ));
+                            let hits = narrowed_paths(index, h);
+                            if let Some(choice) = send_to.menu(ui, lang, hits.as_deref()) {
+                                send = Some(Action::Send(e.dir.clone(), hits, choice));
                             }
                         });
                     }

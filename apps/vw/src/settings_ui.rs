@@ -36,6 +36,7 @@ enum Section {
     Pipeline,
     Fits,
     Dicom,
+    SendApps,
     DicomSend,
     Log,
     Quality,
@@ -46,7 +47,7 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 18] = [
+    const ALL: [Section; 19] = [
         Section::Appearance,
         Section::Viewer,
         Section::Tree,
@@ -58,6 +59,7 @@ impl Section {
         Section::Pipeline,
         Section::Fits,
         Section::Dicom,
+        Section::SendApps,
         Section::DicomSend,
         Section::Log,
         Section::Quality,
@@ -80,6 +82,7 @@ impl Section {
             Section::Pipeline => "Pixel pipeline",
             Section::Fits => "Astronomy images (FITS)",
             Section::Dicom => "Medical images (DICOM)",
+            Section::SendApps => "Send to apps",
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
             Section::Quality => "Quality evaluation",
@@ -2264,6 +2267,7 @@ pub struct SettingsUi {
     seen: Option<Section>,
     focus_search: bool,
     destinations: Destinations,
+    send_apps: SendApps,
 }
 
 impl SettingsUi {
@@ -2271,6 +2275,12 @@ impl SettingsUi {
     pub fn show_destinations(&mut self) {
         self.query.clear();
         self.jump = Some(Section::DicomSend);
+    }
+
+    /// 送り先のアプリの設定へ移る（「送る ▸」の「アプリを設定...」）。
+    pub fn show_send_apps(&mut self) {
+        self.query.clear();
+        self.jump = Some(Section::SendApps);
     }
 
     /// 画面を開いたときに呼ぶ。すぐ検索語を打てるようにする。
@@ -2447,12 +2457,17 @@ impl SettingsUi {
                     tr(lang, "Destinations"),
                 ],
             );
+        let send_apps = section == Section::SendApps
+            && matches(
+                &self.query,
+                &["send.apps", "Send to apps", tr(lang, "Send to apps")],
+            );
         let log_folder = section == Section::Log
             && matches(
                 &self.query,
                 &["log.folder", "Log folder", tr(lang, "Log folder")],
             );
-        if items.is_empty() && actions.is_empty() && !destinations && !log_folder {
+        if items.is_empty() && actions.is_empty() && !destinations && !send_apps && !log_folder {
             return false;
         }
 
@@ -2486,6 +2501,16 @@ impl SettingsUi {
             if self.action_ui(ui, action, &mut settings.keys, lang) {
                 out.changed = true;
             }
+        }
+        if send_apps {
+            item_frame(ui, |ui| {
+                title_line(ui, tr(lang, "Send to apps"), "send.apps");
+                ui.weak(tr(
+                    lang,
+                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: e.g. nef|arw|jpg; empty means any file.",
+                ));
+                self.send_apps.ui(ui, settings, out);
+            });
         }
         if destinations {
             item_frame(ui, |ui| {
@@ -3150,6 +3175,177 @@ impl Destinations {
             let valid = self.valid();
             if valid != settings.dicom_send.destinations {
                 settings.dicom_send.destinations = valid;
+                out.changed = true;
+            }
+        }
+    }
+}
+
+/// 送り先のアプリの表（追加・削除・並べ替え・関連付けからの取り込み）。
+#[derive(Default)]
+struct SendApps {
+    rows: Vec<crate::settings::SendApp>,
+    /// 関連付けを調べている。
+    importing: Option<std::sync::mpsc::Receiver<Vec<crate::settings::SendApp>>>,
+}
+
+impl SendApps {
+    fn valid(&self) -> Vec<crate::settings::SendApp> {
+        self.rows
+            .iter()
+            .filter(|r| r.problem().is_none())
+            .cloned()
+            .collect()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings, out: &mut Response) {
+        use crate::settings::Accepts;
+        let lang = settings.appearance.language;
+        let saved = settings.send.apps.clone().unwrap_or_default();
+        // 設定ファイルが外で書き換えられたら、表を作り直す。
+        if self.valid() != saved {
+            self.rows = saved;
+        }
+        let mut edited = false;
+        let mut remove = None;
+        let mut swap = None;
+        let red = Color32::from_rgb(230, 80, 80);
+        let count = self.rows.len();
+        egui::Grid::new("send_apps")
+            .num_columns(6)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                for title in ["Name", "Program", "Arguments", "Accepts", "Extensions"] {
+                    ui.weak(tr(lang, title));
+                }
+                ui.end_row();
+                for (i, row) in self.rows.iter_mut().enumerate() {
+                    let problem = row.problem();
+                    let bad = [
+                        row.name.trim().is_empty(),
+                        row.program.trim().is_empty(),
+                        vw_launch::args::split(&row.args).is_err(),
+                    ];
+                    let fields: [(&mut String, f32, bool); 3] = [
+                        (&mut row.name, 120.0, bad[0]),
+                        (&mut row.program, 240.0, bad[1]),
+                        (&mut row.args, 140.0, bad[2]),
+                    ];
+                    for (text, width, bad) in fields {
+                        // グリッドのセルでは前の描画の列幅までしか広がらないため、幅は下限で与える。
+                        let r = ui.add(
+                            egui::TextEdit::singleline(text)
+                                .desired_width(width)
+                                .min_size(egui::vec2(width, 0.0)),
+                        );
+                        if bad {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                2.0,
+                                egui::Stroke::new(1.0, red),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        edited |= r.changed();
+                    }
+                    egui::ComboBox::from_id_salt(("send_app_accepts", i))
+                        .selected_text(tr(lang, row.accepts.title()))
+                        .show_ui(ui, |ui| {
+                            for a in Accepts::ALL {
+                                edited |= ui
+                                    .selectable_value(&mut row.accepts, a, tr(lang, a.title()))
+                                    .changed();
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut row.extensions)
+                                .desired_width(110.0)
+                                .min_size(egui::vec2(110.0, 0.0))
+                                .hint_text(tr(lang, "any")),
+                        );
+                        edited |= r.changed();
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new(icon::ARROW_UP))
+                            .clicked()
+                        {
+                            swap = Some((i - 1, i));
+                        }
+                        if ui
+                            .add_enabled(i + 1 < count, egui::Button::new(icon::ARROW_DOWN))
+                            .clicked()
+                        {
+                            swap = Some((i, i + 1));
+                        }
+                        if ui
+                            .button(icon::X)
+                            .on_hover_text(tr(lang, "Remove app"))
+                            .clicked()
+                        {
+                            remove = Some(i);
+                        }
+                        if let Some(p) = problem {
+                            ui.colored_label(red, tr_text(lang, p));
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!("{} {}", icon::PLUS, tr(lang, "Add app")))
+                .clicked()
+            {
+                self.rows.push(crate::settings::SendApp {
+                    args: "{paths}".into(),
+                    ..Default::default()
+                });
+                edited = true;
+            }
+            let importing = self.importing.is_some();
+            if ui
+                .add_enabled(
+                    !importing,
+                    egui::Button::new(tr(lang, "Add from file associations")),
+                )
+                .on_hover_text(tr(
+                    lang,
+                    "Adds the apps the OS opens JPEG and camera RAW files with.",
+                ))
+                .clicked()
+            {
+                self.importing = Some(crate::background::compute(ui.ctx(), || {
+                    vw_launch::assoc::associated_apps(&crate::send_app::ASSOCIATED_EXTENSIONS)
+                        .into_iter()
+                        .map(crate::send_app::from_associated)
+                        .collect()
+                }));
+            }
+            if importing {
+                ui.spinner();
+            }
+        });
+        if let Some(found) = self.importing.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.importing = None;
+            let added = crate::send_app::merge(&mut self.rows, found);
+            out.logs.push((
+                true,
+                format!("Send to apps: added {added} app(s) from file associations"),
+            ));
+            edited = true;
+        }
+        if let Some((a, b)) = swap {
+            self.rows.swap(a, b);
+            edited = true;
+        }
+        if let Some(i) = remove {
+            self.rows.remove(i);
+            edited = true;
+        }
+        if edited {
+            let valid = self.valid();
+            if settings.send.apps.as_ref() != Some(&valid) {
+                settings.send.apps = Some(valid);
                 out.changed = true;
             }
         }
