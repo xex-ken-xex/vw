@@ -16,6 +16,17 @@ pub enum Stretch {
     ZScale,
 }
 
+impl Stretch {
+    /// 英語の名前（設定の画面と同じ文言）。
+    pub fn title(self) -> &'static str {
+        match self {
+            Stretch::MinMax => "Minimum to maximum",
+            Stretch::Percentile => "Percentiles",
+            Stretch::ZScale => "zscale",
+        }
+    }
+}
+
 /// 分布を見るのに使う値の数の上限。全画素を並べ替えると大きな画像で遅いので、間引いて使う。
 const PERCENTILE_SAMPLES: usize = 1_000_000;
 /// zscale が見る値の数（astropy の既定）。

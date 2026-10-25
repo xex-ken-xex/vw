@@ -553,6 +553,7 @@ mod tests {
                 pick: Pick::Palette("hot_iron".into()),
                 window: None,
                 channels: [None; 3],
+                curve: None,
             },
         };
         let registry = crate::test_util::all_registry();

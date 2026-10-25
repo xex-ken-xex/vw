@@ -562,11 +562,28 @@ impl VwApp {
     }
 
     pub(super) fn set_slot_window(&mut self, index: usize, window: Option<(f32, f32)>) {
+        let curve = self.slots[index].color.curve;
+        self.set_slot_levels(index, window, curve);
+    }
+
+    pub(super) fn set_slot_curve(&mut self, index: usize, curve: Option<vw_core::Curve>) {
+        let window = self.slots[index].color.window;
+        self.set_slot_levels(index, window, curve);
+    }
+
+    /// スロットの黒と白と曲線を変えて読み直す。`None` はファイル（と設定）のまま。
+    pub(super) fn set_slot_levels(
+        &mut self,
+        index: usize,
+        window: Option<(f32, f32)>,
+        curve: Option<vw_core::Curve>,
+    ) {
         let slot = &mut self.slots[index];
-        if slot.color.window == window {
+        if (slot.color.window, slot.color.curve) == (window, curve) {
             return;
         }
         slot.color.window = window;
+        slot.color.curve = curve;
         self.reload_slot(index);
     }
 

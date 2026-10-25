@@ -302,7 +302,10 @@ fn every_card_is_listed_in_file_order() {
             "LONGSTR",
             "COMMENT",
             "HISTORY",
-            "QUOTE"
+            "QUOTE",
+            STRETCH,
+            BLACK_PERCENTILE,
+            WHITE_PERCENTILE
         ]
     );
     assert_eq!(m.get(GROUP, "OBJECT"), Some("NGC 7000"));
@@ -311,6 +314,20 @@ fn every_card_is_listed_in_file_order() {
     assert_eq!(m.get(GROUP, "LONGSTR"), Some("first part second part"));
     assert_eq!(m.get(GROUP, "COMMENT"), Some("first comment"));
     assert_eq!(m.get(GROUP, "QUOTE"), Some("it's"));
+}
+
+#[test]
+fn how_black_and_white_were_chosen_follows_the_cards() {
+    let options = Options {
+        stretch: Stretch::ZScale,
+        ..Options::default()
+    };
+    let m = decode_opts(&fits(&image_cards(8, &[1, 1]), &[0]), options).metadata;
+    assert_eq!(m.get(GROUP, STRETCH), Some("zscale"));
+    assert_eq!(m.get(GROUP, BLACK_PERCENTILE), None);
+    let m = decode(&fits(&image_cards(8, &[1, 1]), &[0])).metadata;
+    assert_eq!(m.get(GROUP, STRETCH), Some("Percentiles"));
+    assert_eq!(m.get(GROUP, WHITE_PERCENTILE), Some("99.5 %"));
 }
 
 #[test]

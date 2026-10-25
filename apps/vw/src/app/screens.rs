@@ -45,6 +45,10 @@ impl VwApp {
                     .map(|p| p.name.as_str())
                     .collect(),
                 color_rules: &self.color_rules,
+                scale_filters: (
+                    self.settings.settings.viewer.magnify_filter,
+                    self.settings.settings.viewer.minify_filter,
+                ),
             })
         });
         let commands = self.pipeline.ui(ui, lang, target);
@@ -76,6 +80,14 @@ impl VwApp {
                 }
                 Command::Window(window) => {
                     self.set_slot_window(self.active, window);
+                    continue;
+                }
+                Command::Curve(curve) => {
+                    self.set_slot_curve(self.active, curve);
+                    continue;
+                }
+                Command::ResetLevels => {
+                    self.set_slot_levels(self.active, None, None);
                     continue;
                 }
                 Command::Compose(files) => {

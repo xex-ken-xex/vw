@@ -32,6 +32,7 @@ use crate::nodes::{self, Chain};
 use crate::pipelines::Values;
 use crate::pixel_pipeline::{self, Decoded, Histogram, Params, Trace, VoiFunction};
 use crate::settings::Language;
+use crate::viewer::ScaleFilter;
 
 /// ウインドウに渡す、アクティブなスロットの画像。
 pub struct Target<'a> {
@@ -55,6 +56,8 @@ pub struct Target<'a> {
     pub saved: Vec<&'a str>,
     /// 色の表の段で選べる表と、種類ごとの既定。
     pub color_rules: &'a Arc<colormap::Rules>,
+    /// スロットで拡大するときと縮小するときのフィルタ（設定）。
+    pub scale_filters: (ScaleFilter, ScaleFilter),
 }
 
 /// ウインドウでの操作。スロットと保存したパイプラインの一覧に当てる。
@@ -76,6 +79,10 @@ pub enum Command {
     ColorMap(colormap::Pick),
     /// スロットの黒と白（画素の値の単位）を変えた。`None` はファイルの値に戻す。
     Window(Option<(f32, f32)>),
+    /// スロットの、黒と白の間の曲線を変えた。`None` はファイル（と設定）のまま。
+    Curve(Option<vw_core::Curve>),
+    /// スロットで変えた黒と白と曲線を、両方ともファイルの値に戻す。
+    ResetLevels,
     /// 合成の色の割り当てを変えた。
     Compose(compose::Files),
     /// 合成の 1 色（0〜2）の黒と白を変えた。`None` はファイルの値に戻す。
@@ -305,8 +312,11 @@ pub struct PipelineView {
     /// このフレームで、ダーク・フラットの段か色の表の段で押されたもの。
     calibration: Option<Command>,
     color_rules: Option<Arc<colormap::Rules>>,
+    scale_filters: Option<(ScaleFilter, ScaleFilter)>,
     /// 色の表の段のゲージで、ドラッグしている黒と白。
     gauge_drag: Option<(f32, f32)>,
+    /// 「黒と白」の段の数の欄で、ドラッグ中の黒と白（離すまで読み直さない）。
+    levels_drag: Option<(f32, f32)>,
     /// 合成の色ごとの黒と白の段のゲージで、ドラッグしている黒と白。
     lane_drags: [Option<(f32, f32)>; 3],
 }
@@ -371,7 +381,7 @@ impl PipelineView {
             (Node::Modality | Node::Voi | Node::Presentation, Some(Loaded::Gray(_))) => true,
             (Node::Stage(i), Some(Loaded::Plain(stages))) => stages
                 .get(i)
-                .is_some_and(|s| s.switch.is_some() || !s.choices.is_empty()),
+                .is_some_and(|s| s.switch.is_some() || !s.choices.is_empty() || s.levels),
             _ => false,
         }
     }
@@ -385,6 +395,7 @@ impl PipelineView {
     ) -> Vec<Command> {
         self.follow(&ui.ctx().clone(), target.as_ref());
         self.color_rules = target.as_ref().map(|t| t.color_rules.clone());
+        self.scale_filters = target.as_ref().map(|t| t.scale_filters);
         let mut out = Vec::new();
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
@@ -1241,7 +1252,7 @@ impl PipelineView {
                 false
             }
             Some(Loaded::Plain(stages)) => {
-                if let Some(c) = plain_body(ui, lang, node, info, stages) {
+                if let Some(c) = plain_body(ui, lang, node, info, stages, &mut self.levels_drag) {
                     self.calibration = Some(c);
                 }
                 false
@@ -1249,6 +1260,25 @@ impl PipelineView {
             _ => false,
         };
         if node == Node::Display {
+            if let Some((magnify, minify)) = self.scale_filters {
+                egui::Grid::new("display_filters")
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        for (name, filter) in [
+                            ("Zoom-in interpolation", magnify),
+                            ("Zoom-out interpolation", minify),
+                        ] {
+                            ui.weak(tr(lang, name));
+                            ui.label(tr(lang, filter.title()));
+                            ui.end_row();
+                        }
+                    });
+                ui.weak(tr(
+                    lang,
+                    "How the slot fills the pixels between the image pixels (Viewer in the settings).",
+                ));
+            }
             ui.separator();
             ui.weak(tr(
                 lang,
@@ -1918,6 +1948,7 @@ fn plain_body(
     node: Node,
     info: &ImageInfo,
     stages: &[Stage],
+    levels_drag: &mut Option<(f32, f32)>,
 ) -> Option<Command> {
     let mut command = None;
     match node {
@@ -1967,7 +1998,10 @@ fn plain_body(
             if let Some(note) = stage.note {
                 ui.weak(tr(lang, note));
             }
-            if i == 0 && stages.iter().all(|s| s.switch.is_none()) {
+            if let (true, Some(applied)) = (stage.levels, &info.look) {
+                command = command.or(levels_body(ui, lang, applied, levels_drag));
+            }
+            if i == 0 && stages.iter().all(|s| s.switch.is_none() && !s.levels) {
                 ui.weak(tr(lang, "This format has no editable file stages."));
             }
         }
@@ -1985,6 +2019,102 @@ fn plain_body(
         _ => {}
     }
     command
+}
+
+/// 灰色の画像の「黒と白」の段で、スロットの黒と白と曲線を変える欄。色の表の段のゲージと同じ値を変える。
+fn levels_body(
+    ui: &mut egui::Ui,
+    lang: Language,
+    applied: &colormap::Applied,
+    drag: &mut Option<(f32, f32)>,
+) -> Option<Command> {
+    let mut command = None;
+    let f = applied.scale.factor;
+    let shown = |v: f32| f64::from(v) * f;
+    let (lo, hi) = drag.unwrap_or(applied.window);
+    let (mut black, mut white) = (shown(lo), shown(hi));
+    let speed = ((white - black).abs() / 500.0).max(f64::EPSILON);
+    let unit = applied.scale.unit.clone();
+    let mut released = false;
+    let mut changed = false;
+    egui::Grid::new("levels")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            for (name, value, range) in [
+                ("Black", &mut black, f64::NEG_INFINITY..=shown(hi)),
+                ("White", &mut white, shown(lo)..=f64::INFINITY),
+            ] {
+                ui.weak(tr(lang, name));
+                let r = ui.add(
+                    egui::DragValue::new(value)
+                        .speed(speed)
+                        .range(range)
+                        .custom_formatter(|v, _| crate::histogram::number(v))
+                        .suffix(if unit.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {unit}")
+                        }),
+                );
+                changed |= r.changed();
+                // 打ち込んだ値は確定したとき、ドラッグは離したときに読み直す（毎フレームでは大きな画像で遅れる）。
+                released |= r.drag_stopped() || (r.changed() && !r.dragged());
+                ui.end_row();
+            }
+            ui.weak(tr(lang, "Curve"));
+            let mut curve = applied.curve;
+            vw_ui::menu::combo("levels_curve")
+                .selected_text(tr(lang, curve_title(curve)))
+                .show_ui(ui, |ui| {
+                    for c in CURVES {
+                        ui.selectable_value(&mut curve, c, tr(lang, curve_title(c)));
+                    }
+                });
+            if curve != applied.curve {
+                command = Some(Command::Curve(
+                    (curve != applied.file_curve).then_some(curve),
+                ));
+            }
+            ui.end_row();
+        });
+    let back = |v: f64| if f == 0.0 { v as f32 } else { (v / f) as f32 };
+    if changed {
+        *drag = Some((back(black), back(white)));
+    }
+    if released {
+        if let Some(w) = drag.take() {
+            command = Some(Command::Window((w != applied.file_window).then_some(w)));
+        }
+    }
+    if (applied.slot_window().is_some() || applied.slot_curve().is_some())
+        && ui.small_button(tr(lang, "Reset black and white")).clicked()
+    {
+        *drag = None;
+        command = Some(Command::ResetLevels);
+    }
+    ui.weak(tr(
+        lang,
+        "Only this slot changes. The color map gauge shows the same black and white.",
+    ));
+    command
+}
+
+/// 黒と白の間の曲線の並び（設定の天体の画像と同じ順）。
+const CURVES: [vw_core::Curve; 4] = [
+    vw_core::Curve::Linear,
+    vw_core::Curve::Asinh,
+    vw_core::Curve::Log,
+    vw_core::Curve::Sqrt,
+];
+
+fn curve_title(curve: vw_core::Curve) -> &'static str {
+    match curve {
+        vw_core::Curve::Linear => "Linear",
+        vw_core::Curve::Sqrt => "Square root",
+        vw_core::Curve::Log => "Logarithm",
+        vw_core::Curve::Asinh => "asinh",
+    }
 }
 
 /// 色の表の段。入れるか外すかと、表を選ぶ。既定（設定の種類ごとの表）も添える。

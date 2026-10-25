@@ -297,6 +297,7 @@ pub fn compose(
                 file_window,
                 range: vw_core::display::gray_range(img),
                 curve: img.curve,
+                file_curve: img.curve,
                 scale: Scale::of(&img.metadata),
             },
             size: (img.width, img.height),
