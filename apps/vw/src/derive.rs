@@ -55,16 +55,6 @@ struct Key {
     preview: bool,
 }
 
-/// ノードに渡す最初の値。
-enum Start {
-    /// ファイルの値の表示の値（標準の表示と同じ。確かめに使ったものをそのまま使う）。
-    AtFile,
-    /// 図で変えたファイルの段の値で描いた表示の値。
-    Display(nodes::Float),
-    /// 鎖に伸縮ノードがあるときの、伸縮の前の線形の値と、伸縮ノードで当てる伸縮。
-    Linear((nodes::Float, pixel_pipeline::Stretch)),
-}
-
 struct Rendered {
     /// フル解像度の色導出（解析ウインドウ用）。
     full: Arc<ColorImage>,
@@ -421,60 +411,18 @@ pub fn render_once(
 }
 
 fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
-    let mut standard = pixel_pipeline::standard_display(image);
-    let split = nodes::split_at_stretch(&key.values.chain);
-    let staged = matches!(split, Ok(Some(_)));
-    let (at_file, start) = match info {
-        Some(g) => {
-            let decoded = Decoded::of(g);
-            let file = pixel_pipeline::file_params(g, image, &decoded);
-            let file = match key.window {
-                Some(w) => pixel_pipeline::with_window(file, image, &decoded, w),
-                None => file,
-            };
-            let at_file = pixel_pipeline::float_of_params(image, &decoded, &file);
-            let p = key.values.params.unwrap_or(file);
-            let start = if staged {
-                Start::Linear(pixel_pipeline::linear_of_params(image, &decoded, &p))
-            } else if p != file {
-                Start::Display(pixel_pipeline::float_of_params(image, &decoded, &p))
-            } else {
-                Start::AtFile
-            };
-            (at_file, start)
-        }
-        None => {
-            let start = match staged {
-                true => Start::Linear(pixel_pipeline::linear_of_display(image)),
-                false => Start::AtFile,
-            };
-            (pixel_pipeline::float_of_display(image), start)
-        }
-    };
-    let checked = pixel_pipeline::check_standard(&at_file, &standard);
-    let (mut float, stretch) = match start {
-        Start::AtFile => (at_file, None),
-        Start::Display(f) => (f, None),
-        Start::Linear((f, s)) => (f, Some(s)),
-    };
-    let mut chain = std::borrow::Cow::Borrowed(&key.values.chain);
-    if key.preview {
-        let factor = float.shrink([PREVIEW_SIDE; 2]);
-        standard = pixel_pipeline::shrink_rgba(&standard, image.width as usize, factor);
-        chain = std::borrow::Cow::Owned(chain.iter().map(|n| n.scaled(factor)).collect());
-    }
-    let error = match nodes::split_at_stretch(&chain) {
-        Err(e) => Some(e),
-        Ok(None) => nodes::apply(&chain, &mut float).err(),
-        Ok(Some(staged)) => nodes::apply(staged.before, &mut float).err().or_else(|| {
-            if let Some(s) = &stretch {
-                s.apply(&mut float);
-            }
-            nodes::apply(staged.after, &mut float)
-                .err()
-                .map(|(i, e)| (i + staged.offset, e))
-        }),
-    };
+    let vw_pipeline::render::Rendering {
+        float,
+        mut standard,
+        checked,
+        error,
+    } = vw_pipeline::render::render(
+        image,
+        info,
+        &key.values,
+        key.window,
+        key.preview.then_some(PREVIEW_SIDE),
+    );
     let mut derived = pixel_pipeline::to_color_image(&float, &standard);
     // 色の表は灰色のまま出てきたときだけ引く（混合などで RGB になったら、その色を出す）。
     let gray = float.channels == 1;
@@ -522,6 +470,7 @@ mod tests {
         Preset {
             name: name.into(),
             values,
+            look: None,
         }
     }
 

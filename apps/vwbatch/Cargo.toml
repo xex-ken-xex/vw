@@ -1,0 +1,27 @@
+[package]
+name = "vwbatch"
+description = "vw で保存した画素の変換（パイプライン）を、たくさんの画像にまとめてかけて書き出す"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+vw-png.workspace = true
+vw-jpeg.workspace = true
+vw-bmp.workspace = true
+vw-webp.workspace = true
+vw-gif.workspace = true
+vw-tiff.workspace = true
+vw-fits.workspace = true
+vw-raw.workspace = true
+vw-dicom.workspace = true
+vw-pipeline.workspace = true
+clap = { version = "4", features = ["derive"] }
+rayon = "1"
+walkdir = "2"
+png = "0.18"
+tiff = "0.11"
+jpeg-encoder = "0.7"

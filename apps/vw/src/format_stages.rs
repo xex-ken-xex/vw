@@ -672,6 +672,7 @@ mod tests {
                 factor: 1.0,
                 unit: String::new(),
             },
+            black_white: Default::default(),
         }
     }
 

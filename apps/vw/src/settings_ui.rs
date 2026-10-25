@@ -1864,7 +1864,7 @@ fn archive_dir_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
     changed
 }
 
-fn picker_labels(lang: Language) -> vw_tree::picker::Labels {
+pub fn picker_labels(lang: Language) -> vw_tree::picker::Labels {
     vw_tree::picker::Labels {
         choose: tr(lang, "Choose").into(),
         cancel: tr(lang, "Cancel").into(),

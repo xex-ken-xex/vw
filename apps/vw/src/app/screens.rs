@@ -87,7 +87,7 @@ impl VwApp {
                     continue;
                 }
                 Command::ResetLevels => {
-                    self.set_slot_levels(self.active, None, None);
+                    self.reset_slot_levels(self.active);
                     continue;
                 }
                 Command::Compose(files) => {
@@ -105,7 +105,9 @@ impl VwApp {
                     continue;
                 }
                 Command::SaveAs(name, values) => {
-                    let result = self.presets.put(&name, values.clone());
+                    let result =
+                        self.presets
+                            .put(&name, values.clone(), self.slot_look(self.active));
                     if let (Ok(()), Some(slot)) = (&result, self.slots.get_mut(self.active)) {
                         let d = slot.derive.get_or_insert_with(|| {
                             crate::derive::Derive::new(None, values.clone())
@@ -117,7 +119,9 @@ impl VwApp {
                     result.map(|()| format!("Pipeline saved as \"{name}\""))
                 }
                 Command::Overwrite(name, values) => {
-                    let result = self.presets.put(&name, values.clone());
+                    let result =
+                        self.presets
+                            .put(&name, values.clone(), self.slot_look(self.active));
                     if let (Ok(()), Some(d)) = (
                         &result,
                         self.slots
@@ -133,12 +137,100 @@ impl VwApp {
                     .presets
                     .remove(&name)
                     .map(|()| format!("Pipeline \"{name}\" deleted")),
+                Command::ExportFile(path, values) => {
+                    let text =
+                        crate::pipelines::to_file(&values, self.slot_look(self.active).as_ref());
+                    write_new_file(&path, &text)
+                        .map(|()| format!("Pipeline exported to {}", path.display()))
+                }
+                Command::ExportLut(path, values, format) => {
+                    let title = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    vw_pipeline::lut::sample(&values.chain)
+                        .map(|table| match format {
+                            crate::pipeline_view::LutFormat::Cube => {
+                                vw_pipeline::lut::to_cube(&title, &table)
+                            }
+                            crate::pipeline_view::LutFormat::Clf => {
+                                vw_pipeline::lut::to_clf(&title, &table)
+                            }
+                        })
+                        .and_then(|text| write_new_file(&path, &text))
+                        .map(|()| format!("3D LUT exported to {}", path.display()))
+                }
+                Command::ImportFile(path) => self.import_pipeline(&path),
             };
             match stored {
                 Ok(message) => self.log.info(message),
                 Err(e) => self.log.error(format!("Pipelines: {e}")),
             }
             self.sync_derived_slots();
+        }
+    }
+
+    /// パイプラインのファイルを読んで一覧に足し、アクティブなスロットに当てる。名前はファイル名で、
+    /// 同じ名前がすでにあれば後ろに番号を付ける（読み込みで今のものを置き換えないように）。
+    fn import_pipeline(&mut self, path: &std::path::Path) -> Result<String, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let (values, look) =
+            crate::pipelines::from_file(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "pipeline".to_owned());
+        let taken = |n: &str| self.presets.presets().iter().any(|p| p.name == n);
+        let name = (1..)
+            .map(|i| match i {
+                1 => stem.clone(),
+                i => format!("{stem} ({i})"),
+            })
+            .find(|n| !taken(n))
+            .expect("some number is free");
+        self.presets.put(&name, values.clone(), look.clone())?;
+        if let Some(slot) = self.slots.get_mut(self.active) {
+            let view = slot.derive.as_ref().map(|d| (d.view, d.split));
+            let mut d = crate::derive::Derive::new(Some(name.clone()), values);
+            if let Some((v, s)) = view {
+                d.view = v;
+                d.split = s;
+            }
+            slot.derive = Some(d);
+        }
+        if let Some(look) = &look {
+            self.add_missing_palette(look);
+            self.apply_look(self.active, look);
+        }
+        Ok(format!("Pipeline \"{name}\" read from {}", path.display()))
+    }
+
+    /// 読んだパイプラインの色の表が組み込みでも設定にもなければ、ファイルに入っていた色の点で
+    /// 設定に足す（スロットの色の表のメニューからも選べるように）。
+    fn add_missing_palette(&mut self, look: &crate::pipelines::Look) {
+        let Some(name) = look.color_map.as_deref() else {
+            return;
+        };
+        if look.color_map_stops.is_empty()
+            || name == vw_pipeline::look::COLOR_MAP_OFF
+            || self.color_rules.palette(name).is_some()
+        {
+            return;
+        }
+        self.settings
+            .settings
+            .pipeline
+            .palettes
+            .push(crate::settings::CustomPalette {
+                name: name.to_owned(),
+                colors: look.color_map_stops.clone(),
+            });
+        self.apply_color_rules();
+        match self.settings.save() {
+            Ok(_) => self
+                .log
+                .info(format!("Color map \"{name}\" added to the settings")),
+            Err(e) => self.log.error(format!("Settings: {e}")),
         }
     }
 
@@ -597,4 +689,23 @@ impl VwApp {
             self.stop_fullscreen(&ctx);
         }
     }
+}
+
+/// 書き出しは、同じ名前のファイルがあれば上書きしない（vw のほかの書き出しと同じ）。
+fn write_new_file(path: &std::path::Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                format!(
+                    "{}: a file with that name exists (not overwritten)",
+                    path.display()
+                )
+            }
+            _ => format!("{}: {e}", path.display()),
+        })
 }

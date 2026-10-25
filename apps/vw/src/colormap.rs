@@ -124,6 +124,8 @@ pub struct Choice {
     pub channels: [Option<(f32, f32)>; 3],
     /// 図の「黒と白」の段で変えた曲線。`None` はファイル（と設定）のまま。
     pub curve: Option<Curve>,
+    /// 保存したパイプラインの見た目で選んだ、黒と白の決め方。`window` があればそちらを使う。
+    pub black_white: vw_pipeline::look::BlackWhite,
 }
 
 /// 読み込みに渡す、色の表の当て方。
@@ -179,6 +181,8 @@ pub struct Applied {
     /// スロットで変える前の曲線。
     pub file_curve: Curve,
     pub scale: Scale,
+    /// 保存したパイプラインで決めた黒と白の決め方。`File` は読み込んだときの決め方のまま。
+    pub black_white: vw_pipeline::look::BlackWhite,
 }
 
 impl Applied {
@@ -206,7 +210,11 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
     let kind = Kind::of(plugin, &image.metadata);
     let file_window = display::window_of(image, &DisplayParams::default());
     let file_curve = image.curve;
-    if let Some(w) = look.choice.window {
+    if let Some(w) = look
+        .choice
+        .window
+        .or_else(|| look.choice.black_white.window(&image.data))
+    {
         image.window = Some(w);
     }
     if let Some(c) = look.choice.curve {
@@ -230,6 +238,10 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
         curve: image.curve,
         file_curve,
         scale: Scale::of(&image.metadata),
+        black_white: match look.choice.window {
+            Some(_) => vw_pipeline::look::BlackWhite::File,
+            None => look.choice.black_white,
+        },
     })
 }
 
@@ -371,6 +383,7 @@ mod tests {
             window: None,
             channels: [None; 3],
             curve: None,
+            ..Choice::default()
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, off)).unwrap();
         assert_eq!(a.palette_name(), None);
@@ -379,6 +392,7 @@ mod tests {
             window: None,
             channels: [None; 3],
             curve: None,
+            ..Choice::default()
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "PNG", &look(&s, viridis)).unwrap();
         assert_eq!(a.palette_name(), Some("viridis"));
@@ -413,6 +427,7 @@ mod tests {
             window: None,
             channels: [None; 3],
             curve: None,
+            ..Choice::default()
         };
         let a = prepare(&mut gray(vec![0.0, 1.0]), "FITS", &look(&s, choice)).unwrap();
         assert_eq!(a.palette_name(), None);
@@ -442,6 +457,7 @@ mod tests {
             window: Some((20.0, 40.0)),
             channels: [None; 3],
             curve: None,
+            ..Choice::default()
         };
         let a = prepare(&mut img, "FITS", &look(&s, choice)).unwrap();
         assert_eq!(img.window, Some((20.0, 40.0)));
@@ -490,6 +506,7 @@ mod tests {
                 factor,
                 unit: String::new(),
             },
+            black_white: Default::default(),
         }
     }
 

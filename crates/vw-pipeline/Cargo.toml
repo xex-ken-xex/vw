@@ -1,0 +1,13 @@
+[package]
+name = "vw-pipeline"
+description = "Pixel pipeline (stages, nodes and stretch) shared by vw and vwbatch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+vw-dicom.workspace = true
+vw-fits.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = "1"
