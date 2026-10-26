@@ -303,7 +303,9 @@ impl VwApp {
             return;
         }
         let info = &loaded.info;
+        let fingerprint = shown.info.fingerprint;
         shown.info = info.clone();
+        shown.info.fingerprint = info.fingerprint.or(fingerprint);
         if let Some(thumb) = loaded.thumb.take() {
             shown.thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
         }
@@ -769,6 +771,7 @@ impl VwApp {
         let ai_ready = self.ai_ready();
         let people = self.people.names();
         let mut send = None;
+        self.update_similar();
         let mut cells: Vec<(Rect, usize)> = Vec::new();
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
@@ -795,6 +798,7 @@ impl VwApp {
                 (Some(s), true) => self.ai_tags.faces(&crate::frames::file_of(&s.path)),
                 _ => Vec::new(),
             };
+            let similar = self.similar.mark(self.slots[i].id);
             let resp = self.slots[i].ui(
                 ui,
                 rect,
@@ -820,6 +824,7 @@ impl VwApp {
                         on_gray: self.color_settings.gauge_on_gray,
                     }),
                     color_rules: &self.color_rules,
+                    similar,
                 },
             );
             cells.push((rect, i));
@@ -846,6 +851,9 @@ impl VwApp {
             }
             if resp.compare {
                 self.open_compare_dialog(i);
+            }
+            if resp.compare_similar {
+                self.compare_similar(i);
             }
             if resp.read_qr {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
@@ -966,6 +974,7 @@ impl VwApp {
                         colors,
                         gauge: None,
                         color_rules: &self.color_rules,
+                        similar: None,
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));

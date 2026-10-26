@@ -1,6 +1,7 @@
 //! 似た画像を位置合わせして比べる欄。スロットに見えている画像（画素の変換を通した色）を
 //! 受け取り、裏で位置合わせと差の分析をして、並べる・切り替え・スワイプ・差で見せる。
 //! 拡大とパンは基準の画像の座標で持ち、どの見せ方でも連動する。
+//! 自動の位置合わせが外れたときは「ずれを直す」で手で直せ、直した値はラベルのファイルに残る。
 //!
 //! 位置合わせと分析は [`vw_compare`]。ここは受け渡しと描画だけを持つ。
 
@@ -12,7 +13,7 @@ use eframe::egui::{
     self, pos2, vec2, Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2,
 };
 use vw_compare::report::{Labels, Report};
-use vw_compare::{render, Affine, Analysis, Compared, Options, Prepared};
+use vw_compare::{render, Affine, Analysis, Compared, Options, Prepared, Rgb};
 
 use crate::i18n::{tr, tr1};
 use crate::settings::Language;
@@ -21,6 +22,8 @@ use crate::settings::Language;
 pub struct Input {
     pub path: PathBuf,
     pub image: ColorImage,
+    /// 前に手で直した位置合わせ（基準 → この画像、元の画素）。あれば自動では合わせない。
+    pub aligned: Option<Affine>,
 }
 
 /// 欄の外（本体）にしてもらうこと。
@@ -29,6 +32,12 @@ pub enum Command {
     CopyText(String, String),
     Info(String),
     Error(String),
+    /// 手で直した位置合わせを `path` のラベルに残す（`None` なら消す）。
+    SaveAlignment {
+        path: PathBuf,
+        reference: PathBuf,
+        aligned: Option<crate::labels::Aligned>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +67,10 @@ const OVERLAY_ALPHA: f32 = 0.5;
 const HOTSPOT: Color32 = Color32::from_rgb(0, 220, 255);
 /// 値の欄の幅。
 const PANEL_WIDTH: f32 = 300.0;
+/// ずれを直すときに重ねる画像の不透明度。
+const ADJUST_ALPHA: f32 = 0.5;
+/// ずれを直すときの、ホイールの 1 目盛りの回転（度）。Shift を押すと 10 倍。
+const ROTATE_STEP: f64 = 0.1;
 
 #[derive(Default)]
 pub struct CompareWindow {
@@ -76,6 +89,39 @@ struct Entry {
     /// 基準（0 番）は `None` のまま。
     result: Option<Arc<Compared>>,
     heat: Option<TextureHandle>,
+    /// 解析の大きさに縮めたこの画像。手で直したあとに写し直すのに使う。浮動小数の
+    /// [`Rgb`] のまま持つと 1 枚で 100 MB 近くになるので、8 bit で持つ。
+    small: Option<Arc<Small>>,
+    /// 手で直した位置合わせ（ラベルから読んだもの、またはこの画面で直したもの）。
+    manual: Option<Affine>,
+    /// 手で直している途中で、まだ測り直していない。
+    edited: bool,
+}
+
+/// 解析の大きさに縮めた画像（RGBA8）と、元の大きさ。
+struct Small {
+    width: usize,
+    height: usize,
+    rgba: Vec<u8>,
+    size: [usize; 2],
+}
+
+impl Small {
+    fn new(p: &Prepared) -> Self {
+        Self {
+            width: p.image.width,
+            height: p.image.height,
+            rgba: p.image.to_rgba8(),
+            size: p.size,
+        }
+    }
+
+    fn prepared(&self) -> Prepared {
+        Prepared {
+            image: Rgb::from_rgba8(self.width, self.height, &self.rgba),
+            size: self.size,
+        }
+    }
 }
 
 /// 分析し直した結果（`entries` の添字ごと）。
@@ -83,7 +129,7 @@ type Reanalysed = Vec<(usize, Option<Analysis>)>;
 
 enum Progress {
     Reference(Arc<Prepared>),
-    Compared(usize, Box<Compared>),
+    Compared(usize, Box<Compared>, Arc<Small>),
 }
 
 struct Session {
@@ -109,6 +155,12 @@ struct Session {
     blink_reference: bool,
     /// 位置合わせの間に出す、終わった枚数。
     done: usize,
+    /// 「ずれを直す」の途中。基準の上に比べる画像を半透明で重ね、ドラッグとホイールで動かす。
+    adjusting: bool,
+    /// 手で直したあと・自動に戻したあとの測り直し。
+    remeasure: Vec<Receiver<(usize, Compared)>>,
+    /// ずれを直すときの、まだ 1 目盛りに満たないホイールの量。
+    wheel: f32,
 }
 
 impl CompareWindow {
@@ -125,6 +177,7 @@ impl CompareWindow {
         let max_side = ctx.input(|i| i.max_texture_side).min(8192);
         let mut entries = Vec::new();
         let mut sources = Vec::new();
+        let mut manual = Vec::new();
         for (i, input) in images.into_iter().enumerate() {
             let [w, h] = input.image.size;
             let shown = fit_texture(&input.image, max_side);
@@ -137,8 +190,12 @@ impl CompareWindow {
                 texture,
                 result: None,
                 heat: None,
+                small: None,
+                manual: input.aligned,
+                edited: false,
             });
             sources.push(input.image);
+            manual.push(input.aligned);
         }
         let options = Options { match_brightness };
         let (tx, rx) = channel();
@@ -157,8 +214,16 @@ impl CompareWindow {
             for (i, img) in sources.enumerate() {
                 let moving = prepare(&img);
                 drop(img);
-                let c = vw_compare::compare(&reference, &moving, options);
-                if tx.send(Progress::Compared(i + 1, Box::new(c))).is_err() {
+                let c = match manual[i + 1] {
+                    Some(t) => vw_compare::compare_at(&reference, &moving, t, options),
+                    None => vw_compare::compare(&reference, &moving, options),
+                };
+                let small = Arc::new(Small::new(&moving));
+                drop(moving);
+                if tx
+                    .send(Progress::Compared(i + 1, Box::new(c), small))
+                    .is_err()
+                {
                     return;
                 }
                 wake.request_repaint();
@@ -180,6 +245,9 @@ impl CompareWindow {
             dragging_swipe: false,
             blink_reference: true,
             done: 0,
+            adjusting: false,
+            remeasure: Vec::new(),
+            wheel: 0.0,
         });
         self.open = true;
     }
@@ -208,6 +276,9 @@ impl CompareWindow {
         };
         let mut write_report = false;
         session.toolbar(ui, lang, &mut out, &mut write_report);
+        if session.adjusting {
+            session.adjust_bar(ui, lang, &mut out);
+        }
         session.status(ui, lang);
         let rest = ui.available_rect_before_wrap();
         let panel_w = PANEL_WIDTH.min(rest.width() * 0.4);
@@ -332,12 +403,13 @@ impl Session {
             loop {
                 match rx.try_recv() {
                     Ok(Progress::Reference(r)) => self.reference = Some(r),
-                    Ok(Progress::Compared(i, c)) => {
+                    Ok(Progress::Compared(i, c, small)) => {
                         self.done += 1;
                         let grid = self.grid_size();
                         if let Some(e) = self.entries.get_mut(i) {
                             e.heat = c.analysis.as_ref().map(|a| heat_texture(ctx, i, a, grid));
                             e.result = Some(Arc::from(c));
+                            e.small = Some(small);
                         }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -348,6 +420,19 @@ impl Session {
                 }
             }
         }
+        let grid = self.grid_size();
+        let entries = &mut self.entries;
+        self.remeasure.retain(|rx| match rx.try_recv() {
+            Ok((i, c)) => {
+                if let Some(e) = entries.get_mut(i) {
+                    e.heat = c.analysis.as_ref().map(|a| heat_texture(ctx, i, a, grid));
+                    e.result = Some(Arc::new(c));
+                }
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
         if let Some(rx) = &self.reanalysis {
             if let Ok(results) = rx.try_recv() {
                 self.reanalysis = None;
@@ -377,7 +462,102 @@ impl Session {
     }
 
     fn busy(&self) -> bool {
-        self.job.is_some() || self.reanalysis.is_some()
+        self.job.is_some() || self.reanalysis.is_some() || !self.remeasure.is_empty()
+    }
+
+    /// 「ずれを直す」の帯。直す画像を選び、終える・自動に戻す。
+    fn adjust_bar(&mut self, ui: &mut egui::Ui, lang: Language, out: &mut Vec<Command>) {
+        ui.horizontal_wrapped(|ui| {
+            if self.entries.len() > 2 {
+                let shown = self.entries[self.target].name.clone();
+                vw_ui::menu::combo("compare_adjust_target")
+                    .selected_text(shown)
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for i in 1..self.entries.len() {
+                            let name = self.entries[i].name.clone();
+                            ui.selectable_value(&mut self.target, i, name);
+                        }
+                    });
+            }
+            ui.weak(tr(
+                lang,
+                "Drag to move, wheel to turn (Shift: 10 times), Ctrl+wheel to zoom.",
+            ));
+            if ui.button(tr(lang, "Done")).clicked() {
+                self.finish_adjusting(ui.ctx(), out);
+            }
+            let manual = self.entries[self.target].manual.is_some();
+            if ui
+                .add_enabled(manual, egui::Button::new(tr(lang, "Back to automatic")))
+                .on_hover_text(tr(
+                    lang,
+                    "Forget the alignment fixed by hand and align this image automatically again.",
+                ))
+                .clicked()
+            {
+                let i = self.target;
+                self.entries[i].manual = None;
+                self.entries[i].edited = false;
+                self.remeasure(ui.ctx(), i, None);
+                out.push(self.save_command(i));
+            }
+        });
+    }
+
+    /// 手で直した画像を測り直し、直した値を残す。
+    fn finish_adjusting(&mut self, ctx: &egui::Context, out: &mut Vec<Command>) {
+        self.adjusting = false;
+        for i in 1..self.entries.len() {
+            if !std::mem::take(&mut self.entries[i].edited) {
+                continue;
+            }
+            let t = self.entries[i].manual;
+            self.remeasure(ctx, i, t);
+            out.push(self.save_command(i));
+        }
+    }
+
+    /// 画像 `i` を、写し方 `transform`（`None` なら自動で合わせ直す）で測り直す。
+    fn remeasure(&mut self, ctx: &egui::Context, i: usize, transform: Option<Affine>) {
+        let (Some(reference), Some(small)) =
+            (self.reference.clone(), self.entries[i].small.clone())
+        else {
+            return;
+        };
+        let options = self.options;
+        self.remeasure
+            .push(crate::background::compute(ctx, move || {
+                let moving = small.prepared();
+                let c = match transform {
+                    Some(t) => vw_compare::compare_at(&reference, &moving, t, options),
+                    None => vw_compare::compare(&reference, &moving, options),
+                };
+                (i, c)
+            }));
+    }
+
+    /// 画像 `i` の手で直した位置合わせを、ラベルに残す（なければ消す）命令。
+    fn save_command(&self, i: usize) -> Command {
+        let e = &self.entries[i];
+        let aligned = e.manual.map(|t| crate::labels::Aligned {
+            reference_size: self.entries[0].size,
+            size: e.size,
+            transform: [t.a, t.b, t.c, t.d, t.e, t.f],
+        });
+        Command::SaveAlignment {
+            path: e.path.clone(),
+            reference: self.entries[0].path.clone(),
+            aligned,
+        }
+    }
+
+    /// ずれを直す操作。基準の座標で `edit` をかけてから、今の写し方をかける。
+    fn edit_target(&mut self, edit: Affine) {
+        let i = self.target;
+        let t = self.transform(i);
+        self.entries[i].manual = Some(edit.then(&t));
+        self.entries[i].edited = true;
     }
 
     /// 明るさの合わせ方を変えたので、写した画像はそのままで分析だけをし直す。
@@ -402,6 +582,9 @@ impl Session {
 
     fn transform(&self, i: usize) -> Affine {
         let e = &self.entries[i];
+        if let Some(t) = e.manual {
+            return t;
+        }
         if let Some(r) = &e.result {
             return r.alignment.transform;
         }
@@ -466,6 +649,24 @@ impl Session {
             if changed {
                 self.options.match_brightness = matched;
                 self.reanalyse(ui.ctx());
+            }
+            let adjustable = !self.busy() && self.entries.len() > 1;
+            if ui
+                .add_enabled(
+                    adjustable || self.adjusting,
+                    egui::Button::selectable(self.adjusting, tr(lang, "Fix alignment")),
+                )
+                .on_hover_text(tr(
+                    lang,
+                    "Move and turn an image by hand when the automatic alignment is off.",
+                ))
+                .clicked()
+            {
+                if self.adjusting {
+                    self.finish_adjusting(ui.ctx(), out);
+                } else {
+                    self.adjusting = true;
+                }
             }
             ui.separator();
             if ui.button(tr(lang, "Fit")).clicked() {
@@ -581,6 +782,10 @@ impl Session {
     }
 
     fn view(&mut self, ui: &mut egui::Ui, lang: Language, area: Rect) {
+        if self.adjusting {
+            self.adjust_view(ui, lang, area);
+            return;
+        }
         let id = ui.id().with("compare_view");
         let response = ui.interact(area, id, Sense::click_and_drag());
         let tiles = self.tiles(area);
@@ -645,6 +850,80 @@ impl Session {
         {
             self.blink_reference = !self.blink_reference;
         }
+    }
+
+    /// 「ずれを直す」の間の見せ方と操作。基準の上に比べる画像を半透明で重ねる。
+    fn adjust_view(&mut self, ui: &mut egui::Ui, lang: Language, area: Rect) {
+        let response = ui.interact(
+            area,
+            ui.id().with("compare_adjust"),
+            Sense::click_and_drag(),
+        );
+        let painter = ui.painter_at(area);
+        painter.rect_filled(area, 0.0, ui.visuals().extreme_bg_color);
+        let screen = self.to_screen(area);
+        let target = self.target;
+        self.draw_image(&painter, 0, screen);
+        self.draw_image_alpha(&painter, target, screen, ADJUST_ALPHA);
+        let e = &self.entries[target];
+        let text = format!("{}  ({})", e.name, tr(lang, "fixing by hand"));
+        caption_text(&painter, area, &text, false);
+        let scale = f64::from(self.scale(area).max(1e-6));
+        if response.dragged() {
+            let d = response.drag_delta();
+            let shift = Affine {
+                c: -f64::from(d.x) / scale,
+                f: -f64::from(d.y) / scale,
+                ..Affine::IDENTITY
+            };
+            self.edit_target(shift);
+        }
+        if response.double_clicked() {
+            self.zoom = 1.0;
+            self.pan = Vec2::ZERO;
+        }
+        if !response.hovered() {
+            return;
+        }
+        // Ctrl+ホイールとピンチは egui が拡大の量にする。
+        let (wheel, pinch, fast) = ui.ctx().input(|i| {
+            (
+                crate::viewer::wheel_delta(&i.events, area.height()),
+                i.zoom_delta(),
+                i.modifiers.shift,
+            )
+        });
+        if pinch != 1.0 {
+            let factor = pinch.clamp(0.5, 2.0);
+            {
+                let before = self.scale(area);
+                let new_zoom = (self.zoom * factor).clamp(0.05, 400.0);
+                if let Some(p) = response.hover_pos() {
+                    let c = p - area.center();
+                    let after = before * new_zoom / self.zoom;
+                    self.pan += c / before - c / after;
+                }
+                self.zoom = new_zoom;
+            }
+            return;
+        }
+        // 1 目盛りで 1 段だけ回す（なめらかなスクロールの量のままだと、1 目盛りが何段にもなる）。
+        let steps = crate::viewer::wheel_steps(&mut self.wheel, wheel);
+        if steps == 0 {
+            return;
+        }
+        // 回す中心はポインタの下の点。合っている所を押さえたまま、ほかを回して合わせられる。
+        let Some(p) = response.hover_pos() else {
+            return;
+        };
+        let [w, h] = self.entries[0].size.map(|v| v as f64);
+        let about = [
+            (w - 1.0) / 2.0 + f64::from(self.pan.x) + f64::from(p.x - area.center().x) / scale,
+            (h - 1.0) / 2.0 + f64::from(self.pan.y) + f64::from(p.y - area.center().y) / scale,
+        ];
+        let step = ROTATE_STEP * if fast { 10.0 } else { 1.0 };
+        let degrees = steps as f64 * step;
+        self.edit_target(Affine::similarity(1.0, -degrees.to_radians(), about, about));
     }
 
     fn draw_tile(&self, ui: &egui::Ui, lang: Language, tile: Rect, i: usize) {
@@ -720,6 +999,16 @@ impl Session {
     }
 
     fn draw_image(&self, painter: &egui::Painter, i: usize, screen: impl Fn([f64; 2]) -> Pos2) {
+        self.draw_image_alpha(painter, i, screen, 1.0);
+    }
+
+    fn draw_image_alpha(
+        &self,
+        painter: &egui::Painter,
+        i: usize,
+        screen: impl Fn([f64; 2]) -> Pos2,
+        alpha: f32,
+    ) {
         let e = &self.entries[i];
         let [w, h] = e.size.map(|v| v as f64);
         let corners = [
@@ -746,7 +1035,7 @@ impl Session {
             mesh.vertices.push(egui::epaint::Vertex {
                 pos: screen(to_reference.apply(*c)),
                 uv,
-                color: Color32::WHITE,
+                color: Color32::from_white_alpha((alpha * 255.0).round() as u8),
             });
         }
         mesh.add_triangle(0, 1, 2);
@@ -811,6 +1100,7 @@ impl Session {
             .is_some_and(|r| !r.alignment.looks_right());
         let text = match i {
             0 => format!("{}  ({})", e.name, tr(lang, "reference")),
+            _ if e.manual.is_some() => format!("{}  ({})", e.name, tr(lang, "fixed by hand")),
             _ => e.name.clone(),
         };
         caption_text(painter, tile, &text, weak);
@@ -936,6 +1226,9 @@ impl Session {
                 warped: None,
             };
             ui.strong(&e.name);
+            if e.manual.is_some() {
+                ui.weak(tr(lang, "Alignment fixed by hand"));
+            }
             if !r.alignment.looks_right() {
                 ui.colored_label(ui.visuals().warn_fg_color, labels.weak);
             }
@@ -1053,6 +1346,7 @@ mod tests {
         let input = |n: &str| Input {
             path: PathBuf::from(n),
             image: ColorImage::new([8, 8], vec![Color32::GRAY; 64]),
+            aligned: None,
         };
         w.start(
             &ctx,

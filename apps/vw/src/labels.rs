@@ -5,6 +5,7 @@
 //! どの画像が絞り込みに残るのか分かりにくくなるため。
 //! 画像ファイルには書き込まない。DICOM や RAW を書き換えたくないため。
 //! 地図で置いた撮影地点も、EXIF を書き換えずにここに持つ（同じ理由）。
+//! 似た画像の比べ方で手で直した位置合わせも、比べた画像の側に持つ。
 //! 設定フォルダの 1 つのデータベースにしないのは、フォルダを移動・コピーしたときにラベルを
 //! 一緒に持っていけるようにするため。書き込めないフォルダ（読み取り専用のメディアなど）の
 //! ラベルだけは設定フォルダの下に置く。
@@ -43,11 +44,27 @@ pub struct Label {
     pub tags: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Position>,
+    /// 手で直した位置合わせ。基準の画像ごと（同じフォルダならファイル名、ほかはフルパス）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub aligned: BTreeMap<String, Aligned>,
+}
+
+/// 手で直した位置合わせ。大きさは直したときのもので、違う大きさ（RAW を現像し直した、
+/// 書き出し直した）で比べるときは使わない。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Aligned {
+    pub reference_size: [usize; 2],
+    pub size: [usize; 2],
+    /// 基準の画素 → この画像の画素（x' = a·x + b·y + c、y' = d·x + e·y + f）。
+    pub transform: [f64; 6],
 }
 
 impl Label {
     pub fn is_empty(&self) -> bool {
-        self.flag.is_none() && self.tags.is_empty() && self.position.is_none()
+        self.flag.is_none()
+            && self.tags.is_empty()
+            && self.position.is_none()
+            && self.aligned.is_empty()
     }
 }
 
@@ -135,6 +152,32 @@ impl LabelStore {
     ) -> Result<Option<Position>, String> {
         self.edit_file(path, |label| {
             std::mem::replace(&mut label.position, position)
+        })
+    }
+
+    /// `path` を `reference` に合わせて手で直した位置合わせ。
+    pub fn aligned(&self, path: &Path, reference: &Path) -> Option<Aligned> {
+        self.get(path)
+            .aligned
+            .get(&reference_key(path, reference))
+            .copied()
+    }
+
+    /// 手で直した位置合わせを残す（`None` なら消す）。
+    pub fn set_aligned(
+        &mut self,
+        path: &Path,
+        reference: &Path,
+        aligned: Option<Aligned>,
+    ) -> Result<(), String> {
+        let key = reference_key(path, reference);
+        self.edit_file(path, |label| match aligned {
+            Some(a) => {
+                label.aligned.insert(key, a);
+            }
+            None => {
+                label.aligned.remove(&key);
+            }
         })
     }
 
@@ -288,6 +331,15 @@ pub fn labeled_name(
     job
 }
 
+/// 手で直した位置合わせの基準の書き方。同じフォルダならファイル名だけにし、フォルダごと
+/// 移動・コピーしても組が保たれるようにする。
+fn reference_key(path: &Path, reference: &Path) -> String {
+    match (path.parent(), reference.parent()) {
+        (Some(a), Some(b)) if a == b => file_key(reference).unwrap_or_default(),
+        _ => reference.display().to_string(),
+    }
+}
+
 fn file_key(path: &Path) -> Option<String> {
     Some(path.file_name()?.to_string_lossy().into_owned())
 }
@@ -370,6 +422,28 @@ mod tests {
         assert_eq!(store.set_position(&img, Some(sapporo)), Ok(None));
         assert_eq!(LabelStore::new(None).get(&img).position, Some(sapporo));
         assert_eq!(store.set_position(&img, None), Ok(Some(sapporo)));
+        assert!(!dir.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn a_manual_alignment_is_kept_per_reference_and_can_be_removed() {
+        let dir = TempDir::new();
+        let mut store = LabelStore::new(None);
+        let jpg = dir.path().join("DSC_0001.JPG");
+        let nef = dir.path().join("DSC_0001.NEF");
+        let other = std::path::PathBuf::from("/elsewhere/ref.png");
+        let a = Aligned {
+            reference_size: [6000, 4000],
+            size: [3000, 2000],
+            transform: [0.5, 0.0, 1.0, 0.0, 0.5, 2.0],
+        };
+        store.set_aligned(&jpg, &nef, Some(a)).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(text.contains("\"DSC_0001.NEF\""), "{text}");
+        let fresh = LabelStore::new(None);
+        assert_eq!(fresh.aligned(&jpg, &nef), Some(a));
+        assert_eq!(fresh.aligned(&jpg, &other), None);
+        store.set_aligned(&jpg, &nef, None).unwrap();
         assert!(!dir.path().join(FILE_NAME).exists());
     }
 

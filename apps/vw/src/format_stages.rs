@@ -466,6 +466,7 @@ mod tests {
             convert: Default::default(),
             look: None,
             compose: None,
+            fingerprint: None,
         }
     }
 

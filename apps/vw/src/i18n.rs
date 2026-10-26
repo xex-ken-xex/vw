@@ -1609,6 +1609,28 @@ const JA: &[(&str, &str)] = &[
     ("largest", "最大"),
     ("Aligning the images...", "画像を合わせています..."),
     ("aligning...", "合わせています..."),
+    (
+        "Similar to {}. Click to align and compare.",
+        "似た画像: {}。クリックで位置合わせして比べます。",
+    ),
+    ("Fix alignment", "ずれを直す"),
+    (
+        "Move and turn an image by hand when the automatic alignment is off.",
+        "自動の位置合わせが外れたとき、画像を手で動かし、回して合わせます。",
+    ),
+    (
+        "Drag to move, wheel to turn (Shift: 10 times), Ctrl+wheel to zoom.",
+        "ドラッグで動かす、ホイールで回す（Shift で 10 倍）、Ctrl+ホイールで拡大。",
+    ),
+    ("Back to automatic", "自動に戻す"),
+    (
+        "Forget the alignment fixed by hand and align this image automatically again.",
+        "手で直した位置合わせを消し、この画像を自動で合わせ直します。",
+    ),
+    ("fixing by hand", "手で直している"),
+    ("fixed by hand", "手で直した"),
+    ("Alignment fixed by hand", "位置合わせは手で直したもの"),
+    ("Done", "終わる"),
     ("Compose colors...", "色を合成..."),
     ("Compose", "合成"),
     ("Put two or three gray images on red, green and blue.", "灰色の画像 2〜3 枚を赤・緑・青に重ねます。"),

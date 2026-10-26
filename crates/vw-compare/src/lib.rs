@@ -7,6 +7,7 @@ pub mod align;
 pub mod analysis;
 pub mod coarse;
 pub mod color;
+pub mod pairs;
 pub mod plane;
 pub mod refine;
 pub mod render;
@@ -61,6 +62,30 @@ pub struct Compared {
 /// `moving` を `reference` に合わせて比べる。
 pub fn compare(reference: &Prepared, moving: &Prepared, options: Options) -> Compared {
     let small = align(&reference.image, &moving.image);
+    finish(reference, moving, small, options)
+}
+
+/// 決まった写し方 `transform`（元の大きさどうし、基準 → 比べる画像）で比べる。手で直した
+/// 写し方を使うとき。相関と重なりは、その写し方のまま測る。
+pub fn compare_at(
+    reference: &Prepared,
+    moving: &Prepared,
+    transform: Affine,
+    options: Options,
+) -> Compared {
+    let small = transform.between_scales(reference.scale(), moving.scale());
+    let (correlation, overlap) =
+        refine::score(&reference.image.luma(), &moving.image.luma(), &small);
+    let small = Alignment {
+        transform: small,
+        correlation,
+        overlap,
+    };
+    finish(reference, moving, small, options)
+}
+
+/// 縮めた画像どうしの位置合わせ `small` から、写した画像と分析を作る。
+fn finish(reference: &Prepared, moving: &Prepared, small: Alignment, options: Options) -> Compared {
     let (sr, sm) = (reference.scale(), moving.scale());
     let alignment = Alignment {
         transform: small.transform.between_scales(1.0 / sr, 1.0 / sm),
@@ -100,5 +125,26 @@ mod tests {
         assert!(p.shift[0].abs() < 0.5 && p.shift[1].abs() < 0.5, "{p:?}");
         let a = c.analysis.unwrap();
         assert!(a.ssim.unwrap() > 0.8, "{:?}", a.ssim);
+    }
+
+    #[test]
+    fn a_given_transform_is_used_as_is_and_scored() {
+        let big = test_util::color_texture(240, 180);
+        let small = big.resized(120, 90);
+        let r = Prepared::new(240, 180, &big.to_rgba8());
+        let m = Prepared::new(120, 90, &small.to_rgba8());
+        let right = compare(&r, &m, Options::default()).alignment.transform;
+        let at = compare_at(&r, &m, right, Options::default());
+        assert!(at.alignment.looks_right(), "{:?}", at.alignment);
+        let off = Affine {
+            c: right.c + 20.0,
+            ..right
+        };
+        let wrong = compare_at(&r, &m, off, Options::default());
+        assert!(
+            wrong.alignment.correlation < at.alignment.correlation - 0.2,
+            "{:?}",
+            wrong.alignment
+        );
     }
 }

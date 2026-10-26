@@ -63,6 +63,8 @@ pub struct ImageInfo {
     pub look: Option<colormap::Applied>,
     /// 灰色の画像を色に割り当てて重ねたときの内訳。
     pub compose: Option<Arc<compose::Composite>>,
+    /// 縮小画像の指紋。似た画像の組を探すのに使う（[`vw_compare::pairs`]）。
+    pub fingerprint: Option<u64>,
 }
 
 impl ImageInfo {
@@ -475,6 +477,9 @@ fn finish(
         convert: t3 - t2,
         look: applied,
         compose: None,
+        fingerprint: thumb
+            .as_ref()
+            .and_then(|t| vw_compare::pairs::fingerprint(t.size[0], t.size[1], t.as_raw())),
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),
