@@ -20,6 +20,7 @@ vw-pipeline.workspace = true
 vw-raw.workspace = true
 vw-dicom.workspace = true
 vw-quality.workspace = true
+vw-compare.workspace = true
 vw-ui.workspace = true
 vw-tree.workspace = true
 vw-dock.workspace = true

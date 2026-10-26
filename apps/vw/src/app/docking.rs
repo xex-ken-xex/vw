@@ -25,10 +25,13 @@ pub(super) const CHARTS: &str = "relationship_charts";
 pub(super) const MAP: &str = "map";
 pub(super) const DATASETS: &str = "datasets";
 pub(super) const SKY: &str = "sky_chart";
+pub(super) const COMPARE: &str = "compare_images";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 7] = [ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY];
+pub(super) const TOOLS: [&str; 8] = [
+    ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY, COMPARE,
+];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
 fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
@@ -39,6 +42,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         CHARTS => ([1000.0, 680.0], None),
         DATASETS => ([1100.0, 700.0], None),
         SKY => ([900.0, 640.0], None),
+        COMPARE => ([1280.0, 800.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -120,6 +124,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         CHARTS => "Relationship charts",
         MAP => "Map",
         SKY => "Sky chart",
+        COMPARE => "Compare images",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -147,6 +152,7 @@ impl Panes for AppPanes<'_> {
         match pane {
             ANALYSIS => self.app.histogram.title(lang),
             PIPELINE => self.app.pipeline.title(lang),
+            COMPARE => self.app.compare.title(lang),
             ZOOM_MAP => {
                 crate::sub_window::title(lang, "Zoom map", self.app.active_image().as_deref())
             }
@@ -226,6 +232,7 @@ impl Panes for AppPanes<'_> {
             CHARTS => self.app.people_graph_pane(ui),
             MAP => self.app.map_pane(ui),
             SKY => self.app.sky_pane(ui),
+            COMPARE => self.app.compare_pane(ui),
             DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
@@ -295,6 +302,7 @@ impl VwApp {
             CHARTS => &mut self.graph_window.open,
             DATASETS => &mut self.show_datasets,
             SKY => &mut self.sky.open,
+            COMPARE => &mut self.compare.open,
             _ => &mut self.map.open,
         }
     }
@@ -452,11 +460,11 @@ impl VwApp {
 }
 
 /// 並びに出ている道具。データセットは開き直さない。開くたびにカタログを探し直すので、
-/// ネットワークのドライブでは起動が遅くなるため。
+/// ネットワークのドライブでは起動が遅くなるため。画像の比較も、比べた画像を残していないので開き直さない。
 fn tools_to_reopen(dock: &Dock) -> Vec<&'static str> {
     TOOLS
         .into_iter()
-        .filter(|t| *t != DATASETS && dock.is_shown(t))
+        .filter(|t| *t != DATASETS && *t != COMPARE && dock.is_shown(t))
         .collect()
 }
 

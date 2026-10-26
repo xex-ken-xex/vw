@@ -844,6 +844,9 @@ impl VwApp {
             if resp.compose {
                 self.open_compose_dialog(i);
             }
+            if resp.compare {
+                self.open_compare_dialog(i);
+            }
             if resp.read_qr {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.read_qr_codes(ui.ctx(), path);

@@ -347,6 +347,8 @@ pub struct SlotResponse {
     pub read_qr: bool,
     /// 右クリックメニューで「色を合成」が選ばれた。
     pub compose: bool,
+    /// 右クリックの「位置合わせして比べる」。
+    pub compare: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
@@ -1570,6 +1572,17 @@ impl Slot {
                         .clicked()
                 {
                     out.compose = true;
+                    ui.close();
+                }
+                if ui
+                    .button(tr(lang, "Align and compare..."))
+                    .on_hover_text(tr(
+                        lang,
+                        "Line up similar images with this one and measure how they differ.",
+                    ))
+                    .clicked()
+                {
+                    out.compare = true;
                     ui.close();
                 }
                 ui.separator();

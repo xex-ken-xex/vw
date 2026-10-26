@@ -1,0 +1,15 @@
+[package]
+name = "vw-compare"
+description = "Align similar images and analyse their differences (PSNR, SSIM, colour difference, noise, vignetting)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+vw-quality.workspace = true
+rayon = "1"
+rustfft = "6"
+png = "0.18"
+base64 = "0.22"
