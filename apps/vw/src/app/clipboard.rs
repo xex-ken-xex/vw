@@ -61,7 +61,10 @@ impl VwApp {
     }
 
     /// スロット `index` に見えている画像の元の解像度のもの。まだ揃っていなければ `None`。
-    fn slot_copy_image(&self, index: usize) -> Option<(std::path::PathBuf, egui::ColorImage)> {
+    pub(super) fn slot_copy_image(
+        &self,
+        index: usize,
+    ) -> Option<(std::path::PathBuf, egui::ColorImage)> {
         let slot = &self.slots[index];
         let shown = slot.shown.as_ref()?;
         let full = shown.full.as_ref()?;

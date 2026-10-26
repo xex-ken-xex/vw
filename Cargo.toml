@@ -21,6 +21,7 @@ vw-fits = { path = "crates/vw-fits" }
 vw-raw = { path = "crates/vw-raw" }
 vw-dicom = { path = "crates/vw-dicom" }
 vw-quality = { path = "crates/vw-quality" }
+vw-compare = { path = "crates/vw-compare" }
 vw-ui = { path = "crates/vw-ui" }
 vw-tree = { path = "crates/vw-tree" }
 vw-dock = { path = "crates/vw-dock" }

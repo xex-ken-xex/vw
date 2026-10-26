@@ -39,6 +39,7 @@ mod activity;
 mod ai_tagging;
 mod ai_tidy;
 mod clipboard;
+mod compare_dialog;
 mod compose_dialog;
 mod dataset_dialogs;
 mod docking;
@@ -199,6 +200,8 @@ pub struct VwApp {
     zoom_map: crate::zoom_map::ZoomMap,
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
+    compare: crate::compare::CompareWindow,
+    compare_dialog: Option<compare_dialog::CompareDialog>,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -708,6 +711,8 @@ impl VwApp {
             place_names_load: None,
             map: Default::default(),
             sky: Default::default(),
+            compare: Default::default(),
+            compare_dialog: None,
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -1090,6 +1095,7 @@ impl eframe::App for VwApp {
         self.update_evaluation(&ctx);
         self.map_tick(&ctx);
         self.sky_tick();
+        self.compare.forget_while_closed();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         self.qr_ui();
@@ -1176,6 +1182,7 @@ impl eframe::App for VwApp {
         self.outer_update_dialog(&ctx);
         self.resume_offer_dialog(&ctx);
         self.compose_dialog_ui(&ctx);
+        self.compare_dialog_ui(&ctx);
         self.finish_trash_job();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);

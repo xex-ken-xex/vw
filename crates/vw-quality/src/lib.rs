@@ -141,6 +141,24 @@ pub fn psnr(a: &Image<'_>, b: &Image<'_>, peak: f32) -> Option<f64> {
 /// 画素ごとに 5 枚の写像を持つと大きな画像でメモリを食う上に、SSIM は縮小した
 /// 解像度で見るのが本来の使い方（視距離に合わせる）だから。
 pub fn ssim(a: &Image<'_>, b: &Image<'_>, peak: f32) -> Option<f64> {
+    Some(ssim_map(a, b, peak)?.mean)
+}
+
+/// 縮小した解像度での、画素ごとの SSIM。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SsimMap {
+    pub width: u32,
+    pub height: u32,
+    /// 元の画像の何画素四方を 1 画素にしたか。
+    pub factor: u32,
+    /// 行の順の値。窓が収まらない縁は、いちばん近い内側の値で埋める。
+    pub values: Vec<f32>,
+    /// 縁を除いた平均（[`ssim`] の値）。
+    pub mean: f64,
+}
+
+/// [`ssim`] と同じ求め方で、どこが違うかの地図も返す。
+pub fn ssim_map(a: &Image<'_>, b: &Image<'_>, peak: f32) -> Option<SsimMap> {
     if !a.same_size(b) || a.width == 0 || a.height == 0 {
         return None;
     }
@@ -155,21 +173,48 @@ pub fn ssim(a: &Image<'_>, b: &Image<'_>, peak: f32) -> Option<f64> {
     let ab = blur(&a.iter().zip(&b).map(|(p, q)| p * q).collect::<Vec<_>>());
     let c1 = (0.01 * f64::from(peak)).powi(2);
     let c2 = (0.03 * f64::from(peak)).powi(2);
+    let at = |i: usize| ssim_at(mu_a[i], mu_b[i], aa[i], bb[i], ab[i], c1, c2);
     let margin = GAUSSIAN.len() / 2;
+    let (width, height) = (w as u32, h as u32);
     if w <= 2 * margin || h <= 2 * margin {
         // 窓が収まらないほど小さい。中心の 1 画素ぶんの窓で見る。
-        return Some(ssim_at(mu_a[0], mu_b[0], aa[0], bb[0], ab[0], c1, c2));
+        let v = at(0);
+        return Some(SsimMap {
+            width,
+            height,
+            factor,
+            values: vec![v as f32; w * h],
+            mean: v,
+        });
     }
+    let mut values = vec![0.0f32; w * h];
     let mut sum = 0.0;
     let mut n = 0usize;
     for y in margin..h - margin {
         for x in margin..w - margin {
             let i = y * w + x;
-            sum += ssim_at(mu_a[i], mu_b[i], aa[i], bb[i], ab[i], c1, c2);
+            let v = at(i);
+            values[i] = v as f32;
+            sum += v;
             n += 1;
         }
     }
-    Some(sum / n as f64)
+    for y in 0..h {
+        let sy = y.clamp(margin, h - margin - 1);
+        for x in 0..w {
+            let sx = x.clamp(margin, w - margin - 1);
+            if (sx, sy) != (x, y) {
+                values[y * w + x] = values[sy * w + sx];
+            }
+        }
+    }
+    Some(SsimMap {
+        width,
+        height,
+        factor,
+        values,
+        mean: sum / n as f64,
+    })
 }
 
 fn ssim_at(mu_a: f32, mu_b: f32, aa: f32, bb: f32, ab: f32, c1: f64, c2: f64) -> f64 {
@@ -533,6 +578,24 @@ mod tests {
         let c = Image::new(48, 64, &px);
         assert_eq!(ssim(&a, &c, 255.0), None);
         assert_eq!(psnr(&a, &c, 255.0), None);
+    }
+
+    #[test]
+    fn the_ssim_map_is_low_only_where_the_images_differ() {
+        let px = gradient(64, 64);
+        let mut changed = px.clone();
+        for y in 40..56 {
+            for x in 40..56 {
+                changed[y * 64 + x] = 255.0 - changed[y * 64 + x];
+            }
+        }
+        let a = Image::new(64, 64, &px);
+        let b = Image::new(64, 64, &changed);
+        let map = ssim_map(&a, &b, 255.0).unwrap();
+        assert_eq!((map.width, map.height, map.factor), (64, 64, 1));
+        assert!(map.values[48 * 64 + 48] < 0.5);
+        assert!(map.values[10 * 64 + 10] > 0.99);
+        assert_eq!(Some(map.mean), ssim(&a, &b, 255.0));
     }
 
     #[test]
