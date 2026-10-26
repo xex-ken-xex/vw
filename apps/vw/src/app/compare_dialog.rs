@@ -203,7 +203,14 @@ impl VwApp {
             };
             if let Some((path, image)) = self.slot_copy_image(index) {
                 if let Some(d) = &mut self.compare_dialog {
-                    d.gathered.push((id, Input { path, image }));
+                    d.gathered.push((
+                        id,
+                        Input {
+                            path,
+                            image,
+                            aligned: None,
+                        },
+                    ));
                 }
                 continue;
             }
@@ -224,7 +231,7 @@ impl VwApp {
             return;
         };
         let match_brightness = dialog.match_brightness;
-        let images: Vec<Input> = ids
+        let mut images: Vec<Input> = ids
             .iter()
             .filter_map(|id| {
                 let at = dialog.gathered.iter().position(|(g, _)| g == id)?;
@@ -234,12 +241,99 @@ impl VwApp {
         if images.len() < 2 {
             return;
         }
+        let (reference, rest) = images.split_first_mut().expect("two or more");
+        for input in rest {
+            input.aligned = self.saved_alignment(input, reference);
+        }
         self.log.info(format!(
             "Compare: aligning {} images to {}",
             images.len() - 1,
             images[0].path.display()
         ));
         self.compare.start(ctx, images, match_brightness);
+    }
+
+    /// 見出しの似た画像の印から、その組を比べる。クリックした画像を基準にする。
+    pub(super) fn compare_similar(&mut self, index: usize) {
+        let id = self.slots[index].id;
+        let Some(group) = self.similar.group(id).map(<[u64]>::to_vec) else {
+            return;
+        };
+        let order = std::iter::once(id).chain(group.into_iter().filter(|&g| g != id));
+        let candidates: Vec<Candidate> = order
+            .filter_map(|g| {
+                let s = self.slots.iter().find(|s| s.id == g)?;
+                Some(Candidate {
+                    slot: g,
+                    name: compare::file_name(&s.shown.as_ref()?.path),
+                    chosen: true,
+                })
+            })
+            .take(MAX_IMAGES)
+            .collect();
+        self.compare_dialog = Some(CompareDialog {
+            candidates,
+            reference: 0,
+            match_brightness: true,
+            waiting: false,
+            gathered: Vec::new(),
+        });
+        self.request_compare_images();
+    }
+
+    /// 前に手で直した位置合わせ。直したときと大きさが違えば使わない。
+    fn saved_alignment(&self, input: &Input, reference: &Input) -> Option<vw_compare::Affine> {
+        let (path, reference_path) = alignment_keys(&input.path, &reference.path)?;
+        let a = self.labels.aligned(&path, &reference_path)?;
+        if a.size != input.image.size || a.reference_size != reference.image.size {
+            return None;
+        }
+        let [a_, b, c, d, e, f] = a.transform;
+        Some(vw_compare::Affine {
+            a: a_,
+            b,
+            c,
+            d,
+            e,
+            f,
+        })
+    }
+
+    /// 手で直した位置合わせをラベルに残す。ZIP の中や合成した画像は書く場所がないので、
+    /// この比べ方の間だけにする。
+    fn save_alignment(
+        &mut self,
+        path: &std::path::Path,
+        reference: &std::path::Path,
+        aligned: Option<crate::labels::Aligned>,
+    ) {
+        let Some((path, reference)) = alignment_keys(path, reference) else {
+            self.log.info(format!(
+                "Compare: the alignment of {} is kept only while comparing",
+                path.display()
+            ));
+            return;
+        };
+        if self.archives.mount_of(&path).is_some() {
+            self.log.info(format!(
+                "Compare: the alignment of {} is kept only while comparing (inside an archive)",
+                path.display()
+            ));
+            return;
+        }
+        let what = if aligned.is_some() {
+            "saved"
+        } else {
+            "removed"
+        };
+        match self.labels.set_aligned(&path, &reference, aligned) {
+            Ok(()) => self.log.info(format!(
+                "Compare: alignment of {} to {} {what}",
+                path.display(),
+                reference.display()
+            )),
+            Err(e) => self.log.error(format!("Compare: {e}")),
+        }
     }
 
     /// 比べる欄。
@@ -255,7 +349,27 @@ impl VwApp {
                 compare::Command::CopyText(text, what) => self.copy_text(&ctx, text, &what),
                 compare::Command::Info(text) => self.log.info(text),
                 compare::Command::Error(text) => self.log.error(text),
+                compare::Command::SaveAlignment {
+                    path,
+                    reference,
+                    aligned,
+                } => self.save_alignment(&path, &reference, aligned),
             }
         }
     }
+}
+
+/// 位置合わせを残すファイル（フレームを指すパスはそのファイル）。合成した画像には
+/// ファイルがないので `None`。
+fn alignment_keys(
+    path: &std::path::Path,
+    reference: &std::path::Path,
+) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if crate::compose::split(path).is_some() || crate::compose::split(reference).is_some() {
+        return None;
+    }
+    Some((
+        crate::frames::file_of(path).to_path_buf(),
+        crate::frames::file_of(reference).to_path_buf(),
+    ))
 }

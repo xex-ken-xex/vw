@@ -57,6 +57,7 @@ mod positions;
 mod qr_reading;
 mod screens;
 mod send;
+mod similar;
 mod slots;
 mod transfers;
 
@@ -202,6 +203,7 @@ pub struct VwApp {
     sky: crate::sky_window::SkyWindow,
     compare: crate::compare::CompareWindow,
     compare_dialog: Option<compare_dialog::CompareDialog>,
+    similar: similar::Similar,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -713,6 +715,7 @@ impl VwApp {
             sky: Default::default(),
             compare: Default::default(),
             compare_dialog: None,
+            similar: Default::default(),
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),

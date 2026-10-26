@@ -69,6 +69,15 @@ pub fn refine(reference: &Plane, moving: &Plane, start: Affine) -> Refined {
     }
 }
 
+/// 写し方 `t` のままで、重なった所の相関と重なりの割合を測る（手で直した写し方を確かめる）。
+pub fn score(reference: &Plane, moving: &Plane, t: &Affine) -> (f64, f64) {
+    let stride = ((reference.width * reference.height) as f64 / SAMPLES as f64)
+        .sqrt()
+        .ceil()
+        .max(1.0) as usize;
+    correlation(reference, moving, t, stride)
+}
+
 /// 1 段ぶんの繰り返し。直した写し方と、そのときの (相関, 重なりの割合)。
 fn fit(r: &Plane, m: &Plane, start: Affine) -> (Affine, (f64, f64)) {
     let stride = ((r.width * r.height) as f64 / SAMPLES as f64)

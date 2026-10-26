@@ -281,6 +281,17 @@ pub struct SlotLook<'a> {
     /// 色の表のゲージ。`None` はゲージを出さない。
     pub gauge: Option<Gauge>,
     pub color_rules: &'a crate::colormap::Rules,
+    /// 似た画像の組に入っていれば、見出しに出す印。
+    pub similar: Option<&'a SimilarMark>,
+}
+
+/// 似た画像の組の印。同じ組のスロットには同じ番号と色を出す。
+pub struct SimilarMark {
+    /// フォルダの中での組の番号（1 から）。
+    pub number: usize,
+    pub color: Color32,
+    /// 同じ組のほかの画像の名前（印にマウスを乗せたときに出す）。
+    pub others: String,
 }
 
 /// ゲージの出し方。
@@ -349,6 +360,8 @@ pub struct SlotResponse {
     pub compose: bool,
     /// 右クリックの「位置合わせして比べる」。
     pub compare: bool,
+    /// 見出しの似た画像の印がクリックされた（組を比べる）。
+    pub compare_similar: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
@@ -1100,6 +1113,7 @@ impl Slot {
             colors,
             gauge,
             color_rules,
+            similar,
         } = look;
         self.colors = colors;
         let mut out = SlotResponse::default();
@@ -1828,6 +1842,36 @@ impl Slot {
                     "Calibration off for this image"
                 },
             ));
+            labels_right = mark_rect.left();
+        }
+
+        if let Some(mark) = similar.filter(|_| self.shown.is_some()) {
+            let text = format!("{}{}", egui_phosphor::regular::LINK_SIMPLE, mark.number);
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), mark.color);
+            let mark_rect = Rect::from_min_max(
+                pos2(labels_right - galley.size().x - 8.0, header.min.y + 2.0),
+                pos2(labels_right, header.max.y - 2.0),
+            );
+            let response = ui.interact(
+                mark_rect,
+                ui.id().with(("similar", self.id)),
+                Sense::click(),
+            );
+            if response.hovered() {
+                painter.rect_filled(mark_rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
+            }
+            painter.galley(mark_rect.center() - galley.size() / 2.0, galley, mark.color);
+            if response
+                .on_hover_text(tr1(
+                    lang,
+                    "Similar to {}. Click to align and compare.",
+                    &mark.others,
+                ))
+                .clicked()
+            {
+                out.compare_similar = true;
+                out.clicked = true;
+            }
             labels_right = mark_rect.left();
         }
 
