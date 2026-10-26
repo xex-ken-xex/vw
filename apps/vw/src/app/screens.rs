@@ -49,6 +49,11 @@ impl VwApp {
                     self.settings.settings.viewer.magnify_filter,
                     self.settings.settings.viewer.minify_filter,
                 ),
+                notes: slot
+                    .derive
+                    .as_ref()
+                    .and_then(|d| d.ready_for(shown))
+                    .map_or(&[], |r| r.notes.as_slice()),
             })
         });
         let commands = self.pipeline.ui(ui, lang, target);

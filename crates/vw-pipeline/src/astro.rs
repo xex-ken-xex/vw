@@ -1,4 +1,4 @@
-//! 天体写真の仕上げのノード（ノイズ除去・シャープ化・星の縮小）の計算。
+//! 天体写真の仕上げのノード（ノイズ除去・シャープ化・星の縮小と除去）の計算。デコンボリューションは [`crate::deconv`]。
 //!
 //! どれも値の大きさに依らない（雑音の強さを画像から測り、その何倍かで決める）ので、
 //! 伸縮の前の線形の値（FITS の物理量など）にも、表示の 0〜1 にも同じように当てられる。
@@ -15,7 +15,7 @@ pub const LEVELS: usize = 4;
 
 /// 白色雑音の標準偏差 1 の画像を B3 スターレットで分けたときの、各階層の係数の標準偏差
 /// （Starck & Murtagh, Astronomical Image and Data Analysis, 表 2.1）。
-const NOISE: [f32; LEVELS] = [0.889, 0.200, 0.086, 0.041];
+pub(crate) const NOISE: [f32; LEVELS] = [0.889, 0.200, 0.086, 0.041];
 
 /// ノイズ除去。階層 `j` の係数のうち、雑音の `threshold` 倍より小さいものを `strength[j]` だけ弱める。
 pub fn denoise(img: &mut Float, strength: [f32; LEVELS], threshold: f32) {
@@ -78,6 +78,90 @@ pub fn reduce_stars(img: &mut Float, amount: f32, size: u32, threshold: f32) {
     });
 }
 
+/// 星の除去。星のマスク（[`star_mask`]、半径 `size` だけ広げる）の中を、周りの値から埋める。
+/// 埋めた所はなめらかすぎて周りから浮くので、周りと同じ強さの雑音を足す。
+///
+/// AI（StarNet など）を使わないのは、重みの配布条件を確かめる必要があり、手元の計算だけで
+/// 済ませたいため。明るい星の大きな光芒はマスクに入りきらず残りやすい。
+pub fn remove_stars(img: &mut Float, size: u32, threshold: f32) {
+    let size = size.clamp(1, 16) as usize;
+    if img.data.is_empty() {
+        return;
+    }
+    let mask = star_mask(img, threshold, size);
+    if mask.iter().all(|&m| m <= 0.0) {
+        return;
+    }
+    let known: Vec<f32> = mask
+        .iter()
+        .map(|&m| if m > 0.01 { 0.0 } else { 1.0 })
+        .collect();
+    for_each_plane(img, |plane, w, h| {
+        let (details, _) = starlet(plane, w, h);
+        let sigma = noise_sigma(&details[0]);
+        let filled = push_pull(plane, &known, w, h);
+        // チャンネルで同じ種にするのは、色の付いた粒にしないため（夜空の雑音は色が薄い）。
+        let mut state = crate::nodes::splitmix(0x5EED);
+        for ((v, f), m) in plane.iter_mut().zip(&filled).zip(&mask) {
+            if *m > 0.0 {
+                let grain = crate::nodes::gaussian(&mut state) * sigma;
+                *v += m * (f + grain - *v);
+            }
+        }
+    });
+}
+
+/// 重み 0 の画素を、周りの重みのある画素から埋める（push-pull）。半分に縮めながら
+/// 重み付きで平均し、いちばん粗い所から拡げ戻して穴だけに入れる。
+/// 穴の縁から少しずつしみ込ませるやり方（拡散）より、大きな穴でも速く埋まる。
+fn push_pull(values: &[f32], weights: &[f32], w: usize, h: usize) -> Vec<f32> {
+    if weights.iter().all(|&k| k >= 1.0) || (w <= 1 && h <= 1) {
+        return values.to_vec();
+    }
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+    let mut coarse = vec![0.0f32; cw * ch];
+    let mut coarse_weights = vec![0.0f32; cw * ch];
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let (mut sum, mut weight) = (0.0f32, 0.0f32);
+            for y in 2 * cy..(2 * cy + 2).min(h) {
+                for x in 2 * cx..(2 * cx + 2).min(w) {
+                    let k = weights[y * w + x];
+                    sum += k * values[y * w + x];
+                    weight += k;
+                }
+            }
+            let i = cy * cw + cx;
+            if weight > 0.0 {
+                coarse[i] = sum / weight;
+            }
+            coarse_weights[i] = weight.min(1.0);
+        }
+    }
+    let coarse = push_pull(&coarse, &coarse_weights, cw, ch);
+    let sample = |x: f32, y: f32| -> f32 {
+        let x = x.clamp(0.0, (cw - 1) as f32);
+        let y = y.clamp(0.0, (ch - 1) as f32);
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(cw - 1), (y0 + 1).min(ch - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let top = coarse[y0 * cw + x0] * (1.0 - fx) + coarse[y0 * cw + x1] * fx;
+        let bottom = coarse[y1 * cw + x0] * (1.0 - fx) + coarse[y1 * cw + x1] * fx;
+        top * (1.0 - fy) + bottom * fy
+    };
+    (0..w * h)
+        .map(|i| {
+            let k = weights[i];
+            if k >= 1.0 {
+                return values[i];
+            }
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            let up = sample((x + 0.5) / 2.0 - 0.5, (y + 0.5) / 2.0 - 0.5);
+            k * values[i] + (1.0 - k) * up
+        })
+        .collect()
+}
+
 /// 星の柔らかいマスク（0〜1）。明るさ（チャンネルの平均）の細かい 3 階層の和で星を見つけ、
 /// 削る半径より少し広げてからぼかす（星の縁で段差が出ないように）。
 pub fn star_mask(img: &Float, threshold: f32, size: usize) -> Vec<f32> {
@@ -113,7 +197,7 @@ pub fn star_mask(img: &Float, threshold: f32, size: usize) -> Vec<f32> {
 
 /// チャンネルごとの面に分けて `f(面, 幅, 高さ)` を当て、戻す。NaN は面の中央値で埋めてから当て、後で NaN に戻す
 /// （NaN のまま畳み込むと、周りの画素まで NaN になるため）。
-fn for_each_plane(img: &mut Float, f: impl Fn(&mut [f32], usize, usize) + Sync) {
+pub(crate) fn for_each_plane(img: &mut Float, f: impl Fn(&mut [f32], usize, usize) + Sync) {
     let (w, h, n) = (img.width, img.height, img.channels);
     if w == 0 || h == 0 {
         return;
@@ -141,7 +225,7 @@ fn for_each_plane(img: &mut Float, f: impl Fn(&mut [f32], usize, usize) + Sync) 
 }
 
 /// NaN を中央値で埋め、埋めた位置を返す。
-fn fill_nan(plane: &mut [f32]) -> Vec<usize> {
+pub(crate) fn fill_nan(plane: &mut [f32]) -> Vec<usize> {
     let holes: Vec<usize> = (0..plane.len()).filter(|&i| plane[i].is_nan()).collect();
     if !holes.is_empty() {
         let mut finite: Vec<f32> = plane.iter().copied().filter(|v| v.is_finite()).collect();
@@ -153,7 +237,7 @@ fn fill_nan(plane: &mut [f32]) -> Vec<usize> {
     holes
 }
 
-fn median(values: &mut [f32]) -> Option<f32> {
+pub(crate) fn median(values: &mut [f32]) -> Option<f32> {
     if values.is_empty() {
         return None;
     }
@@ -164,7 +248,7 @@ fn median(values: &mut [f32]) -> Option<f32> {
 
 /// 画像そのものの雑音の標準偏差。いちばん細かい階層の係数の中央絶対偏差から見積もる
 /// （星や縁の大きな係数に引っ張られない）。
-fn noise_sigma(finest: &[f32]) -> f32 {
+pub(crate) fn noise_sigma(finest: &[f32]) -> f32 {
     // 全部を並べ替えると大きな画像で遅いので、間引いて使う。
     let step = (finest.len() / 1_000_000).max(1);
     let mut values: Vec<f32> = finest.iter().step_by(step).copied().collect();
@@ -267,7 +351,7 @@ fn min_filter(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     extreme_filter(plane, w, h, r, f32::min)
 }
 
-fn max_filter(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+pub(crate) fn max_filter(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     extreme_filter(plane, w, h, r, f32::max)
 }
 
@@ -382,6 +466,38 @@ mod tests {
         reduce_stars(&mut img, 1.0, 2, 4.0);
         assert!(ring(&img) < before - 10.0, "{before} -> {}", ring(&img));
         assert_eq!(&img.data[..64 * 10], &sky_before[..]);
+    }
+
+    #[test]
+    fn star_removal_fills_the_star_with_the_sky() {
+        let mut img = sky_with_star(64, 64, 100.0, (32.0, 32.0, 2.0), 5);
+        let far: Vec<f32> = img.data[..64 * 8].to_vec();
+        remove_stars(&mut img, 3, 4.0);
+        let core = img.data[32 * 64 + 32];
+        assert!((core - 100.0).abs() < 3.0, "{core}");
+        assert_eq!(&img.data[..64 * 8], &far[..]);
+    }
+
+    #[test]
+    fn push_pull_fills_a_hole_from_its_surroundings() {
+        let (w, h) = (16, 16);
+        let values: Vec<f32> = (0..w * h).map(|i| (i % w) as f32).collect();
+        let mut weights = vec![1.0; w * h];
+        let mut holed = values.clone();
+        for y in 6..10 {
+            for x in 6..10 {
+                weights[y * w + x] = 0.0;
+                holed[y * w + x] = 1000.0;
+            }
+        }
+        let filled = push_pull(&holed, &weights, w, h);
+        for y in 6..10 {
+            for x in 6..10 {
+                let v = filled[y * w + x];
+                assert!((v - x as f32).abs() < 2.5, "({x}, {y}) {v}");
+            }
+        }
+        assert_eq!(filled[0], 0.0);
     }
 
     #[test]
