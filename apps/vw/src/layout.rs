@@ -102,12 +102,44 @@ pub struct View {
     pub pages: usize,
 }
 
-/// `n` 個のスロットのうち、画面に出すもの。アクティブなスロットが載るページを出す。
+/// ページの帯の上のホイールと、スロットの上の Shift+ホイールで、1 目盛りに動かす量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WheelScroll {
+    /// 1 枚ずつ。
+    Slot,
+    /// 半ページ（行数の半分、切り上げ）ずつ。
+    HalfPage,
+    /// 1 ページずつ。
+    #[default]
+    Page,
+}
+
+impl WheelScroll {
+    pub const ALL: [WheelScroll; 3] = [WheelScroll::Slot, WheelScroll::HalfPage, WheelScroll::Page];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            WheelScroll::Slot => "One slot",
+            WheelScroll::HalfPage => "Half a page",
+            WheelScroll::Page => "One page",
+        }
+    }
+}
+
+/// `n` 個のスロットのうち、画面に出すもの。`first` 番目のスロットから 1 ページ分を出すが、
+/// アクティブなスロットがそこに入らなければ、アクティブなスロットが載るページを出す。
 /// `maximized` があれば、そのスロットだけを 1 マスで出す。
 ///
-/// ページ番号を別に持たずアクティブなスロットから決めるのは、キー操作やツリーから
-/// 開いた画像のスロットが、いつも見えているようにするため。
-pub fn view(layout: SlotLayout, n: usize, active: usize, maximized: Option<usize>) -> View {
+/// 出す範囲をアクティブなスロットに合わせ直すのは、キー操作やツリーから開いた画像の
+/// スロットが、いつも見えているようにするため。
+pub fn view(
+    layout: SlotLayout,
+    n: usize,
+    active: usize,
+    first: usize,
+    maximized: Option<usize>,
+) -> View {
     if let Some(i) = maximized.filter(|i| *i < n) {
         return View {
             range: i..i + 1,
@@ -118,23 +150,76 @@ pub fn view(layout: SlotLayout, n: usize, active: usize, maximized: Option<usize
         };
     }
     let (cols, rows) = layout.dims(n);
-    let page = layout.page_of(active.min(n.saturating_sub(1)), n);
+    let per_page = layout.per_page(n);
+    let active = active.min(n.saturating_sub(1));
+    let first = if (first..first + per_page).contains(&active) {
+        first
+    } else {
+        layout.page_of(active, n) * per_page
+    };
+    let pages = layout.page_count(n);
     View {
-        range: layout.page_range(page, n),
+        range: first..(first + per_page).min(n),
         cols,
         rows,
-        page,
-        pages: layout.page_count(n),
+        page: shown_page(first, per_page, pages),
+        pages,
     }
 }
 
-/// ページを `delta` だけ送ったときに、アクティブにするスロット（そのページの先頭）。
+/// `first` 番目から出しているときに、ページの帯に出すページ（0 から）。ページの途中まで
+/// 送っているときは、半分を越えたら次のページとする。
+fn shown_page(first: usize, per_page: usize, pages: usize) -> usize {
+    ((first + per_page / 2) / per_page).min(pages.saturating_sub(1))
+}
+
+/// `first` 番目から出しているときに、ホイールを `steps` 目盛り回した後に出す最初のスロット。
+/// 端で止める。1 ページずつのときはページの切れ目にそろえる。
+///
+/// 1 枚ずつ・半ページずつで最後のスロットが画面の最後のマスに来たら止めるのは、ページの
+/// 切れ目まで送ると後ろに空きができて、送った分だけ見えるスロットが減るため。
+pub fn scroll(
+    layout: SlotLayout,
+    n: usize,
+    first: usize,
+    steps: isize,
+    unit: WheelScroll,
+) -> usize {
+    let (cols, rows) = layout.dims(n);
+    let per_page = cols * rows;
+    let pages = layout.page_count(n);
+    let stride = match unit {
+        WheelScroll::Page => {
+            let page = shown_page(first, per_page, pages) as isize + steps;
+            let page = page.clamp(0, pages as isize - 1) as usize;
+            return layout.page_range(page, n).start;
+        }
+        WheelScroll::Slot => 1,
+        WheelScroll::HalfPage => rows.div_ceil(2) * cols,
+    };
+    let last_first = n.saturating_sub(per_page);
+    // 1 ページずつで最後のページまで送ってあると、1 枚ずつで止める位置より先にいることがある。
+    // そこから先へ回しても戻らないように、今の位置も上限に入れる。
+    let high = last_first.max(first) as isize;
+    (first as isize + steps * stride as isize).clamp(0, high) as usize
+}
+
+/// ページを `delta` だけ送ったときに出すページの、最初のスロット。
 /// 端まで行ったら反対側に回り込む。
-pub fn page_step(layout: SlotLayout, n: usize, active: usize, delta: isize) -> usize {
+pub fn page_step(layout: SlotLayout, n: usize, page: usize, delta: isize) -> usize {
     let pages = layout.page_count(n) as isize;
-    let page = layout.page_of(active, n) as isize;
-    let target = (page + delta).rem_euclid(pages) as usize;
+    let target = (page as isize + delta).rem_euclid(pages) as usize;
     layout.page_range(target, n).start
+}
+
+/// ページの数字をドラッグして 1 ページ進む横の量（論理ピクセル）。
+pub const DRAG_PER_PAGE: f32 = 12.0;
+
+/// ページ `from` で押して横に `dx` 動かしたときのページ（0 から）。端で止める。
+/// ページ送りのボタンのように回り込まないのは、ドラッグで回り込むとどこまで来たか分からなくなるため。
+pub fn page_after_drag(from: usize, dx: f32, pages: usize) -> usize {
+    let moved = (dx / DRAG_PER_PAGE).round() as isize;
+    (from as isize + moved).clamp(0, pages.saturating_sub(1) as isize) as usize
 }
 
 /// `start` から長さ `len` を `n` 等分した `i` 番目の範囲（始まり, 終わり）。隣との間だけ
@@ -311,46 +396,101 @@ mod tests {
 
     #[test]
     fn view_shows_the_page_of_the_active_slot() {
-        let v = view(SlotLayout::grid(2, 2), 10, 5, None);
+        let v = view(SlotLayout::grid(2, 2), 10, 5, 0, None);
         assert_eq!((v.range, v.page, v.pages), (4..8, 1, 3));
         assert_eq!((v.cols, v.rows), (2, 2));
     }
 
     #[test]
     fn maximized_slot_is_shown_alone() {
-        let v = view(SlotLayout::grid(2, 2), 10, 5, Some(7));
+        let v = view(SlotLayout::grid(2, 2), 10, 5, 0, Some(7));
         assert_eq!((v.range, v.cols, v.rows, v.pages), (7..8, 1, 1, 1));
     }
 
     #[test]
     fn maximized_slot_that_no_longer_exists_is_ignored() {
-        let v = view(SlotLayout::Auto, 3, 0, Some(3));
+        let v = view(SlotLayout::Auto, 3, 0, 0, Some(3));
         assert_eq!(v.range, 0..3);
     }
 
     #[test]
     fn auto_view_shows_every_slot() {
-        let v = view(SlotLayout::Auto, 5, 4, None);
+        let v = view(SlotLayout::Auto, 5, 4, 0, None);
         assert_eq!((v.range, v.cols, v.rows), (0..5, 3, 2));
     }
 
     #[test]
     fn page_step_moves_to_the_first_slot_of_the_next_page() {
         let l = SlotLayout::grid(2, 2);
-        assert_eq!(page_step(l, 10, 1, 1), 4);
-        assert_eq!(page_step(l, 10, 5, -1), 0);
+        assert_eq!(page_step(l, 10, 0, 1), 4);
+        assert_eq!(page_step(l, 10, 1, -1), 0);
     }
 
     #[test]
     fn page_step_wraps_around_both_ends() {
         let l = SlotLayout::grid(2, 2);
-        assert_eq!(page_step(l, 10, 9, 1), 0);
+        assert_eq!(page_step(l, 10, 2, 1), 0);
         assert_eq!(page_step(l, 10, 0, -1), 8);
     }
 
     #[test]
     fn page_step_on_a_single_page_stays_on_it() {
-        assert_eq!(page_step(SlotLayout::Auto, 6, 3, 1), 0);
+        assert_eq!(page_step(SlotLayout::Auto, 6, 0, 1), 0);
+    }
+
+    #[test]
+    fn view_keeps_a_scrolled_window_while_the_active_slot_is_inside_it() {
+        let v = view(SlotLayout::grid(2, 2), 10, 3, 1, None);
+        assert_eq!((v.range, v.page), (1..5, 0));
+    }
+
+    #[test]
+    fn view_moves_to_the_page_of_an_active_slot_outside_the_window() {
+        let v = view(SlotLayout::grid(2, 2), 10, 9, 2, None);
+        assert_eq!((v.range, v.page), (8..10, 2));
+    }
+
+    #[test]
+    fn scrolling_by_slots_moves_one_slot_and_stops_with_the_last_slot_in_the_last_cell() {
+        let l = SlotLayout::grid(2, 2);
+        assert_eq!(scroll(l, 10, 0, 1, WheelScroll::Slot), 1);
+        assert_eq!(scroll(l, 10, 1, 3, WheelScroll::Slot), 4);
+        assert_eq!(scroll(l, 10, 6, 1, WheelScroll::Slot), 6);
+        assert_eq!(scroll(l, 10, 2, -5, WheelScroll::Slot), 0);
+    }
+
+    #[test]
+    fn scrolling_by_half_pages_moves_half_the_rows_rounded_up() {
+        let l = SlotLayout::grid(3, 3);
+        assert_eq!(scroll(l, 30, 0, 1, WheelScroll::HalfPage), 6);
+        let l = SlotLayout::grid(2, 4);
+        assert_eq!(scroll(l, 30, 0, 1, WheelScroll::HalfPage), 4);
+    }
+
+    #[test]
+    fn scrolling_by_pages_lands_on_page_starts_and_stops_at_the_ends() {
+        let l = SlotLayout::grid(2, 2);
+        assert_eq!(scroll(l, 10, 0, 1, WheelScroll::Page), 4);
+        assert_eq!(scroll(l, 10, 4, 5, WheelScroll::Page), 8);
+        assert_eq!(scroll(l, 10, 8, 1, WheelScroll::Page), 8);
+        assert_eq!(scroll(l, 10, 0, -1, WheelScroll::Page), 0);
+        assert_eq!(scroll(l, 10, 2, 1, WheelScroll::Page), 8);
+    }
+
+    #[test]
+    fn scrolling_by_slots_from_the_last_page_does_not_jump_back() {
+        let l = SlotLayout::grid(2, 2);
+        assert_eq!(scroll(l, 10, 8, 1, WheelScroll::Slot), 8);
+        assert_eq!(scroll(l, 10, 8, -1, WheelScroll::Slot), 7);
+    }
+
+    #[test]
+    fn dragging_the_page_number_moves_one_page_per_step_and_stops_at_the_ends() {
+        assert_eq!(page_after_drag(3, 0.0, 10), 3);
+        assert_eq!(page_after_drag(3, DRAG_PER_PAGE * 2.0, 10), 5);
+        assert_eq!(page_after_drag(3, -DRAG_PER_PAGE, 10), 2);
+        assert_eq!(page_after_drag(3, DRAG_PER_PAGE * 100.0, 10), 9);
+        assert_eq!(page_after_drag(3, -DRAG_PER_PAGE * 100.0, 10), 0);
     }
 
     #[test]

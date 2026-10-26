@@ -1079,6 +1079,10 @@ const JA: &[(&str, &str)] = &[
     ("Previous page", "前のページ"),
     ("Next page", "次のページ"),
     (
+        "Drag left or right to jump pages. Turn the wheel here, or Shift+wheel over the slots, to scroll.",
+        "左右にドラッグすると遠くのページへ移ります。ここでホイールを回すか、スロットの上で Shift+ホイールでも送れます。",
+    ),
+    (
         "Maximize/restore slot, or open folder",
         "スロットの最大化/元に戻す、またはフォルダへ移動",
     ),
@@ -1151,6 +1155,12 @@ const JA: &[(&str, &str)] = &[
         "表示メニューの「カスタム」で使う 列 x 行。",
     ),
     ("Auto layout maximum", "自動レイアウトの最大"),
+    ("Wheel scroll amount", "ホイールで送る量"),
+    ("How far the wheel over the page bar, or Shift+wheel over the slots, moves the slots when they are split into pages: one slot, half a page or one page. The page buttons and Page Up / Page Down always turn one page.", "スロットがページに分かれているとき、ページの帯の上のホイールや、スロットの上の Shift+ホイールで送る量です。1 枚・半ページ・1 ページから選びます。ページのボタンと Page Up / Page Down はいつも 1 ページ送ります。"),
+    ("One slot", "1 枚"),
+    ("Half a page", "半ページ"),
+    ("One page", "1 ページ"),
+    ("Wheel: {}", "ホイール: {}ずつ"),
     (
         "Largest grid (columns x rows) the Auto layout uses. More slots than this go on further pages, so slots do not get too small.",
         "自動レイアウトで使う最大の 列 x 行。これを超える数のスロットは次のページに回し、スロットが小さくなりすぎないようにします。",

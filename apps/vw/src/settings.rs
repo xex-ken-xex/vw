@@ -11,7 +11,7 @@ use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
-use crate::layout::SlotLayout;
+use crate::layout::{SlotLayout, WheelScroll};
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
@@ -119,6 +119,8 @@ pub struct Viewer {
     /// 自動レイアウトで並べるマス目の上限。超える数のスロットはページに分ける。
     /// 大量に読み込んでも 1 枠が小さくなりすぎないようにするため。
     pub auto_layout_max: SlotLayout,
+    /// ページの帯の上のホイールと、スロットの上の Shift+ホイールで送る量。
+    pub page_wheel: WheelScroll,
     /// スライドショーの速さ。再生バーで最後に使った値を覚える。
     pub slideshow_fps: f32,
     pub slideshow_end: EndMode,
@@ -162,6 +164,7 @@ impl Default for Viewer {
             layout: SlotLayout::Auto,
             custom_layout: SlotLayout::grid(6, 6),
             auto_layout_max: SlotLayout::grid(6, 6),
+            page_wheel: WheelScroll::Page,
             slideshow_fps: 30.0,
             slideshow_end: EndMode::Loop,
             slideshow_drop_window_secs: 5,
@@ -214,6 +217,7 @@ impl Viewer {
                     "must be COLSxROWS",
                 )
                 .unwrap_or(d.auto_layout_max),
+            page_wheel: r.get("page_wheel").unwrap_or(d.page_wheel),
             slideshow_fps: r
                 .get_valid(
                     "slideshow_fps",
@@ -2685,6 +2689,23 @@ ae_title = "PACS"
         .unwrap();
         assert_eq!(s.viewer.magnify_filter, ScaleFilter::Nearest);
         assert_eq!(s.viewer.minify_filter, ScaleFilter::Nearest);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
+    fn page_wheel_defaults_to_one_page_and_reads_slots_and_half_pages() {
+        let (s, _) = Settings::from_toml("").unwrap();
+        assert_eq!(s.viewer.page_wheel, WheelScroll::Page);
+        for (text, unit) in [
+            ("slot", WheelScroll::Slot),
+            ("half_page", WheelScroll::HalfPage),
+        ] {
+            let (s, _) =
+                Settings::from_toml(&format!("[viewer]\npage_wheel = \"{text}\"\n")).unwrap();
+            assert_eq!(s.viewer.page_wheel, unit);
+        }
+        let (s, problems) = Settings::from_toml("[viewer]\npage_wheel = \"row\"\n").unwrap();
+        assert_eq!(s.viewer.page_wheel, WheelScroll::Page);
         assert_eq!(problems.len(), 1, "{problems:?}");
     }
 

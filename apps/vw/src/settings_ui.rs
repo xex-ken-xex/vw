@@ -10,7 +10,7 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1, tr_text};
 use crate::keymap::{is_modifier, os_conflict, Action, KeyCombo, Keymap, Os, Refusal, Scope};
-use crate::layout::SlotLayout;
+use crate::layout::{SlotLayout, WheelScroll};
 use vw_quality::Thresholds;
 
 use crate::settings::{
@@ -104,7 +104,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 104] = [
+const ITEMS: [Item; 105] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -174,6 +174,13 @@ const ITEMS: [Item; 104] = [
         title: "Auto layout maximum",
         description: "Largest grid (columns x rows) the Auto layout uses. More slots than this go on further pages, so slots do not get too small.",
         widget: auto_layout_max_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.page_wheel",
+        title: "Wheel scroll amount",
+        description: "How far the wheel over the page bar, or Shift+wheel over the slots, moves the slots when they are split into pages: one slot, half a page or one page. The page buttons and Page Up / Page Down always turn one page.",
+        widget: page_wheel_widget,
     },
     Item {
         section: Section::Viewer,
@@ -1219,6 +1226,16 @@ fn drop_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
             .suffix(tr(lang, " s")),
     )
     .changed()
+}
+
+fn page_wheel_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.viewer.page_wheel;
+    ui.horizontal(|ui| {
+        for unit in WheelScroll::ALL {
+            ui.radio_value(&mut s.viewer.page_wheel, unit, tr(lang, unit.title()));
+        }
+    });
+    s.viewer.page_wheel != before
 }
 
 fn end_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
