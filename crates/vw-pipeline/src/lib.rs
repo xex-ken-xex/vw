@@ -2,6 +2,7 @@
 //! （apps/vwbatch）が同じ結果を出すように、画面の部品に依らない部分をここに置く。
 
 pub mod astro;
+pub mod deconv;
 pub mod expr;
 pub mod look;
 pub mod lut;

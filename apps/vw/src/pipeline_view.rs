@@ -58,6 +58,8 @@ pub struct Target<'a> {
     pub color_rules: &'a Arc<colormap::Rules>,
     /// スロットで拡大するときと縮小するときのフィルタ（設定）。
     pub scale_filters: (ScaleFilter, ScaleFilter),
+    /// 最後に描いた色導出で、鎖のノードが知らせたこと。
+    pub notes: &'a [(usize, nodes::Note)],
 }
 
 /// ウインドウでの操作。スロットと保存したパイプラインの一覧に当てる。
@@ -323,6 +325,8 @@ pub struct PipelineView {
     loaded: Option<Loaded>,
     /// 自由なノードの鎖。毎フレーム、スロットの色導出の値から写す。
     chain: Chain,
+    /// 鎖のノードが知らせること（星から測った PSF など）。毎フレーム、スロットの色導出の結果から写す。
+    notes: Vec<(usize, nodes::Note)>,
     /// ダブルクリックで開いた、ノードを探して足す小窓の位置（キャンバスの座標）と、絞り込みの文字。
     add_at: Option<Pos2>,
     add_filter: String,
@@ -428,6 +432,10 @@ impl PipelineView {
         self.follow(&ui.ctx().clone(), target.as_ref());
         self.color_rules = target.as_ref().map(|t| t.color_rules.clone());
         self.scale_filters = target.as_ref().map(|t| t.scale_filters);
+        self.notes = target
+            .as_ref()
+            .map(|t| t.notes.to_vec())
+            .unwrap_or_default();
         let mut out = Vec::new();
         let marks = target.as_ref().map(|t| t.marks.clone()).unwrap_or_default();
         let evaluation = target.as_ref().and_then(|t| t.evaluation);
@@ -1348,10 +1356,14 @@ impl PipelineView {
                     ui.colored_label(ui.visuals().error_fg_color, tr_text(lang, &e));
                 }
             }
-            return match self.chain.get_mut(i) {
+            let edited = match self.chain.get_mut(i) {
                 Some(n) => chain_body(ui, lang, n),
                 None => false,
             };
+            for (_, note) in self.notes.iter().filter(|(at, _)| *at == i) {
+                ui.label(note_text(lang, note));
+            }
+            return edited;
         }
         if node == Node::ColorMap {
             if let (Some(applied), Some(rules)) = (&info.look, &self.color_rules) {
@@ -2638,6 +2650,89 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
                 "Finds stars from the small bright details and shrinks only them. A higher threshold finds fewer stars.",
             ));
         }
+        nodes::Node::Deconvolve {
+            algorithm,
+            iterations,
+            tv,
+            noise_ratio,
+            measure,
+            fwhm,
+        } => {
+            use vw_pipeline::deconv::Algorithm;
+            egui::Grid::new("deconvolve").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Algorithm"));
+                egui::ComboBox::from_id_salt("deconvolve_algorithm")
+                    .selected_text(algorithm.title())
+                    .show_ui(ui, |ui| {
+                        for a in Algorithm::ALL {
+                            edited |= ui.selectable_value(algorithm, a, a.title()).changed();
+                        }
+                    });
+                ui.end_row();
+                if algorithm.iterative() {
+                    ui.label(tr(lang, "Iterations"));
+                    edited |= ui
+                        .add(egui::DragValue::new(iterations).range(1..=200).speed(0.1))
+                        .changed();
+                    ui.end_row();
+                }
+                match algorithm {
+                    Algorithm::RichardsonLucy => {
+                        ui.label(tr(lang, "Regularization (TV)"));
+                        edited |= unit(ui, tv, 0.0, 0.05, 0.0002);
+                        ui.end_row();
+                    }
+                    Algorithm::Wiener => {
+                        ui.label(tr(lang, "Noise ratio"));
+                        edited |= unit(ui, noise_ratio, 0.0001, 1.0, 0.0005);
+                        ui.end_row();
+                    }
+                    Algorithm::Landweber => {}
+                }
+                ui.label("PSF");
+                edited |= ui
+                    .checkbox(measure, tr(lang, "Measure from stars"))
+                    .changed();
+                ui.end_row();
+                ui.label(tr(lang, "FWHM (px)"));
+                edited |= unit(ui, fwhm, 0.5, 20.0, 0.02);
+                ui.end_row();
+            });
+            ui.weak(tr(
+                lang,
+                match algorithm {
+                    Algorithm::RichardsonLucy => "Repeats to tighten the stars. Too many repeats make dark rings and noise; the regularization keeps the sky smooth.",
+                    Algorithm::Wiener => "Divides once by the blur in frequency. Fast; a larger noise ratio is gentler and makes fewer rings.",
+                    Algorithm::Landweber => "Adds back the remaining difference step by step. Gentler than Richardson–Lucy.",
+                },
+            ));
+            ui.weak(tr(
+                lang,
+                "The PSF is a Gaussian. With \"Measure from stars\", its FWHM is measured from the stars in the image; the FWHM here is used when no stars are found.",
+            ));
+            ui.weak(tr(
+                lang,
+                "Put it before the stretch node: it works on the linear values.",
+            ));
+        }
+        nodes::Node::StarRemove { size, threshold } => {
+            egui::Grid::new("star_remove")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label(tr(lang, "Size (px)"));
+                    edited |= ui
+                        .add(egui::DragValue::new(size).range(1..=16).speed(0.05))
+                        .changed();
+                    ui.end_row();
+                    ui.label(tr(lang, "Threshold (× noise)"));
+                    edited |= unit(ui, threshold, 0.5, 20.0, 0.02);
+                    ui.end_row();
+                });
+            ui.weak(tr(
+                lang,
+                "Fills the stars found from the small bright details with the surrounding sky. Large glows of bright stars may stay.",
+            ));
+        }
         nodes::Node::Mix { matrix } => {
             ui.weak(tr(lang, "Output = matrix × (r, g, b)"));
             egui::Grid::new("mix").num_columns(4).show(ui, |ui| {
@@ -2657,6 +2752,17 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
         }
     }
     edited
+}
+
+fn note_text(lang: Language, note: &nodes::Note) -> String {
+    match note {
+        nodes::Note::Psf(Some(m)) => tr(lang, "Measured from {} stars: FWHM {} px")
+            .replacen("{}", &m.stars.to_string(), 1)
+            .replacen("{}", &format!("{:.2}", m.fwhm), 1),
+        nodes::Note::Psf(None) => {
+            tr(lang, "No stars were found; the FWHM below is used.").to_owned()
+        }
+    }
 }
 
 fn expression_help(lang: Language) -> String {

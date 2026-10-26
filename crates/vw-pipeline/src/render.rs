@@ -18,6 +18,8 @@ pub struct Rendering {
     pub checked: Result<(), Mismatch>,
     /// ノードが当てられなかった（ノードの番号と理由）。
     pub error: Option<(usize, String)>,
+    /// ノードが知らせること（ノードの番号と知らせ）。下描きでも元の画素の値に直してある。
+    pub notes: Vec<(usize, nodes::Note)>,
 }
 
 /// ノードに渡す最初の値。
@@ -76,27 +78,39 @@ pub fn render(
         Start::Linear((f, s)) => (f, Some(s)),
     };
     let mut chain = std::borrow::Cow::Borrowed(&values.chain);
+    let mut factor = 1;
     if let Some(side) = preview_side {
-        let factor = float.shrink([side; 2]);
+        factor = float.shrink([side; 2]);
         standard = pixel::shrink_rgba(&standard, image.width as usize, factor);
         chain = std::borrow::Cow::Owned(chain.iter().map(|n| n.scaled(factor)).collect());
     }
+    let mut notes = Vec::new();
     let error = match nodes::split_at_stretch(&chain) {
         Err(e) => Some(e),
-        Ok(None) => nodes::apply(&chain, &mut float).err(),
-        Ok(Some(staged)) => nodes::apply(staged.before, &mut float).err().or_else(|| {
-            if let Some(s) = &stretch {
-                s.apply(&mut float);
-            }
-            nodes::apply(staged.after, &mut float)
-                .err()
-                .map(|(i, e)| (i + staged.offset, e))
-        }),
+        Ok(None) => nodes::apply_noting(&chain, &mut float, &mut notes).err(),
+        Ok(Some(staged)) => nodes::apply_noting(staged.before, &mut float, &mut notes)
+            .err()
+            .or_else(|| {
+                if let Some(s) = &stretch {
+                    s.apply(&mut float);
+                }
+                let mut after = Vec::new();
+                let error = nodes::apply_noting(staged.after, &mut float, &mut after)
+                    .err()
+                    .map(|(i, e)| (i + staged.offset, e));
+                notes.extend(after.into_iter().map(|(i, n)| (i + staged.offset, n)));
+                error
+            }),
     };
+    let notes = notes
+        .into_iter()
+        .map(|(i, n)| (i, n.unscaled(factor)))
+        .collect();
     Rendering {
         float,
         standard,
         checked,
         error,
+        notes,
     }
 }

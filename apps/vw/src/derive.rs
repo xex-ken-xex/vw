@@ -64,6 +64,7 @@ struct Rendered {
     checked: Result<(), Mismatch>,
     /// ノードが当てられなかった（式の誤りなど）。
     error: Option<(usize, String)>,
+    notes: Vec<(usize, vw_pipeline::nodes::Note)>,
 }
 
 pub struct Ready {
@@ -76,6 +77,8 @@ pub struct Ready {
     pub difference: TextureHandle,
     /// 差の最大（0..=255）。
     pub max: u8,
+    /// ノードが知らせること（星から測った PSF など）。ノードの番号と知らせ。
+    pub notes: Vec<(usize, vw_pipeline::nodes::Note)>,
 }
 
 /// スロットに知らせること。ログに出す。
@@ -239,6 +242,7 @@ impl Derive {
                 ready.max = r.max;
                 ready.full = r.full;
                 ready.preview = key.preview;
+                ready.notes = r.notes;
                 ready.key = key;
             }
             None => {
@@ -248,6 +252,7 @@ impl Derive {
                     max: r.max,
                     full: r.full,
                     preview: key.preview,
+                    notes: r.notes,
                     key,
                 });
             }
@@ -416,6 +421,7 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
         mut standard,
         checked,
         error,
+        notes,
     } = vw_pipeline::render::render(
         image,
         info,
@@ -444,6 +450,7 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
         max,
         checked,
         error,
+        notes,
     }
 }
 

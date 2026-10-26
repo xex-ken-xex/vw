@@ -157,6 +157,51 @@ pub enum Node {
         #[serde(default = "default_star_threshold")]
         threshold: f32,
     },
+    /// デコンボリューション（[`crate::deconv`]）。`measure` なら PSF の FWHM を写っている星から測り、
+    /// 測れなければ `fwhm`（画素）を使う。
+    Deconvolve {
+        #[serde(default)]
+        algorithm: crate::deconv::Algorithm,
+        #[serde(default = "default_iterations")]
+        iterations: u32,
+        /// Richardson–Lucy の全変動の重み。
+        #[serde(default = "default_tv")]
+        tv: f32,
+        /// Wiener の雑音と信号の比。
+        #[serde(default = "default_noise_ratio")]
+        noise_ratio: f32,
+        #[serde(default = "yes")]
+        measure: bool,
+        #[serde(default = "default_fwhm")]
+        fwhm: f32,
+    },
+    /// 星の除去（[`crate::astro::remove_stars`]）。`size` は星のマスクを広げる半径（画素）。
+    StarRemove {
+        #[serde(default = "three")]
+        size: u32,
+        #[serde(default = "default_star_threshold")]
+        threshold: f32,
+    },
+}
+
+fn default_iterations() -> u32 {
+    10
+}
+
+fn default_tv() -> f32 {
+    0.002
+}
+
+fn default_noise_ratio() -> f32 {
+    0.01
+}
+
+fn default_fwhm() -> f32 {
+    3.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_denoise() -> [f32; crate::astro::LEVELS] {
@@ -207,7 +252,14 @@ impl Node {
     ];
 
     /// 「天体」のまとまりに並べる順。
-    pub const ASTRO_KINDS: [&'static str; 4] = ["stretch", "denoise", "sharpen", "star_reduce"];
+    pub const ASTRO_KINDS: [&'static str; 6] = [
+        "stretch",
+        "deconvolve",
+        "denoise",
+        "sharpen",
+        "star_reduce",
+        "star_remove",
+    ];
 
     pub fn new(kind: &str) -> Option<Self> {
         Some(match kind {
@@ -244,6 +296,18 @@ impl Node {
                 size: two(),
                 threshold: default_star_threshold(),
             },
+            "deconvolve" => Node::Deconvolve {
+                algorithm: crate::deconv::Algorithm::default(),
+                iterations: default_iterations(),
+                tv: default_tv(),
+                noise_ratio: default_noise_ratio(),
+                measure: true,
+                fwhm: default_fwhm(),
+            },
+            "star_remove" => Node::StarRemove {
+                size: three(),
+                threshold: default_star_threshold(),
+            },
             _ => return None,
         })
     }
@@ -262,6 +326,8 @@ impl Node {
             Node::Denoise { .. } => "denoise",
             Node::Sharpen { .. } => "sharpen",
             Node::StarReduce { .. } => "star_reduce",
+            Node::Deconvolve { .. } => "deconvolve",
+            Node::StarRemove { .. } => "star_remove",
         }
     }
 
@@ -280,6 +346,8 @@ impl Node {
             "denoise" => "Noise reduction",
             "sharpen" => "Sharpen",
             "star_reduce" => "Star reduction",
+            "deconvolve" => "Deconvolution",
+            "star_remove" => "Star removal",
             _ => "Node",
         }
     }
@@ -304,6 +372,25 @@ impl Node {
                 size: ((size as f32 / f).round() as u32).max(1),
                 threshold,
             },
+            Node::Deconvolve {
+                algorithm,
+                iterations,
+                tv,
+                noise_ratio,
+                measure,
+                fwhm,
+            } => Node::Deconvolve {
+                algorithm,
+                iterations,
+                tv,
+                noise_ratio,
+                measure,
+                fwhm: fwhm / f,
+            },
+            Node::StarRemove { size, threshold } => Node::StarRemove {
+                size: ((size as f32 / f).round() as u32).max(1),
+                threshold,
+            },
             other => other,
         }
     }
@@ -322,10 +409,14 @@ impl Node {
                 | Node::Denoise { .. }
                 | Node::Sharpen { .. }
                 | Node::StarReduce { .. }
+                | Node::Deconvolve { .. }
+                | Node::StarRemove { .. }
         )
     }
 
-    fn apply(&self, img: &mut Float) -> Result<(), String> {
+    /// 当てる。知らせることがあれば（星から測った PSF など）返す。
+    fn apply(&self, img: &mut Float) -> Result<Option<Note>, String> {
+        let mut note = None;
         match self {
             Node::Expression { text } => {
                 let program = Program::compile(text).map_err(|e| e.to_string())?;
@@ -389,8 +480,53 @@ impl Node {
                 size,
                 threshold,
             } => crate::astro::reduce_stars(img, *amount, *size, *threshold),
+            Node::Deconvolve {
+                algorithm,
+                iterations,
+                tv,
+                noise_ratio,
+                measure,
+                fwhm,
+            } => {
+                let measured = measure.then(|| crate::deconv::measure_fwhm(img)).flatten();
+                if *measure {
+                    note = Some(Note::Psf(measured));
+                }
+                crate::deconv::deconvolve(
+                    img,
+                    crate::deconv::Deconvolution {
+                        algorithm: *algorithm,
+                        sigma: measured.map_or(*fwhm, |m| m.fwhm) / crate::deconv::FWHM_PER_SIGMA,
+                        iterations: (*iterations).clamp(1, 200),
+                        tv: tv.max(0.0),
+                        noise_ratio: *noise_ratio,
+                    },
+                );
+            }
+            Node::StarRemove { size, threshold } => {
+                crate::astro::remove_stars(img, *size, *threshold)
+            }
         }
-        Ok(())
+        Ok(note)
+    }
+}
+
+/// ノードが知らせること。画素の変換のウインドウでノードの下に出す。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Note {
+    /// デコンボリューションで星から測った PSF。星が足りなければ `None`（手で入れた FWHM を使った）。
+    Psf(Option<crate::deconv::Measured>),
+}
+
+impl Note {
+    /// `factor` 分の 1 に縮めた画像で測ったものを、元の画素に直す。
+    pub fn unscaled(self, factor: usize) -> Note {
+        match self {
+            Note::Psf(m) => Note::Psf(m.map(|m| crate::deconv::Measured {
+                fwhm: m.fwhm * factor as f32,
+                ..m
+            })),
+        }
     }
 }
 
@@ -473,7 +609,7 @@ fn add_noise(img: &mut Float, sigma: f32, seed: u32) {
     });
 }
 
-fn splitmix(seed: u64) -> u64 {
+pub(crate) fn splitmix(seed: u64) -> u64 {
     let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -489,7 +625,7 @@ fn xorshift(state: &mut u64) -> f32 {
 }
 
 /// 標準正規分布の乱数（Box–Muller）。
-fn gaussian(state: &mut u64) -> f32 {
+pub(crate) fn gaussian(state: &mut u64) -> f32 {
     let u1 = xorshift(state).max(1e-7);
     let u2 = xorshift(state);
     (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
@@ -599,8 +735,19 @@ fn threads(pixels: usize) -> usize {
 
 /// `chain` を順に当てる。失敗したら (ノードの番号, 理由)。
 pub fn apply(chain: &[Node], img: &mut Float) -> Result<(), (usize, String)> {
+    apply_noting(chain, img, &mut Vec::new())
+}
+
+/// [`apply`] と同じ。ノードが知らせることを `notes` に (ノードの番号, 知らせ) で足す。
+pub fn apply_noting(
+    chain: &[Node],
+    img: &mut Float,
+    notes: &mut Vec<(usize, Note)>,
+) -> Result<(), (usize, String)> {
     for (i, node) in chain.iter().enumerate() {
-        node.apply(img).map_err(|e| (i, e))?;
+        if let Some(note) = node.apply(img).map_err(|e| (i, e))? {
+            notes.push((i, note));
+        }
     }
     Ok(())
 }
@@ -704,6 +851,8 @@ mod tests {
         }
         .scaled(8);
         assert!(matches!(stars, Node::StarReduce { size: 1, .. }));
+        let deconvolve = Node::new("deconvolve").unwrap().scaled(2);
+        assert!(matches!(deconvolve, Node::Deconvolve { fwhm: 1.5, .. }));
     }
 
     #[test]
