@@ -204,6 +204,12 @@ pub struct VwApp {
     compare: crate::compare::CompareWindow,
     compare_dialog: Option<compare_dialog::CompareDialog>,
     similar: similar::Similar,
+    /// ページの帯の上で回した、まだ 1 目盛りに満たないホイールの回転量。
+    page_wheel: f32,
+    /// ページの数字をドラッグしているときの、押した時のページと横に動かした量。
+    page_drag: Option<(usize, f32)>,
+    /// 画面に出している最初のスロット。ホイールで 1 枚や半ページずつ送ったときの位置を覚える。
+    slot_first: usize,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -716,6 +722,9 @@ impl VwApp {
             compare: Default::default(),
             compare_dialog: None,
             similar: Default::default(),
+            page_wheel: 0.0,
+            page_drag: None,
+            slot_first: 0,
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),

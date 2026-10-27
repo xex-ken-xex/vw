@@ -220,6 +220,8 @@ pub struct Slot {
     pan: Vec2,
     /// まだ 1 段に満たないホイールの回転量（論理ピクセル）。
     wheel: f32,
+    /// まだ 1 目盛りに満たない Shift+ホイールの回転量。
+    page_wheel: f32,
     /// 直前に描いた画像部分の大きさ。キー操作で倍率を変えるときに使う。
     last_body: Option<Vec2>,
     /// 画素値を確かめる十字の印。ファイルには書かず、スロットを閉じると消える。
@@ -340,6 +342,8 @@ pub struct SlotResponse {
     pub toggle_maximize: bool,
     /// ホイールで送る枚数。負なら前へ。
     pub step: isize,
+    /// Shift+ホイールで送るページ数。負なら前へ。
+    pub page_step: isize,
     /// フォルダのスロットの「このフォルダへ移動」が押された。
     pub open_folder: bool,
     /// フォルダのスロットに画像がドロップされた。
@@ -561,6 +565,40 @@ pub fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
         .sum()
 }
 
+/// このフレームのホイールの回転量を、Shift なしと Shift 付きに分ける（[`wheel_delta`] と同じ向きと単位）。
+/// Shift 付きはページ送りに使う。
+///
+/// Shift 付きは横の回転量も数える。macOS などでは OS が Shift+ホイールを横スクロールに
+/// 変えて届けるため、縦だけ見ると回しても何も起きない。
+pub fn split_wheel(events: &[egui::Event], page_height: f32) -> (f32, f32) {
+    let (mut plain, mut shifted) = (0.0, 0.0);
+    for e in events {
+        let egui::Event::MouseWheel {
+            unit,
+            delta,
+            modifiers,
+            ..
+        } = e
+        else {
+            continue;
+        };
+        if modifiers.command {
+            continue;
+        }
+        let scale = match unit {
+            MouseWheelUnit::Point => 1.0,
+            MouseWheelUnit::Line => WHEEL_STEP,
+            MouseWheelUnit::Page => page_height,
+        };
+        if modifiers.shift {
+            shifted += (delta.y + delta.x) * scale;
+        } else {
+            plain += delta.y * scale;
+        }
+    }
+    (plain, shifted)
+}
+
 impl Slot {
     /// 中身をまだ開いていないフォルダのスロット。
     pub fn is_closed_folder(&self) -> bool {
@@ -584,6 +622,7 @@ impl Slot {
             zoom: 1.0,
             pan: Vec2::ZERO,
             wheel: 0.0,
+            page_wheel: 0.0,
             last_body: None,
             marks: Vec::new(),
             colors: Colors::default(),
@@ -1189,8 +1228,9 @@ impl Slot {
         }
         out.toggle_maximize = response.double_clicked();
         if response.hovered() {
-            let wheel = ui.input(|i| wheel_delta(&i.events, i.viewport_rect().height()));
+            let (wheel, shifted) = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
             out.step = wheel_steps(&mut self.wheel, wheel);
+            out.page_step = wheel_steps(&mut self.page_wheel, shifted);
         }
 
         self.last_body = Some(body.size());
@@ -2190,6 +2230,32 @@ mod tests {
         };
         assert_eq!(wheel_delta(&[wheel(false)], 500.0), -WHEEL_STEP);
         assert_eq!(wheel_delta(&[wheel(true)], 500.0), 0.0);
+    }
+
+    #[test]
+    fn wheel_with_shift_turns_pages_instead_of_images() {
+        let wheel = |modifiers: egui::Modifiers, delta: Vec2| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta,
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        };
+        let down = vec2(0.0, -1.0);
+        assert_eq!(
+            split_wheel(&[wheel(egui::Modifiers::NONE, down)], 500.0),
+            (-WHEEL_STEP, 0.0)
+        );
+        assert_eq!(
+            split_wheel(&[wheel(egui::Modifiers::SHIFT, down)], 500.0),
+            (0.0, -WHEEL_STEP)
+        );
+        // OS が横スクロールに変えて届けても、ページ送りとして数える。
+        assert_eq!(
+            split_wheel(&[wheel(egui::Modifiers::SHIFT, vec2(-1.0, 0.0))], 500.0),
+            (0.0, -WHEEL_STEP)
+        );
+        let ctrl_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        assert_eq!(split_wheel(&[wheel(ctrl_shift, down)], 500.0), (0.0, 0.0));
     }
 
     #[test]
