@@ -9,7 +9,9 @@ use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
 use crate::i18n::{tr, tr1, tr_text};
-use crate::keymap::{is_modifier, os_conflict, Action, KeyCombo, Keymap, Os, Refusal, Scope};
+use crate::keymap::{
+    is_modifier, os_conflict, Action, KeyCombo, KeyGroup, Keymap, Os, Refusal, Scope,
+};
 use crate::layout::{SlotLayout, WheelScroll};
 use vw_quality::Thresholds;
 
@@ -2278,6 +2280,11 @@ pub struct SettingsUi {
     capturing: Option<Action>,
     notice: Option<(Action, Notice)>,
     jump: Option<Section>,
+    /// キーの割り当ての中で、目次から飛ぶまとまり。
+    key_jump: Option<KeyGroup>,
+    /// キーの割り当ての中で、いま見ているまとまり。節と同じく前のフレームの位置から決める。
+    current_group: Option<KeyGroup>,
+    seen_group: Option<KeyGroup>,
     /// 目次で強調する、いま見ている節。前のフレームで描いた位置から決める。
     current: Option<Section>,
     /// 描いている途中のフレームで、見ている節の候補。
@@ -2407,6 +2414,20 @@ impl SettingsUi {
                         self.jump = Some(s);
                     }
                 }
+                // キーの割り当ては 90 を超えて長いので、まとまりにも目次から飛べるようにする。
+                ui.indent("key_groups", |ui| {
+                    for g in KeyGroup::ALL {
+                        if g == KeyGroup::Fullscreen {
+                            continue;
+                        }
+                        let viewing =
+                            self.current == Some(Section::Keys) && self.current_group == Some(g);
+                        if ui.selectable_label(viewing, tr(lang, g.title())).clicked() {
+                            self.query.clear();
+                            self.key_jump = Some(g);
+                        }
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -2416,10 +2437,12 @@ impl SettingsUi {
                     ui.set_max_width(760.0);
                     let mut any = false;
                     self.seen = None;
+                    self.seen_group = None;
                     for section in Section::ALL {
                         any |= self.section_ui(ui, section, settings, &mut out);
                     }
                     self.current = self.seen;
+                    self.current_group = self.seen_group;
                     if !any {
                         ui.add_space(8.0);
                         ui.weak(tr(lang, "No settings match"));
@@ -2514,9 +2537,33 @@ impl SettingsUi {
                 }
             });
         }
-        for action in actions {
-            if self.action_ui(ui, action, &mut settings.keys, lang) {
-                out.changed = true;
+        for group in KeyGroup::ALL {
+            let in_group: Vec<Action> = actions
+                .iter()
+                .copied()
+                .filter(|a| a.group() == group)
+                .collect();
+            if in_group.is_empty() {
+                continue;
+            }
+            // 全画面スライドショーの節は 1 つのまとまりだけなので、見出しを重ねない。
+            if section == Section::Keys {
+                ui.add_space(6.0);
+                let heading = ui.label(RichText::new(tr(lang, group.title())).strong());
+                if self.key_jump == Some(group) {
+                    heading.scroll_to_me(Some(Align::TOP));
+                    self.key_jump = None;
+                }
+                if self.seen_group.is_none()
+                    || heading.rect.top() <= ui.clip_rect().top() + VIEWING_MARGIN
+                {
+                    self.seen_group = Some(group);
+                }
+            }
+            for action in in_group {
+                if self.action_ui(ui, action, &mut settings.keys, lang) {
+                    out.changed = true;
+                }
             }
         }
         if send_apps {
@@ -2568,7 +2615,14 @@ impl SettingsUi {
             .iter()
             .map(KeyCombo::to_string)
             .collect();
-        let mut texts = vec![key.as_str(), action.title(), tr(lang, action.title())];
+        let group = action.group().title();
+        let mut texts = vec![
+            key.as_str(),
+            action.title(),
+            tr(lang, action.title()),
+            group,
+            tr(lang, group),
+        ];
         texts.extend(combos.iter().map(String::as_str));
         matches(&self.query, &texts)
     }
