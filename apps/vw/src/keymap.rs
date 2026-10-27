@@ -118,6 +118,58 @@ pub enum Scope {
     Fullscreen,
 }
 
+/// 設定画面でキーの割り当てを分けて並べる、機能のまとまり。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyGroup {
+    Navigate,
+    View,
+    Layout,
+    Image,
+    Tools,
+    Tagging,
+    Filter,
+    Send,
+    Ai,
+    Windows,
+    App,
+    Fullscreen,
+}
+
+impl KeyGroup {
+    /// 設定画面に並べる順。
+    pub const ALL: [KeyGroup; 12] = [
+        KeyGroup::Navigate,
+        KeyGroup::View,
+        KeyGroup::Layout,
+        KeyGroup::Image,
+        KeyGroup::Tools,
+        KeyGroup::Tagging,
+        KeyGroup::Filter,
+        KeyGroup::Send,
+        KeyGroup::Ai,
+        KeyGroup::Windows,
+        KeyGroup::App,
+        KeyGroup::Fullscreen,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            KeyGroup::Navigate => "Move between images and folders",
+            KeyGroup::View => "Zoom and play",
+            KeyGroup::Layout => "Layout and slots",
+            KeyGroup::Image => "Image operations",
+            KeyGroup::Tools => "Tools",
+            KeyGroup::Tagging => "Tagging",
+            KeyGroup::Filter => "Filter, export and trash",
+            KeyGroup::Send => "Send to apps",
+            KeyGroup::Ai => "AI tags and faces",
+            KeyGroup::Windows => "Show and hide windows",
+            KeyGroup::App => "Help and settings",
+            KeyGroup::Fullscreen => "Fullscreen slideshow",
+        }
+    }
+}
+
 impl Action {
     /// 設定画面に並べる順。
     pub const ALL: [Action; 93] = [
@@ -415,6 +467,105 @@ impl Action {
             Action::ToggleRoi => "ROI tool on/off",
             Action::ToggleHandTool => "Hand tool on/off",
             Action::DeleteProbePoint => "Delete selected probe point or ROI",
+        }
+    }
+
+    /// 設定画面で並べるまとまり。
+    pub fn group(self) -> KeyGroup {
+        match self {
+            Action::PreviousImage
+            | Action::NextImage
+            | Action::PreviousSlot
+            | Action::NextSlot
+            | Action::PreviousPage
+            | Action::NextPage
+            | Action::ParentFolder => KeyGroup::Navigate,
+            Action::ToggleMaximize
+            | Action::FitImage
+            | Action::ActualSize
+            | Action::ZoomIn
+            | Action::ZoomOut
+            | Action::TogglePlay
+            | Action::FullscreenSlideshow => KeyGroup::View,
+            Action::LayoutAuto
+            | Action::Layout1x1
+            | Action::Layout1x2
+            | Action::Layout2x1
+            | Action::Layout2x2
+            | Action::Layout3x3
+            | Action::Layout4x4
+            | Action::LayoutCustom
+            | Action::NewSlot
+            | Action::CloseSlot
+            | Action::CloseAllSlots => KeyGroup::Layout,
+            Action::DevelopRaw
+            | Action::ReadQrCodes
+            | Action::ToggleCalibration
+            | Action::NextColorMap
+            | Action::ToggleColorGauge => KeyGroup::Image,
+            Action::TogglePixelProbe
+            | Action::ToggleRoi
+            | Action::ToggleHandTool
+            | Action::DeleteProbePoint
+            | Action::UndoPosition => KeyGroup::Tools,
+            Action::ToggleTagging
+            | Action::FlagGood
+            | Action::FlagBad
+            | Action::Tag1
+            | Action::Tag2
+            | Action::Tag3
+            | Action::Tag4
+            | Action::Tag5
+            | Action::Tag6
+            | Action::Tag7
+            | Action::Tag8
+            | Action::Tag9 => KeyGroup::Tagging,
+            Action::FilterAll
+            | Action::FilterGood
+            | Action::FilterBad
+            | Action::FilterUnflagged
+            | Action::ExportImages
+            | Action::TrashBadImages => KeyGroup::Filter,
+            Action::SendToApp1
+            | Action::SendToApp2
+            | Action::SendToApp3
+            | Action::SendToApp4
+            | Action::SendToApp5
+            | Action::SendToApp6
+            | Action::SendToApp7
+            | Action::SendToApp8
+            | Action::SendToApp9
+            | Action::CancelSending => KeyGroup::Send,
+            Action::ShowAiModels
+            | Action::AiTagFolder
+            | Action::FindFacesFolder
+            | Action::RemoveAiTagsFolder
+            | Action::TidyAiTags
+            | Action::ShowPeople
+            | Action::ShowPeopleGraph
+            | Action::ToggleFaceFrames
+            | Action::OpenModelsFolder => KeyGroup::Ai,
+            Action::ToggleFolderTree
+            | Action::ToggleMetadata
+            | Action::ToggleImages
+            | Action::ToggleLog
+            | Action::ToggleDatasets
+            | Action::TogglePixelPipeline
+            | Action::ToggleHistogram
+            | Action::ToggleZoomMap
+            | Action::ToggleMap
+            | Action::ToggleSkyChart => KeyGroup::Windows,
+            Action::ToggleSettings
+            | Action::OpenSettingsFolder
+            | Action::ShowAbout
+            | Action::OpenQualityHelp
+            | Action::Quit => KeyGroup::App,
+            Action::FullscreenExit
+            | Action::FullscreenNext
+            | Action::FullscreenPrevious
+            | Action::FullscreenNextFolder
+            | Action::FullscreenPreviousFolder
+            | Action::FullscreenPause => KeyGroup::Fullscreen,
         }
     }
 
@@ -1124,6 +1275,24 @@ mod tests {
             pressed: true,
             repeat,
             modifiers,
+        }
+    }
+
+    #[test]
+    fn only_fullscreen_actions_are_grouped_under_fullscreen() {
+        for a in Action::ALL {
+            assert_eq!(
+                a.group() == KeyGroup::Fullscreen,
+                a.scope() == Scope::Fullscreen,
+                "{a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_group_has_at_least_one_action() {
+        for g in KeyGroup::ALL {
+            assert!(Action::ALL.iter().any(|a| a.group() == g), "{g:?}");
         }
     }
 
