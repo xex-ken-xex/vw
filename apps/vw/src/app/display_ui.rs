@@ -273,7 +273,7 @@ impl VwApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(tr(lang, "Shows gray bands made inside vw on the whole screen of a monitor, so you can see whether it shows 10-bit gradation. No image files are needed."));
+                    ui.label(tr(lang, "Shows gray bands made inside vw on the whole screen of a monitor, so you can see how deep its gradation is (8, 10, 12 or 14 bits). No image files are needed."));
                     ui.add_space(6.0);
                     if system.displays.is_empty() {
                         ui.weak(tr(lang, "The monitors cannot be listed here. The test opens on the monitor of this window."));
@@ -377,14 +377,95 @@ enum Drawn {
     Plain(TextureHandle),
 }
 
-/// 帯の名前。上から順に並べる。
-pub const BANDS: [&str; 5] = [
-    "8-bit steps",
-    "10-bit steps",
-    "12-bit steps",
-    "Smooth (16-bit)",
-    "8-bit with dithering",
+/// 階調テストの帯の 1 本。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Band {
+    /// その bit 数の段に丸めた帯。
+    Steps(u32),
+    /// 丸めない 16bit の帯。
+    Smooth,
+    /// 8bit にディザで落とした帯。
+    Dither,
+}
+
+/// 上から順に並べる帯。12bit・14bit の帯は、医用モニタのように 10bit より深い信号を
+/// 受けるモニタで、どこまで細かく出ているかを見分けるため。
+pub const BANDS: [Band; 6] = [
+    Band::Steps(8),
+    Band::Steps(10),
+    Band::Steps(12),
+    Band::Steps(14),
+    Band::Smooth,
+    Band::Dither,
 ];
+
+impl Band {
+    fn name(self) -> &'static str {
+        match self {
+            Band::Steps(8) => "8-bit steps",
+            Band::Steps(10) => "10-bit steps",
+            Band::Steps(12) => "12-bit steps",
+            Band::Steps(_) => "14-bit steps",
+            Band::Smooth => "Smooth (16-bit)",
+            Band::Dither => "8-bit with dithering",
+        }
+    }
+
+    /// `expected` bit で出ているときに、この帯がどう見えるはずか。8bit の帯とディザの帯は
+    /// どのモニタでも見え方が変わらないので何も言わない。`dithered` はディザで描いているとき。
+    /// そのときは 8bit より深い帯もディザで 8bit に落ちる。
+    pub fn expectation(self, expected: u32, dithered: bool) -> Option<Expect> {
+        let bits = match self {
+            Band::Steps(bits) if bits > 8 => bits,
+            Band::Smooth => 16,
+            _ => return None,
+        };
+        if dithered {
+            Some(Expect::Dithered)
+        } else if bits <= expected {
+            Some(Expect::Finer)
+        } else if expected > 8 {
+            Some(Expect::SameAs(expected))
+        } else {
+            Some(Expect::SameAs(8))
+        }
+    }
+}
+
+/// 帯の見え方の見込み。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expect {
+    /// 一つ上の帯より縞が細かく（なめらかに）見える。
+    Finer,
+    /// その bit 数の段の帯と同じ縞に見える。
+    SameAs(u32),
+    /// ディザの帯と同じ細かい模様に見える。
+    Dithered,
+}
+
+/// モニタが受ける 1 色の bit 数。Windows は GPU が送っている信号、Linux は EDID の値と
+/// ドライバの上限（max bpc）の浅い方。分からなければ `None`。
+pub fn monitor_bits(display: &Display) -> Option<u32> {
+    display
+        .signal_bits
+        .or_else(|| match (display.edid_bits, display.max_bpc) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        })
+}
+
+/// vw が描いている 1 色の bit 数。描画先が深くても、10bit の描き方でなければ 8bit に落とす。
+pub fn drawn_bits(mode: Option<Mode>, surface: Surface) -> u32 {
+    match mode {
+        Some(Mode::TenBit) => u32::from(surface.bits),
+        _ => 8,
+    }
+}
+
+/// 帯が細かく見えるはずの深さ。vw の描く深さとモニタの受ける深さの浅い方。
+pub fn expected_bits(drawn: u32, monitor: Option<u32>) -> u32 {
+    monitor.map_or(drawn, |m| m.min(drawn))
+}
 
 /// 明るさの範囲の名前と、左端の明るさ（8bit の段で数える）。
 pub const RANGES: [(&str, f32); 3] = [
@@ -394,7 +475,8 @@ pub const RANGES: [(&str, f32); 3] = [
 ];
 
 /// 画面の幅いっぱいに広げる明るさの幅（8bit の段で数える）。8bit の帯で 1 段が画面の 1/16 になり、
-/// 10bit の帯で 1/64、12bit の帯で 1/256 になる。
+/// 10bit の帯で 1/64、12bit の帯で 1/256、14bit の帯で 1/1024 になる。幅 1920 の画面でも
+/// 14bit の段は 2 ピクセル近くあり、隣の段と描き分けられる。
 pub const SPAN: f32 = 16.0;
 
 /// 階調テストの帯の画像。帯を縦に [`BANDS`] の数だけ並べ、左から右へ `start` から
@@ -410,12 +492,12 @@ pub fn pattern(width: usize, height: usize, start: f32) -> DisplayImage16 {
         let band = (y * BANDS.len() / height).min(BANDS.len() - 1);
         for x in 0..width {
             let v = (start + SPAN * x as f32 / (width - 1) as f32) / 255.0;
-            let value = match band {
-                0 => quantize(v, 8),
-                1 => quantize(v, 10),
-                2 => quantize(v, 12),
-                3 => (v * 65535.0).round() as u16,
-                _ => u16::from(deep::dither_value((v * 65535.0).round() as u16, x, y)) * 257,
+            let value = match BANDS[band] {
+                Band::Steps(bits) => quantize(v, bits),
+                Band::Smooth => (v * 65535.0).round() as u16,
+                Band::Dither => {
+                    u16::from(deep::dither_value((v * 65535.0).round() as u16, x, y)) * 257
+                }
             };
             let i = (y * width + x) * 4;
             rgba[i..i + 4].copy_from_slice(&[value, value, value, 65535]);
@@ -538,13 +620,36 @@ fn labels(painter: &egui::Painter, rect: Rect, s: &Showing, surface: Surface, la
         painter.rect_filled(r, 3.0, Color32::from_black_alpha(200));
         painter.galley(r.min + egui::vec2(5.0, 5.0), galley, Color32::WHITE);
     };
+    let drawn_bits = drawn_bits(s.mode, surface);
+    let monitor_bits = s.display.as_ref().and_then(monitor_bits);
+    let expected = expected_bits(drawn_bits, monitor_bits);
     let band_h = rect.height() / BANDS.len() as f32;
     for (i, band) in BANDS.iter().enumerate() {
         let top = rect.top() + band_h * i as f32;
+        let mut text = tr(lang, band.name()).to_owned();
+        match band.expectation(expected, s.mode == Some(Mode::Dither)) {
+            Some(Expect::Finer) => {
+                text.push_str(" - ");
+                text.push_str(tr(lang, "should look finer than the band above"));
+            }
+            Some(Expect::SameAs(bits)) => {
+                text.push_str(" - ");
+                text.push_str(&tr1(
+                    lang,
+                    "should look the same as the {}-bit band now",
+                    &bits.to_string(),
+                ));
+            }
+            Some(Expect::Dithered) => {
+                text.push_str(" - ");
+                text.push_str(tr(lang, "should look like the dithering band"));
+            }
+            None => {}
+        }
         boxed(
             egui::pos2(rect.left() + 12.0, top + 10.0),
             egui::Align2::LEFT_TOP,
-            tr(lang, band).to_owned(),
+            text,
         );
     }
     let drawn = match s.mode {
@@ -575,7 +680,19 @@ fn labels(painter: &egui::Painter, rect: Rect, s: &Showing, surface: Surface, la
             tr(lang, RANGES[s.range].0),
             tr(lang, "Left/Right: change, Esc: close")
         ),
-        tr(lang, "8-bit: every band shows the same stripes as the top one. 10-bit: the 10-bit, 12-bit and smooth bands show finer stripes. 12-bit: the 12-bit and smooth bands look smooth.").to_owned(),
+        format!(
+            "{}: {}  ({}: {}, {}: {})",
+            tr(lang, "Expected depth"),
+            tr1(lang, "{}-bit per color", &expected.to_string()),
+            tr(lang, "vw draws"),
+            tr1(lang, "{}-bit per color", &drawn_bits.to_string()),
+            tr(lang, "Monitor"),
+            monitor_bits.map_or_else(
+                || tr(lang, "unknown").to_owned(),
+                |m| tr1(lang, "{}-bit per color", &m.to_string())
+            ),
+        ),
+        tr(lang, "With n-bit output, the bands down to the n-bit steps get finer one by one, and the deeper bands look the same as the n-bit band. With 8-bit output every band looks like the top one.").to_owned(),
     ];
     if s.ten_bit_setting && s.mode != Some(Mode::TenBit) {
         info.push(
@@ -597,7 +714,7 @@ mod tests {
 
     fn row(p: &DisplayImage16, band: usize) -> Vec<u16> {
         let (w, h) = (p.width as usize, p.height as usize);
-        let y = band * h / BANDS.len();
+        let y = (2 * band + 1) * h / (2 * BANDS.len());
         (0..w).map(|x| p.rgba[(y * w + x) * 4]).collect()
     }
 
@@ -610,17 +727,19 @@ mod tests {
     #[test]
     fn each_band_has_the_steps_of_its_depth() {
         let p = pattern(4096, 50, 120.0);
-        // 8bit の 16 段の幅に、それぞれの深さの 4 倍ずつの段が入る（両端が段の途中にかかると 1〜2 段増える）。
+        // 8bit の 16 段の幅に、深さが 2bit 増えるごとにほぼ 4 倍の段が入る（16/255 の幅を
+        // 2^n - 1 段で割るので、深いほど 4 倍より少し多い。両端が段の途中にかかると 1 段増える）。
         assert_eq!(distinct(&row(&p, 0)), 17);
         assert!((65..=66).contains(&distinct(&row(&p, 1))));
         assert!((257..=258).contains(&distinct(&row(&p, 2))));
-        assert!(distinct(&row(&p, 3)) > 1000);
+        assert!((1028..=1029).contains(&distinct(&row(&p, 3))));
+        assert!(distinct(&row(&p, 4)) > 2000);
     }
 
     #[test]
     fn bands_cover_the_same_brightness_from_left_to_right() {
         let p = pattern(1000, 50, 8.0);
-        for band in 0..4 {
+        for band in 0..5 {
             let r = row(&p, band);
             let (first, last) = (f32::from(r[0]) / 257.0, f32::from(r[999]) / 257.0);
             assert!((first - 8.0).abs() < 0.6, "band {band}: {first}");
@@ -631,9 +750,108 @@ mod tests {
     #[test]
     fn the_dither_band_uses_only_8_bit_values() {
         let p = pattern(500, 50, 120.0);
-        let r = row(&p, 4);
+        let r = row(&p, 5);
         assert!(r.iter().all(|v| v % 257 == 0));
         assert!(distinct(&r) > 17, "dithering mixes neighbouring steps");
+    }
+
+    fn display(signal: Option<u32>, edid: Option<u32>, max_bpc: Option<u32>) -> Display {
+        Display {
+            id: "m".into(),
+            name: "m".into(),
+            connector: String::new(),
+            rect: [0, 0, 1920, 1080],
+            scale_percent: 100,
+            primary: true,
+            refresh_hz: None,
+            signal_bits: signal,
+            hdr: None,
+            edid_bits: edid,
+            max_bpc,
+        }
+    }
+
+    #[test]
+    fn monitor_bits_prefer_the_signal_then_the_shallower_of_edid_and_max_bpc() {
+        assert_eq!(monitor_bits(&display(Some(12), Some(10), None)), Some(12));
+        assert_eq!(monitor_bits(&display(None, Some(12), Some(10))), Some(10));
+        assert_eq!(monitor_bits(&display(None, Some(10), None)), Some(10));
+        assert_eq!(monitor_bits(&display(None, None, None)), None);
+    }
+
+    #[test]
+    fn expected_depth_is_the_shallower_of_vw_and_the_monitor() {
+        assert_eq!(expected_bits(10, Some(12)), 10);
+        assert_eq!(expected_bits(10, Some(8)), 8);
+        assert_eq!(expected_bits(10, None), 10);
+    }
+
+    #[test]
+    fn only_10_bit_drawing_uses_the_surface_depth() {
+        let surface = Surface {
+            bits: 10,
+            gpu: true,
+            norm16: true,
+        };
+        assert_eq!(drawn_bits(Some(Mode::TenBit), surface), 10);
+        assert_eq!(drawn_bits(Some(Mode::Dither), surface), 8);
+        assert_eq!(drawn_bits(None, surface), 8);
+    }
+
+    #[test]
+    fn bands_deeper_than_the_output_look_like_the_output_band() {
+        let at = |expected| {
+            BANDS
+                .iter()
+                .map(|b| b.expectation(expected, false))
+                .collect::<Vec<_>>()
+        };
+        use Expect::*;
+        assert_eq!(
+            at(10),
+            [
+                None,
+                Some(Finer),
+                Some(SameAs(10)),
+                Some(SameAs(10)),
+                Some(SameAs(10)),
+                None
+            ]
+        );
+        assert_eq!(
+            at(12),
+            [
+                None,
+                Some(Finer),
+                Some(Finer),
+                Some(SameAs(12)),
+                Some(SameAs(12)),
+                None
+            ]
+        );
+        assert_eq!(
+            at(8),
+            [
+                None,
+                Some(SameAs(8)),
+                Some(SameAs(8)),
+                Some(SameAs(8)),
+                Some(SameAs(8)),
+                None
+            ]
+        );
+        let dithered: Vec<_> = BANDS.iter().map(|b| b.expectation(8, true)).collect();
+        assert_eq!(
+            dithered,
+            [
+                None,
+                Some(Dithered),
+                Some(Dithered),
+                Some(Dithered),
+                Some(Dithered),
+                None
+            ]
+        );
     }
 
     #[test]
