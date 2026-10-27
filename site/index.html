@@ -56,6 +56,7 @@ ul.plain { padding-left: 1.2em; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
 th { background: var(--panel); white-space: nowrap; }
+@media (min-width: 821px) { #by-format td:first-child, #formats td:first-child { white-space: nowrap; } }
 code, pre { font-family: Consolas, "Cascadia Mono", "Noto Sans Mono CJK JP", monospace; background: var(--code); border-radius: 4px; }
 code { padding: 1px 5px; font-size: 14px; }
 pre { padding: 12px 14px; overflow-x: auto; font-size: 14px; }
@@ -80,8 +81,8 @@ footer a { color: var(--muted); text-decoration: underline; }
     <img src="images/vw.png" alt="">
     <span class="name">vw</span>
     <nav>
-      <a href="#features">できること</a>
-      <a href="#formats">対応形式</a>
+      <a href="#by-format">形式ごと</a>
+      <a href="#features">整理と検索</a>
       <a href="#download">ダウンロード</a>
       <a href="#install">インストール</a>
       <a href="https://github.com/xex-ken-xex/vw#readme">使い方（README）</a>
@@ -96,7 +97,7 @@ footer a { color: var(--muted); text-decoration: underline; }
     <div>
       <h1>速い画像ビューワ <span style="color:var(--accent)">vw</span>
         <small>Linux と Windows で、たくさんの画像を「見る・選り分ける・探す」</small></h1>
-      <p class="lead">起動してすぐ使え、数千枚のフォルダでも待たされません。16bit の画像を落とさずに読み、
+      <p class="lead">起動してすぐ使え、数千枚のフォルダでも待たされません。16bit の画像を元の階調のまま読み、
         ZIP / 7z の中もそのまま見られます。タグやカタログは別のファイルに保存するので、元の画像には一切手を加えません。</p>
       <div class="buttons">
         <a class="btn primary" id="dl-win" href="https://github.com/xex-ken-xex/vw/releases/latest">⬇ Windows 版をダウンロード</a>
@@ -108,55 +109,69 @@ footer a { color: var(--muted); text-decoration: underline; }
     <a href="images/screenshot.png"><img src="images/screenshot.png" alt="vw の画面。左にフォルダツリー、中央に画像のスロット、右にメタデータ、下にログ" width="1280" height="800"></a>
   </div>
 
+  <section id="by-format">
+    <h2>形式ごとにできること</h2>
+    <p>形式によって持っている情報が違うので、vw でできることも少しずつ違います。</p>
+    <table>
+      <tr><th>形式</th><th>その形式ならではのこと</th></tr>
+      <tr><td>JPEG</td><td>EXIF の向きで正しく表示し、カメラ・レンズ・露出などの撮影情報を出します。GPS があれば地図に出し、撮影情報で検索できます</td></tr>
+      <tr><td>カメラ RAW</td><td>まずカメラの埋め込みプレビューをすぐ出し、裏でセンサーのデータから現像して差し替えます。同じ名前の JPEG と組にして比べられ、<code>vwbatch</code> で現像して書き出せます</td></tr>
+      <tr><td>FITS（天体の画像）</td><td>暗い画像を見やすく伸ばし（zscale・asinh など）、色の表とゲージを付けます。ダーク・フラットを当て、星図に写した範囲を出し、白黒の画像 2〜3 枚を位置合わせして色を合成します。伸縮・ノイズ除去・デコンボリューション・星の除去などの仕上げもでき、ヘッダの全項目で検索できます</td></tr>
+      <tr><td>PNG</td><td>16bit の画像を 8bit に落とさずに読み、元の値のまま測れます（画面の表示は 8bit）。テキストのチャンク（作成ソフトや説明など）をメタデータに出し、検索できます</td></tr>
+      <tr><td>WebP / GIF</td><td>アニメーションの全コマを 1 つのスロットに並べ、ファイルに書かれた速さで再生します。ホイールで 1 コマずつ送れます</td></tr>
+      <tr><td>TIFF</td><td>複数ページを 1 つのスロットに並べてホイールで送ります。32bit の実数や CMYK、FAX 圧縮も読みます。EXIF とタグで検索できます</td></tr>
+      <tr><td>BMP</td><td>古い 1〜32bit の BMP や RLE 圧縮も開きます</td></tr>
+      <tr><td>ZIP / 7z / tar</td><td>展開の手間なくフォルダと同じように開きます（パスワード付きも）。中の画像も検索カタログに入り、見つけたものを取り出せます</td></tr>
+    </table>
+  </section>
+
   <section id="features">
-    <h2>できること</h2>
+    <h2>どの形式でもできること: 整理して、探す</h2>
+    <p>JPEG でも RAW でも FITS でも、ZIP の中の画像でも、整理と検索は同じ操作でできます。</p>
     <div class="three">
       <div class="card">
-        <div class="icon">🖼️</div>
-        <h3>画像を見る</h3>
-        <p>フォルダの画像を何枚も並べて、すばやく見比べます。拡大・縮小、スライドショー、アニメーション（WebP / GIF）の再生、
-          自動レイアウトとページ送り。新しい画像がフォルダに増えると自動で表示します。</p>
-        <img src="images/maximize-play.png" alt="最大化と再生バー" loading="lazy">
-      </div>
-      <div class="card">
         <div class="icon">🏷️</div>
-        <h3>タグを付ける</h3>
-        <p>「良い / 悪い」のフラグと、自分で決めたタグ（例: 山・海・花）をキー 1 つで付けます。
-          付けたもので絞り込み、別のフォルダへコピーしたり、CSV / JSONL に書き出したり。機械学習の学習データ作りにも。</p>
+        <h3>整理する</h3>
+        <p>「良い / 悪い」のフラグと自分のタグをキー 1 つで付け、絞り込んで別のフォルダへコピーしたり、CSV / JSONL に書き出したり。AI が写っているもののタグと人の名前を付け、RAW と JPEG のような似た画像を組にして違いを測ります。</p>
         <img src="images/tagging.png" alt="タグ付けモード" loading="lazy">
       </div>
       <div class="card">
-        <div class="icon">🗂️</div>
-        <h3>カタログで管理する</h3>
-        <p>フォルダを「データセット」として登録すると、中の画像の撮影情報などを集めた検索カタログを作ります。
-          「ISO 800 以上で撮った写真が入っているフォルダ」のように中身で探し、必要なものを取り出せます。</p>
+        <div class="icon">🔍</div>
+        <h3>探す</h3>
+        <p>フォルダを「データセット」として登録すると、撮影情報・テキスト・ヘッダ・AI タグなどを ZIP の中まで集めた検索カタログを作ります。「ISO 800 以上」のように中身で探して取り出せます。撮影地点は地図で、天体の画像は星図で探せます。</p>
         <img src="images/dataset-search.png" alt="データセットの画面" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🖼️</div>
+        <h3>見る・測る</h3>
+        <p>何枚も並べて見比べ、スライドショーで流し、フォルダに増えた画像を自動で表示します。画素の値・ROI・ヒストグラム・画質の値を測り、画素の変換を見て変え、同じ変換をまとめて書き出せます。</p>
+        <img src="images/maximize-play.png" alt="最大化と再生バー" loading="lazy">
       </div>
     </div>
     <h3>ほかの特長</h3>
     <ul class="plain">
       <li><b>速い</b>: 画像の読み込みは裏で並行して行い、表示は GPU で描きます</li>
-      <li><b>画質を落とさない</b>: 16bit の画像も 8bit に落とさずに読み込みます</li>
+      <li><b>値を落とさない</b>: 16bit の画像も 8bit に落とさずに読み込み、画素の値・計測・書き出しは元の階調のまま扱います（画面の表示は 8bit）</li>
       <li><b>画像ファイルを書き換えない</b>: タグやカタログは別のファイルに保存します</li>
-      <li><b>ZIP / 7z の中もそのまま見られる</b>: パスワード付きのものも開けます</li>
-      <li><b>画素の変換を見る・変える</b>: 色導出のウインドウで、ファイルの値から表示までの段をたどり、式やレベル補正などのノードを足して見比べられます</li>
+      <li><b>AI は PC の中で</b>: AI タグと顔のモデルは CPU で動き、画像を外へ送りません</li>
       <li><b>日本語表示</b>: メニューや設定を日本語にできます（初期設定は英語）</li>
       <li><b>無料・オープンソース</b>: MIT / Apache-2.0 のデュアルライセンス</li>
     </ul>
   </section>
 
   <section id="formats">
-    <h2>対応している形式</h2>
+    <h2>対応している形式の詳細</h2>
     <table>
       <tr><th>形式</th><th>内容</th></tr>
       <tr><td>PNG</td><td>1〜16bit、グレー / RGB / アルファ / パレット</td></tr>
-      <tr><td>JPEG</td><td>ベースライン / プログレッシブ、グレー / カラー / CMYK。EXIF の向きを反映し、撮影情報を表示</td></tr>
-      <tr><td>WebP</td><td>非可逆 / 可逆、透過、EXIF。アニメーションは全コマを 1 つのスロットに並べて再生</td></tr>
-      <tr><td>GIF</td><td>透過。アニメーションは全コマを 1 つのスロットに並べて再生</td></tr>
+      <tr><td>JPEG</td><td>ベースライン / プログレッシブ、グレー / カラー / CMYK</td></tr>
+      <tr><td>WebP</td><td>非可逆 / 可逆、透過、アニメーション</td></tr>
+      <tr><td>GIF</td><td>透過、アニメーション</td></tr>
       <tr><td>BMP</td><td>1〜32bit、パレット / RLE / ビットフィールド、上下逆の BMP も</td></tr>
       <tr><td>TIFF</td><td>1〜16bit の整数と 32bit の実数、グレー / RGB / アルファ / パレット / CMYK、CCITT G3 / G4、LZW / Deflate / PackBits / JPEG 圧縮、タイル、BigTIFF、複数ページ</td></tr>
-      <tr><td>カメラ RAW</td><td>Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF（Canon CR2 / CR3、DNG も）。埋め込みプレビューを先に出し、裏で現像して精細な画像に差し替えます</td></tr>
-      <tr><td>ZIP / 7z</td><td>中の画像をフォルダと同じように開けます。パスワード付き（ZIP は ZipCrypto と AES、7z は AES）も可</td></tr>
+      <tr><td>カメラ RAW</td><td>Nikon NEF / NRW、Sony ARW / SR2 / SRF、富士フイルム RAF（Canon CR2 / CR3、DNG も）</td></tr>
+      <tr><td>FITS</td><td><code>.fits</code> <code>.fit</code> <code>.fts</code>、tile 圧縮の <code>.fz</code>、<code>.fits.gz</code>。8〜64bit の整数と実数、キューブ、Bayer のカラー</td></tr>
+      <tr><td>ZIP / 7z / tar</td><td>パスワード付き（ZIP は ZipCrypto と AES、7z は AES）、tar は圧縮なし・gzip・bzip2・xz・zstd、漫画の <code>.cbz</code> <code>.cb7</code> <code>.cbt</code></td></tr>
     </table>
   </section>
 
@@ -216,6 +231,7 @@ cd vw
   <div class="wrap">
     Copyright (c) 2026 vw contributors · 作者: xex（<a href="https://github.com/xex-ken-xex">xex-ken-xex</a>） ·
     <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-MIT">MIT</a> OR <a href="https://github.com/xex-ken-xex/vw/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    <p>免責事項: vw は現状のまま提供され、いかなる保証もありません。作者と貢献者は、vw の利用によって生じたいかなる損害（データの消失を含みます）にも責任を負いません。詳しくは <a href="https://github.com/xex-ken-xex/vw#免責事項">README の免責事項</a> を見てください。</p>
   </div>
 </footer>
 
