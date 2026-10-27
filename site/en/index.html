@@ -56,6 +56,7 @@ ul.plain { padding-left: 1.2em; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
 th { background: var(--panel); white-space: nowrap; }
+@media (min-width: 821px) { #by-format td:first-child, #formats td:first-child { white-space: nowrap; } }
 code, pre { font-family: Consolas, "Cascadia Mono", "Noto Sans Mono CJK JP", monospace; background: var(--code); border-radius: 4px; }
 code { padding: 1px 5px; font-size: 14px; }
 pre { padding: 12px 14px; overflow-x: auto; font-size: 14px; }
@@ -80,8 +81,8 @@ footer a { color: var(--muted); text-decoration: underline; }
     <img src="../images/vw.png" alt="">
     <span class="name">vw</span>
     <nav>
-      <a href="#features">Features</a>
-      <a href="#formats">Formats</a>
+      <a href="#by-format">Formats</a>
+      <a href="#features">Sort &amp; find</a>
       <a href="#download">Download</a>
       <a href="#install">Install</a>
       <a href="https://github.com/xex-ken-xex/vw#readme">README (Japanese)</a>
@@ -108,29 +109,46 @@ footer a { color: var(--muted); text-decoration: underline; }
     <a href="../images/screenshot.png"><img src="../images/screenshot.png" alt="The vw window: folder tree on the left, image slots in the middle, metadata on the right, log at the bottom" width="1280" height="800"></a>
   </div>
 
+  <section id="by-format">
+    <h2>What each format gets</h2>
+    <p>Formats carry different information, so what vw can do differs a little from format to format.</p>
+    <table>
+      <tr><th>Format</th><th>Specific to the format</th></tr>
+      <tr><td>JPEG</td><td>Shown the right way up from EXIF orientation, with camera, lens and exposure info. Photos with GPS appear on the map, and the shooting info is searchable</td></tr>
+      <tr><td>PNG</td><td>16-bit images stay 16-bit, so you measure the real values. Text chunks (creating software, descriptions and so on) appear as metadata and are searchable</td></tr>
+      <tr><td>WebP / GIF</td><td>All frames of an animation go into one slot and play at the speed written in the file. The wheel steps one frame at a time</td></tr>
+      <tr><td>TIFF</td><td>Multi-page files go into one slot and the wheel turns the pages. 32-bit float, CMYK and fax compression are read too. EXIF and tags are searchable</td></tr>
+      <tr><td>BMP</td><td>Old 1–32 bit BMPs and RLE compression open too</td></tr>
+      <tr><td>Camera RAW</td><td>The camera's embedded preview shows at once, then the sensor data is developed in the background and swapped in. Pairs with the JPEG of the same name for comparison, and <code>vwbatch</code> develops and exports in bulk</td></tr>
+      <tr><td>FITS (astronomy)</td><td>Dark images are stretched (zscale, asinh and more) with a color map and gauge. Darks and flats are applied, the sky chart shows where the image points, and 2–3 grayscale images are aligned and composed into color. Finishing nodes (stretch, noise reduction, deconvolution, star removal and more) are available, and every header keyword is searchable</td></tr>
+      <tr><td>ZIP / 7z / tar</td><td>Open like a folder without extracting by hand (password-protected too). Images inside go into the search catalog and can be extracted when found</td></tr>
+    </table>
+  </section>
+
   <section id="features">
-    <h2>What vw does</h2>
+    <h2>For every format: sort, then find</h2>
+    <p>JPEG, RAW, FITS or an image inside a ZIP: sorting and searching work the same way.</p>
     <div class="three">
       <div class="card">
-        <div class="icon">🖼️</div>
-        <h3>View</h3>
-        <p>Lay out many images from a folder side by side and compare them quickly. Zoom, slideshow, animated WebP / GIF
-          playback, automatic layouts with paging. New images that appear in the folder show up by themselves.</p>
-        <img src="../images/maximize-play.png" alt="A maximized slot with the play bar" loading="lazy">
-      </div>
-      <div class="card">
         <div class="icon">🏷️</div>
-        <h3>Tag</h3>
-        <p>Flag images good or bad and add your own tags (say, mountain, sea, flower) with a single key. Filter by them,
-          copy the matches to another folder, or export a list as CSV / JSONL. Handy for building machine-learning datasets.</p>
+        <h3>Sort</h3>
+        <p>Flag images good or bad and add your own tags with a single key, then filter, copy the matches to another folder or export CSV / JSONL.
+          AI adds content tags and names faces, and similar images such as RAW and JPEG pairs are grouped and compared.</p>
         <img src="../images/tagging.png" alt="Tagging mode" loading="lazy">
       </div>
       <div class="card">
-        <div class="icon">🗂️</div>
-        <h3>Catalog</h3>
-        <p>Register a folder as a dataset and vw builds a search catalog of the metadata inside. Find folders by what they
-          contain, such as "photos shot at ISO 800 or more", and extract just what you need.</p>
+        <div class="icon">🔍</div>
+        <h3>Find</h3>
+        <p>Register a folder as a dataset and vw builds a search catalog of shooting info, text, headers and AI tags, even inside ZIPs.
+          Search by content, such as "ISO 800 or more", and extract the hits. Find photos by place on the map and astronomy images on the sky chart.</p>
         <img src="../images/dataset-search.png" alt="The datasets screen" loading="lazy">
+      </div>
+      <div class="card">
+        <div class="icon">🖼️</div>
+        <h3>View and measure</h3>
+        <p>Compare many images side by side, run a slideshow, and see new images as they land in the folder.
+          Measure pixel values, ROIs, histograms and quality metrics, inspect and change the pixel pipeline, and apply it to many files at once.</p>
+        <img src="../images/maximize-play.png" alt="A maximized slot with the play bar" loading="lazy">
       </div>
     </div>
     <h3>More</h3>
@@ -138,25 +156,25 @@ footer a { color: var(--muted); text-decoration: underline; }
       <li><b>Fast</b>: images decode in parallel in the background and are drawn by the GPU</li>
       <li><b>No loss</b>: 16-bit images are loaded as 16-bit, not reduced to 8-bit</li>
       <li><b>Never writes to your images</b>: tags and catalogs are stored in separate files</li>
-      <li><b>Looks inside ZIP / 7z</b>: password-protected archives too</li>
-      <li><b>Inspect and change the pixel pipeline</b>: a window that traces each format's stages from file values to the display, where you can add expression, levels and other nodes and compare</li>
+      <li><b>AI stays on your PC</b>: the tagging and face models run on the CPU and never send images out</li>
       <li><b>English and Japanese UI</b>: English by default</li>
       <li><b>Free and open source</b>: dual-licensed MIT / Apache-2.0</li>
     </ul>
   </section>
 
   <section id="formats">
-    <h2>Supported formats</h2>
+    <h2>Supported formats in detail</h2>
     <table>
       <tr><th>Format</th><th>Notes</th></tr>
       <tr><td>PNG</td><td>1–16 bit, gray / RGB / alpha / palette</td></tr>
-      <tr><td>JPEG</td><td>Baseline / progressive, gray / color / CMYK. EXIF orientation applied, shooting info shown</td></tr>
-      <tr><td>WebP</td><td>Lossy / lossless, transparency, EXIF. Animations play with all frames in one slot</td></tr>
-      <tr><td>GIF</td><td>Transparency. Animations play with all frames in one slot</td></tr>
+      <tr><td>JPEG</td><td>Baseline / progressive, gray / color / CMYK</td></tr>
+      <tr><td>WebP</td><td>Lossy / lossless, transparency, animation</td></tr>
+      <tr><td>GIF</td><td>Transparency, animation</td></tr>
       <tr><td>BMP</td><td>1–32 bit, palette / RLE / bit fields, top-down files too</td></tr>
       <tr><td>TIFF</td><td>1–16 bit integer and 32-bit float, gray / RGB / alpha / palette / CMYK, CCITT G3 / G4, LZW / Deflate / PackBits / JPEG compression, tiles, BigTIFF, multi-page</td></tr>
-      <tr><td>Camera RAW</td><td>Nikon NEF / NRW, Sony ARW / SR2 / SRF, Fujifilm RAF (Canon CR2 / CR3 and DNG too). The embedded preview shows first, then the sensor data is developed in the background</td></tr>
-      <tr><td>ZIP / 7z</td><td>Images inside open like a folder. Password-protected archives (ZipCrypto and AES for ZIP, AES for 7z) too</td></tr>
+      <tr><td>Camera RAW</td><td>Nikon NEF / NRW, Sony ARW / SR2 / SRF, Fujifilm RAF (Canon CR2 / CR3 and DNG too)</td></tr>
+      <tr><td>FITS</td><td><code>.fits</code> <code>.fit</code> <code>.fts</code>, tile-compressed <code>.fz</code>, <code>.fits.gz</code>. 8–64 bit integer and float, cubes, Bayer color</td></tr>
+      <tr><td>ZIP / 7z / tar</td><td>Password-protected (ZipCrypto and AES for ZIP, AES for 7z); tar plain, gzip, bzip2, xz, zstd; comic <code>.cbz</code> <code>.cb7</code> <code>.cbt</code></td></tr>
     </table>
   </section>
 
