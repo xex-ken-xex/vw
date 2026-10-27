@@ -24,9 +24,11 @@ mod dataset_extract;
 mod dataset_search;
 mod dataset_ui;
 mod datasets_screen;
+mod deep;
 mod derive;
 mod dicom_send;
 mod discard;
+mod displays;
 mod export;
 mod face_groups;
 mod face_store;
@@ -141,9 +143,11 @@ fn main() -> eframe::Result {
             .with_icon(window_icon()),
         ..Default::default()
     };
-    vw_renderer::run_native(
+    let depth = settings::startup_depth(settings::SettingsStore::default_path().as_deref());
+    vw_renderer::run_native_with_depth(
         "vw",
         options,
+        depth,
         Box::new(move |cc| {
             let fits = vw_fits::SharedOptions::default();
             let calibration = vw_fits::Calibration::default();

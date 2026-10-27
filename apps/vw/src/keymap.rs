@@ -97,6 +97,8 @@ pub enum Action {
     ToggleSkyChart,
     UndoPosition,
     ShowAbout,
+    ShowSystemInfo,
+    ShowGradationTest,
     OpenQualityHelp,
     ShowAiModels,
     AiTagFolder,
@@ -172,7 +174,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 93] = [
+    pub const ALL: [Action; 95] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -249,6 +251,8 @@ impl Action {
         Action::ToggleSettings,
         Action::ToggleDatasets,
         Action::ShowAbout,
+        Action::ShowSystemInfo,
+        Action::ShowGradationTest,
         Action::OpenQualityHelp,
         Action::ShowAiModels,
         Action::AiTagFolder,
@@ -342,6 +346,8 @@ impl Action {
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
+            Action::ShowSystemInfo => "show_system_info",
+            Action::ShowGradationTest => "show_gradation_test",
             Action::OpenQualityHelp => "open_quality_help",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
@@ -444,6 +450,8 @@ impl Action {
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::UndoPosition => "Undo the last position change",
             Action::ShowAbout => "About vw",
+            Action::ShowSystemInfo => "System information",
+            Action::ShowGradationTest => "Display gradation test...",
             Action::OpenQualityHelp => "Image quality metrics help",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
@@ -558,6 +566,8 @@ impl Action {
             Action::ToggleSettings
             | Action::OpenSettingsFolder
             | Action::ShowAbout
+            | Action::ShowSystemInfo
+            | Action::ShowGradationTest
             | Action::OpenQualityHelp
             | Action::Quit => KeyGroup::App,
             Action::FullscreenExit
@@ -752,6 +762,8 @@ impl Action {
             Action::ToggleSkyChart => vec![],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
+            Action::ShowSystemInfo => vec![],
+            Action::ShowGradationTest => vec![],
             Action::OpenQualityHelp => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],

@@ -1,4 +1,4 @@
-//! [`VwImage`] から描画用メモリ [`DisplayImage`]（RGBA8）への変換。
+//! [`VwImage`] から描画用メモリ [`DisplayImage`]（RGBA8）と [`DisplayImage16`]（RGBA16）への変換。
 //!
 //! 階調変換（ウィンドウ幅/レベル）と、GPU のテクスチャ上限に収めるための縮小をここで行う。
 
@@ -10,6 +10,58 @@ pub struct DisplayImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+/// 10bit の表示に使う RGBA16 の画像。並びは [`DisplayImage`] と同じ。
+#[derive(Clone, Debug)]
+pub struct DisplayImage16 {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u16>,
+}
+
+/// 描画用メモリの 1 サンプル（8bit か 16bit）。変換の手順を 1 つにして、深さだけを変える。
+pub trait Sample: Copy + Default + Send + Sync + 'static {
+    /// 白の値。
+    const MAX: f32;
+    /// 0..=MAX の値を丸めて詰める（範囲外は端に張り付く）。
+    fn round_from(x: f32) -> Self;
+    /// 0〜1 の値（浮動小数点の画像のアルファ）を詰める。
+    fn from_unit(v: f32) -> Self;
+    fn from_u8(v: u8) -> Self;
+    fn from_u16(v: u16) -> Self;
+}
+
+impl Sample for u8 {
+    const MAX: f32 = 255.0;
+    fn round_from(x: f32) -> Self {
+        x.round().clamp(0.0, 255.0) as u8
+    }
+    fn from_unit(v: f32) -> Self {
+        (v.clamp(0.0, 1.0) * 255.0) as u8
+    }
+    fn from_u8(v: u8) -> Self {
+        v
+    }
+    fn from_u16(v: u16) -> Self {
+        (v >> 8) as u8
+    }
+}
+
+impl Sample for u16 {
+    const MAX: f32 = 65535.0;
+    fn round_from(x: f32) -> Self {
+        x.round().clamp(0.0, 65535.0) as u16
+    }
+    fn from_unit(v: f32) -> Self {
+        Self::round_from(v.clamp(0.0, 1.0) * 65535.0)
+    }
+    fn from_u8(v: u8) -> Self {
+        u16::from(v) * 257
+    }
+    fn from_u16(v: u16) -> Self {
+        v
+    }
 }
 
 /// 表示用変換のパラメータ。
@@ -37,20 +89,41 @@ impl Default for DisplayParams {
 /// U8/U16 は 256 / 65536 要素の変換表（LUT）を先に作って引く。
 /// 画素ごとに浮動小数点で計算するより速く、16bit 画像でも表は 64KB で済むため。
 pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
+    let (width, height, rgba) = render::<u8>(img, params);
+    DisplayImage {
+        width,
+        height,
+        rgba,
+    }
+}
+
+/// [`to_display`] の RGBA16 版。黒と白、曲線、縮小は同じで、最後に 8bit に丸めない。
+pub fn to_display16(img: &VwImage, params: &DisplayParams) -> DisplayImage16 {
+    let (width, height, rgba) = render::<u16>(img, params);
+    DisplayImage16 {
+        width,
+        height,
+        rgba,
+    }
+}
+
+fn render<T: Sample>(img: &VwImage, params: &DisplayParams) -> (u32, u32, Vec<T>) {
     let window = params.window.or(img.window);
     let curve = img.curve;
     match &img.data {
         PixelData::U8(v) => match window {
-            None if curve == Curve::Linear => convert(img, params, |i| v[i], |i| v[i]),
+            None if curve == Curve::Linear => {
+                convert(img, params, |i| T::from_u8(v[i]), |i| T::from_u8(v[i]))
+            }
             _ => {
-                let lut = build_lut(256, window.unwrap_or((0.0, 255.0)), curve);
-                convert(img, params, |i| lut[v[i] as usize], |i| v[i])
+                let lut = build_lut::<T>(256, window.unwrap_or((0.0, 255.0)), curve);
+                convert(img, params, |i| lut[v[i] as usize], |i| T::from_u8(v[i]))
             }
         },
         PixelData::U16(v) => {
             let max = ((1u32 << img.significant_bits.clamp(1, 16)) - 1) as f32;
-            let lut = build_lut(65536, window.unwrap_or((0.0, max)), curve);
-            convert(img, params, |i| lut[v[i] as usize], |i| (v[i] >> 8) as u8)
+            let lut = build_lut::<T>(65536, window.unwrap_or((0.0, max)), curve);
+            convert(img, params, |i| lut[v[i] as usize], |i| T::from_u16(v[i]))
         }
         PixelData::F32(v) => match img.channel_windows.filter(|_| img.color.channels() >= 3) {
             Some(windows) => {
@@ -60,17 +133,12 @@ pub fn to_display(img: &VwImage, params: &DisplayParams) -> DisplayImage {
                     img,
                     params,
                     |i| shades[i % ch].of(v[i]),
-                    |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
+                    |i| T::from_unit(v[i]),
                 )
             }
             None => {
                 let shade = Shade::new(window.unwrap_or_else(|| min_max(v)), curve);
-                convert(
-                    img,
-                    params,
-                    |i| shade.of(v[i]),
-                    |i| (v[i].clamp(0.0, 1.0) * 255.0) as u8,
-                )
+                convert(img, params, |i| shade.of(v[i]), |i| T::from_unit(v[i]))
             }
         },
     }
@@ -111,10 +179,10 @@ fn fold_range(values: impl Iterator<Item = f32>) -> (f32, f32) {
         .fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)))
 }
 
-/// 黒 `lo`〜白 `hi` の値を 0〜255 に写す。範囲外は 0 / 255 に張り付き、NaN（欠損）は黒。
+/// 黒 `lo`〜白 `hi` の値を 0〜白（[`Sample::MAX`]）に写す。範囲外は端に張り付き、NaN（欠損）は黒。
 struct Shade {
     lo: f32,
-    /// 値 1 あたりの明るさ（0〜255）。
+    /// 値 1 あたりの明るさ（0〜255）。白が 255 でない深さには [`Shade::of`] が掛け直す。
     scale: f32,
     curve: Curve,
 }
@@ -125,7 +193,7 @@ impl Shade {
         Self { lo, scale, curve }
     }
 
-    fn of(&self, v: f32) -> u8 {
+    fn of<T: Sample>(&self, v: f32) -> T {
         let x = (v - self.lo) * self.scale;
         // 直線は曲線を通さずに丸める。0〜1 に直してから戻すと浮動小数点の誤差で 1 段ずれる
         // 値があり、画素の変換の表示が標準の表示と食い違ってしまうため。
@@ -133,7 +201,12 @@ impl Shade {
             Curve::Linear => x,
             curve => curve.apply(x / 255.0) * 255.0,
         };
-        x.round().clamp(0.0, 255.0) as u8
+        // 8bit のときは掛けない。掛けると上と同じ理由で 1 段ずれる値がある。
+        if T::MAX == 255.0 {
+            T::round_from(x)
+        } else {
+            T::round_from(x * (T::MAX / 255.0))
+        }
     }
 }
 
@@ -142,12 +215,12 @@ impl Shade {
 /// 型ごとの差を閉包に閉じ込めて、ループ本体を 1 つにしている。
 /// `Box<dyn Fn>` にしないのは、画素ごとの動的呼び出しが変換時間の大半を占めてしまうため
 /// （ジェネリクスならインライン展開される）。
-fn convert(
+fn convert<T: Sample>(
     img: &VwImage,
     params: &DisplayParams,
-    sample: impl Fn(usize) -> u8 + Sync,
-    alpha: impl Fn(usize) -> u8 + Sync,
-) -> DisplayImage {
+    sample: impl Fn(usize) -> T + Sync,
+    alpha: impl Fn(usize) -> T + Sync,
+) -> (u32, u32, Vec<T>) {
     let ch = img.color.channels();
     let (w, h) = (img.width as usize, img.height as usize);
     // 縮小は整数間引き（最近傍）。面積平均の方が画質は良いが、1 パスで済まず遅くなる。
@@ -156,9 +229,10 @@ fn convert(
         .div_ceil(params.max_side.max(1) as usize)
         .max(1);
     let (ow, oh) = (w.div_ceil(step), h.div_ceil(step));
-    let mut rgba = vec![0u8; ow * oh * 4];
+    let mut rgba = vec![T::default(); ow * oh * 4];
+    let opaque = T::round_from(T::MAX);
 
-    let convert_rows = |first_row: usize, out: &mut [u8]| {
+    let convert_rows = |first_row: usize, out: &mut [T]| {
         for (r, out_row) in out.chunks_exact_mut(ow * 4).enumerate() {
             let row = (first_row + r) * step * w;
             for (ox, px) in out_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -166,13 +240,13 @@ fn convert(
                 let rgba_px = match img.color {
                     ColorModel::Gray => {
                         let g = sample(s);
-                        [g, g, g, 255]
+                        [g, g, g, opaque]
                     }
                     ColorModel::GrayAlpha => {
                         let g = sample(s);
                         [g, g, g, alpha(s + 1)]
                     }
-                    ColorModel::Rgb => [sample(s), sample(s + 1), sample(s + 2), 255],
+                    ColorModel::Rgb => [sample(s), sample(s + 1), sample(s + 2), opaque],
                     ColorModel::Rgba => [sample(s), sample(s + 1), sample(s + 2), alpha(s + 3)],
                 };
                 px.copy_from_slice(&rgba_px);
@@ -200,11 +274,7 @@ fn convert(
             }
         });
     }
-    DisplayImage {
-        width: ow as u32,
-        height: oh as u32,
-        rgba,
-    }
+    (ow as u32, oh as u32, rgba)
 }
 
 /// 縦横どちらも `max_side` 以下になるよう、整数倍で縮小する。縮小しないで済むときは複製を返す。
@@ -252,8 +322,8 @@ pub fn shrink(img: &DisplayImage, max_side: u32) -> DisplayImage {
     }
 }
 
-/// 0..size の値を、`lo` → 0、`hi` → 255 の間を `curve` で写す変換表。範囲外は 0 / 255 に張り付く。
-fn build_lut(size: usize, window: (f32, f32), curve: Curve) -> Vec<u8> {
+/// 0..size の値を、`lo` → 0、`hi` → 白の間を `curve` で写す変換表。範囲外は端に張り付く。
+fn build_lut<T: Sample>(size: usize, window: (f32, f32), curve: Curve) -> Vec<T> {
     let shade = Shade::new(window, curve);
     (0..size).map(|v| shade.of(v as f32)).collect()
 }
@@ -266,6 +336,58 @@ fn min_max(v: &[f32]) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display16_keeps_the_steps_that_8_bits_would_merge() {
+        // 16bit の 4 つの値が、8bit では同じ 1 段に入る。
+        let img = VwImage::new(
+            4,
+            1,
+            ColorModel::Gray,
+            PixelData::U16(vec![1000, 1010, 1020, 1030]),
+        )
+        .unwrap();
+        let params = DisplayParams {
+            window: Some((0.0, 65535.0)),
+            ..Default::default()
+        };
+        let eight: Vec<u8> = to_display(&img, &params)
+            .rgba
+            .chunks(4)
+            .map(|p| p[0])
+            .collect();
+        assert!(eight.windows(2).all(|w| w[0] == w[1]));
+        let deep: Vec<u16> = to_display16(&img, &params)
+            .rgba
+            .chunks(4)
+            .map(|p| p[0])
+            .collect();
+        assert_eq!(deep, vec![1000, 1010, 1020, 1030]);
+    }
+
+    #[test]
+    fn display16_matches_display_at_8_bit_precision() {
+        let values: Vec<u16> = (0..=4095).map(|v| v * 16).collect();
+        let img = VwImage::new(4096, 1, ColorModel::Gray, PixelData::U16(values)).unwrap();
+        let params = DisplayParams {
+            window: Some((5000.0, 60000.0)),
+            ..Default::default()
+        };
+        let eight = to_display(&img, &params).rgba;
+        let deep = to_display16(&img, &params).rgba;
+        for (e, d) in eight.iter().zip(&deep) {
+            assert!((i32::from(*e) - ((i32::from(*d) + 128) / 257)).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn display16_makes_8_bit_images_full_scale_and_opaque() {
+        let d = to_display16(&gray8(&[0, 128, 255]), &DisplayParams::default());
+        assert_eq!(
+            d.rgba,
+            vec![0, 0, 0, 65535, 32896, 32896, 32896, 65535, 65535, 65535, 65535, 65535]
+        );
+    }
 
     #[test]
     fn each_color_of_an_rgb_image_can_have_its_own_black_and_white() {

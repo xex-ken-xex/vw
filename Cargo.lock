@@ -1110,8 +1110,6 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cef1f6d1bba40b09a4d0d62cb822b81030922cfbf65c5373398c3a3caafc5bd"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4450,6 +4448,7 @@ name = "vw"
 version = "0.8.1"
 dependencies = [
  "base64 0.22.1",
+ "bytemuck",
  "bzip2",
  "chrono",
  "eframe",

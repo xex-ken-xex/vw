@@ -1571,6 +1571,94 @@ impl SearchGroup {
     }
 }
 
+/// モニタごとの表示（[`crate::deep`]）。並べていないモニタは、10bit もディザも切。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct DisplaySettings {
+    pub monitors: Vec<MonitorSettings>,
+}
+
+/// 1 台のモニタの表示の設定。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MonitorSettings {
+    /// モニタを見分ける文字列（[`crate::displays::Display::id`]）。
+    pub id: String,
+    /// 設定ファイルを読む人のための名前。見分けには使わない。
+    #[serde(default)]
+    pub name: String,
+    /// 16bit の画像を 10bit の階調で出す。どれか 1 台でも入っていれば、wgpu で起動して 10bit の面を頼む。
+    #[serde(default)]
+    pub ten_bit: bool,
+    /// 16bit の画像を 8bit に落とすときに、細かいノイズを混ぜて縞を目立たなくする。
+    #[serde(default)]
+    pub dither: bool,
+}
+
+impl DisplaySettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let mut r = r.at("display");
+        let mut seen = std::collections::HashSet::new();
+        Self {
+            monitors: r
+                .get::<Vec<MonitorSettings>>("monitors")
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| {
+                    let problem = if m.id.trim().is_empty() {
+                        Some("id is empty")
+                    } else if !seen.insert(m.id.clone()) {
+                        Some("the same id is already listed")
+                    } else {
+                        None
+                    };
+                    if let Some(p) = problem {
+                        r.problem("monitors", format!("{:?}: {p} (ignored)", m.name));
+                    }
+                    problem.is_none()
+                })
+                .collect(),
+        }
+    }
+
+    /// `id` のモニタの設定。並べていなければ全部切。
+    pub fn monitor(&self, id: &str) -> MonitorSettings {
+        self.monitors
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+            .unwrap_or_else(|| MonitorSettings {
+                id: id.to_owned(),
+                ..Default::default()
+            })
+    }
+
+    /// `id` のモニタの設定を変える。全部切になったモニタは並びから外す（設定ファイルを短く保つため）。
+    pub fn set(&mut self, settings: MonitorSettings) {
+        self.monitors.retain(|m| m.id != settings.id);
+        if settings.ten_bit || settings.dither {
+            self.monitors.push(settings);
+        }
+    }
+
+    /// どれか 1 台でも 10bit が入っている。起動するときに描画の方法を決めるのに使う。
+    pub fn wants_ten_bit(&self) -> bool {
+        self.monitors.iter().any(|m| m.ten_bit)
+    }
+}
+
+/// 起動の前に、描画先の面の深さだけを設定ファイルから読む。設定の全体はウインドウを作ったあとに
+/// 読むが、面の深さはウインドウを作る前に決める必要があるため。
+pub fn startup_depth(path: Option<&Path>) -> vw_renderer::Depth {
+    let ten_bit = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| Settings::from_toml(&text).ok())
+        .is_some_and(|(s, _)| s.display.wants_ten_bit());
+    if ten_bit {
+        vw_renderer::Depth::TenBit
+    } else {
+        vw_renderer::Depth::Standard
+    }
+}
+
 /// 全画面スライドショーの進め方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1875,6 +1963,7 @@ pub struct Settings {
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
     pub fullscreen: Fullscreen,
+    pub display: DisplaySettings,
     pub log: LogSettings,
     pub quality: Quality,
     pub ai: Ai,
@@ -1905,6 +1994,7 @@ impl Settings {
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
         let fullscreen = Fullscreen::read(&mut r);
+        let display = DisplaySettings::read(&mut r);
         let log = LogSettings::read(&mut r);
         let quality = Quality::read(&mut r);
         let ai = Ai::read(&mut r);
@@ -1936,6 +2026,7 @@ impl Settings {
                 dicom_send,
                 dataset,
                 fullscreen,
+                display,
                 log,
                 quality,
                 ai,
@@ -2303,6 +2394,75 @@ mod tests {
         assert!(text.contains("theme = \"system\""), "{text}");
         assert!(text.contains("language = \"en\""), "{text}");
         assert!(text.contains("next_image = ["), "{text}");
+    }
+
+    #[test]
+    fn monitor_settings_are_written_and_read_back() {
+        let mut s = Settings::default();
+        s.display.set(MonitorSettings {
+            id: r"\\?\DISPLAY#EIZ1234#5&1&0&UID4352".into(),
+            name: "RX660".into(),
+            ten_bit: true,
+            dither: false,
+        });
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.display, s.display);
+        assert!(back.display.wants_ten_bit());
+    }
+
+    #[test]
+    fn a_monitor_not_listed_has_ten_bit_and_dither_off() {
+        let m = DisplaySettings::default().monitor("DP-1/U2720Q");
+        assert_eq!((m.ten_bit, m.dither), (false, false));
+        assert!(!DisplaySettings::default().wants_ten_bit());
+    }
+
+    #[test]
+    fn turning_everything_off_removes_the_monitor_from_the_list() {
+        let mut d = DisplaySettings::default();
+        let on = MonitorSettings {
+            id: "a".into(),
+            dither: true,
+            ..Default::default()
+        };
+        d.set(on.clone());
+        assert_eq!(d.monitors.len(), 1);
+        d.set(MonitorSettings {
+            dither: false,
+            ..on
+        });
+        assert!(d.monitors.is_empty());
+    }
+
+    #[test]
+    fn monitors_without_an_id_or_listed_twice_are_dropped() {
+        let text = r#"
+[[display.monitors]]
+id = "a"
+ten_bit = true
+[[display.monitors]]
+id = ""
+dither = true
+[[display.monitors]]
+id = "a"
+dither = true
+"#;
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.display.monitors.len(), 1);
+        assert!(s.display.monitors[0].ten_bit);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+    }
+
+    #[test]
+    fn startup_depth_is_ten_bit_only_when_a_monitor_asks_for_it() {
+        let dir = crate::test_util::TempDir::new();
+        let path = dir.path().join("settings.toml");
+        assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::Standard);
+        std::fs::write(&path, "[[display.monitors]]\nid = \"a\"\ndither = true\n").unwrap();
+        assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::Standard);
+        std::fs::write(&path, "[[display.monitors]]\nid = \"a\"\nten_bit = true\n").unwrap();
+        assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::TenBit);
     }
 
     #[test]

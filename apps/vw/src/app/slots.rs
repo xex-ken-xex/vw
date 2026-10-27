@@ -809,6 +809,7 @@ impl VwApp {
         let mut send = None;
         self.update_similar();
         let mut cells: Vec<(Rect, usize)> = Vec::new();
+        let deep_target = self.update_deep(ui.ctx(), &view);
         // 隠れたスロットのフル解像度の画像は、メモリが足りなくなったら先に捨ててよい。
         for (i, slot) in self.slots.iter_mut().enumerate() {
             if !view.range.contains(&i) {
@@ -924,7 +925,8 @@ impl VwApp {
             let analysis_open = self.pipeline.open || self.histogram.open;
             let is_reference = self.quality_reference.is_some()
                 && self.slots[i].shown.as_ref().map(|s| &s.path) == self.quality_reference.as_ref();
-            let pipeline_wants = analysis_open && (i == self.active || is_reference);
+            let pipeline_wants =
+                analysis_open && (i == self.active || is_reference) || deep_target == Some(i);
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {

@@ -673,9 +673,13 @@ impl VwApp {
     pub(super) fn fullscreen_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let lang = self.lang();
+        let deep_mode = self.deep_mode_here(&ctx);
+        let surface = self.display.surface;
         let Some(show) = &mut self.fullscreen else {
             return;
         };
+        show.deep_mode = deep_mode;
+        show.surface = surface;
         let requests = egui::CentralPanel::no_frame()
             .show(ui, |ui| {
                 show.ui(

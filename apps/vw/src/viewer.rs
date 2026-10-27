@@ -247,6 +247,9 @@ pub struct Slot {
     pub color: crate::colormap::Choice,
     /// ゲージの端をドラッグしている間の黒と白の値。離したら読み直しを頼む。
     gauge_drag: Option<(f32, f32)>,
+    /// 8bit に落とさずに描く（10bit）か、ディザをかけて描く画像。1 枚を大きく出しているときだけ
+    /// アプリが用意する（[`crate::deep`]）。
+    pub deep: Option<crate::deep::Layer>,
 }
 
 /// スロットの描き方。スロットの外（設定やラベル）から決まるもの。
@@ -635,6 +638,7 @@ impl Slot {
             bar_floating: false,
             color: Default::default(),
             gauge_drag: None,
+            deep: None,
         }
     }
 
@@ -1299,12 +1303,14 @@ impl Slot {
                         .image(texture.id(), img_rect, whole, Color32::WHITE);
                 }
                 None => {
-                    ui.painter_at(body).image(
-                        shown.texture().id(),
-                        img_rect,
-                        whole,
-                        Color32::WHITE,
-                    );
+                    let painter = ui.painter_at(body);
+                    let deep = self
+                        .deep
+                        .as_ref()
+                        .is_some_and(|d| d.paint(&painter, img_rect, whole, texture_options));
+                    if !deep {
+                        painter.image(shown.texture().id(), img_rect, whole, Color32::WHITE);
+                    }
                 }
             }
             // 色導出は元の画像から描くので、縮小画像で足りる大きさでも元の画像を持たせる。

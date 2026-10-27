@@ -128,6 +128,21 @@ impl Palette {
             px[..3].copy_from_slice(&[r, g, b]);
         }
     }
+
+    /// [`Palette::recolor`] の RGBA16 版。表の 256 色の間をなめらかにつなぐ。
+    /// 表の隣どうしの色をそのまま使うと、16bit で出しても 256 段に戻ってしまうため。
+    pub fn recolor16(&self, rgba: &mut [u16]) {
+        for px in rgba.as_chunks_mut::<4>().0 {
+            let pos = f32::from(px[0]) * (255.0 / 65535.0);
+            let i = (pos as usize).min(254);
+            let t = pos - i as f32;
+            let (a, b) = (self.colors[i], self.colors[i + 1]);
+            for c in 0..3 {
+                let v = f32::from(a[c]) + (f32::from(b[c]) - f32::from(a[c])) * t;
+                px[c] = (v * 257.0).round() as u16;
+            }
+        }
+    }
 }
 
 /// 色の点の書き方「位置 #rrggbb」（例: `0.5 #ff8000`）を読む。
@@ -291,6 +306,25 @@ mod tests {
         assert!(parse_stop("half #ff8000").is_err());
         assert!(parse_stop("0.5 #ff80").is_err());
         assert!(parse_stop("0.5 #gg8000").is_err());
+    }
+
+    #[test]
+    fn recolor16_blends_neighbouring_colors_and_keeps_alpha() {
+        let p = Palette::builtin("hot_iron").unwrap();
+        // 表の 0 番と 1 番のちょうど中ほど。
+        let half = (65535.0 / 255.0 * 0.5_f32).round() as u16;
+        let mut px = vec![half, half, half, 1234, 65535, 0, 0, 65535];
+        p.recolor16(&mut px);
+        let [r0, _, _] = p.colors[0];
+        let [r1, _, _] = p.colors[1];
+        let mid = (f32::from(r0) + f32::from(r1)) / 2.0 * 257.0;
+        assert!((f32::from(px[0]) - mid).abs() <= 2.0);
+        assert_eq!(px[3], 1234);
+        let [r, g, b] = p.colors[255];
+        assert_eq!(
+            &px[4..7],
+            &[u16::from(r) * 257, u16::from(g) * 257, u16::from(b) * 257]
+        );
     }
 
     #[test]
