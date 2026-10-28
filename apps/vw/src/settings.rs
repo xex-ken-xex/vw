@@ -1568,6 +1568,7 @@ impl Default for Dataset {
                     "AI tags",
                     &["ai tags:person", "ai tags:character", "ai tags:tag"],
                 ),
+                group("Labels", &["labels:flag", "labels:tag"]),
             ],
         }
     }

@@ -816,10 +816,11 @@ vw では、まとまりのあるフォルダを **データセット** とし�
 | `exif` | `Make`（メーカー）、`Model`（機種）、`PhotographicSensitivity`（ISO）、`ExposureTime`、`FNumber`、`FocalLength`、`DateTimeOriginal` など |
 | `jpeg`、`png` など | 形式ごとの情報。メタデータウインドウのグループ名を小文字にしたもの |
 | `ai tags` | AI タグ。`person`（名前の付いた人物）、`tag`（一般のタグ）、`character`、`rating`、`model`（タグを付けたモデル）。確信度は入れない |
+| `labels` | 手で付けた印とタグ（登録か更新をしたときのもの）。`flag`（`good` / `bad`）、`tag`（タグの名前） |
 
 キーの欄の ▼ を押すと、検索カタログに実際にあるキーの一覧から選べます。キーを決めると、値の欄の ▼ でも実際にある値の一覧から選べます。
 
-**グループ** の ▼ → **AI tags** を選ぶと、`person`・`character`・`tag` の「一致」の条件がまとめて並び、値を選ぶだけで探せます。
+**グループ** の ▼ → **AI tags** を選ぶと、`person`・`character`・`tag` の「一致」の条件がまとめて並び、値を選ぶだけで探せます。**Labels** を選ぶと、手で付けた印とタグの条件が並びます。
 
 **② 比べ方**
 
