@@ -1,3 +1,6 @@
+// Modified by the vw contributors (2026): Rgba16Float surfaces get the linear
+// framebuffer shader. See vendor/egui-wgpu/README-vw.md.
+
 use core::{num::NonZeroU64, ops::Range};
 use std::borrow::Cow;
 
@@ -406,7 +409,10 @@ impl Renderer {
 
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some(if output_color_format.is_srgb() {
+                    // Rgba16Float (linear scRGB) added by the vw contributors.
+                    entry_point: Some(if output_color_format.is_srgb()
+                        || output_color_format == wgpu::TextureFormat::Rgba16Float
+                    {
                         log::warn!("Detected a linear (sRGBA aware) framebuffer {output_color_format:?}. egui prefers Rgba8Unorm or Bgra8Unorm");
                         "fs_main_linear_framebuffer"
                     } else {

@@ -42,7 +42,7 @@ mod clipboard;
 mod compare_dialog;
 mod compose_dialog;
 mod dataset_dialogs;
-mod display_ui;
+pub(crate) mod display_ui;
 mod docking;
 mod export_dialog;
 mod folders;
@@ -599,8 +599,13 @@ impl VwApp {
         let renderer = vw_renderer::describe(cc);
         log.info(format!("Renderer: {renderer}"));
         let surface = crate::deep::install(cc);
-        if settings.settings.display.wants_ten_bit() && surface.bits < 10 {
-            log.warn("Display: 10-bit is on for a monitor, but the surface is 8-bit (see Help > System information)");
+        let asked = settings.settings.display.deepest();
+        if asked > surface.depth() {
+            log.warn(format!(
+                "Display: {} is chosen for a monitor, but this start can draw only {} (see Help > System information)",
+                asked.title(),
+                surface.depth().title()
+            ));
         }
         log.info(format!(
             "Plugins: {}",

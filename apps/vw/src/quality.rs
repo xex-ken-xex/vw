@@ -1,7 +1,12 @@
 //! 定量評価。アクティブなスロットの画像の PSNR・SSIM・SNR・CNR・鮮鋭度を裏で求めて持ち、
 //! 解析ウインドウの「評価」タブと色導出のウインドウに出す。計算は [`vw_quality`]。
 //!
-//! 値はどれも表示の明るさ（0..=255）で測る。物理量（HU など）で測らないのは、
+//! 値はどれも表示の明るさで測る。明るさは 16bit の表示の値から求め、目盛りは 8bit の表示と
+//! 同じ 0..=255 にする（PSNR の基準と、前の版で測った値とがそのまま比べられるように）。
+//! 8bit に丸めてから測らないのは、10bit 以上で描くモニタでは画面に 8bit より細かい段が見えて
+//! いるのに、測る値だけが 256 段に丸まってしまうため。
+//!
+//! 物理量（HU など）で測らないのは、
 //! 「変更後」が色導出の結果として表示の色でしか存在せず、変更前と同じ土俵に乗せるには
 //! 表示の明るさしかないため。ROI の統計（[`crate::roi`]）は物理量で出すので、SNR の
 //! 値はそちらの mean / SD と一致しない。
@@ -25,8 +30,8 @@ pub struct Input<'a> {
     pub image: Option<&'a Arc<VwImage>>,
     /// スロットで灰色の画像に当てている色の表。変更前の明るさは、これを通した色から求める。
     pub palette: Option<&'a Arc<Palette>>,
-    /// 色導出で描いた画像（当てているときだけ）。
-    pub edited: Option<&'a Arc<egui::ColorImage>>,
+    /// 色導出で描いた画像の明るさ（当てているときだけ。[`luma_of_derived`]）。
+    pub edited: Option<&'a Arc<Vec<f32>>>,
     pub target_roi: Option<Region>,
     pub background_roi: Option<Region>,
     /// 「評価の基準にする」で選んだ別のスロットの画像。
@@ -158,7 +163,7 @@ pub struct Evaluation {
 struct Pending {
     image: Arc<VwImage>,
     palette: Option<Arc<Palette>>,
-    edited: Option<Arc<egui::ColorImage>>,
+    edited: Option<Arc<Vec<f32>>>,
     target: Option<Region>,
     background: Option<Region>,
     reference: Option<PendingReference>,
@@ -218,37 +223,58 @@ impl Evaluation {
     }
 }
 
-/// 表示の明るさ（輝度、Rec. 709）。
-fn luma_of_rgba(rgba: &[u8]) -> Vec<f32> {
+/// 16bit の表示の値の明るさ（輝度、Rec. 709）を、0..=255 の目盛りで。
+fn luma_of_rgba16(rgba: &[u16]) -> Vec<f32> {
     rgba.as_chunks::<4>()
         .0
         .iter()
-        .map(|p| 0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2]))
-        .collect()
-}
-
-fn luma_of_color_image(img: &egui::ColorImage) -> Vec<f32> {
-    img.pixels
-        .iter()
-        .map(|p| 0.2126 * f32::from(p.r()) + 0.7152 * f32::from(p.g()) + 0.0722 * f32::from(p.b()))
+        .map(|p| {
+            (0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2])) / 257.0
+        })
         .collect()
 }
 
 /// スロットに標準で見えている明るさ（色の表を当てていれば、その色の明るさ）。
 fn shown(image: &VwImage, palette: Option<&Palette>) -> Vec<f32> {
-    let mut d = display::to_display(image, &DisplayParams::default());
+    let mut d = display::to_display16(image, &DisplayParams::default());
     if let Some(p) = palette {
-        p.recolor(&mut d.rgba);
+        p.recolor16(&mut d.rgba);
     }
-    luma_of_rgba(&d.rgba)
+    luma_of_rgba16(&d.rgba)
+}
+
+/// 色導出の結果（0〜1 の値）の明るさ。変更前（[`shown`]）と同じく 16bit の段に丸め、灰色なら
+/// 同じように色の表を引く。手順を揃えるのは、何も変えていない色導出が変更前と同じ値になるように。
+pub fn luma_of_derived(float: &crate::nodes::Float, palette: Option<&Palette>) -> Vec<f32> {
+    let level = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+    let mut rgba: Vec<u16> = match float.channels {
+        1 => float
+            .data
+            .iter()
+            .flat_map(|&v| {
+                let g = level(v);
+                [g, g, g, u16::MAX]
+            })
+            .collect(),
+        _ => float
+            .data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|c| [level(c[0]), level(c[1]), level(c[2]), u16::MAX])
+            .collect(),
+    };
+    if let (1, Some(p)) = (float.channels, palette) {
+        p.recolor16(&mut rgba);
+    }
+    luma_of_rgba16(&rgba)
 }
 
 fn evaluate(p: &Pending) -> Report {
     let (w, h) = (p.image.width, p.image.height);
     let before_px = shown(&p.image, p.palette.as_deref());
     let before = Image::new(w, h, &before_px);
-    let after_px = p.edited.as_deref().map(luma_of_color_image);
-    let after = after_px.as_deref().map(|px| Image::new(w, h, px));
+    let after = p.edited.as_deref().map(|px| Image::new(w, h, px));
     let reference_px = p.reference.as_ref().map(|(_, img, palette)| {
         img.as_ref()
             .map(|img| (img.width, img.height, shown(img, palette.as_deref())))
@@ -425,8 +451,65 @@ mod tests {
         let snr = r.rows.iter().find(|r| r.metric == Metric::Snr).unwrap();
         assert_eq!(snr.before, Some(f64::INFINITY));
         let cnr = r.rows.iter().find(|r| r.metric == Metric::Cnr).unwrap();
-        assert_eq!(cnr.before, Some(17.0));
+        assert!((cnr.before.unwrap() - 17.0).abs() < 1e-4, "{cnr:?}");
         assert_eq!(cnr.missing, None);
+    }
+
+    fn gray16(w: u32, h: u32, px: Vec<u16>) -> Arc<VwImage> {
+        Arc::new(VwImage::new(w, h, ColorModel::Gray, PixelData::U16(px)).unwrap())
+    }
+
+    /// 画像の値をそのまま 0〜1 にした、何も変えていない色導出。
+    fn unchanged(image: &VwImage) -> crate::nodes::Float {
+        let PixelData::U16(v) = &image.data else {
+            panic!("16-bit image expected")
+        };
+        crate::nodes::Float::new(
+            image.width as usize,
+            image.height as usize,
+            1,
+            v.iter().map(|&v| f32::from(v) / 65535.0).collect(),
+        )
+    }
+
+    #[test]
+    fn differences_finer_than_an_8_bit_step_are_measured() {
+        // 0 と 100 の市松模様。8bit に丸めるとどちらも 0 になり、鮮鋭度が 0 になっていた。
+        let px = (0..64)
+            .map(|i| if (i % 8 + i / 8) % 2 == 0 { 0 } else { 100 })
+            .collect();
+        let r = evaluate(&pending(gray16(8, 8, px)));
+        let sharp = r
+            .rows
+            .iter()
+            .find(|r| r.metric == Metric::Sharpness)
+            .unwrap();
+        assert!(sharp.before.unwrap() > 0.0, "{sharp:?}");
+    }
+
+    #[test]
+    fn brightness_stays_on_the_0_to_255_scale() {
+        let px = shown(&gray16(2, 1, vec![0, 65535]), None);
+        assert_eq!(px, [0.0, 255.0]);
+    }
+
+    #[test]
+    fn an_unchanged_derivation_matches_the_before_column_exactly() {
+        let image = gray16(64, 4, (0..256).map(|i| (i * 257 + i % 7) as u16).collect());
+        let mut p = pending(image.clone());
+        p.edited = Some(Arc::new(luma_of_derived(&unchanged(&image), None)));
+        let r = evaluate(&p);
+        assert_eq!(r.rows[0].after, Some(f64::INFINITY), "{:?}", r.rows[0]);
+    }
+
+    #[test]
+    fn a_derivation_reads_the_color_map_the_same_way_as_the_before_column() {
+        let image = gray16(64, 4, (0..256).map(|i| (i * 257 + 100) as u16).collect());
+        let palette = Palette::builtin("viridis").unwrap();
+        assert_eq!(
+            luma_of_derived(&unchanged(&image), Some(&palette)),
+            shown(&image, Some(&palette))
+        );
     }
 
     #[test]

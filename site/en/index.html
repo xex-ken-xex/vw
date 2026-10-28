@@ -117,7 +117,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       <tr><td>JPEG</td><td>Shown the right way up from EXIF orientation, with camera, lens and exposure info. Photos with GPS appear on the map, and the shooting info is searchable</td></tr>
       <tr><td>Camera RAW</td><td>The camera's embedded preview shows at once, then the sensor data is developed in the background and swapped in. Pairs with the JPEG of the same name for comparison, and <code>vwbatch</code> develops and exports in bulk</td></tr>
       <tr><td>FITS (astronomy)</td><td>Dark images are stretched (zscale, asinh and more) with a color map and gauge. Darks and flats are applied, the sky chart shows where the image points, and 2–3 grayscale images are aligned and composed into color. Finishing nodes (stretch, noise reduction, deconvolution, star removal and more) are available, and every header keyword is searchable</td></tr>
-      <tr><td>PNG</td><td>16-bit images stay 16-bit, so you measure the real values, and a 10-bit monitor shows them with 10-bit gradation. Text chunks (creating software, descriptions and so on) appear as metadata and are searchable</td></tr>
+      <tr><td>PNG</td><td>16-bit images stay 16-bit, so you measure the real values, and a 10-bit or 12-bit monitor shows them with that gradation. Text chunks (creating software, descriptions and so on) appear as metadata and are searchable</td></tr>
       <tr><td>WebP / GIF</td><td>All frames of an animation go into one slot and play at the speed written in the file. The wheel steps one frame at a time</td></tr>
       <tr><td>TIFF</td><td>Multi-page files go into one slot and the wheel turns the pages. 32-bit float, CMYK and fax compression are read too. EXIF and tags are searchable</td></tr>
       <tr><td>BMP</td><td>Old 1–32 bit BMPs and RLE compression open too</td></tr>
@@ -154,7 +154,7 @@ footer a { color: var(--muted); text-decoration: underline; }
     <h3>More</h3>
     <ul class="plain">
       <li><b>Fast</b>: images decode in parallel in the background and are drawn by the GPU</li>
-      <li><b>No loss</b>: 16-bit images are loaded as 16-bit, and pixel values, measurements and exports keep the full depth. On a 10-bit monitor the screen shows 10-bit gradation too</li>
+      <li><b>No loss</b>: 16-bit images are loaded as 16-bit, and pixel values, measurements and exports keep the full depth. On a 10-bit or 12-bit monitor the screen shows that gradation too</li>
       <li><b>Never writes to your images</b>: tags and catalogs are stored in separate files</li>
       <li><b>AI stays on your PC</b>: the tagging and face models run on the CPU and never send images out</li>
       <li><b>English and Japanese UI</b>: English by default</li>
