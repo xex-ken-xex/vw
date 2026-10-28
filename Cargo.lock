@@ -827,7 +827,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "dicoamplio"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4445,7 +4445,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vw"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
@@ -4502,7 +4502,7 @@ dependencies = [
 
 [[package]]
 name = "vw-bmp"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "vw-core",
  "zune-bmp",
@@ -4511,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "vw-compare"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "base64 0.22.1",
  "png",
@@ -4522,7 +4522,7 @@ dependencies = [
 
 [[package]]
 name = "vw-core"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "kamadak-exif",
  "regex",
@@ -4530,7 +4530,7 @@ dependencies = [
 
 [[package]]
 name = "vw-dicom"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "charls",
  "dicom-core",
@@ -4546,7 +4546,7 @@ dependencies = [
 
 [[package]]
 name = "vw-dock"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "eframe",
  "egui",
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "vw-fits"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "flate2",
  "vw-core",
@@ -4566,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "vw-gif"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "gif",
  "vw-core",
@@ -4574,7 +4574,7 @@ dependencies = [
 
 [[package]]
 name = "vw-jpeg"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "jpeg-encoder",
  "vw-core",
@@ -4584,14 +4584,14 @@ dependencies = [
 
 [[package]]
 name = "vw-launch"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "vw-log"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "chrono",
  "egui",
@@ -4599,7 +4599,7 @@ dependencies = [
 
 [[package]]
 name = "vw-pipeline"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "rustfft",
  "serde",
@@ -4611,7 +4611,7 @@ dependencies = [
 
 [[package]]
 name = "vw-png"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "png",
  "vw-core",
@@ -4619,14 +4619,14 @@ dependencies = [
 
 [[package]]
 name = "vw-quality"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "vw-raw"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "image",
  "rawler",
@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "vw-renderer"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "eframe",
  "wgpu",
@@ -4644,7 +4644,7 @@ dependencies = [
 
 [[package]]
 name = "vw-tiff"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "tiff",
  "vw-core",
@@ -4652,7 +4652,7 @@ dependencies = [
 
 [[package]]
 name = "vw-tree"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "egui",
  "vw-ui",
@@ -4660,14 +4660,14 @@ dependencies = [
 
 [[package]]
 name = "vw-ui"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "egui",
 ]
 
 [[package]]
 name = "vw-webp"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "image-webp",
  "vw-core",
@@ -4675,7 +4675,7 @@ dependencies = [
 
 [[package]]
 name = "vwbatch"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "clap",
  "jpeg-encoder",
