@@ -12,7 +12,7 @@ use crate::loader::Job;
 use crate::settings_ui::fps_input;
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::tree::{self};
-use crate::viewer::Shown;
+use crate::viewer::{SequenceKind, Shown};
 
 use super::*;
 
@@ -63,6 +63,34 @@ impl VwApp {
             Playback::new(self.slots[self.active].id, loader_slot, frames, clock, fps);
         playback.delays = delays;
         self.playback = Some(playback);
+    }
+
+    /// スロットを 1 つだけ出しているとき、そこに開いた GIF・WebP のアニメーションを再生する。
+    /// 並べて見ているときに回さないのは、比べている最中に他のスロットが動くと気が散り、
+    /// 再生の仕組みも 1 つのスロットを最大化して回す作りのため。
+    pub(super) fn autoplay_animation(&mut self) {
+        if !self.shows_one_slot() {
+            self.autoplayed = None;
+            return;
+        }
+        if self.playback.is_some() {
+            return;
+        }
+        let Some(slot) = self.slots.get(self.active) else {
+            return;
+        };
+        let Some(seq) = slot
+            .sequence
+            .as_ref()
+            .filter(|q| q.kind == SequenceKind::Frames && q.delays.is_some())
+        else {
+            return;
+        };
+        let key = (slot.id, seq.folder.clone());
+        if self.autoplayed.as_ref() != Some(&key) {
+            self.autoplayed = Some(key);
+            self.start_playback();
+        }
     }
 
     pub(super) fn stop_playback(&mut self) {
