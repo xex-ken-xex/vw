@@ -64,7 +64,7 @@
       vwbatch は別の Application にする。実行エイリアスは Application ごとに 1 つしか宣言できないため。
       コマンドから使う道具なので、スタートメニューには出さない（AppListEntry="none"）。
     -->
-    <Application Id="vwbatch" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication" desktop4:Subsystem="console">
+    <Application Id="vwbatch" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication" desktop4:Subsystem="console" desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="vwbatch"
         Description="Applies a saved vw pipeline to images"
@@ -74,7 +74,7 @@
         AppListEntry="none" />
       <Extensions>
         <uap5:Extension Category="windows.appExecutionAlias" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication">
-          <uap5:AppExecutionAlias desktop4:Subsystem="console">
+          <uap5:AppExecutionAlias desktop4:Subsystem="console" desktop4:SupportsMultipleInstances="true">
             <uap5:ExecutionAlias Alias="vwbatch.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
