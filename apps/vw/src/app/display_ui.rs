@@ -12,7 +12,7 @@ use crate::deep::{self, Layer, Mode, Surface};
 use crate::displays::{self, Display};
 use crate::i18n::{tr, tr1};
 use crate::layout;
-use crate::settings::Language;
+use crate::settings::{Language, OutputDepth};
 
 /// 描き終わるまでの間、描き直しを頼む間隔。
 const POLL: Duration = Duration::from_millis(50);
@@ -120,7 +120,7 @@ impl VwApp {
         let now = (label, drawn);
         if self.display.logged.as_ref() != Some(&now) {
             if drawn.is_some() || self.display.logged.as_ref().is_some_and(|l| l.1.is_some()) {
-                let how = drawn.map_or("8-bit", Mode::title);
+                let how = deep::title(drawn, surface);
                 self.log
                     .info(format!("Display: {} - image drawn {how}", now.0));
             }
@@ -186,10 +186,7 @@ impl VwApp {
                 format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
             ),
             (t("Renderer"), self.display.renderer.clone()),
-            (
-                t("Surface"),
-                tr1(lang, "{}-bit per color", &surface.bits.to_string()),
-            ),
+            (t("Surface"), surface_text(surface, lang)),
             (
                 t("16-bit textures"),
                 if !surface.gpu {
@@ -230,15 +227,15 @@ impl VwApp {
                 t("Settings"),
                 format!(
                     "{}: {}, {}: {}",
-                    tr(lang, "10-bit"),
-                    on_off(monitor.ten_bit),
+                    tr(lang, "Depth"),
+                    tr(lang, monitor.depth.title()),
                     tr(lang, "Dithering"),
                     on_off(monitor.dither)
                 ),
             ));
             lines.push((
                 t("Deep images are drawn"),
-                deep::mode(&monitor, surface).map_or_else(|| t("8-bit"), |m| t(m.title())),
+                t(deep::title(deep::mode(&monitor, surface), surface)),
             ));
             lines.push((t("ID"), d.id.clone()));
         }
@@ -303,7 +300,7 @@ impl VwApp {
                 self.log.info(format!(
                     "Display gradation test: {}, drawn {}",
                     chosen.as_ref().map_or_else(String::new, Display::label),
-                    mode.map_or("8-bit", Mode::title)
+                    deep::title(mode, surface)
                 ));
                 self.display.test.setup_open = false;
                 self.display.test.showing = Some(Showing {
@@ -312,7 +309,7 @@ impl VwApp {
                     range: 1,
                     frames: 0,
                     drawn: None,
-                    ten_bit_setting: monitor.ten_bit,
+                    asked: monitor.depth,
                 });
             }
         }
@@ -368,8 +365,8 @@ struct Showing {
     frames: u32,
     /// 作った帯（画面の大きさと明るさの範囲）。
     drawn: Option<(Drawn, [usize; 2], usize)>,
-    /// そのモニタの 10bit の設定。入っているのに 10bit で描けないときに案内を出す。
-    ten_bit_setting: bool,
+    /// そのモニタに頼んだ深さ。頼んだ深さで描けないときに案内を出す。
+    asked: OutputDepth,
 }
 
 enum Drawn {
@@ -454,12 +451,46 @@ pub fn monitor_bits(display: &Display) -> Option<u32> {
         })
 }
 
-/// vw が描いている 1 色の bit 数。描画先が深くても、10bit の描き方でなければ 8bit に落とす。
+/// vw が描いている 1 色の bit 数。描画先が深くても、深く描く描き方でなければ 8bit に落とす。
 pub fn drawn_bits(mode: Option<Mode>, surface: Surface) -> u32 {
     match mode {
-        Some(Mode::TenBit) => u32::from(surface.bits),
+        Some(Mode::Deep) => surface.drawn_bits(),
         _ => 8,
     }
+}
+
+/// 描画先の面の説明。16bit の浮動小数点は、見込める細かさを添える。
+pub fn surface_text(surface: Surface, lang: Language) -> String {
+    if surface.linear() {
+        tr1(
+            lang,
+            "16-bit float (about {} bits per color)",
+            &surface.drawn_bits().to_string(),
+        )
+    } else {
+        tr1(lang, "{}-bit per color", &surface.bits.to_string())
+    }
+}
+
+/// 階調テストに添える、設定の案内。頼んだ深さで描けないとき、頼んでいないとき、モニタが
+/// 頼んだより深い信号を受けるときに出す。
+pub fn advice(asked: OutputDepth, surface: Surface, monitor_bits: Option<u32>) -> Option<Advice> {
+    if asked == OutputDepth::Standard {
+        Some(Advice::TurnOn)
+    } else if asked > surface.depth() {
+        Some(Advice::Restart)
+    } else if asked == OutputDepth::TenBit && monitor_bits.is_some_and(|m| m > 10) {
+        Some(Advice::Deeper)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advice {
+    TurnOn,
+    Restart,
+    Deeper,
 }
 
 /// 帯が細かく見えるはずの深さ。vw の描く深さとモニタの受ける深さの浅い方。
@@ -652,10 +683,7 @@ fn labels(painter: &egui::Painter, rect: Rect, s: &Showing, surface: Surface, la
             text,
         );
     }
-    let drawn = match s.mode {
-        Some(mode) => tr(lang, mode.title()).to_owned(),
-        None => tr(lang, "8-bit").to_owned(),
-    };
+    let drawn = tr(lang, deep::title(s.mode, surface)).to_owned();
     let mut info = vec![
         s.display
             .as_ref()
@@ -670,7 +698,7 @@ fn labels(painter: &egui::Painter, rect: Rect, s: &Showing, surface: Surface, la
         format!(
             "{}: {}  {}: {}",
             tr(lang, "Surface"),
-            tr1(lang, "{}-bit per color", &surface.bits.to_string()),
+            surface_text(surface, lang),
             tr(lang, "Drawn"),
             drawn
         ),
@@ -694,12 +722,11 @@ fn labels(painter: &egui::Painter, rect: Rect, s: &Showing, surface: Surface, la
         ),
         tr(lang, "With n-bit output, the bands down to the n-bit steps get finer one by one, and the deeper bands look the same as the n-bit band. With 8-bit output every band looks like the top one.").to_owned(),
     ];
-    if s.ten_bit_setting && s.mode != Some(Mode::TenBit) {
-        info.push(
-            tr(lang, "10-bit is on for this monitor, but this start has an 8-bit surface. Restart vw, and see Help > System information.").to_owned(),
-        );
-    } else if !s.ten_bit_setting {
-        info.push(tr(lang, "To draw 10-bit, turn on 10-bit for this monitor in Settings > Display and restart vw.").to_owned());
+    match advice(s.asked, surface, monitor_bits) {
+        Some(Advice::TurnOn) => info.push(tr(lang, "To draw deeper than 8 bits, choose 10-bit or 12-bit or more for this monitor in Settings > Display and restart vw.").to_owned()),
+        Some(Advice::Restart) => info.push(tr1(lang, "{} is chosen for this monitor, but this start cannot draw it. Restart vw, and see Help > System information.", tr(lang, s.asked.title()))),
+        Some(Advice::Deeper) => info.push(tr(lang, "This monitor takes more than 10 bits. Choose 12-bit or more for it in Settings > Display and restart vw to draw deeper.").to_owned()),
+        None => {}
     }
     boxed(
         egui::pos2(rect.right() - 12.0, rect.bottom() - 12.0),
@@ -793,7 +820,7 @@ mod tests {
             gpu: true,
             norm16: true,
         };
-        assert_eq!(drawn_bits(Some(Mode::TenBit), surface), 10);
+        assert_eq!(drawn_bits(Some(Mode::Deep), surface), 10);
         assert_eq!(drawn_bits(Some(Mode::Dither), surface), 8);
         assert_eq!(drawn_bits(None, surface), 8);
     }
@@ -885,6 +912,44 @@ mod tests {
         for name in names {
             assert_ne!(tr(Language::Japanese, name), name);
         }
+    }
+
+    #[test]
+    fn advice_points_to_the_setting_the_restart_or_a_deeper_choice() {
+        let ten = Surface {
+            bits: 10,
+            gpu: true,
+            norm16: true,
+        };
+        let float = Surface { bits: 16, ..ten };
+        assert_eq!(
+            advice(OutputDepth::Standard, float, Some(12)),
+            Some(Advice::TurnOn)
+        );
+        assert_eq!(
+            advice(OutputDepth::Float16, ten, Some(12)),
+            Some(Advice::Restart)
+        );
+        assert_eq!(
+            advice(OutputDepth::TenBit, ten, Some(12)),
+            Some(Advice::Deeper)
+        );
+        assert_eq!(advice(OutputDepth::TenBit, ten, Some(10)), None);
+        assert_eq!(advice(OutputDepth::Float16, float, Some(12)), None);
+    }
+
+    #[test]
+    fn a_float_surface_is_described_with_its_likely_bits() {
+        let float = Surface {
+            bits: 16,
+            gpu: true,
+            norm16: true,
+        };
+        assert_eq!(
+            surface_text(float, Language::English),
+            "16-bit float (about 12 bits per color)"
+        );
+        assert_eq!(drawn_bits(Some(Mode::Deep), float), 12);
     }
 
     #[test]

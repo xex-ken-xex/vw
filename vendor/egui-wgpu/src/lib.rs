@@ -1,5 +1,6 @@
 // Modified by the vw contributors (2026): the surface format can be chosen by the
-// application (`set_preferred_surface_formats`) and lints are allowed below so that
+// application (`set_preferred_surface_formats`), Rgba16Float is offered only on linear
+// scRGB surfaces, and lints are allowed below so that
 // vw's `cargo clippy -- -D warnings` passes. See vendor/egui-wgpu/README-vw.md.
 
 //! This crates provides bindings between [`egui`](https://github.com/emilk/egui) and [wgpu](https://crates.io/crates/wgpu).
@@ -277,7 +278,19 @@ impl RenderState {
             profiling::scope!("get_capabilities");
             compatible_surface.map_or_else(
                 || vec![wgpu::TextureFormat::Rgba8Unorm],
-                |s| s.get_capabilities(&adapter).formats,
+                |s| {
+                    // Added by the vw contributors: an fp16 surface is only usable when its
+                    // values are read as linear scRGB; otherwise `Auto` would pick sRGB and
+                    // the linear output below would look washed out.
+                    let caps = s.get_capabilities(&adapter);
+                    let linear_fp16 = caps
+                        .color_spaces(wgpu::TextureFormat::Rgba16Float)
+                        .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR);
+                    caps.formats
+                        .into_iter()
+                        .filter(|f| *f != wgpu::TextureFormat::Rgba16Float || linear_fp16)
+                        .collect()
+                },
             )
         };
         let target_format = crate::preferred_framebuffer_format(&surface_formats)?;

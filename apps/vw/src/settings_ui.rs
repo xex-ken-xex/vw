@@ -19,7 +19,8 @@ use crate::settings::{
     parse_hex_color, CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling,
     FitsCalibration, FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode,
     GaugeSide, HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings,
-    LogStyle, MonitorSettings, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
+    LogStyle, MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree,
+    Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -240,7 +241,7 @@ const ITEMS: [Item; 106] = [
         section: Section::Display,
         key: "display.monitors",
         title: "Monitors",
-        description: "For each monitor, draw 16-bit images (PNG, TIFF, FITS, developed RAW...) with 10-bit gradation, or dither them when reducing them to 8 bits so smooth gradients show no bands. Applies to the one large image (1x1, maximized) and the fullscreen slideshow. 10-bit takes effect from the next start.",
+        description: "For each monitor, draw 16-bit images (PNG, TIFF, FITS, developed RAW...) with 10-bit or 12-bit or more gradation, or dither them when reducing them to 8 bits so smooth gradients show no bands. Applies to the one large image (1x1, maximized) and the fullscreen slideshow. The depth takes effect from the next start. 12-bit or more draws on a 16-bit float surface, which Windows sends at the monitor's signal depth.",
         widget: monitors_widget,
     },
     Item {
@@ -1126,30 +1127,39 @@ fn monitors_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
     let mut changed = false;
     for (label, detail, mut m) in rows {
         ui.horizontal(|ui| {
-            let before = (m.ten_bit, m.dither);
-            ui.checkbox(&mut m.ten_bit, tr(lang, "10-bit"));
+            let before = (m.depth, m.dither);
+            egui::ComboBox::from_id_salt(("monitor-depth", &m.id))
+                .selected_text(tr(lang, m.depth.title()))
+                .show_ui(ui, |ui| {
+                    for depth in OutputDepth::ALL {
+                        ui.selectable_value(&mut m.depth, depth, tr(lang, depth.title()));
+                    }
+                });
             ui.checkbox(&mut m.dither, tr(lang, "Dithering"));
             ui.label(label);
             if !detail.is_empty() {
                 ui.weak(detail);
             }
-            if (m.ten_bit, m.dither) != before {
+            if (m.depth, m.dither) != before {
                 s.display.set(m);
                 changed = true;
             }
         });
     }
-    let started = if surface.bits >= 10 {
-        tr1(
+    let mut started = tr1(
+        lang,
+        "This start: {}.",
+        &crate::app::display_ui::surface_text(surface, lang),
+    );
+    let asked = s.display.deepest();
+    if asked > surface.depth() {
+        started.push(' ');
+        started.push_str(&tr1(
             lang,
-            "This start: {}-bit surface.",
-            &surface.bits.to_string(),
-        )
-    } else if s.display.wants_ten_bit() {
-        tr(lang, "This start: 8-bit surface. Restart vw to try 10-bit; if it still says 8-bit, see Help > System information.").to_owned()
-    } else {
-        tr(lang, "This start: 8-bit surface.").to_owned()
-    };
+            "Restart vw to draw {}; if this line does not change, see Help > System information.",
+            tr(lang, asked.title()),
+        ));
+    }
     ui.weak(started);
     changed
 }

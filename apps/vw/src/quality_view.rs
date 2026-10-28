@@ -160,7 +160,7 @@ pub fn table(
 }
 
 /// 測り方の断り。ROI の横の値（物理量）と食い違って見えるので、評価を出す所には必ず添える。
-const MEASURED_ON: &str = "All values are measured on the display brightness (0 to 255), because the after image exists only as display colors. They do not match the mean / SD shown on the ROI, which are file values such as HU.";
+const MEASURED_ON: &str = "All values are measured on the display brightness (0 to 255, computed from 16-bit display values, so steps finer than 8 bits count), because the after image exists only as display colors. They do not match the mean / SD shown on the ROI, which are file values such as HU.";
 
 /// 判定の帯。
 fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {

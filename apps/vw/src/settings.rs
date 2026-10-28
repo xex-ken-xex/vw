@@ -1571,7 +1571,7 @@ impl SearchGroup {
     }
 }
 
-/// モニタごとの表示（[`crate::deep`]）。並べていないモニタは、10bit もディザも切。
+/// モニタごとの表示（[`crate::deep`]）。並べていないモニタは、8bit でディザも切。
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct DisplaySettings {
     pub monitors: Vec<MonitorSettings>,
@@ -1585,12 +1585,52 @@ pub struct MonitorSettings {
     /// 設定ファイルを読む人のための名前。見分けには使わない。
     #[serde(default)]
     pub name: String,
-    /// 16bit の画像を 10bit の階調で出す。どれか 1 台でも入っていれば、wgpu で起動して 10bit の面を頼む。
+    /// 16bit の画像を描く深さ。どれか 1 台でも 8bit より深ければ、wgpu で起動して深い面を頼む。
     #[serde(default)]
+    pub depth: OutputDepth,
+    /// 前の版の「10bit」。読むときに `depth` に移し、書くときは書かない。
+    #[serde(default, skip_serializing)]
     pub ten_bit: bool,
     /// 16bit の画像を 8bit に落とすときに、細かいノイズを混ぜて縞を目立たなくする。
     #[serde(default)]
     pub dither: bool,
+}
+
+/// 16bit の画像を描く深さ。並びは浅い順。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+pub enum OutputDepth {
+    #[default]
+    #[serde(rename = "8-bit")]
+    Standard,
+    #[serde(rename = "10-bit")]
+    TenBit,
+    /// 16bit の浮動小数点の面で、1 色 12bit ほど以上の細かさ。
+    #[serde(rename = "12-bit+")]
+    Float16,
+}
+
+impl OutputDepth {
+    pub const ALL: [OutputDepth; 3] = [
+        OutputDepth::Standard,
+        OutputDepth::TenBit,
+        OutputDepth::Float16,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            OutputDepth::Standard => "8-bit",
+            OutputDepth::TenBit => "10-bit",
+            OutputDepth::Float16 => "12-bit or more",
+        }
+    }
+
+    fn renderer(self) -> vw_renderer::Depth {
+        match self {
+            OutputDepth::Standard => vw_renderer::Depth::Standard,
+            OutputDepth::TenBit => vw_renderer::Depth::TenBit,
+            OutputDepth::Float16 => vw_renderer::Depth::Float16,
+        }
+    }
 }
 
 impl DisplaySettings {
@@ -1602,6 +1642,12 @@ impl DisplaySettings {
                 .get::<Vec<MonitorSettings>>("monitors")
                 .unwrap_or_default()
                 .into_iter()
+                .map(|mut m| {
+                    if std::mem::take(&mut m.ten_bit) && m.depth == OutputDepth::Standard {
+                        m.depth = OutputDepth::TenBit;
+                    }
+                    m
+                })
                 .filter(|m| {
                     let problem = if m.id.trim().is_empty() {
                         Some("id is empty")
@@ -1634,29 +1680,28 @@ impl DisplaySettings {
     /// `id` のモニタの設定を変える。全部切になったモニタは並びから外す（設定ファイルを短く保つため）。
     pub fn set(&mut self, settings: MonitorSettings) {
         self.monitors.retain(|m| m.id != settings.id);
-        if settings.ten_bit || settings.dither {
+        if settings.depth != OutputDepth::Standard || settings.dither {
             self.monitors.push(settings);
         }
     }
 
-    /// どれか 1 台でも 10bit が入っている。起動するときに描画の方法を決めるのに使う。
-    pub fn wants_ten_bit(&self) -> bool {
-        self.monitors.iter().any(|m| m.ten_bit)
+    /// いちばん深いモニタの深さ。起動するときに描画の方法と面の形式を決めるのに使う。
+    pub fn deepest(&self) -> OutputDepth {
+        self.monitors
+            .iter()
+            .map(|m| m.depth)
+            .max()
+            .unwrap_or_default()
     }
 }
 
 /// 起動の前に、描画先の面の深さだけを設定ファイルから読む。設定の全体はウインドウを作ったあとに
 /// 読むが、面の深さはウインドウを作る前に決める必要があるため。
 pub fn startup_depth(path: Option<&Path>) -> vw_renderer::Depth {
-    let ten_bit = path
-        .and_then(|p| std::fs::read_to_string(p).ok())
+    path.and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|text| Settings::from_toml(&text).ok())
-        .is_some_and(|(s, _)| s.display.wants_ten_bit());
-    if ten_bit {
-        vw_renderer::Depth::TenBit
-    } else {
-        vw_renderer::Depth::Standard
-    }
+        .map_or(OutputDepth::Standard, |(s, _)| s.display.deepest())
+        .renderer()
 }
 
 /// 全画面スライドショーの進め方。
@@ -2402,20 +2447,22 @@ mod tests {
         s.display.set(MonitorSettings {
             id: r"\\?\DISPLAY#EIZ1234#5&1&0&UID4352".into(),
             name: "RX660".into(),
-            ten_bit: true,
-            dither: false,
+            depth: OutputDepth::Float16,
+            ..Default::default()
         });
-        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        let text = s.to_toml();
+        assert!(text.contains("depth = \"12-bit+\""), "{text}");
+        let (back, problems) = Settings::from_toml(&text).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(back.display, s.display);
-        assert!(back.display.wants_ten_bit());
+        assert_eq!(back.display.deepest(), OutputDepth::Float16);
     }
 
     #[test]
     fn a_monitor_not_listed_has_ten_bit_and_dither_off() {
         let m = DisplaySettings::default().monitor("DP-1/U2720Q");
-        assert_eq!((m.ten_bit, m.dither), (false, false));
-        assert!(!DisplaySettings::default().wants_ten_bit());
+        assert_eq!((m.depth, m.dither), (OutputDepth::Standard, false));
+        assert_eq!(DisplaySettings::default().deepest(), OutputDepth::Standard);
     }
 
     #[test]
@@ -2450,19 +2497,53 @@ dither = true
 "#;
         let (s, problems) = Settings::from_toml(text).unwrap();
         assert_eq!(s.display.monitors.len(), 1);
-        assert!(s.display.monitors[0].ten_bit);
+        assert_eq!(s.display.monitors[0].depth, OutputDepth::TenBit);
         assert_eq!(problems.len(), 2, "{problems:?}");
     }
 
     #[test]
-    fn startup_depth_is_ten_bit_only_when_a_monitor_asks_for_it() {
+    fn the_earlier_ten_bit_switch_reads_as_10_bit_and_is_not_written_again() {
+        let text = "[[display.monitors]]\nid = \"a\"\nten_bit = true\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(s.display.monitor("a").depth, OutputDepth::TenBit);
+        let written = s.to_toml();
+        assert!(!written.contains("ten_bit"), "{written}");
+        assert!(written.contains("depth = \"10-bit\""), "{written}");
+    }
+
+    #[test]
+    fn the_deepest_monitor_decides_the_surface() {
+        let mut d = DisplaySettings::default();
+        for (id, depth) in [("a", OutputDepth::TenBit), ("b", OutputDepth::Float16)] {
+            d.set(MonitorSettings {
+                id: id.into(),
+                depth,
+                ..Default::default()
+            });
+        }
+        assert_eq!(d.deepest(), OutputDepth::Float16);
+    }
+
+    #[test]
+    fn startup_depth_is_deep_only_when_a_monitor_asks_for_it() {
         let dir = crate::test_util::TempDir::new();
         let path = dir.path().join("settings.toml");
         assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::Standard);
         std::fs::write(&path, "[[display.monitors]]\nid = \"a\"\ndither = true\n").unwrap();
         assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::Standard);
-        std::fs::write(&path, "[[display.monitors]]\nid = \"a\"\nten_bit = true\n").unwrap();
+        std::fs::write(
+            &path,
+            "[[display.monitors]]\nid = \"a\"\ndepth = \"10-bit\"\n",
+        )
+        .unwrap();
         assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::TenBit);
+        std::fs::write(
+            &path,
+            "[[display.monitors]]\nid = \"a\"\ndepth = \"12-bit+\"\n",
+        )
+        .unwrap();
+        assert_eq!(startup_depth(Some(&path)), vw_renderer::Depth::Float16);
     }
 
     #[test]

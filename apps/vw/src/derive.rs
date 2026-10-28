@@ -58,6 +58,8 @@ struct Key {
 struct Rendered {
     /// フル解像度の色導出（解析ウインドウ用）。
     full: Arc<ColorImage>,
+    /// `full` の明るさを 16bit の値から求めたもの（定量評価用、[`crate::quality::luma_of_derived`]）。
+    luma: Arc<Vec<f32>>,
     derived: ColorImage,
     difference: ColorImage,
     max: u8,
@@ -71,6 +73,8 @@ pub struct Ready {
     key: Key,
     /// フル解像度の色導出。下描きのときは表示の大きさしかない（[`Ready::preview`]）。
     pub full: Arc<ColorImage>,
+    /// `full` の明るさ（16bit の値から）。定量評価に使う。
+    pub luma: Arc<Vec<f32>>,
     /// 値を動かしている間の、縮めた画像での下描き。コピーや定量評価には使わない。
     pub preview: bool,
     pub derived: TextureHandle,
@@ -241,6 +245,7 @@ impl Derive {
                 ready.difference.set(r.difference, options);
                 ready.max = r.max;
                 ready.full = r.full;
+                ready.luma = r.luma;
                 ready.preview = key.preview;
                 ready.notes = r.notes;
                 ready.key = key;
@@ -251,6 +256,7 @@ impl Derive {
                     difference: ctx.load_texture("derived-difference", r.difference, options),
                     max: r.max,
                     full: r.full,
+                    luma: r.luma,
                     preview: key.preview,
                     notes: r.notes,
                     key,
@@ -310,6 +316,13 @@ impl Derive {
         self.ready_for(shown)
             .filter(|r| !r.preview)
             .map(|r| &r.full)
+    }
+
+    /// [`Derive::full_for`] の明るさ（定量評価に使う）。
+    pub fn luma_for(&self, shown: &Shown) -> Option<&Arc<Vec<f32>>> {
+        self.ready_for(shown)
+            .filter(|r| !r.preview)
+            .map(|r| &r.luma)
     }
 
     /// 今の値でノードが当てられなかった理由（ノードの番号と文）。
@@ -432,6 +445,10 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
     let mut derived = pixel_pipeline::to_color_image(&float, &standard);
     // 色の表は灰色のまま出てきたときだけ引く（混合などで RGB になったら、その色を出す）。
     let gray = float.channels == 1;
+    let luma = Arc::new(crate::quality::luma_of_derived(
+        &float,
+        key.palette.as_deref().filter(|_| gray),
+    ));
     drop(float);
     if let Some(p) = &key.palette {
         p.recolor(&mut standard);
@@ -446,6 +463,7 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
     Rendered {
         derived: crate::loader::fit_color_image(derived.clone(), key.size),
         full: Arc::new(derived),
+        luma,
         difference: crate::loader::fit_color_image(difference, key.size),
         max,
         checked,

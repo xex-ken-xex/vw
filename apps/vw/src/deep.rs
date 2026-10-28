@@ -1,7 +1,8 @@
 //! 8bit より深い画像（16bit の PNG・TIFF、FITS、現像した RAW など）を、8bit に落とさずに描く。
 //!
-//! - 10bit: 描画先の面が 10bit（[`vw_renderer::Depth::TenBit`]）のとき、画像を 16bit のテクスチャに
-//!   入れ、egui の絵の間に自前のシェーダーで描く。egui のテクスチャは 8bit（RGBA8）しかないため。
+//! - 深く描く: 描画先の面が 10bit（Rgb10a2Unorm）か 16bit の浮動小数点（Rgba16Float）のとき、画像を
+//!   16bit のテクスチャに入れ、egui の絵の間に自前のシェーダーで描く。egui のテクスチャは 8bit（RGBA8）
+//!   しかないため。
 //! - ディザ: 8bit に落とすときに、場所ごとに決まった小さなずれ（Bayer の 8x8 の表）を足してから丸める。
 //!   なめらかなグラデーションの縞が、細かい模様に変わって目立たなくなる。値・計測・書き出しは変えない。
 //!
@@ -17,23 +18,24 @@ use eframe::egui_wgpu::{self, wgpu};
 use vw_core::display::{self, DisplayImage16, DisplayParams};
 use vw_core::{Palette, VwImage};
 
-use crate::settings::MonitorSettings;
+use crate::settings::{MonitorSettings, OutputDepth};
 
 /// 深い画像の描き方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// 16bit のテクスチャで 10bit の面に描く。
-    TenBit,
+    /// 16bit のテクスチャで、面の深さ（10bit か 16bit の浮動小数点）のまま描く。
+    Deep,
     /// 8bit に落とすときにディザをかける。
     Dither,
 }
 
-impl Mode {
-    pub fn title(self) -> &'static str {
-        match self {
-            Mode::TenBit => "10-bit",
-            Mode::Dither => "8-bit with dithering",
-        }
+/// 描き方の名前（ログと画面に出す）。
+pub fn title(mode: Option<Mode>, surface: Surface) -> &'static str {
+    match mode {
+        Some(Mode::Deep) if surface.linear() => "16-bit float",
+        Some(Mode::Deep) => "10-bit",
+        Some(Mode::Dither) => "8-bit with dithering",
+        None => "8-bit",
     }
 }
 
@@ -49,10 +51,44 @@ pub struct Surface {
     pub norm16: bool,
 }
 
-/// そのモニタで深い画像をどう描くか。10bit は面と GPU の用意ができたときだけ。
+impl Surface {
+    /// 16bit の浮動小数点の面。値を線形の scRGB として読むので、ガンマを外して書く。
+    pub fn linear(self) -> bool {
+        self.bits >= 16
+    }
+
+    /// この面に深く描いたときの、1 色あたりのおおよその細かさ（明るい所で）。
+    ///
+    /// 16bit の浮動小数点は仮数が 10bit で、線形の値の白に近い所では 2^-11 刻み。ガンマのかかった
+    /// 明るさに直すと刻みはほぼ半分になるので 12bit とみなす（暗い所はもっと細かい）。
+    /// テクスチャも浮動小数点（Rgba16Float）のときは、ガンマのかかった値の白に近い所で 11bit ほど。
+    pub fn drawn_bits(self) -> u32 {
+        let surface = match self.bits {
+            16.. => 12,
+            bits => u32::from(bits),
+        };
+        if self.norm16 {
+            surface
+        } else {
+            surface.min(11)
+        }
+    }
+
+    /// この面で描ける深さ。
+    pub fn depth(self) -> OutputDepth {
+        match self.bits {
+            16.. if self.gpu => OutputDepth::Float16,
+            10.. if self.gpu => OutputDepth::TenBit,
+            _ => OutputDepth::Standard,
+        }
+    }
+}
+
+/// そのモニタで深い画像をどう描くか。深く描くのは面と GPU の用意ができたときだけ。
+/// 頼んだより深い面（別のモニタが 12bit 以上を頼んだときなど）なら、その深さで描く。
 pub fn mode(monitor: &MonitorSettings, surface: Surface) -> Option<Mode> {
-    if monitor.ten_bit && surface.gpu && surface.bits >= 10 {
-        Some(Mode::TenBit)
+    if monitor.depth != OutputDepth::Standard && surface.depth() != OutputDepth::Standard {
+        Some(Mode::Deep)
     } else if monitor.dither {
         Some(Mode::Dither)
     } else {
@@ -303,7 +339,7 @@ fn build(source: Source, mode: Mode, norm16: bool) -> Receiver<Built> {
             Source::Pixels(p) => p,
         };
         let built = match mode {
-            Mode::TenBit => Built::Gpu(upload(pixels, norm16)),
+            Mode::Deep => Built::Gpu(upload(pixels, norm16)),
             Mode::Dither => Built::Dither(ColorImage::from_rgba_unmultiplied(
                 [pixels.width as usize, pixels.height as usize],
                 &dither(&pixels.rgba, pixels.width as usize),
@@ -549,7 +585,30 @@ fn fs_main(v: Out) -> @location(0) vec4<f32> {
     let c = textureSample(image, image_sampler, v.uv);
     return vec4<f32>(c.rgb * c.a, c.a);
 }
+
+// 16bit の浮動小数点の面（線形の scRGB）には、sRGB のガンマを外した値を書く。egui も
+// この面には線形の値を書く（fs_main_linear_framebuffer）ので、明るさが 8bit の表示と揃う。
+fn linear_from_srgb(c: vec3<f32>) -> vec3<f32> {
+    let low = c / 12.92;
+    let high = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, c <= vec3<f32>(0.04045));
+}
+
+@fragment
+fn fs_main_linear(v: Out) -> @location(0) vec4<f32> {
+    let c = textureSample(image, image_sampler, v.uv);
+    return vec4<f32>(linear_from_srgb(c.rgb) * c.a, c.a);
+}
 "#;
+
+/// 面の形式に合う、フラグメントシェーダーの入口。
+fn fragment_entry(target: wgpu::TextureFormat) -> &'static str {
+    if target == wgpu::TextureFormat::Rgba16Float {
+        "fs_main_linear"
+    } else {
+        "fs_main"
+    }
+}
 
 impl Renderer {
     fn new(device: &wgpu::Device, target: wgpu::TextureFormat) -> Self {
@@ -604,7 +663,7 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(fragment_entry(target)),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target,
@@ -771,7 +830,11 @@ mod tests {
     fn monitor(ten_bit: bool, dither: bool) -> MonitorSettings {
         MonitorSettings {
             id: "m".into(),
-            ten_bit,
+            depth: if ten_bit {
+                OutputDepth::TenBit
+            } else {
+                OutputDepth::Standard
+            },
             dither,
             ..Default::default()
         }
@@ -785,7 +848,7 @@ mod tests {
 
     #[test]
     fn ten_bit_needs_the_setting_and_a_ten_bit_surface() {
-        assert_eq!(mode(&monitor(true, false), TEN_BIT_GPU), Some(Mode::TenBit));
+        assert_eq!(mode(&monitor(true, false), TEN_BIT_GPU), Some(Mode::Deep));
         let eight = Surface {
             bits: 8,
             gpu: false,
@@ -804,7 +867,73 @@ mod tests {
             norm16: false,
         };
         assert_eq!(mode(&monitor(true, true), eight), Some(Mode::Dither));
-        assert_eq!(mode(&monitor(true, true), TEN_BIT_GPU), Some(Mode::TenBit));
+        assert_eq!(mode(&monitor(true, true), TEN_BIT_GPU), Some(Mode::Deep));
+    }
+
+    #[test]
+    fn a_monitor_asking_for_10_bit_is_drawn_deep_on_a_float_surface_too() {
+        let float = Surface {
+            bits: 16,
+            gpu: true,
+            norm16: true,
+        };
+        assert_eq!(mode(&monitor(true, false), float), Some(Mode::Deep));
+        assert_eq!(title(Some(Mode::Deep), float), "16-bit float");
+        assert_eq!(title(Some(Mode::Deep), TEN_BIT_GPU), "10-bit");
+    }
+
+    #[test]
+    fn a_float_surface_draws_about_12_bits_and_a_float_texture_about_11() {
+        let float = |norm16| Surface {
+            bits: 16,
+            gpu: true,
+            norm16,
+        };
+        assert_eq!(float(true).drawn_bits(), 12);
+        assert_eq!(float(false).drawn_bits(), 11);
+        assert_eq!(TEN_BIT_GPU.drawn_bits(), 10);
+        assert!(float(true).linear());
+        assert!(!TEN_BIT_GPU.linear());
+    }
+
+    #[test]
+    fn the_surface_tells_how_deep_it_can_draw() {
+        assert_eq!(TEN_BIT_GPU.depth(), OutputDepth::TenBit);
+        let no_shader = Surface {
+            bits: 10,
+            gpu: false,
+            norm16: false,
+        };
+        assert_eq!(no_shader.depth(), OutputDepth::Standard);
+    }
+
+    #[test]
+    fn only_the_float_surface_takes_the_linear_shader() {
+        assert_eq!(
+            fragment_entry(wgpu::TextureFormat::Rgba16Float),
+            "fs_main_linear"
+        );
+        assert_eq!(fragment_entry(wgpu::TextureFormat::Rgb10a2Unorm), "fs_main");
+    }
+
+    #[test]
+    fn the_shader_compiles_with_both_fragment_entries() {
+        use wgpu::naga;
+        let module = naga::front::wgsl::parse_str(SHADER).expect("WGSL parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("WGSL validates");
+        let entries: Vec<_> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        for entry in ["vs_main", "fs_main", "fs_main_linear"] {
+            assert!(entries.contains(&entry), "{entries:?}");
+        }
     }
 
     #[test]
@@ -902,6 +1031,6 @@ mod tests {
         assert!(layer.is_for(&image, None, 8192, Mode::Dither));
         assert!(!layer.is_for(&other, None, 8192, Mode::Dither));
         assert!(!layer.is_for(&image, None, 4096, Mode::Dither));
-        assert!(!layer.is_for(&image, None, 8192, Mode::TenBit));
+        assert!(!layer.is_for(&image, None, 8192, Mode::Deep));
     }
 }
