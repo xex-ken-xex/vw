@@ -556,6 +556,7 @@ const JA: &[(&str, &str)] = &[
     ("Horizontal axis", "横軸"),
     ("Display brightness", "表示の明るさ"),
     ("Physical value", "物理量"),
+    ("Original value", "元の値"),
     ("Channel", "チャンネル"),
     ("Luminance", "輝度"),
     ("Red", "R"),

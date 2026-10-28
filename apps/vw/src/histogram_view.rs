@@ -7,7 +7,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use eframe::egui::{self, pos2, Color32, Pos2, Rect, Sense, Stroke};
-use vw_core::{display, DisplayParams, VwImage};
+use vw_core::{display, ColorModel, DisplayParams, PixelData, VwImage};
 use vw_dicom::pipeline::Pipeline;
 
 use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
@@ -86,6 +86,8 @@ enum Axis {
     Brightness,
     /// 物理量（HU など）。DICOM のグレースケールのみ。
     Physical,
+    /// ファイルに入っている値そのもの。DICOM 以外の 16 bit・実数のグレースケール。
+    Original,
 }
 
 /// チャンネルの選び方。
@@ -130,8 +132,9 @@ enum Counted {
     },
     Physical {
         histogram: Physical,
-        file: Params,
-        edited: Option<Params>,
+        windows: Option<Windows>,
+        /// 手で値を変えている（変えたのが窓や関数だけで山が同じでも）。
+        changed: bool,
         unit: Option<String>,
     },
 }
@@ -188,7 +191,13 @@ impl HistogramView {
             ui.centered_and_justified(|ui| ui.spinner());
             None
         } else {
-            self.tabs(ui, lang, rois, &evaluated)
+            self.tabs(
+                ui,
+                lang,
+                rois,
+                &evaluated,
+                target.as_ref().and_then(|t| t.image),
+            )
         }
     }
 
@@ -199,6 +208,7 @@ impl HistogramView {
         lang: Language,
         rois: (bool, bool),
         evaluated: &Evaluated<'_>,
+        image: Option<&Arc<VwImage>>,
     ) -> Option<Command> {
         let evaluation = |ui: &mut egui::Ui| {
             quality_view::table(
@@ -219,7 +229,7 @@ impl HistogramView {
                     command = evaluation(ui);
                 });
             ui.strong(tr(lang, "Histogram"));
-            self.contents(ui, lang, rois);
+            self.contents(ui, lang, rois, image);
             return command;
         }
         ui.horizontal(|ui| {
@@ -229,7 +239,7 @@ impl HistogramView {
         ui.separator();
         match self.tab {
             Tab::Histogram => {
-                self.contents(ui, lang, rois);
+                self.contents(ui, lang, rois, image);
                 None
             }
             Tab::Evaluation => evaluation(ui),
@@ -260,8 +270,20 @@ impl HistogramView {
                 });
             }
         }
-        if !matches!(self.gray, Some(Gray::Loaded(_))) {
+        let available = self.axis_beyond_brightness(target.and_then(|t| t.image));
+        if available != Some(self.axis) {
             self.axis = Axis::Brightness;
+        }
+    }
+
+    /// 明るさのほかに選べる横軸。画像をまだ読んでいなければ、DICOM の段の値だけで決める。
+    fn axis_beyond_brightness(&self, image: Option<&Arc<VwImage>>) -> Option<Axis> {
+        if matches!(self.gray, Some(Gray::Loaded(_))) {
+            Some(Axis::Physical)
+        } else if image.is_some_and(|i| has_original_values(i)) {
+            Some(Axis::Original)
+        } else {
+            None
         }
     }
 
@@ -310,9 +332,21 @@ impl HistogramView {
                     edited.map(|p| (p.slope, p.intercept)),
                     region,
                 ),
-                file,
-                edited,
+                windows: Some(Windows {
+                    before: (file.center, file.width),
+                    after: edited.filter(|e| *e != file).map(|e| (e.center, e.width)),
+                }),
+                changed: edited.is_some_and(|e| e != file),
                 unit,
+            },
+            (Axis::Original, _) => Counted::Physical {
+                histogram: histogram::physical(&image, &AS_STORED, (1.0, 0.0), None, region),
+                windows: image.window.map(|(black, white)| Windows {
+                    before: (f64::from(black + white) / 2.0, f64::from(white - black)),
+                    after: None,
+                }),
+                changed: false,
+                unit: None,
             },
             _ => {
                 // 表示用の既定（一辺 8192 まで縮める）を使わないのは、ROI が元の大きさの画素で
@@ -332,8 +366,14 @@ impl HistogramView {
         self.counting = Some((key, rx));
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, lang: Language, rois: (bool, bool)) {
-        let physical_available = matches!(self.gray, Some(Gray::Loaded(_)));
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        rois: (bool, bool),
+        image: Option<&Arc<VwImage>>,
+    ) {
+        let beyond = self.axis_beyond_brightness(image);
         let color =
             matches!(&self.counted, Some((_, Counted::Levels { before, .. })) if before.color);
         ui.horizontal(|ui| {
@@ -346,12 +386,8 @@ impl HistogramView {
                         Axis::Brightness,
                         axis_title(lang, Axis::Brightness),
                     );
-                    if physical_available {
-                        ui.selectable_value(
-                            &mut self.axis,
-                            Axis::Physical,
-                            axis_title(lang, Axis::Physical),
-                        );
+                    if let Some(axis) = beyond {
+                        ui.selectable_value(&mut self.axis, axis, axis_title(lang, axis));
                     }
                 });
             if self.axis == Axis::Brightness && color {
@@ -407,7 +443,7 @@ impl HistogramView {
         let channel = if color { self.channel } else { Shown::Luma };
         let graph = Graph::of(counted, channel, ui.visuals());
         let changed = graph.series.iter().any(|s| s.after.is_some())
-            || matches!(counted, Counted::Physical { edited: Some(e), file, .. } if e != file);
+            || matches!(counted, Counted::Physical { changed: true, .. });
         legend(ui, lang, changed);
         let height = (ui.available_height() - 100.0).max(80.0);
         let hover = draw(ui, &graph, self.log, height);
@@ -420,10 +456,24 @@ impl HistogramView {
     }
 }
 
+/// 格納値をそのまま値とみなす。DICOM 以外の画像は傾きや切片を持たない。
+const AS_STORED: Decoded = Decoded {
+    slope: 1.0,
+    intercept: 0.0,
+    negated: false,
+};
+
+/// 表示の明るさ（8 bit）に縮める前の値を、軸にする意味がある画像か。
+/// カラーは 1 本の山にまとめられないので、グレーだけにする。
+fn has_original_values(image: &VwImage) -> bool {
+    image.color == ColorModel::Gray && !matches!(image.data, PixelData::U8(_))
+}
+
 fn axis_title(lang: Language, axis: Axis) -> &'static str {
     match axis {
         Axis::Brightness => tr(lang, "Display brightness"),
         Axis::Physical => tr(lang, "Physical value"),
+        Axis::Original => tr(lang, "Original value"),
     }
 }
 
@@ -503,9 +553,9 @@ impl Graph {
             }
             Counted::Physical {
                 histogram: h,
-                file,
-                edited,
+                windows,
                 unit,
+                ..
             } => Self {
                 series: vec![Series {
                     before: h.before.clone(),
@@ -517,10 +567,7 @@ impl Graph {
                 }],
                 lo: h.lo,
                 hi: h.hi,
-                windows: Some(Windows {
-                    before: (file.center, file.width),
-                    after: edited.filter(|e| e != file).map(|e| (e.center, e.width)),
-                }),
+                windows: *windows,
                 unit: unit.clone(),
                 physical: true,
                 single: true,
@@ -757,4 +804,45 @@ fn stats_table(ui: &mut egui::Ui, lang: Language, g: &Graph, changed: bool) {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(color: ColorModel, data: PixelData) -> VwImage {
+        VwImage::new(2, 1, color, data).unwrap()
+    }
+
+    #[test]
+    fn deep_gray_images_offer_their_original_values() {
+        assert!(has_original_values(&image(
+            ColorModel::Gray,
+            PixelData::U16(vec![0, 40000])
+        )));
+        assert!(has_original_values(&image(
+            ColorModel::Gray,
+            PixelData::F32(vec![-1.5, 2.5])
+        )));
+    }
+
+    #[test]
+    fn eight_bit_and_color_images_keep_only_the_brightness_axis() {
+        assert!(!has_original_values(&image(
+            ColorModel::Gray,
+            PixelData::U8(vec![0, 255])
+        )));
+        assert!(!has_original_values(&image(
+            ColorModel::Rgb,
+            PixelData::U16(vec![0; 6])
+        )));
+    }
+
+    #[test]
+    fn original_values_are_counted_as_stored() {
+        let picture = image(ColorModel::Gray, PixelData::U16(vec![1000, 50000]));
+        let h = histogram::physical(&picture, &AS_STORED, (1.0, 0.0), None, None);
+        assert_eq!((h.lo, h.hi), (1000.0, 50000.0));
+        assert_eq!(h.before_stats.mean, 25500.0);
+    }
 }
