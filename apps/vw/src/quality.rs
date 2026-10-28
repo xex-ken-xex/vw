@@ -236,7 +236,13 @@ fn luma_of_rgba16(rgba: &[u16]) -> Vec<f32> {
 
 /// スロットに標準で見えている明るさ（色の表を当てていれば、その色の明るさ）。
 fn shown(image: &VwImage, palette: Option<&Palette>) -> Vec<f32> {
-    let mut d = display::to_display16(image, &DisplayParams::default());
+    // 表示用の既定（一辺 8192 まで縮める）を使わないのは、色導出の結果や ROI が元の大きさの
+    // 画素で来るため。縮めると大きさが合わず、一辺 8192 を超える画像で落ちていた。
+    let params = DisplayParams {
+        max_side: u32::MAX,
+        ..DisplayParams::default()
+    };
+    let mut d = display::to_display16(image, &params);
     if let Some(p) = palette {
         p.recolor16(&mut d.rgba);
     }
@@ -485,6 +491,16 @@ mod tests {
             .find(|r| r.metric == Metric::Sharpness)
             .unwrap();
         assert!(sharp.before.unwrap() > 0.0, "{sharp:?}");
+    }
+
+    #[test]
+    fn images_wider_than_a_texture_are_measured_at_their_own_size() {
+        let image = ramp(8256, 2);
+        let mut p = pending(image.clone());
+        p.edited = Some(Arc::new(shown(&image, None)));
+        p.reference = Some(("ref.png".into(), Some(image), None));
+        let r = evaluate(&p);
+        assert_eq!(r.rows[0].after, Some(f64::INFINITY), "{:?}", r.rows[0]);
     }
 
     #[test]

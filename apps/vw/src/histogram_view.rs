@@ -315,11 +315,17 @@ impl HistogramView {
                 unit,
             },
             _ => {
-                let shown = display::to_display(&image, &DisplayParams::default());
+                // 表示用の既定（一辺 8192 まで縮める）を使わないのは、ROI が元の大きさの画素で
+                // 来るため。縮めた絵を元の幅で引くと、一辺 8192 を超える画像で行がずれていた。
+                let params = DisplayParams {
+                    max_side: u32::MAX,
+                    ..DisplayParams::default()
+                };
+                let shown = display::to_display(&image, &params);
                 Counted::Levels {
-                    before: histogram::levels_of_rgba(&shown.rgba, image.width, region),
+                    before: histogram::levels_of_rgba(&shown.rgba, shown.width, region),
                     after: derived
-                        .map(|d| histogram::levels_of_rgba(d.as_raw(), image.width, region)),
+                        .map(|d| histogram::levels_of_rgba(d.as_raw(), d.size[0] as u32, region)),
                 }
             }
         });

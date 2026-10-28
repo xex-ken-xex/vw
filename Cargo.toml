@@ -33,7 +33,9 @@ vw-pipeline = { path = "crates/vw-pipeline" }
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# abort にしない。画像の読み込みやカタログの登録は、デコーダが壊れたファイルで panic しても
+# catch_unwind でそのファイルだけ飛ばす作りで、abort ではアプリごと落ちるため。
+panic = "unwind"
 strip = true
 
 # Image decoding is painfully slow unoptimized; keep dependencies fast in dev builds.

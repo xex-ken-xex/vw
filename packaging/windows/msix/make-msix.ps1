@@ -3,7 +3,7 @@
   Microsoft Store に出す vw の MSIX を作る。使い方は同じフォルダの README.md。
 #>
 param(
-    # vw.exe と同梱物が入ったフォルダ（CI の dist/vw）。vwbatch はあっても入れない
+    # vw.exe と同梱物が入ったフォルダ（CI の dist/vw）。vwbatch と check はあっても入れない
     [Parameter(Mandatory)] [string] $Source,
     [Parameter(Mandatory)] [string] $OutFile,
     # Cargo.toml の版（0.8.2 の形）。Store は 4 つ目を 0 にする決まりなので、末尾に .0 を足す
@@ -33,6 +33,9 @@ try {
     # vwbatch は入れない。スタートメニューに出さない Application は「画面のないアプリ」とみなされ、
     # Microsoft の個別の許可（HeadlessAppBypass）がないと Store が受け付けないため
     Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $stage 'vwbatch.exe'), (Join-Path $stage 'THIRD-PARTY-LICENSES-vwbatch.txt')
+    # check（起動しないときの診断スクリプト）も入れない。Store 版の入る場所には書き込めないので
+    # 報告を書き出せず動かないうえ、-ExecutionPolicy Bypass で起動するのが審査で疑われうるため
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $stage 'check')
     Copy-Item -Recurse (Join-Path $here 'Assets') $stage
 
     $escape = { param($s) [Security.SecurityElement]::Escape($s) }

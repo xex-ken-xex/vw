@@ -522,6 +522,19 @@ mod tests {
     use super::*;
     use crate::test_util::{png_registry, write_png, TempDir};
 
+    /// テストは panic を unwind で走らせるので、配る版の設定を別に確かめる。
+    #[test]
+    fn release_builds_unwind_so_a_decoder_panic_skips_only_that_file() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+        let text = std::fs::read_to_string(manifest).unwrap();
+        let cargo: toml::Value = toml::from_str(&text).unwrap();
+        let panic = cargo["profile"]["release"].get("panic");
+        assert!(
+            panic.is_none_or(|p| p.as_str() == Some("unwind")),
+            "{panic:?}"
+        );
+    }
+
     #[test]
     fn multiframe_file_reports_its_frames_and_frame_paths_load_one_frame() {
         use vw_dicom::synth::{Synth, XA_IMAGE};
