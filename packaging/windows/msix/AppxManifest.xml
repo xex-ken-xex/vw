@@ -57,6 +57,43 @@
             <uap5:ExecutionAlias Alias="vw.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
+        <!--
+          エクスプローラーの「プログラムから開く」に vw を出す。既定のアプリを奪うことはなく、
+          利用者が選んだときだけ vw がそのファイルのパスを受け取って開く。
+        -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="images">
+            <uap:DisplayName>{{DISPLAY_NAME}}</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.jpe</uap:FileType>
+              <uap:FileType>.jfif</uap:FileType>
+              <uap:FileType>.png</uap:FileType>
+              <uap:FileType>.webp</uap:FileType>
+              <uap:FileType>.gif</uap:FileType>
+              <uap:FileType>.tif</uap:FileType>
+              <uap:FileType>.tiff</uap:FileType>
+              <uap:FileType>.bmp</uap:FileType>
+              <uap:FileType>.dib</uap:FileType>
+              <uap:FileType>.fits</uap:FileType>
+              <uap:FileType>.fit</uap:FileType>
+              <uap:FileType>.fts</uap:FileType>
+              <uap:FileType>.fz</uap:FileType>
+              <uap:FileType>.nef</uap:FileType>
+              <uap:FileType>.nrw</uap:FileType>
+              <uap:FileType>.arw</uap:FileType>
+              <uap:FileType>.srf</uap:FileType>
+              <uap:FileType>.sr2</uap:FileType>
+              <uap:FileType>.raf</uap:FileType>
+              <uap:FileType>.cr2</uap:FileType>
+              <uap:FileType>.cr3</uap:FileType>
+              <uap:FileType>.dng</uap:FileType>
+              <uap:FileType>.zip</uap:FileType>
+              <uap:FileType>.7z</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
       </Extensions>
     </Application>
   </Applications>
