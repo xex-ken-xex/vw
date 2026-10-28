@@ -531,6 +531,26 @@ mod tests {
     }
 
     #[test]
+    fn signal_text_lists_only_what_is_known() {
+        let d = Display {
+            signal_bits: Some(10),
+            hdr: Some(true),
+            edid_bits: Some(12),
+            max_bpc: Some(16),
+            ..Default::default()
+        };
+        assert_eq!(
+            signal_text(&d, Language::English),
+            "signal 10-bit, HDR on, accepts 12-bit (EDID), max bpc 16"
+        );
+        let off = Display {
+            hdr: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(signal_text(&off, Language::English), "");
+    }
+
+    #[test]
     fn edid_1_4_digital_input_tells_the_bits_per_color() {
         // 0b1011_0101: デジタル入力、10bit、DisplayPort。
         assert_eq!(edid_bits(&edid((1, 4), 0b1011_0101, None)), Some(10));

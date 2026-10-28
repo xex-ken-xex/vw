@@ -855,6 +855,39 @@ mod tests {
     }
 
     #[test]
+    fn every_range_stays_inside_the_8_bit_scale() {
+        for (name, start) in RANGES {
+            assert!(start >= 0.0 && start + SPAN <= 255.0, "{name}");
+        }
+    }
+
+    #[test]
+    fn bands_are_opaque_gray() {
+        let p = pattern(300, 60, 8.0);
+        for px in p.rgba.chunks_exact(4) {
+            assert_eq!((px[0], px[3]), (px[1], 65535));
+            assert_eq!(px[1], px[2]);
+        }
+    }
+
+    #[test]
+    fn a_tiny_screen_still_gets_one_row_per_band() {
+        let p = pattern(1, 1, 120.0);
+        assert_eq!((p.width, p.height), (2, BANDS.len() as u32));
+    }
+
+    #[test]
+    fn band_and_range_names_have_japanese() {
+        let names = BANDS
+            .iter()
+            .map(|b| b.name())
+            .chain(RANGES.iter().map(|(name, _)| *name));
+        for name in names {
+            assert_ne!(tr(Language::Japanese, name), name);
+        }
+    }
+
+    #[test]
     fn copied_system_information_has_one_line_per_entry() {
         let lines = vec![
             ("vw".to_owned(), "0.8.1".to_owned()),
