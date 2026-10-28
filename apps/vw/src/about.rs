@@ -1,4 +1,4 @@
-//! 「vw について」のウインドウ。名前・版・著作権・ライセンス・Issue の画面へのリンクと、
+//! 「vw Image Viewer について」のウインドウ。名前・版・著作権・ライセンス・Issue の画面へのリンクと、
 //! 同梱のサードパーティのライセンス一覧を開くボタンを出す。
 
 use std::path::PathBuf;
@@ -8,6 +8,8 @@ use eframe::egui;
 use crate::i18n::tr;
 use crate::settings::{Language, MapSettings};
 
+/// 窓のタイトルや About に出す名前。ファイル名・コマンド名・設定フォルダは短い `vw` のまま。
+pub const NAME: &str = "vw Image Viewer";
 pub const COPYRIGHT: &str = "Copyright (c) 2026 vw contributors";
 pub const AUTHOR: &str = "xex (xex-ken-xex)";
 pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
@@ -33,13 +35,13 @@ impl About {
         }
         let mut error = None;
         let mut open = self.open;
-        egui::Window::new(tr(lang, "About vw"))
+        egui::Window::new(tr(lang, "About vw Image Viewer"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.heading(format!("vw {VERSION}"));
+                ui.heading(format!("{NAME} {VERSION}"));
                 ui.label(tr(lang, "Fast image viewer"));
                 ui.add_space(6.0);
                 ui.label(COPYRIGHT);

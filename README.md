@@ -1,6 +1,6 @@
-# vw
+# vw Image Viewer
 
-**vw** は、Linux と Windows で動く、起動と表示がとても速い画像ビューワです。
+**vw Image Viewer**（以下 vw）は、Linux と Windows で動く、起動と表示がとても速い画像ビューワです。
 たくさんの画像を **見て**、**選り分けて**、**探せるようにしまっておく** ための道具です。
 
 ![vw の画面](docs/screenshot.png)
@@ -1168,10 +1168,10 @@ JSON のファイルで、主に次のものが入っています。
 
 ## 不具合の報告と要望
 
-不具合の報告・改良の提案・機能追加の要望は、[Issue（チケット）を起票](https://github.com/xex-ken-xex/vw/issues/new/choose)してください。テンプレートに沿って、vw の版（「ヘルプ」→「vw について」）・OS・手順を書いてもらえると助かります。
+不具合の報告・改良の提案・機能追加の要望は、[Issue（チケット）を起票](https://github.com/xex-ken-xex/vw/issues/new/choose)してください。テンプレートに沿って、vw の版（「ヘルプ」→「vw Image Viewer について」）・OS・手順を書いてもらえると助かります。
 直し方が分かる場合は、その Issue を元にプルリクエスト（PR）を出してください。流れと決まりは [CONTRIBUTING.md](CONTRIBUTING.md) にあります。
 
-アプリの「ヘルプ」→「vw について」の **不具合の報告・要望...** からも Issue の画面を開けます。
+アプリの「ヘルプ」→「vw Image Viewer について」の **不具合の報告・要望...** からも Issue の画面を開けます。
 
 ---
 
@@ -1321,7 +1321,7 @@ vw は現状のまま提供され、明示・黙示を問わず、いかなる�
 
 Copyright (c) 2026 vw contributors
 
-作者は xex（GitHub: [xex-ken-xex](https://github.com/xex-ken-xex)）です。ソースは https://github.com/xex-ken-xex/vw にあります。アプリの「ヘルプ」→「vw について」と、Windows の EXE のプロパティ（「詳細」タブ）にも同じ表示があります。
+作者は xex（GitHub: [xex-ken-xex](https://github.com/xex-ken-xex)）です。ソースは https://github.com/xex-ken-xex/vw にあります。アプリの「ヘルプ」→「vw Image Viewer について」と、Windows の EXE のプロパティ（「詳細」タブ）にも同じ表示があります。
 
 vw は [MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) のどちらかを選んで使えます（`MIT OR Apache-2.0`）。
 無償で、改変・再配布・商用利用ができます。どちらのライセンスでも、vw は現状のまま提供され、いかなる保証もありません。作者は vw の利用によって生じた損害に責任を負いません。
@@ -1330,4 +1330,4 @@ vw は [MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) の�
 
 AI のモデル（ONNX Runtime・WD tagger v3・YuNet・SFace）は配布物に入っておらず、使う人が「AI のモデル」の画面で選んだときに、それぞれの公開元から取ってきます。ライセンスはその画面と、上の「[AI タグと顔](#ai-タグと顔)」の一覧に書いてあります。日本語の文字は OS に入っているフォント（Windows は Yu Gothic やメイリオ）を使い、配布物には入れていません。英数字と記号は egui に入っているフォント（Ubuntu・Hack・Noto Emoji など）で、そのライセンスは下の一覧に入っています。
 
-vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります（「vw について」の「サードパーティのライセンス...」でも開けます）。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。
+vw が使っているほかのソフトウェアのライセンスは、配布物の `THIRD-PARTY-LICENSES.txt` にまとめてあります（「vw Image Viewer について」の「サードパーティのライセンス...」でも開けます）。この一覧は CI で [cargo-about](https://github.com/EmbarkStudios/cargo-about) が作り、[packaging/about.toml](packaging/about.toml) にない種類のライセンスの依存が入るとビルドが失敗します。

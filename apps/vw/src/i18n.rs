@@ -34,9 +34,9 @@ pub fn tr1(lang: Language, en: &'static str, arg: &str) -> String {
 }
 
 const JA: &[(&str, &str)] = &[
-    // vw について
+    // vw Image Viewer について
     ("Help", "ヘルプ"),
-    ("About vw", "vw について"),
+    ("About vw Image Viewer", "vw Image Viewer について"),
     ("Image quality metrics help", "画質の評価のヘルプ"),
     ("Help on the metrics", "指標の説明"),
     ("Fast image viewer", "高速画像ビューワ"),
