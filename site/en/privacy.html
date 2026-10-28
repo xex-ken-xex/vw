@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vw – Privacy policy</title>
+<link rel="icon" href="../images/vw.png" type="image/png">
+<link rel="alternate" hreflang="ja" href="https://xex-ken-xex.github.io/vw/privacy.html">
+<style>
+:root { --bg: #1e1e1e; --panel: #252526; --line: #3c3c3c; --text: #d4d4d4; --muted: #9a9a9a; --accent: #4fc1ff; }
+@media (prefers-color-scheme: light) { :root { --bg: #fafafa; --panel: #ffffff; --line: #dcdcdc; --text: #222; --muted: #666; --accent: #0b6fc2; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", Meiryo, system-ui, sans-serif; line-height: 1.7; font-size: 16px; }
+a { color: var(--accent); }
+.wrap { max-width: 820px; margin: 0 auto; padding: 0 16px; }
+header { border-bottom: 1px solid var(--line); background: var(--panel); }
+header .wrap { display: flex; align-items: center; gap: 12px; height: 52px; }
+header img { width: 28px; height: 28px; }
+header a.name { font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; }
+h1 { font-size: 28px; margin: 32px 0 8px; }
+h2 { font-size: 20px; margin: 28px 0 8px; }
+.note { color: var(--muted); font-size: 14px; }
+footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 20px 0 40px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header><div class="wrap"><img src="../images/vw.png" alt=""><a class="name" href="./">vw</a></div></header>
+<main class="wrap">
+<h1>Privacy policy</h1>
+<p class="note">Last updated: 2026-10-28 · <a href="../privacy.html" lang="ja">日本語</a></p>
+
+<p>vw does not collect any information about its users. It has no usage reporting (telemetry), no ads and no accounts.</p>
+
+<h2>What stays on your PC</h2>
+<p>Settings, logs, labels, search catalogs and registered faces are stored only on your PC (in the settings folder or in the folders that hold your images). They are never sent to the authors or to third parties. Face detection and matching run only on your PC; images and face data never leave it.</p>
+
+<h2>When vw uses the network</h2>
+<p>vw connects to the network only when you use one of these features.</p>
+<ul>
+  <li><b>Map</b>: showing the map downloads tile images from the tile server in the settings (OpenStreetMap by default). The server receives your IP address and a User-Agent that names vw and its version. Downloaded tiles are kept on your PC and reused for a while.</li>
+  <li><b>AI tags, face detection and place search</b>: when you ask vw to download them, it downloads the models, their runtime library and the place-name table from GitHub and Hugging Face. Those servers receive your IP address. Your images are never uploaded; all analysis runs on your PC.</li>
+  <li><b>Network send</b>: vw sends the images you choose to the destination you configured. You choose the destination; nothing goes to the authors.</li>
+  <li><b>Links</b>: links such as those in Help open in your default web browser.</li>
+</ul>
+<p>Each server handles the information it receives under its own policy.</p>
+
+<h2>Contact</h2>
+<p>Please use <a href="https://github.com/xex-ken-xex/vw/issues">GitHub Issues</a>.</p>
+</main>
+<footer><div class="wrap">Copyright (c) 2026 vw contributors</div></footer>
+</body>
+</html>

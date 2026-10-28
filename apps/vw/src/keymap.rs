@@ -449,7 +449,7 @@ impl Action {
             Action::ToggleMap => "Show/hide map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::UndoPosition => "Undo the last position change",
-            Action::ShowAbout => "About vw",
+            Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
             Action::ShowGradationTest => "Display gradation test...",
             Action::OpenQualityHelp => "Image quality metrics help",

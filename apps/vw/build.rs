@@ -7,8 +7,8 @@ fn main() {
     {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../packaging/icons/vw.ico");
-        res.set("ProductName", "vw");
-        res.set("FileDescription", "vw - Fast image viewer");
+        res.set("ProductName", "vw Image Viewer");
+        res.set("FileDescription", "vw Image Viewer");
         // about.rs の COPYRIGHT と同じ文言。build.rs からはクレートのモジュールを読めないので写す。
         res.set("LegalCopyright", "Copyright (c) 2026 vw contributors");
         res.compile()
