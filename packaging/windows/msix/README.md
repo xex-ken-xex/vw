@@ -1,18 +1,22 @@
 # Microsoft Store 用の MSIX を作る
 
-vw（vwbatch を含む）を Microsoft Store に出すための MSIX パッケージを作ります。
-DicoAmplio は Store に出しません。
+vw を Microsoft Store に出すための MSIX パッケージを作ります。
+DicoAmplio と vwbatch は Store に出しません。vwbatch は zip 版で使います。
+
+vwbatch を入れない理由: コマンドだけの道具をスタートメニューに出さない設定（`AppListEntry="none"`）にすると、
+Store は「画面のないアプリ」とみなし、Microsoft の個別の許可（HeadlessAppBypass）がないと受け付けません
+（2026-10-28 に Partner Center の検証で弾かれました）。
 
 Store に出すと、Store が Microsoft の証明書で署名し直します。そのため、署名のない zip 版を止める
 Windows の「スマート アプリ コントロール」でも、Store 版の vw は起動できます。証明書を買う必要はありません。
 
 ## できること
 
-- `make-msix.ps1` が、zip 版と同じ中身（`vw.exe`・`vwbatch.exe`・README・ライセンス・`check\`）に
-  アイコンと `AppxManifest.xml` を足して、`.msix` を 1 つ作ります。
+- `make-msix.ps1` が、zip 版と同じ中身（`vw.exe`・README・ライセンス・`check\`）に
+  アイコンと `AppxManifest.xml` を足して、`.msix` を 1 つ作ります。フォルダに `vwbatch.exe` があっても入れません。
 - できた MSIX では、次のように動きます。
   - スタートメニューに vw が出ます。
-  - コマンドプロンプトから `vw` と `vwbatch` で呼べます（実行エイリアス）。
+  - コマンドプロンプトから `vw` で呼べます（実行エイリアス）。
   - 設定やログは zip 版と同じ `%APPDATA%\vw` に置かれます。zip 版の設定をそのまま使えます。
   - VC++ ランタイム（`Microsoft.VCLibs.140.00.UWPDesktop`）は Store が一緒に入れます。
 - MSIX には署名をしません。そのため、**できた `.msix` はそのままでは PC に入れられません**。
@@ -24,7 +28,7 @@ Windows の「スマート アプリ コントロール」でも、Store 版の 
 - Windows SDK（`makeappx.exe` が入っているもの）。GitHub Actions の `windows-latest` には入っています。
   手元で作るときは、Visual Studio Installer か
   [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) から入れます。
-- `-Source` に渡すフォルダに、ビルド済みの `vw.exe` と `vwbatch.exe` があること
+- `-Source` に渡すフォルダに、ビルド済みの `vw.exe` があること
 
 ## 使い方
 
@@ -40,7 +44,7 @@ Release には載せません（署名がなく、利用者の PC には入れ�
 cargo build --release
 # zip 版と同じ中身を 1 つのフォルダに集める
 New-Item -ItemType Directory -Force dist\vw | Out-Null
-Copy-Item target\release\vw.exe, target\release\vwbatch.exe, README.md, LICENSE-MIT, LICENSE-APACHE dist\vw\
+Copy-Item target\release\vw.exe, README.md, LICENSE-MIT, LICENSE-APACHE dist\vw\
 Copy-Item -Recurse packaging\windows\check dist\vw\check
 # 版は Cargo.toml の [workspace.package] の version
 powershell -ExecutionPolicy Bypass -File packaging\windows\msix\make-msix.ps1 -Source dist\vw -OutFile dist\vw-windows-x64.msix -Version 0.8.2
