@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Microsoft Store に出す vw の MSIX の定義。{{...}} は make-msix.ps1 が埋める。
+  Store は MSIX を自分の証明書で署名し直すので、ここでは署名しない。
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop desktop4 desktop6 rescap">
+
+  <Identity Name="{{IDENTITY_NAME}}" Publisher="{{PUBLISHER}}" Version="{{VERSION}}" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>{{DISPLAY_NAME}}</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!--
+      %APPDATA% への書き込みを、パッケージ専用の場所へ振り替えさせない。振り替えられると、
+      「設定ファイルを開く」で起動したエディタやエクスプローラー（パッケージの外のプロセス）には
+      本物の %APPDATA%\vw が見え、vw が書いた設定やログが見つからない。zip 版から移った人の設定も
+      そのまま使える。そのために制限付きの機能 unvirtualizedResources が要る（下の Capabilities）。
+    -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.26100.0" />
+    <!--
+      Rust の MSVC ビルドは vcruntime140.dll を使う。zip 版は Windows に入っているものを使うが、
+      Store のパッケージは依存を宣言しておけば Store が一緒に入れてくれる。
+      crt-static で埋め込む案は、zip 版と別のビルドになり CI の時間が倍になるので採らない。
+    -->
+    <PackageDependency Name="Microsoft.VCLibs.140.00.UWPDesktop" MinVersion="14.0.24217.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ja-jp" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="vw" Executable="vw.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="{{DISPLAY_NAME}}"
+        Description="Fast image viewer"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- コマンドプロンプトから zip 版と同じく vw / vwbatch で呼べるようにする -->
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="vw.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="vw.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias desktop4:Subsystem="console">
+            <uap5:ExecutionAlias Alias="vwbatch.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>

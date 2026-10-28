@@ -110,6 +110,21 @@ jobs:
           Copy-Item THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
           Copy-Item -Recurse apps/dicoamplio/presets, apps/dicoamplio/examples dist/dicoamplio/
           Compress-Archive -Path dist/dicoamplio -DestinationPath dist/${{ matrix.dicoamplio_package }}
+      # Microsoft Store に出す MSIX。Store が自分の証明書で署名し直すので、未署名のまま作る。
+      # 未署名の MSIX は利用者の PC には入れられないので Release には載せず、Actions の成果物にだけ置く。
+      # DicoAmplio は Store に出さない（ken の判断）。
+      - name: Package for Microsoft Store
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist/store | Out-Null
+          packaging/windows/msix/make-msix.ps1 -Source dist/vw -OutFile dist/store/vw-windows-x64.msix -Version $version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os == 'Windows'
+        with:
+          name: vw-store-msix
+          path: dist/store/vw-windows-x64.msix
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.package }}
@@ -139,6 +154,8 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          # Store 用の MSIX（vw-store-msix）は Release に載せない
+          pattern: '*-x64.*'
           merge-multiple: true
       # 利用者がダウンロードしたファイルを確かめられるよう、SHA-256 の一覧を一緒に置く。
       - name: Checksums
