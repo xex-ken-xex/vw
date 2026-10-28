@@ -8,11 +8,11 @@ param(
     [Parameter(Mandatory)] [string] $OutFile,
     # Cargo.toml の版（0.8.2 の形）。Store は 4 つ目を 0 にする決まりなので、末尾に .0 を足す
     [Parameter(Mandatory)] [string] $Version,
-    # 以下 4 つは Partner Center の「製品 ID」ページの値。登録前は仮の値のまま作れる（Store には出せない）
-    [string] $IdentityName = 'vw.unregistered',
-    [string] $Publisher = 'CN=vw-unregistered',
+    # 以下 4 つは Partner Center の「製品 ID」ページの値（Store ID 9PP7JP120MW5）
+    [string] $IdentityName = 'xex.vwImageViewer',
+    [string] $Publisher = 'CN=3073867D-C52E-4A8F-B1A5-E4D83FDB3036',
     [string] $PublisherDisplayName = 'xex',
-    [string] $DisplayName = 'vw'
+    [string] $DisplayName = 'vw Image Viewer'
 )
 $ErrorActionPreference = 'Stop'
 

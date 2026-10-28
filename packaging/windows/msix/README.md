@@ -53,8 +53,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\msix\make-msix.ps1 -S
 | `-Version` | `0.8.2` の形の版（必須）。Store の決まりで、末尾に `.0` を足した `0.8.2.0` になります |
 | `-IdentityName` `-Publisher` `-PublisherDisplayName` `-DisplayName` | Partner Center の「製品 ID」の値。省略すると、スクリプトに書いてある値を使います |
 
-Partner Center で名前を予約するまでは、仮の値（`vw.unregistered` など）で作ります。
-形は正しいので、パッケージの作り方の確認には使えます。ただし Store には上げられません。
+既定値は Partner Center で予約した「vw Image Viewer」（Store ID `9PP7JP120MW5`）の値です。
 
 ## Store に出す手順（初回）
 
