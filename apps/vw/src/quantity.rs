@@ -13,6 +13,8 @@ pub enum Quantity {
     /// 単位の分からない生の値。
     Raw,
     Unit(&'static str),
+    /// ファイルに書いてある単位（FITS の `BUNIT`。電波の Jy/beam や K など）。
+    Named(String),
     /// PET の Bq/ml。SUVbw に換算できれば掛ける値、できなければ足りない項目。
     Pet(Result<f64, String>),
 }
@@ -34,7 +36,7 @@ impl Quantity {
                 Some("CNTS") => Quantity::Unit("counts"),
                 _ => Quantity::Raw,
             },
-            _ => Quantity::Raw,
+            _ => fits_unit(meta).map_or(Quantity::Raw, Quantity::Named),
         }
     }
 
@@ -43,6 +45,7 @@ impl Quantity {
         match self {
             Quantity::Raw => histogram::number(v),
             Quantity::Unit(unit) => format!("{} {unit}", histogram::number(v)),
+            Quantity::Named(unit) => format!("{} {unit}", histogram::number(v)),
             Quantity::Pet(Ok(f)) => format!("{}  {}", suv(v * f), bq(v)),
             Quantity::Pet(Err(_)) => bq(v),
         }
@@ -63,6 +66,16 @@ impl Quantity {
             _ => None,
         }
     }
+}
+
+/// FITS の `BUNIT`。画像の HDU のもの（後ろの見出し）を先に見る。
+pub fn fits_unit(meta: &Metadata) -> Option<String> {
+    meta.entries
+        .iter()
+        .rev()
+        .find(|(g, k, _)| g.starts_with(vw_fits::GROUP) && k == "BUNIT")
+        .map(|(_, _, v)| v.trim().trim_matches('\'').trim().to_owned())
+        .filter(|u| !u.is_empty())
 }
 
 /// 足りない項目（`SUVbw needs` の、カンマで区切った英語の名前）を画面の言葉にする。
@@ -94,6 +107,14 @@ mod tests {
             m.push("DICOM", *k, *v);
         }
         m
+    }
+
+    #[test]
+    fn fits_values_carry_the_unit_written_in_bunit() {
+        let mut m = Metadata::default();
+        m.push(vw_fits::GROUP, "BUNIT", "Jy/beam");
+        assert_eq!(Quantity::of(&m).text(0.5), "0.50 Jy/beam");
+        assert_eq!(Quantity::of(&Metadata::default()).text(0.5), "0.50");
     }
 
     #[test]

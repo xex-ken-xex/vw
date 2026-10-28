@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 106] = [
+const ITEMS: [Item; 109] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -647,7 +647,7 @@ const ITEMS: [Item; 106] = [
         section: Section::Fits,
         key: "fits.stretch",
         title: "First black and white",
-        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black.",
+        description: "How the black and white points are chosen when an image opens. Percentiles uses the percentiles below; zscale (as in ds9 and astropy) looks at the values around the sky background; Minimum to maximum often leaves sky images almost black; Symmetric around zero puts zero in the middle, for radio images with negative values and velocity maps (white is the white percentile of the absolute values, black its negative).",
         widget: fits_stretch_widget,
     },
     Item {
@@ -661,7 +661,7 @@ const ITEMS: [Item; 106] = [
         section: Section::Fits,
         key: "fits.high_percent",
         title: "White percentile",
-        description: "With Percentiles, pixels above this percent are drawn white (%).",
+        description: "With Percentiles, pixels above this percent are drawn white (%). With Symmetric around zero, the same percent of the absolute values.",
         widget: fits_high_widget,
     },
     Item {
@@ -684,6 +684,27 @@ const ITEMS: [Item; 106] = [
         title: "Color from the Bayer pattern",
         description: "Turn images from color cameras (with BAYERPAT) into color. When off, they are shown as the gray mosaic stored in the file.",
         widget: fits_demosaic_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.same_window_for_planes",
+        title: "Same black and white for all planes",
+        description: "In cubes (such as radio spectral cubes), choose black and white once from all planes, so that planes can be compared. When off, each plane gets its own.",
+        widget: fits_same_window_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.missing_color",
+        title: "Color of missing pixels",
+        description: "Pixels without a value (BLANK or NaN, such as outside a radio telescope's field) are drawn in this color, which is kept when a color map is applied.",
+        widget: fits_missing_color_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.beam",
+        title: "Beam",
+        description: "Draw the beam (BMAJ, BMIN and BPA, the resolution of radio images) as an ellipse at the bottom left of the image.",
+        widget: fits_beam_widget,
     },
     Item {
         section: Section::Fits,
@@ -1599,6 +1620,23 @@ fn fits_flip_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool
 fn fits_demosaic_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.demosaic, tr(lang, "Enabled"))
         .changed()
+}
+
+fn fits_same_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.same_window_for_planes, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn fits_missing_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(
+        &mut s.fits.missing_color,
+        Color32::from_rgb(112, 120, 136),
+        ui,
+    )
+}
+
+fn fits_beam_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.beam, tr(lang, "Enabled")).changed()
 }
 
 fn calib_apply_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

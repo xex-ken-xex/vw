@@ -2182,6 +2182,9 @@ fn saved_method(lang: Language, method: vw_pipeline::look::BlackWhite) -> Option
         }
         BlackWhite::Zscale => "zscale".to_owned(),
         BlackWhite::MinMax => tr(lang, "Minimum to maximum").to_owned(),
+        BlackWhite::Symmetric { white } => {
+            format!("{} {white} %", tr(lang, "Symmetric around zero"))
+        }
         BlackWhite::Values { .. } => tr(lang, "Fixed values").to_owned(),
     })
 }

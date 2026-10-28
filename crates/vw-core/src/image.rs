@@ -135,6 +135,9 @@ pub struct VwImage {
     /// [`crate::DecoderPlugin::develop`] で、この画像の代わりに作れる画像の大きさ `(幅, 高さ)`。
     /// カメラ RAW の埋め込みプレビューを表示したときの、センサーの大きさ（向きは補正後）。
     pub develop_size: Option<(u32, u32)>,
+    /// 灰色の実数の画像で、欠損（NaN）を描く色。`None` は黒。色の表を引いても変わらないよう、
+    /// 灰色でない（赤・緑・青が揃わない）色にする。
+    pub missing: Option<[u8; 3]>,
 }
 
 impl VwImage {
@@ -168,6 +171,7 @@ impl VwImage {
             curve: Curve::Linear,
             metadata: Metadata::default(),
             develop_size: None,
+            missing: None,
         })
     }
 }

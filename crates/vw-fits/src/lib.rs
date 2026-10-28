@@ -14,14 +14,17 @@
 mod bayer;
 pub mod calibration;
 mod header;
+pub mod radio;
 mod sky;
 pub mod stretch;
 mod tile;
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub use vw_core::Curve;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
@@ -45,7 +48,15 @@ pub struct Options {
     pub flip_rows: bool,
     /// `BAYERPAT` のモザイクを RGB にする。
     pub demosaic: bool,
+    /// キューブの面（チャンネル）全部に、同じ黒と白を使う。面ごとに決めると、隣の面と明るさを
+    /// 比べられず、輝線のない面では雑音が強調されるため。
+    pub same_window_for_planes: bool,
+    /// 欠損（`BLANK`・NaN）を描く色（[`vw_core::VwImage::missing`]）。`None` は黒。
+    pub missing: Option<[u8; 3]>,
 }
+
+/// 欠損の色の既定。色の表のどの色とも見分けやすい、少し青みのある灰色。
+pub const MISSING_COLOR: [u8; 3] = [112, 120, 136];
 
 impl Default for Options {
     fn default() -> Self {
@@ -56,6 +67,8 @@ impl Default for Options {
             curve: Curve::Linear,
             flip_rows: false,
             demosaic: true,
+            same_window_for_planes: true,
+            missing: Some(MISSING_COLOR),
         }
     }
 }
@@ -79,6 +92,7 @@ impl SharedOptions {
 pub struct FitsPlugin {
     options: SharedOptions,
     calibration: Calibration,
+    cube_windows: CubeWindows,
 }
 
 impl FitsPlugin {
@@ -86,7 +100,31 @@ impl FitsPlugin {
         Self {
             options,
             calibration,
+            cube_windows: CubeWindows::default(),
         }
+    }
+}
+
+/// キューブ全体から決めた黒と白。面を送るたびに全体を読み直すと重いので、ファイルごとに覚える。
+/// 鍵はヘッダの中身とファイルの長さと決め方（場所はデコーダに届かないことがあるため）。
+#[derive(Default, Clone)]
+struct CubeWindows(Arc<Mutex<HashMap<u64, (f32, f32)>>>);
+
+impl CubeWindows {
+    /// 覚えておく数。超えたら全部忘れる（キューブを次々に開いても増え続けないように）。
+    const KEEP: usize = 64;
+
+    fn get_or(&self, key: u64, make: impl FnOnce() -> Option<(f32, f32)>) -> Option<(f32, f32)> {
+        if let Some(w) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return Some(*w);
+        }
+        let window = make()?;
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= Self::KEEP {
+            map.clear();
+        }
+        map.insert(key, window);
+        Some(window)
     }
 }
 
@@ -101,6 +139,11 @@ pub const STRETCH: &str = "Black and white";
 /// [`Stretch::Percentile`] のときに、黒と白にした割合を書く鍵。
 pub const BLACK_PERCENTILE: &str = "Black percentile";
 pub const WHITE_PERCENTILE: &str = "White percentile";
+/// キューブの面が軸のどこか（周波数・速度・偏光）を書く鍵（[`radio`]）。
+pub const PLANE: &str = "Plane";
+/// キューブの全部の面に同じ黒と白を使ったことを書く鍵と値。
+pub const PLANES_WINDOW: &str = "Black and white of planes";
+pub const PLANES_WINDOW_SAME: &str = "Same for all planes";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -126,7 +169,13 @@ impl DecoderPlugin for FitsPlugin {
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
-        decode_with(&gunzip(data)?, frame, self.options.get(), None)
+        decode_with(
+            &gunzip(data)?,
+            frame,
+            self.options.get(),
+            None,
+            Some(&self.cube_windows),
+        )
     }
 
     fn decode_frame_at(
@@ -140,6 +189,7 @@ impl DecoderPlugin for FitsPlugin {
             frame,
             self.options.get(),
             Some((&self.calibration, path)),
+            Some(&self.cube_windows),
         )
     }
 
@@ -177,6 +227,8 @@ struct Image<'a> {
     width: usize,
     height: usize,
     planes: usize,
+    /// 3 次元目以降の軸の長さ。
+    extra_axes: Vec<usize>,
 }
 
 impl Image<'_> {
@@ -226,6 +278,7 @@ fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
             width: axes[0],
             height: axes[1],
             planes,
+            extra_axes: axes[2..].to_vec(),
         });
     }
     Err(DecodeError::Unsupported("FITS file has no image".into()))
@@ -236,6 +289,7 @@ fn decode_with(
     frame: usize,
     options: Options,
     calibration: Option<(&Calibration, &Path)>,
+    cube_windows: Option<&CubeWindows>,
 ) -> Result<VwImage, DecodeError> {
     let hdus = header::hdus(data)?;
     let image = find_image(&hdus)?;
@@ -275,16 +329,29 @@ fn decode_with(
         // 左右はそのまま、上下だけ返す（EXIF の向きの 4）。
         img.apply_orientation(4);
     }
-    img.window = stretch::window(
-        &img.data,
-        options.stretch,
-        options.low_percent,
-        options.high_percent,
-    );
+    let cube = image.planes > 1 && options.same_window_for_planes;
+    img.window = match cube_windows.filter(|_| cube) {
+        Some(cache) => cache.get_or(cube_key(data, &image, &options), || {
+            cube_window(data, &image, &options)
+        }),
+        None => None,
+    }
+    .or_else(|| {
+        stretch::window(
+            &img.data,
+            options.stretch,
+            options.low_percent,
+            options.high_percent,
+        )
+    });
     img.curve = options.curve;
+    img.missing = options.missing;
     img.metadata = metadata(&hdus, &image, frame);
     if flipped {
         img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
+    }
+    if cube {
+        img.metadata.push(GROUP, PLANES_WINDOW, PLANES_WINDOW_SAME);
     }
     img.metadata.push(GROUP, STRETCH, options.stretch.title());
     if options.stretch == Stretch::Percentile {
@@ -407,6 +474,53 @@ fn compressed_plane(data: &[u8], image: &Image, plane: usize) -> Result<Stored, 
     )
 }
 
+/// 黒と白を決めるのに見る面の数の上限。全部の面を読むと大きなキューブで重いので、等間隔に選ぶ。
+const WINDOW_PLANES: usize = 16;
+
+/// キューブの面を [`WINDOW_PLANES`] 枚まで等間隔に読み、まとめた値から黒と白を決める。
+fn cube_window(data: &[u8], image: &Image, options: &Options) -> Option<(f32, f32)> {
+    let count = image.planes.min(WINDOW_PLANES);
+    // 1 面あたりの値の数。合わせて 100 万程度にする（stretch が間引く数と同じくらい）。
+    let per_plane = (1_000_000 / count).max(1);
+    let mut values = Vec::new();
+    for i in 0..count {
+        let plane = i * image.planes / count;
+        let stored = if image.compressed {
+            compressed_plane(data, image, plane)
+        } else {
+            plain_plane(data, image, plane)
+        }
+        .ok()?;
+        let pixels = to_pixels(stored, image.hdu);
+        let step = pixels.len().div_ceil(per_plane).max(1);
+        match &pixels {
+            PixelData::U8(v) => values.extend(v.iter().step_by(step).map(|&x| f32::from(x))),
+            PixelData::U16(v) => values.extend(v.iter().step_by(step).map(|&x| f32::from(x))),
+            PixelData::F32(v) => values.extend(v.iter().step_by(step).copied()),
+        }
+    }
+    stretch::window(
+        &PixelData::F32(values),
+        options.stretch,
+        options.low_percent,
+        options.high_percent,
+    )
+}
+
+/// [`CubeWindows`] の鍵。
+fn cube_key(data: &[u8], image: &Image, options: &Options) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.len().hash(&mut h);
+    for card in &image.hdu.cards {
+        card.key.hash(&mut h);
+        card.value.hash(&mut h);
+    }
+    format!("{:?}", options.stretch).hash(&mut h);
+    options.low_percent.to_bits().hash(&mut h);
+    options.high_percent.to_bits().hash(&mut h);
+    h.finish()
+}
+
 /// 格納値に `BSCALE`・`BZERO` をかけ、`BLANK` を欠損（NaN）にする。
 ///
 /// 符号付き 16bit（`BZERO` なし）は、32768 足して U16 で持つと表示の階調や画素の値、ROI の
@@ -455,6 +569,9 @@ fn metadata(hdus: &[Hdu], image: &Image, frame: usize) -> Metadata {
     m.push(GROUP, "Size", format!("{} x {}", image.width, image.height));
     if image.planes > 1 {
         m.push(GROUP, "Frame", format!("{} / {}", frame + 1, image.planes));
+        if let Some(text) = radio::plane_text(image.hdu, &image.extra_axes, frame) {
+            m.push(GROUP, PLANE, text);
+        }
     }
     push_cards(&mut m, GROUP, &hdus[0]);
     if image.index > 0 {
