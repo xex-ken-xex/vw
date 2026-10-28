@@ -52,12 +52,27 @@
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
       <Extensions>
-        <!-- コマンドプロンプトから zip 版と同じく vw / vwbatch で呼べるようにする -->
+        <!-- コマンドプロンプトから zip 版と同じく vw で呼べるようにする -->
         <uap5:Extension Category="windows.appExecutionAlias" Executable="vw.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="vw.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
+      </Extensions>
+    </Application>
+    <!--
+      vwbatch は別の Application にする。実行エイリアスは Application ごとに 1 つしか宣言できないため。
+      コマンドから使う道具なので、スタートメニューには出さない（AppListEntry="none"）。
+    -->
+    <Application Id="vwbatch" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication" desktop4:Subsystem="console">
+      <uap:VisualElements
+        DisplayName="vwbatch"
+        Description="Applies a saved vw pipeline to images"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+      <Extensions>
         <uap5:Extension Category="windows.appExecutionAlias" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias desktop4:Subsystem="console">
             <uap5:ExecutionAlias Alias="vwbatch.exe" />
