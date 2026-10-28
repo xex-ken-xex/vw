@@ -11,7 +11,7 @@ param(
     # 以下 4 つは Partner Center の「製品 ID」ページの値。登録前は仮の値のまま作れる（Store には出せない）
     [string] $IdentityName = 'vw.unregistered',
     [string] $Publisher = 'CN=vw-unregistered',
-    [string] $PublisherDisplayName = 'vw contributors',
+    [string] $PublisherDisplayName = 'xex',
     [string] $DisplayName = 'vw'
 )
 $ErrorActionPreference = 'Stop'
