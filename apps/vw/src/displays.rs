@@ -289,7 +289,7 @@ mod platform {
                     .then_some(color.bitsPerColorChannel)
                     .filter(|&b| b > 0),
                 // 2 番目の bit が「HDR が入っている」（advancedColorEnabled）。
-                hdr: colored.then(|| unsafe { color.Anonymous.value } & 0b10 != 0),
+                hdr: colored.then_some(unsafe { color.Anonymous.value } & 0b10 != 0),
             });
         }
         out
