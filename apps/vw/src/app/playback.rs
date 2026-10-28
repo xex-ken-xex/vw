@@ -76,19 +76,18 @@ impl VwApp {
         if self.playback.is_some() {
             return;
         }
-        let Some(slot) = self.slots.get(self.active) else {
+        let key = self.slots.get(self.active).and_then(|slot| {
+            slot.sequence
+                .as_ref()
+                .filter(|q| q.kind == SequenceKind::Frames && q.delays.is_some())
+                .map(|q| (slot.id, q.folder.clone()))
+        });
+        if key == self.autoplayed {
             return;
-        };
-        let Some(seq) = slot
-            .sequence
-            .as_ref()
-            .filter(|q| q.kind == SequenceKind::Frames && q.delays.is_some())
-        else {
-            return;
-        };
-        let key = (slot.id, seq.folder.clone());
-        if self.autoplayed.as_ref() != Some(&key) {
-            self.autoplayed = Some(key);
+        }
+        // 別の画像に移ったら忘れる。戻ってきたときにまた回すため。
+        self.autoplayed = key;
+        if self.autoplayed.is_some() {
             self.start_playback();
         }
     }
