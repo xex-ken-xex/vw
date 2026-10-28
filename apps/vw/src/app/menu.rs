@@ -151,6 +151,12 @@ impl VwApp {
                     chosen = Some(Action::OpenQualityHelp);
                 }
                 ui.separator();
+                for action in [Action::ShowSystemInfo, Action::ShowGradationTest] {
+                    if self.menu_item(ui, action, None) {
+                        chosen = Some(action);
+                    }
+                }
+                ui.separator();
                 if self.menu_item(ui, Action::ShowAbout, None) {
                     chosen = Some(Action::ShowAbout);
                 }

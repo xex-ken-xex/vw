@@ -27,8 +27,10 @@ vw-dock.workspace = true
 vw-log.workspace = true
 vw-launch.workspace = true
 vw-renderer.workspace = true
-eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+eframe = { version = "0.36", default-features = false, features = ["glow", "wgpu_no_default_features", "default_fonts", "wayland", "x11"] }
 egui-phosphor = "0.14"
+# 16bit の画像を GPU に送るときに、u16 の並びをそのままバイトとして渡すため（eframe の wgpu も使っている）。
+bytemuck = "1.25"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 notify = { version = "8", default-features = false }
@@ -69,7 +71,7 @@ sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256
 qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

@@ -42,6 +42,7 @@ mod clipboard;
 mod compare_dialog;
 mod compose_dialog;
 mod dataset_dialogs;
+mod display_ui;
 mod docking;
 mod export_dialog;
 mod folders;
@@ -210,6 +211,8 @@ pub struct VwApp {
     page_drag: Option<(usize, f32)>,
     /// 画面に出している最初のスロット。ホイールで 1 枚や半ページずつ送ったときの位置を覚える。
     slot_first: usize,
+    /// モニタごとの深い画像の描き方と、システム情報・表示の階調テスト。
+    display: display_ui::DisplayState,
     /// 地名の表。地図を使う設定で、ダウンロードしてあれば裏で読み込む。
     place_names: Option<std::sync::Arc<crate::geonames::Gazetteer>>,
     place_names_load: Option<std::sync::mpsc::Receiver<Result<crate::geonames::Gazetteer, String>>>,
@@ -593,7 +596,12 @@ impl VwApp {
             log.info("Window: the displays changed since last time, so the window opens where the OS puts it");
         }
         theme::apply(&cc.egui_ctx, &settings.settings.appearance);
-        log.info(format!("Renderer: {}", vw_renderer::describe(cc)));
+        let renderer = vw_renderer::describe(cc);
+        log.info(format!("Renderer: {renderer}"));
+        let surface = crate::deep::install(cc);
+        if settings.settings.display.wants_ten_bit() && surface.bits < 10 {
+            log.warn("Display: 10-bit is on for a monitor, but the surface is 8-bit (see Help > System information)");
+        }
         log.info(format!(
             "Plugins: {}",
             registry
@@ -725,6 +733,7 @@ impl VwApp {
             page_wheel: 0.0,
             page_drag: None,
             slot_first: 0,
+            display: display_ui::DisplayState::new(surface, renderer),
             show_settings: false,
             show_datasets: false,
             datasets: Default::default(),
@@ -898,6 +907,8 @@ impl VwApp {
             }
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
+            Action::ShowSystemInfo => self.display.info_open = true,
+            Action::ShowGradationTest => self.display.test.open_setup(),
             Action::OpenQualityHelp => self.open_help(crate::help::Page::Quality),
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
@@ -1080,6 +1091,8 @@ impl eframe::App for VwApp {
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
         self.reload_presets();
+        self.system_info_ui(&ctx);
+        self.gradation_test_ui(&ctx);
         if self.fullscreen.is_some() {
             self.fullscreen_ui(ui);
             return;

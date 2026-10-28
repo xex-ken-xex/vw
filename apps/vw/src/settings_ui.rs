@@ -19,7 +19,7 @@ use crate::settings::{
     parse_hex_color, CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling,
     FitsCalibration, FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode,
     GaugeSide, HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings,
-    LogStyle, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
+    LogStyle, MonitorSettings, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -29,6 +29,7 @@ use crate::viewer::ScaleFilter;
 enum Section {
     Appearance,
     Viewer,
+    Display,
     Tree,
     Behavior,
     Metadata,
@@ -49,9 +50,10 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 19] = [
+    const ALL: [Section; 20] = [
         Section::Appearance,
         Section::Viewer,
+        Section::Display,
         Section::Tree,
         Section::Behavior,
         Section::Metadata,
@@ -75,6 +77,7 @@ impl Section {
         match self {
             Section::Appearance => "Appearance",
             Section::Viewer => "Viewer",
+            Section::Display => "Display",
             Section::Tree => "Folder tree",
             Section::Behavior => "Behavior",
             Section::Metadata => "Metadata window",
@@ -106,7 +109,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 105] = [
+const ITEMS: [Item; 106] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -232,6 +235,13 @@ const ITEMS: [Item; 105] = [
         title: "Zoom-out interpolation",
         description: "How an image shrunk on screen is drawn. Linear averages pixels smoothly; nearest neighbor picks single pixels, keeping original values but showing jagged edges and moire.",
         widget: minify_filter_widget,
+    },
+    Item {
+        section: Section::Display,
+        key: "display.monitors",
+        title: "Monitors",
+        description: "For each monitor, draw 16-bit images (PNG, TIFF, FITS, developed RAW...) with 10-bit gradation, or dither them when reducing them to 8 bits so smooth gradients show no bands. Applies to the one large image (1x1, maximized) and the fullscreen slideshow. 10-bit takes effect from the next start.",
+        widget: monitors_widget,
     },
     Item {
         section: Section::Tree,
@@ -1080,6 +1090,67 @@ pub fn fullscreen_items_ui(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             changed |= (item.widget)(settings, ui, lang);
         });
     }
+    changed
+}
+
+/// つないでいるモニタと、設定にだけあるモニタ（今は外れている）を並べ、10bit とディザを切り替える。
+fn monitors_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let system = crate::displays::cached();
+    let surface = crate::deep::surface();
+    if system.displays.is_empty() {
+        ui.weak(tr(lang, "The monitors cannot be listed here."));
+    }
+    let mut rows: Vec<(String, String, MonitorSettings)> = system
+        .displays
+        .iter()
+        .map(|d| {
+            let mut m = s.display.monitor(&d.id);
+            m.name.clone_from(&d.name);
+            (d.label(), crate::displays::signal_text(d, lang), m)
+        })
+        .collect();
+    rows.extend(
+        s.display
+            .monitors
+            .iter()
+            .filter(|m| !system.displays.iter().any(|d| d.id == m.id))
+            .map(|m| {
+                let label = if m.name.is_empty() { &m.id } else { &m.name };
+                (
+                    label.clone(),
+                    tr(lang, "(not connected)").to_owned(),
+                    m.clone(),
+                )
+            }),
+    );
+    let mut changed = false;
+    for (label, detail, mut m) in rows {
+        ui.horizontal(|ui| {
+            let before = (m.ten_bit, m.dither);
+            ui.checkbox(&mut m.ten_bit, tr(lang, "10-bit"));
+            ui.checkbox(&mut m.dither, tr(lang, "Dithering"));
+            ui.label(label);
+            if !detail.is_empty() {
+                ui.weak(detail);
+            }
+            if (m.ten_bit, m.dither) != before {
+                s.display.set(m);
+                changed = true;
+            }
+        });
+    }
+    let started = if surface.bits >= 10 {
+        tr1(
+            lang,
+            "This start: {}-bit surface.",
+            &surface.bits.to_string(),
+        )
+    } else if s.display.wants_ten_bit() {
+        tr(lang, "This start: 8-bit surface. Restart vw to try 10-bit; if it still says 8-bit, see Help > System information.").to_owned()
+    } else {
+        tr(lang, "This start: 8-bit surface.").to_owned()
+    };
+    ui.weak(started);
     changed
 }
 

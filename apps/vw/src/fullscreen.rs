@@ -298,6 +298,51 @@ struct Rendering {
 struct Picture {
     texture: TextureHandle,
     info: ImageInfo,
+    /// 8bit より深い画像の元と色の表。深く描く（[`crate::deep`]）ときに使う。
+    deep_source: Option<(Arc<vw_core::VwImage>, Option<Arc<vw_core::Palette>>)>,
+    deep: Option<crate::deep::Layer>,
+}
+
+/// 画面に合わせて縮めてあるので、拡大するときもなめらかにする（スロットのように
+/// 画素を 1 つずつ見る使い方ではないため）。
+const PICTURE_OPTIONS: TextureOptions = TextureOptions {
+    mipmap_mode: Some(egui::TextureFilter::Linear),
+    ..TextureOptions::LINEAR
+};
+
+/// `picture` を深く描くなら、描き方を用意して返す。描き終わるまでは `None`（標準の表示で出す）。
+fn deep_picture<'p>(
+    ctx: &egui::Context,
+    picture: &'p mut Picture,
+    mode: Option<crate::deep::Mode>,
+    surface: crate::deep::Surface,
+    screen_side: u32,
+) -> Option<&'p crate::deep::Layer> {
+    let (Some(mode), Some((image, palette))) = (mode, &picture.deep_source) else {
+        picture.deep = None;
+        return None;
+    };
+    let max_side = crate::loader::cover_side(image.width.max(image.height), screen_side.max(1));
+    if !picture
+        .deep
+        .as_ref()
+        .is_some_and(|d| d.is_for(image, palette.as_ref(), max_side, mode))
+    {
+        picture.deep = Some(crate::deep::Layer::image(
+            image,
+            palette.as_ref(),
+            max_side,
+            mode,
+            surface,
+        ));
+    }
+    let layer = picture.deep.as_mut()?;
+    if layer.poll(ctx, PICTURE_OPTIONS) {
+        Some(layer)
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        None
+    }
 }
 
 /// 書き込み途中で読めなかった最新のファイルを読み直す間隔と回数。
@@ -347,6 +392,9 @@ pub struct Show {
     wheel: f32,
     /// 画面の長辺（物理ピクセル）。この大きさに合わせて縮めて読む。
     screen_side: u32,
+    /// 全画面のモニタでの深い画像の描き方。アプリが毎フレーム決める。
+    pub deep_mode: Option<crate::deep::Mode>,
+    pub surface: crate::deep::Surface,
 }
 
 /// [`Show::ui`] が呼び出し側に頼むこと。
@@ -421,6 +469,8 @@ impl Show {
             pointer_moved: Instant::now(),
             wheel: 0.0,
             screen_side: 0,
+            deep_mode: None,
+            surface: crate::deep::Surface::default(),
         };
         (show, problems)
     }
@@ -510,18 +560,22 @@ impl Show {
         loaded: crate::loader::Loaded,
         derived: Option<egui::ColorImage>,
     ) {
+        // 色導出をした画像は深く描かない（色導出は 8bit で描く）。
+        let deep_source = loaded
+            .full
+            .as_ref()
+            .filter(|_| derived.is_none() && crate::deep::is_deep(loaded.info.bits_per_sample))
+            .map(|f| {
+                let palette = loaded.info.look.as_ref().and_then(|a| a.palette.clone());
+                (Arc::clone(&f.image), palette)
+            });
         let Some(image) = derived.or(loaded.full.map(|f| f.display)).or(loaded.thumb) else {
             return;
         };
-        // 画面に合わせて縮めてあるので、拡大するときもなめらかにする（スロットのように
-        // 画素を 1 つずつ見る使い方ではないため）。
         let texture = ctx.load_texture(
             format!("{}#fullscreen", path.display()),
             image,
-            TextureOptions {
-                mipmap_mode: Some(egui::TextureFilter::Linear),
-                ..TextureOptions::LINEAR
-            },
+            PICTURE_OPTIONS,
         );
         self.failed.remove(&path);
         self.pictures.insert(
@@ -529,6 +583,8 @@ impl Show {
             Picture {
                 texture,
                 info: loaded.info,
+                deep_source,
+                deep: None,
             },
         );
     }
@@ -877,21 +933,22 @@ impl Show {
             let newest = self.settings.mode == FullscreenMode::Newest;
             (!newest || *count >= RETRIES).then(|| e.clone())
         });
+        let (deep_mode, surface, screen_side) = (self.deep_mode, self.surface, self.screen_side);
         let picture = self
             .shown
             .as_ref()
             .filter(|_| gave_up.is_none())
-            .and_then(|p| self.pictures.get(p));
+            .and_then(|p| self.pictures.get_mut(p));
         if let Some(picture) = picture {
             let size = picture.texture.size_vec2();
             let scale = (rect.width() / size.x).min(rect.height() / size.y);
             let image_rect = Rect::from_center_size(rect.center(), size * scale);
-            painter.image(
-                picture.texture.id(),
-                image_rect,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            let deep = deep_picture(&ctx, picture, deep_mode, surface, screen_side)
+                .is_some_and(|layer| layer.paint(painter, image_rect, whole, PICTURE_OPTIONS));
+            if !deep {
+                painter.image(picture.texture.id(), image_rect, whole, Color32::WHITE);
+            }
         }
         let center_text = if self.pos.is_none() {
             Some(if self.scanning {
