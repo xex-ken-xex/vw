@@ -234,7 +234,7 @@ fn skip_by_reading<R: Read>(r: &mut R, n: u64) -> Result<(), String> {
 }
 
 /// 数のカード。Fortran 流の指数（1.0D+03）も読む。
-fn number(v: &str) -> Option<f64> {
+pub(crate) fn number(v: &str) -> Option<f64> {
     v.trim()
         .replace(['D', 'd'], "E")
         .parse()
@@ -394,7 +394,7 @@ impl Wcs {
 
 /// 画素のずれを投影面の度にする行列。`CDi_j` があればそれ、なければ `PCi_j`（省略は単位行列）
 /// × `CDELTi`、古い書き方の `CROTA2` も読む。
-fn cd_matrix(num: &dyn Fn(&str) -> Option<f64>) -> Option<[[f64; 2]; 2]> {
+pub(crate) fn cd_matrix(num: &dyn Fn(&str) -> Option<f64>) -> Option<[[f64; 2]; 2]> {
     let cd = |i, j| num(&format!("CD{i}_{j}"));
     if (1..=2).any(|i| (1..=2).any(|j| cd(i, j).is_some())) {
         let m = [

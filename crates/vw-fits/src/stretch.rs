@@ -14,6 +14,9 @@ pub enum Stretch {
     Percentile,
     /// IRAF の zscale（astropy の `ZScaleInterval` と同じ手順）。背景の付近の分布から決める。
     ZScale,
+    /// 0 をはさんで上下同じ幅。値の絶対値の `high`％ の値を白、その負を黒にする。
+    /// 電波干渉計の画像の負の値や、速度の地図を、0 を真ん中にして見るため。
+    Symmetric,
 }
 
 impl Stretch {
@@ -23,6 +26,7 @@ impl Stretch {
             Stretch::MinMax => "Minimum to maximum",
             Stretch::Percentile => "Percentiles",
             Stretch::ZScale => "zscale",
+            Stretch::Symmetric => "Symmetric around zero",
         }
     }
 }
@@ -49,6 +53,13 @@ pub fn window(data: &PixelData, stretch: Stretch, low: f32, high: f32) -> Option
             }
         },
         Stretch::ZScale => zscale(&sorted_sample(data, ZSCALE_SAMPLES))?,
+        Stretch::Symmetric => {
+            let mut magnitudes = sorted_sample(data, PERCENTILE_SAMPLES);
+            magnitudes.iter_mut().for_each(|v| *v = v.abs());
+            magnitudes.sort_by(f32::total_cmp);
+            let a = at_percent(&magnitudes, high)?;
+            (-a, a)
+        }
     };
     // 黒と白が同じだと階調が出ない（一面同じ値の画像）。最小〜最大に戻し、それでも同じなら幅 1 にする。
     if hi > lo {

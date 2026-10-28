@@ -752,13 +752,15 @@ pub enum FitsStretch {
     #[default]
     Percentile,
     Zscale,
+    Symmetric,
 }
 
 impl FitsStretch {
-    pub const ALL: [FitsStretch; 3] = [
+    pub const ALL: [FitsStretch; 4] = [
         FitsStretch::Percentile,
         FitsStretch::Zscale,
         FitsStretch::MinMax,
+        FitsStretch::Symmetric,
     ];
 
     pub fn title(self) -> &'static str {
@@ -766,6 +768,7 @@ impl FitsStretch {
             FitsStretch::MinMax => "Minimum to maximum",
             FitsStretch::Percentile => "Percentiles",
             FitsStretch::Zscale => "zscale",
+            FitsStretch::Symmetric => "Symmetric around zero",
         }
     }
 }
@@ -1025,6 +1028,12 @@ pub struct Fits {
     pub flip_rows: bool,
     /// `BAYERPAT` のモザイクをカラーにする。
     pub demosaic: bool,
+    /// キューブの全部の面に同じ黒と白を使う。
+    pub same_window_for_planes: bool,
+    /// 欠損（BLANK・NaN）を描く色（#rrggbb）。
+    pub missing_color: String,
+    /// 電波の画像のビーム（BMAJ・BMIN・BPA）を左下に楕円で描く。
+    pub beam: bool,
     /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
     pub calibration: FitsCalibration,
 }
@@ -1039,6 +1048,12 @@ impl Default for Fits {
             curve: FitsCurve::Linear,
             flip_rows: d.flip_rows,
             demosaic: d.demosaic,
+            same_window_for_planes: d.same_window_for_planes,
+            missing_color: {
+                let [r, g, b] = vw_fits::MISSING_COLOR;
+                format!("#{r:02x}{g:02x}{b:02x}")
+            },
+            beam: true,
             calibration: FitsCalibration::default(),
         }
     }
@@ -1071,6 +1086,17 @@ impl Fits {
             curve: r.get("curve").unwrap_or(d.curve),
             flip_rows: r.get("flip_rows").unwrap_or(d.flip_rows),
             demosaic: r.get("demosaic").unwrap_or(d.demosaic),
+            same_window_for_planes: r
+                .get("same_window_for_planes")
+                .unwrap_or(d.same_window_for_planes),
+            missing_color: r
+                .get_valid(
+                    "missing_color",
+                    |v: &String| parse_hex_color(v).is_some(),
+                    "must be #RRGGBB",
+                )
+                .unwrap_or_else(|| d.missing_color.clone()),
+            beam: r.get("beam").unwrap_or(d.beam),
             calibration: FitsCalibration::read(r.reader()),
         }
     }
@@ -1081,12 +1107,23 @@ impl Fits {
                 FitsStretch::MinMax => vw_fits::Stretch::MinMax,
                 FitsStretch::Percentile => vw_fits::Stretch::Percentile,
                 FitsStretch::Zscale => vw_fits::Stretch::ZScale,
+                FitsStretch::Symmetric => vw_fits::Stretch::Symmetric,
             },
             low_percent: self.low_percent,
             high_percent: self.high_percent,
             curve: self.curve.curve(),
             flip_rows: self.flip_rows,
             demosaic: self.demosaic,
+            same_window_for_planes: self.same_window_for_planes,
+            missing: parse_hex_color(&self.missing_color).map(|c| {
+                let [r, g, mut b] = [c.r(), c.g(), c.b()];
+                // 灰色（赤・緑・青が同じ）だと色の表を引いたときに表の色に変わってしまうので、
+                // 見分けのつかない 1 段だけ青をずらす。
+                if r == g && g == b {
+                    b = if b == 255 { 254 } else { b + 1 };
+                }
+                [r, g, b]
+            }),
         }
     }
 }

@@ -288,6 +288,8 @@ pub struct SlotLook<'a> {
     pub color_rules: &'a crate::colormap::Rules,
     /// 似た画像の組に入っていれば、見出しに出す印。
     pub similar: Option<&'a SimilarMark>,
+    /// 電波の画像のビームの楕円を描く。
+    pub beam: bool,
 }
 
 /// 似た画像の組の印。同じ組のスロットには同じ番号と色を出す。
@@ -464,6 +466,56 @@ fn derive_name(d: &Derive, lang: Language) -> String {
         Some(name) => name.clone(),
         None => tr(lang, "Unsaved").to_owned(),
     }
+}
+
+/// 電波の画像のビーム（分解能）を、見えている画像の左下に楕円で描く。
+fn draw_beam(
+    ui: &egui::Ui,
+    lang: Language,
+    body: Rect,
+    img_rect: Rect,
+    scale: f32,
+    meta: &vw_core::Metadata,
+) {
+    let Some(beam) = vw_fits::radio::beam(meta) else {
+        return;
+    };
+    // 画面の y は下向き。上下を返して見せているときは FITS の y と逆になる。
+    let flipped = meta.get(vw_fits::GROUP, vw_fits::ROWS) == Some(vw_fits::ROWS_FLIPPED);
+    let to_screen = |[x, y]: [f64; 2]| {
+        let y = if flipped { -y } else { y };
+        vec2(x as f32, y as f32) * scale
+    };
+    let (a, b) = (to_screen(beam.major), to_screen(beam.minor));
+    let reach = vec2(a.x.abs().max(b.x.abs()), a.y.abs().max(b.y.abs())).max(vec2(3.0, 3.0));
+    let shown = img_rect.intersect(body);
+    if shown.width() < 4.0 * reach.x || shown.height() < 4.0 * reach.y {
+        return;
+    }
+    let center = shown.left_bottom() + vec2(reach.x + 8.0, -(reach.y + 8.0));
+    let points: Vec<Pos2> = (0..48)
+        .map(|i| {
+            let t = i as f32 / 48.0 * std::f32::consts::TAU;
+            center + a * t.cos() + b * t.sin()
+        })
+        .collect();
+    let painter = ui.painter_at(body);
+    // 電波の図の慣習どおり、四角の枠の中に塗った楕円を描く。
+    let frame = Rect::from_center_size(center, 2.0 * reach + vec2(8.0, 8.0));
+    painter.rect_filled(frame, 2.0, Color32::from_black_alpha(140));
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        Color32::from_white_alpha(110),
+        egui::Stroke::new(1.0, Color32::from_gray(235)),
+    ));
+    let response = ui.interact(frame, ui.id().with("beam"), Sense::hover());
+    response.on_hover_text(format!(
+        "{} {:.2}\" × {:.2}\", PA {:.1}°",
+        crate::i18n::tr(lang, "Beam"),
+        beam.bmaj_arcsec,
+        beam.bmin_arcsec,
+        beam.bpa_deg
+    ));
 }
 
 /// 複数枚の並びの「何枚目 / 全部で何枚」。1 枚しかなければ出さない。
@@ -1157,6 +1209,7 @@ impl Slot {
             gauge,
             color_rules,
             similar,
+            beam,
         } = look;
         self.colors = colors;
         let mut out = SlotResponse::default();
@@ -1425,6 +1478,15 @@ impl Slot {
                     .map(|i| (shown.path.clone(), i));
             }
             draw_faces(ui, body, lang, faces, &face_rect, &self.colors);
+            if beam {
+                // 帯を重ねている間は、その上に出す。
+                let clear = if floating {
+                    Rect::from_min_max(body.min, pos2(body.max.x, body.max.y - DERIVE_BAR))
+                } else {
+                    body
+                };
+                draw_beam(ui, lang, clear, img_rect, scale, &shown.info.metadata);
+            }
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
@@ -1773,7 +1835,15 @@ impl Slot {
             }
             None => name,
         };
-        if let Some(text) = self.sequence.as_ref().and_then(page_text) {
+        if let Some(mut text) = self.sequence.as_ref().and_then(page_text) {
+            // キューブの面なら、その面の周波数・速度・偏光も並べる。
+            if let Some(plane) = self
+                .shown
+                .as_ref()
+                .and_then(|s| s.info.metadata.get(vw_fits::GROUP, vw_fits::PLANE))
+            {
+                text = format!("{text}  {plane}");
+            }
             // ヘッダの名前の後ろに出すと、長い名前やフラグ・タグに隠れて読めなくなるので、画像の上に重ねる。
             let galley = painter.layout_no_wrap(
                 text,
