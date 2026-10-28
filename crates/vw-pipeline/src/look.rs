@@ -84,6 +84,10 @@ pub enum BlackWhite {
     },
     Zscale,
     MinMax,
+    /// 0 をはさんで上下同じ幅。値の絶対値の `white`％ の値を白、その負を黒にする。
+    Symmetric {
+        white: f32,
+    },
     /// 決まった値。
     Values {
         black: f32,
@@ -105,6 +109,9 @@ impl BlackWhite {
             }
             BlackWhite::Zscale => stretch::window(data, Stretch::ZScale, 0.0, 0.0),
             BlackWhite::MinMax => stretch::window(data, Stretch::MinMax, 0.0, 0.0),
+            BlackWhite::Symmetric { white } => {
+                stretch::window(data, Stretch::Symmetric, 0.0, white)
+            }
             BlackWhite::Values { black, white } => Some((black, white)),
         }
     }
@@ -156,6 +163,10 @@ mod tests {
             white: 7.0,
         };
         assert_eq!(fixed.window(&data), Some((5.0, 7.0)));
+        assert_eq!(
+            BlackWhite::Symmetric { white: 100.0 }.window(&data),
+            Some((-100.0, 100.0))
+        );
         let (lo, hi) = BlackWhite::Percentile {
             black: 10.0,
             white: 90.0,

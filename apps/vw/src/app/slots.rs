@@ -615,6 +615,9 @@ impl VwApp {
                     },
                     crate::settings::FitsStretch::Zscale => BlackWhite::Zscale,
                     crate::settings::FitsStretch::MinMax => BlackWhite::MinMax,
+                    crate::settings::FitsStretch::Symmetric => BlackWhite::Symmetric {
+                        white: fits.high_percent,
+                    },
                 }
             }
             (None, method) => method,
@@ -836,6 +839,7 @@ impl VwApp {
                 _ => Vec::new(),
             };
             let similar = self.similar.mark(self.slots[i].id);
+            let beam = self.settings().fits.beam;
             let resp = self.slots[i].ui(
                 ui,
                 rect,
@@ -862,6 +866,7 @@ impl VwApp {
                     }),
                     color_rules: &self.color_rules,
                     similar,
+                    beam,
                 },
             );
             cells.push((rect, i));
@@ -1014,6 +1019,7 @@ impl VwApp {
                         gauge: None,
                         color_rules: &self.color_rules,
                         similar: None,
+                        beam: self.settings().fits.beam,
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));

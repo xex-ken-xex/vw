@@ -138,7 +138,11 @@ fn render<T: Sample>(img: &VwImage, params: &DisplayParams) -> (u32, u32, Vec<T>
             }
             None => {
                 let shade = Shade::new(window.unwrap_or_else(|| min_max(v)), curve);
-                convert(img, params, |i| shade.of(v[i]), |i| T::from_unit(v[i]))
+                let mut out = convert(img, params, |i| shade.of(v[i]), |i| T::from_unit(v[i]));
+                if let Some(color) = img.missing.filter(|_| img.color == ColorModel::Gray) {
+                    paint_missing(img, params, v, color, &mut out.2);
+                }
+                out
             }
         },
     }
@@ -275,6 +279,31 @@ fn convert<T: Sample>(
         });
     }
     (ow as u32, oh as u32, rgba)
+}
+
+/// [`convert`] で黒にした欠損（NaN）の画素を `color` で塗り直す。`convert` の閉包に分岐を
+/// 足さないのは、欠損のない多くの画像で画素ごとの判定が増えるのを避けるため。
+fn paint_missing<T: Sample>(
+    img: &VwImage,
+    params: &DisplayParams,
+    v: &[f32],
+    color: [u8; 3],
+    rgba: &mut [T],
+) {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let step = (img.width.max(img.height) as usize)
+        .div_ceil(params.max_side.max(1) as usize)
+        .max(1);
+    let ow = w.div_ceil(step);
+    let color = color.map(T::from_u8);
+    for (oy, y) in (0..h).step_by(step).enumerate() {
+        for (ox, x) in (0..w).step_by(step).enumerate() {
+            if v[y * w + x].is_nan() {
+                let at = (oy * ow + ox) * 4;
+                rgba[at..at + 3].copy_from_slice(&color);
+            }
+        }
+    }
 }
 
 /// 縦横どちらも `max_side` 以下になるよう、整数倍で縮小する。縮小しないで済むときは複製を返す。
@@ -522,6 +551,35 @@ mod tests {
         };
         let d = to_display(&img, &params);
         assert_eq!(d.rgba[4], 150);
+    }
+
+    #[test]
+    fn missing_values_are_drawn_in_the_missing_color_even_when_shrunk() {
+        let mut img = VwImage::new(
+            4,
+            1,
+            ColorModel::Gray,
+            PixelData::F32(vec![0.0, f32::NAN, f32::NAN, 10.0]),
+        )
+        .unwrap();
+        img.window = Some((0.0, 10.0));
+        let plain = to_display(&img, &DisplayParams::default()).rgba;
+        assert_eq!(&plain[4..8], &[0, 0, 0, 255]);
+        img.missing = Some([112, 120, 136]);
+        let d = to_display(&img, &DisplayParams::default()).rgba;
+        assert_eq!(&d[..4], &[0, 0, 0, 255]);
+        assert_eq!(&d[4..8], &[112, 120, 136, 255]);
+        assert_eq!(&d[12..16], &[255, 255, 255, 255]);
+        let half = to_display16(
+            &img,
+            &DisplayParams {
+                max_side: 2,
+                ..Default::default()
+            },
+        )
+        .rgba;
+        // 2 画素おきに間引くので、0 番と 2 番（欠損）が残る。
+        assert_eq!(&half[4..7], &[112 * 257, 120 * 257, 136 * 257]);
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub struct Palette {
 }
 
 /// 組み込みの表の名前（設定に書く名前）。並びはメニューに出す順。
-pub const BUILTIN: [&str; 11] = [
+pub const BUILTIN: [&str; 13] = [
     "gray",
     "gray_inverted",
     "inferno",
@@ -25,6 +25,29 @@ pub const BUILTIN: [&str; 11] = [
     "hot_metal_blue",
     "jet",
     "rainbow",
+    "coolwarm",
+    "blue_black_red",
+];
+
+/// 0 をはさんで青と赤に分かれる表の点（Moreland の coolwarm を 9 点で写したもの）。
+/// 電波の画像の負の値や、近づく（青）と遠ざかる（赤）の速度を見るため。
+const COOLWARM: [(f32, [u8; 3]); 9] = [
+    (0.0, [59, 76, 192]),
+    (0.125, [98, 130, 234]),
+    (0.25, [141, 176, 254]),
+    (0.375, [184, 208, 249]),
+    (0.5, [221, 221, 221]),
+    (0.625, [245, 196, 173]),
+    (0.75, [244, 154, 123]),
+    (0.875, [222, 96, 77]),
+    (1.0, [180, 4, 38]),
+];
+
+/// 真ん中（0）が黒の青と赤。0 付近の雑音を沈め、正と負の強いところだけを光らせる。
+const BLUE_BLACK_RED: [(f32, [u8; 3]); 3] = [
+    (0.0, [90, 160, 255]),
+    (0.5, [0, 0, 0]),
+    (1.0, [255, 96, 64]),
 ];
 
 /// 灰色の表の名前。灰色の表は色を変えないので、引かずに済ませる。
@@ -38,6 +61,8 @@ pub fn title(name: &str) -> &str {
         "hot_iron" => "Hot Iron",
         "pet" => "PET",
         "hot_metal_blue" => "Hot Metal Blue",
+        "coolwarm" => "Cool-warm (blue, white, red)",
+        "blue_black_red" => "Blue, black, red",
         other => other,
     }
 }
@@ -57,6 +82,8 @@ impl Palette {
             "hot_metal_blue" => t::HOT_METAL_BLUE,
             "jet" => from_fn(jet),
             "rainbow" => from_fn(rainbow),
+            "coolwarm" => Self::from_stops(name, &COOLWARM).ok()?.colors,
+            "blue_black_red" => Self::from_stops(name, &BLUE_BLACK_RED).ok()?.colors,
             _ => return None,
         };
         Some(Self {
@@ -122,8 +149,12 @@ impl Palette {
     }
 
     /// 灰色の RGBA8 の画素を色にする。赤の値を明るさとして引き、アルファは残す。
+    /// 灰色でない画素（欠損の色、[`crate::VwImage::missing`]）は表の外の色なので、そのまま残す。
     pub fn recolor(&self, rgba: &mut [u8]) {
         for px in rgba.as_chunks_mut::<4>().0 {
+            if px[0] != px[1] || px[0] != px[2] {
+                continue;
+            }
             let [r, g, b] = self.colors[px[0] as usize];
             px[..3].copy_from_slice(&[r, g, b]);
         }
@@ -133,6 +164,9 @@ impl Palette {
     /// 表の隣どうしの色をそのまま使うと、16bit で出しても 256 段に戻ってしまうため。
     pub fn recolor16(&self, rgba: &mut [u16]) {
         for px in rgba.as_chunks_mut::<4>().0 {
+            if px[0] != px[1] || px[0] != px[2] {
+                continue;
+            }
             let pos = f32::from(px[0]) * (255.0 / 65535.0);
             let i = (pos as usize).min(254);
             let t = pos - i as f32;
@@ -313,7 +347,7 @@ mod tests {
         let p = Palette::builtin("hot_iron").unwrap();
         // 表の 0 番と 1 番のちょうど中ほど。
         let half = (65535.0 / 255.0 * 0.5_f32).round() as u16;
-        let mut px = vec![half, half, half, 1234, 65535, 0, 0, 65535];
+        let mut px = vec![half, half, half, 1234, 65535, 65535, 65535, 65535];
         p.recolor16(&mut px);
         let [r0, _, _] = p.colors[0];
         let [r1, _, _] = p.colors[1];
@@ -325,6 +359,30 @@ mod tests {
             &px[4..7],
             &[u16::from(r) * 257, u16::from(g) * 257, u16::from(b) * 257]
         );
+    }
+
+    #[test]
+    fn diverging_maps_turn_from_blue_to_red_through_the_middle() {
+        let cw = Palette::builtin("coolwarm").unwrap();
+        assert_eq!(cw.colors[0], [59, 76, 192]);
+        assert_eq!(cw.colors[255], [180, 4, 38]);
+        let mid = cw.at(0.5);
+        assert!(mid.iter().all(|&c| (219..=223).contains(&c)), "{mid:?}");
+        let bbr = Palette::builtin("blue_black_red").unwrap();
+        assert!(bbr.at(0.5).iter().all(|&c| c <= 1), "{:?}", bbr.at(0.5));
+        assert!(bbr.colors[0][2] > bbr.colors[0][0]);
+        assert!(bbr.colors[255][0] > bbr.colors[255][2]);
+    }
+
+    #[test]
+    fn pixels_that_are_not_gray_keep_their_color() {
+        let p = Palette::builtin("hot_iron").unwrap();
+        let mut px = vec![112, 120, 136, 255];
+        p.recolor(&mut px);
+        assert_eq!(px, vec![112, 120, 136, 255]);
+        let mut px16 = vec![112 * 257, 120 * 257, 136 * 257, 65535];
+        p.recolor16(&mut px16);
+        assert_eq!(px16, vec![112 * 257, 120 * 257, 136 * 257, 65535]);
     }
 
     #[test]

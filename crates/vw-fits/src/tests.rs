@@ -47,7 +47,7 @@ fn decode(data: &[u8]) -> VwImage {
 }
 
 fn decode_opts(data: &[u8], options: Options) -> VwImage {
-    decode_with(data, 0, options, None).unwrap()
+    decode_with(data, 0, options, None, None).unwrap()
 }
 
 fn f32s(img: &VwImage) -> Vec<f32> {
@@ -551,4 +551,132 @@ fn huge_axes_in_the_header_are_refused_before_allocating() {
         .to_string();
     assert!(err.contains("200000 x 200000"), "{err}");
     assert!(err.contains("image size limit"), "{err}");
+}
+
+#[test]
+fn symmetric_black_and_white_are_equally_far_from_zero() {
+    let v: Vec<f32> = (-50..=100).map(|i| i as f32).collect();
+    let (lo, hi) = stretch::window(&PixelData::F32(v), Stretch::Symmetric, 0.0, 100.0).unwrap();
+    assert_eq!((lo, hi), (-100.0, 100.0));
+}
+
+/// 8 x 1 の実数の面を `planes` 枚重ねたキューブ。面 `p` の値は `p * 10 + x`。
+fn cube(planes: usize, extra: &[String]) -> Vec<u8> {
+    let mut cards = image_cards(-32, &[8, 1, planes]);
+    cards.extend(extra.iter().cloned());
+    let values: Vec<f32> = (0..planes)
+        .flat_map(|p| (0..8).map(move |x| (p * 10 + x) as f32))
+        .collect();
+    fits(&cards, &f32_bytes(&values))
+}
+
+#[test]
+fn all_planes_of_a_cube_share_one_black_and_white() {
+    let file = cube(3, &[]);
+    let p = FitsPlugin::default();
+    let options = Options {
+        stretch: Stretch::MinMax,
+        ..Options::default()
+    };
+    p.options.set(options);
+    let windows: Vec<_> = (0..3)
+        .map(|f| p.decode_frame(&file, f).unwrap().window)
+        .collect();
+    assert_eq!(windows, vec![Some((0.0, 27.0)); 3]);
+    let first = p.decode_frame(&file, 0).unwrap();
+    assert_eq!(
+        first.metadata.get(GROUP, PLANES_WINDOW),
+        Some(PLANES_WINDOW_SAME)
+    );
+
+    p.options.set(Options {
+        same_window_for_planes: false,
+        ..options
+    });
+    assert_eq!(p.decode_frame(&file, 2).unwrap().window, Some((20.0, 27.0)));
+}
+
+#[test]
+fn a_plane_tells_its_frequency_and_radio_velocity() {
+    let file = cube(
+        3,
+        &[
+            card("CTYPE3", "'FREQ'"),
+            card("CRVAL3", "1.420405752E9"),
+            card("CRPIX3", "1"),
+            card("CDELT3", "-1.0E5"),
+            card("CUNIT3", "'Hz'"),
+            card("RESTFRQ", "1.420405752E9"),
+        ],
+    );
+    let plane = |f| {
+        FitsPlugin::default()
+            .decode_frame(&file, f)
+            .unwrap()
+            .metadata
+            .get(GROUP, PLANE)
+            .map(str::to_owned)
+    };
+    assert_eq!(plane(0).as_deref(), Some("1.420406 GHz, 0.00 km/s"));
+    // 周波数が 100 kHz 下がると、およそ 21.1 km/s 遠ざかる。
+    assert_eq!(plane(1).as_deref(), Some("1.420306 GHz, 21.11 km/s"));
+}
+
+#[test]
+fn velocity_and_stokes_axes_are_named() {
+    let mut cards = image_cards(-32, &[2, 1, 2, 4]);
+    cards.extend([
+        card("CTYPE3", "'VRAD'"),
+        card("CRVAL3", "-5000.0"),
+        card("CRPIX3", "1"),
+        card("CDELT3", "2500.0"),
+        card("CTYPE4", "'STOKES'"),
+        card("CRVAL4", "1"),
+        card("CRPIX4", "1"),
+        card("CDELT4", "1"),
+    ]);
+    let file = fits(&cards, &f32_bytes(&[0.0; 16]));
+    let plane = |f| {
+        FitsPlugin::default()
+            .decode_frame(&file, f)
+            .unwrap()
+            .metadata
+            .get(GROUP, PLANE)
+            .map(str::to_owned)
+    };
+    assert_eq!(plane(0).as_deref(), Some("-5.00 km/s, Stokes I"));
+    assert_eq!(plane(7).as_deref(), Some("-2.50 km/s, Stokes V"));
+}
+
+#[test]
+fn missing_values_get_the_missing_color() {
+    let file = fits(&image_cards(-32, &[2, 1]), &f32_bytes(&[f32::NAN, 1.0]));
+    assert_eq!(decode(&file).missing, Some(MISSING_COLOR));
+}
+
+#[test]
+fn the_beam_is_turned_into_pixels_through_the_wcs() {
+    let mut m = Metadata::default();
+    for (k, v) in [
+        ("CDELT1", "-0.001"),
+        ("CDELT2", "0.001"),
+        ("BMAJ", "0.004"),
+        ("BMIN", "0.002"),
+        ("BPA", "90.0"),
+    ] {
+        m.push(GROUP, k, v);
+    }
+    let b = radio::beam(&m).unwrap();
+    // 長径は東西（PA 90°）。東は画素の x の負の向き。半径 2 画素。
+    assert!(
+        (b.major[0] + 2.0).abs() < 1e-9 && b.major[1].abs() < 1e-9,
+        "{b:?}"
+    );
+    assert!(
+        b.minor[0].abs() < 1e-9 && (b.minor[1].abs() - 1.0).abs() < 1e-9,
+        "{b:?}"
+    );
+    assert!((b.bmaj_arcsec - 14.4).abs() < 1e-9);
+    m.entries.retain(|(_, k, _)| k != "BMIN");
+    assert_eq!(radio::beam(&m), None);
 }

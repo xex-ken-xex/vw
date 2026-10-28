@@ -148,20 +148,11 @@ impl Scale {
             Quantity::Pet(Ok(f)) => (f, "SUVbw".to_owned()),
             Quantity::Pet(Err(_)) => (1.0, "Bq/ml".to_owned()),
             Quantity::Unit(u) => (1.0, u.to_owned()),
-            Quantity::Raw => (1.0, fits_unit(meta).unwrap_or_default()),
+            Quantity::Named(u) => (1.0, u),
+            Quantity::Raw => (1.0, String::new()),
         };
         Self { factor, unit }
     }
-}
-
-/// FITS の `BUNIT`。画像の HDU のもの（後ろの見出し）を先に見る。
-fn fits_unit(meta: &Metadata) -> Option<String> {
-    meta.entries
-        .iter()
-        .rev()
-        .find(|(g, k, _)| g.starts_with(vw_fits::GROUP) && k == "BUNIT")
-        .map(|(_, _, v)| v.trim().trim_matches('\'').trim().to_owned())
-        .filter(|u| !u.is_empty())
 }
 
 /// 灰色の画像に当てた結果。ゲージとメニューに使う。
@@ -471,7 +462,8 @@ mod tests {
         let rules = Rules::new(&PipelineSettings::default());
         assert_eq!(rules.next_after(None), Some("gray_inverted"));
         assert_eq!(rules.next_after(Some("inferno")), Some("magma"));
-        assert_eq!(rules.next_after(Some("rainbow")), Some("gray"));
+        assert_eq!(rules.next_after(Some("rainbow")), Some("coolwarm"));
+        assert_eq!(rules.next_after(Some("blue_black_red")), Some("gray"));
     }
 
     #[test]
