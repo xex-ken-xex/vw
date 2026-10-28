@@ -16,6 +16,9 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 const RECENT_FRAMES: usize = 16;
 /// 覚えておくフレームの合計の上限（バイト）。大きな画像のアニメーションでメモリを使い過ぎないため。
 const RECENT_BYTES: usize = 256 << 20;
+/// 表示時間が 10ms 以下のフレームを何ミリ秒として扱うか。GIF（vw-gif）と同じく
+/// ブラウザに合わせて 100ms にする。
+const SHORT_DELAY_MS: u32 = 100;
 
 #[derive(Default)]
 pub struct WebpPlugin {
@@ -52,6 +55,11 @@ impl DecoderPlugin for WebpPlugin {
         } else {
             1
         })
+    }
+
+    fn frame_delays(&self, data: &[u8]) -> Option<Vec<u32>> {
+        let delays = anmf_delays(data.get(12..)?);
+        (!delays.is_empty()).then_some(delays)
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
@@ -108,6 +116,25 @@ impl WebpPlugin {
         }
         result
     }
+}
+
+/// RIFF の中身（`WEBP` の後）の ANMF チャンクの表示時間（ミリ秒）を順に並べる。
+/// image-webp は表示時間をフレームを描いたときにしか返さないので、画素を展開せずに
+/// チャンクを読む。
+fn anmf_delays(mut body: &[u8]) -> Vec<u32> {
+    let mut delays = Vec::new();
+    while body.len() >= 8 {
+        let size = u32::from_le_bytes([body[4], body[5], body[6], body[7]]) as usize;
+        let Some(payload) = body.get(8..8 + size) else {
+            break;
+        };
+        if &body[..4] == b"ANMF" && payload.len() >= 15 {
+            let ms = u32::from_le_bytes([payload[12], payload[13], payload[14], 0]);
+            delays.push(if ms <= 10 { SHORT_DELAY_MS } else { ms });
+        }
+        body = body.get(8 + size + size % 2..).unwrap_or_default();
+    }
+    delays
 }
 
 /// 途中まで描いたアニメーション。
@@ -283,13 +310,18 @@ mod tests {
 
     /// image-webp はアニメーションを書けないので、チャンクを手で組む。
     fn animation_of(w: u32, h: u32, frames: &[Frame], ms: u32) -> Vec<u8> {
+        animation_timed(w, h, frames, &vec![ms; frames.len()])
+    }
+
+    /// フレームごとに表示時間 `ms` の違うアニメーション。
+    fn animation_timed(w: u32, h: u32, frames: &[Frame], ms: &[u32]) -> Vec<u8> {
         let mut body = b"WEBP".to_vec();
         let mut vp8x = vec![0x02, 0, 0, 0]; // アニメーションあり
         vp8x.extend(u24(w - 1));
         vp8x.extend(u24(h - 1));
         body.extend(chunk(b"VP8X", &vp8x));
         body.extend(chunk(b"ANIM", &[0, 0, 0, 0, 0, 0])); // 背景色、無限に繰り返す
-        for f in frames {
+        for (f, &ms) in frames.iter().zip(ms) {
             let pixels = f.color.repeat((f.w * f.h) as usize);
             let still = encode(f.w, f.h, ColorType::Rgb8, &pixels, None);
             let mut anmf = Vec::new();
@@ -318,6 +350,34 @@ mod tests {
     const RED: [u8; 3] = [255, 0, 0];
     const GREEN: [u8; 3] = [0, 255, 0];
     const BLUE: [u8; 3] = [0, 0, 255];
+
+    #[test]
+    fn each_animation_frame_keeps_its_own_delay() {
+        let frame = |color| Frame {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+            color,
+            dispose: false,
+        };
+        let webp = animation_timed(
+            2,
+            2,
+            &[frame(RED), frame(GREEN), frame(BLUE)],
+            &[40, 0, 250],
+        );
+        assert_eq!(
+            WebpPlugin::default().frame_delays(&webp),
+            Some(vec![40, 100, 250])
+        );
+    }
+
+    #[test]
+    fn a_still_webp_has_no_frame_delays() {
+        let still = encode(1, 1, ColorType::Rgb8, &RED, None);
+        assert_eq!(WebpPlugin::default().frame_delays(&still), None);
+    }
 
     #[test]
     fn probe_accepts_riff_webp_only() {

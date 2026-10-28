@@ -829,10 +829,18 @@ impl Show {
             .pictures
             .get(&file)
             .filter(|p| self.plays_frames(p))
-            .map(|p| (p.info.frames, crate::app::frame_rate(&p.info.metadata)));
+            .map(|p| {
+                let delay = p.info.frame_delays.as_ref().and_then(|d| d.get(self.frame));
+                (
+                    p.info.frames,
+                    delay.copied(),
+                    crate::app::frame_rate(&p.info.metadata),
+                )
+            });
         let interval = Duration::from_secs_f32(self.settings.interval_secs);
         let wait = match animation {
-            Some((_, rate)) => Duration::from_secs_f32(1.0 / rate.unwrap_or(10.0).max(0.1)),
+            Some((_, Some(ms), _)) => Duration::from_millis(ms.into()),
+            Some((_, None, rate)) => Duration::from_secs_f32(1.0 / rate.unwrap_or(10.0).max(0.1)),
             None => interval,
         };
         let due = *self.due.get_or_insert(now + wait);
@@ -840,7 +848,7 @@ impl Show {
             return;
         }
         match animation {
-            Some((frames, _)) if self.frame + 1 < frames => {
+            Some((frames, ..)) if self.frame + 1 < frames => {
                 self.frame += 1;
                 self.due = None;
             }

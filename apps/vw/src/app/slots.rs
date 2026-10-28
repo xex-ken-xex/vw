@@ -407,7 +407,8 @@ impl VwApp {
         let multiframe = loaded.info.frames > 1 && frames::split(&path).is_none();
         if multiframe && s.sequence.is_none() {
             let fps = frame_rate(&loaded.info.metadata);
-            let seq = Sequence::frames(path.clone(), loaded.info.frames, fps);
+            let mut seq = Sequence::frames(path.clone(), loaded.info.frames, fps);
+            seq.delays = loaded.info.frame_delays.clone();
             path = seq.paths[0].clone();
             s.path = Some(path.clone());
             s.sequence = Some(seq);

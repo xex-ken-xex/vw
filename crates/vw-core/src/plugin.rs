@@ -62,6 +62,12 @@ pub trait DecoderPlugin: Send + Sync {
         Ok(1)
     }
 
+    /// アニメーションの各フレームを出しておく時間（ミリ秒）。フレームごとに違う形式（GIF・WebP）だけが返す。
+    /// 既定は `None` で、再生はメタデータの平均の速さか設定の速さで回す。
+    fn frame_delays(&self, _data: &[u8]) -> Option<Vec<u32>> {
+        None
+    }
+
     /// `frame` 番目（0 始まり）のフレームをデコードする。既定は 1 枚だけの形式向け。
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
         match frame {
@@ -264,6 +270,11 @@ impl Registry {
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
         Ok((plugin.read_all_metadata(data)?, plugin.name()))
+    }
+
+    /// ファイルの各フレームを出しておく時間（ミリ秒）。[`DecoderPlugin::frame_delays`]。
+    pub fn frame_delays(&self, path: &Path, data: &[u8]) -> Option<Vec<u32>> {
+        self.find(path, data)?.frame_delays(data)
     }
 
     /// ファイルのフレーム数。対応するプラグインがなければエラー。

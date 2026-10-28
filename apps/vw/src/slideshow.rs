@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::TextureHandle;
@@ -97,6 +98,10 @@ pub struct Clock {
     pub dropped: u64,
     /// コマ落ちが起きた時刻とその数。古いものは `DROP_WINDOW_RANGE` の上限を過ぎたら捨てる。
     drops: VecDeque<(Instant, u64)>,
+    /// 位置ごとの表示時間（ミリ秒）。あれば `fps` の代わりにこれで進める（GIF などのアニメーション）。
+    delays: Option<Arc<[u32]>>,
+    /// `delays` で進めるとき、今のコマを終える時刻（`origin` からの経過時間）。
+    tick_end: Duration,
 }
 
 /// 時計を進めた結果。
@@ -123,7 +128,40 @@ impl Clock {
             shown: true,
             dropped: 0,
             drops: VecDeque::new(),
+            delays: None,
+            tick_end: Duration::ZERO,
         }
+    }
+
+    /// 位置ごとの表示時間 `delays`（ミリ秒）で進める時計にする。数が並びと合わなければ `fps` のまま。
+    /// `fps` は先読みの枚数を決めるのに使うので、表示時間の平均にしておく。
+    pub fn paced_by(mut self, delays: Option<Arc<[u32]>>) -> Self {
+        self.delays = delays.filter(|d| d.len() == self.n);
+        self.tick_end = self.hold(0);
+        self
+    }
+
+    /// `tick` 番目のコマを出しておく時間。
+    fn hold(&self, tick: u64) -> Duration {
+        let (index, _) = frame_at(self.start, tick, self.n, self.mode);
+        let ms = self.delays.as_ref().map_or(0, |d| d[index].max(1));
+        Duration::from_millis(ms.into())
+    }
+
+    /// 経過時間 `elapsed` のときのコマ番号。表示時間で進めるときは、今のコマから順に足していく。
+    fn tick_at(&mut self, elapsed: Duration) -> u64 {
+        if self.delays.is_none() {
+            return ticks(elapsed, self.fps);
+        }
+        let mut tick = self.tick;
+        while elapsed >= self.tick_end {
+            if frame_at(self.start, tick, self.n, self.mode).1 {
+                break;
+            }
+            tick += 1;
+            self.tick_end += self.hold(tick);
+        }
+        tick
     }
 
     pub fn tick(&self) -> u64 {
@@ -132,7 +170,7 @@ impl Clock {
 
     /// `now` の時点まで進める。
     pub fn advance(&mut self, now: Instant) -> Step {
-        let tick = ticks(now.saturating_duration_since(self.origin), self.fps);
+        let tick = self.tick_at(now.saturating_duration_since(self.origin));
         let advanced = tick > self.tick;
         if advanced {
             // 1 フレームの間に複数コマ進んだ分（FPS が画面の更新より速い）と、
@@ -182,17 +220,21 @@ impl Clock {
 
     /// 次のコマまでの時間。再描画を予約するのに使う。
     pub fn until_next(&self, now: Instant) -> Duration {
-        let next = Duration::from_secs_f64((self.tick + 1) as f64 / f64::from(self.fps));
+        let next = if self.delays.is_some() {
+            self.tick_end
+        } else {
+            Duration::from_secs_f64((self.tick + 1) as f64 / f64::from(self.fps))
+        };
         (self.origin + next).saturating_duration_since(now)
     }
 
     /// FPS や終端の扱いを変えたときに、今の位置から数え直す。
     /// 経過時間を新しい FPS で掛け直すと、位置が飛んでしまうため。
-    pub fn restart(&mut self, fps: f32, mode: EndMode, now: Instant) {
+    pub fn restart(&mut self, fps: f32, delays: Option<Arc<[u32]>>, mode: EndMode, now: Instant) {
         let (index, _) = frame_at(self.start, self.tick, self.n, self.mode);
         let dropped = self.dropped;
         let drops = std::mem::take(&mut self.drops);
-        *self = Clock::new(index, self.n, mode, fps, now);
+        *self = Clock::new(index, self.n, mode, fps, now).paced_by(delays);
         self.dropped = dropped;
         self.drops = drops;
     }
@@ -226,6 +268,8 @@ pub struct Playback {
     pub failed: HashSet<usize>,
     /// 1 コマのテクスチャのおおよそのバイト数。先読みの枚数をメモリの上限に収めるのに使う。
     pub frame_bytes: usize,
+    /// ファイルに書かれた、位置ごとの表示時間（ミリ秒）。「ファイルの速さ」のときに時計に渡す。
+    pub delays: Option<Arc<[u32]>>,
 }
 
 impl Playback {
@@ -240,6 +284,7 @@ impl Playback {
             pending: HashMap::new(),
             failed: HashSet::new(),
             frame_bytes: 0,
+            delays: None,
         }
     }
 
@@ -347,7 +392,7 @@ mod tests {
         let mut c = Clock::new(0, 100, EndMode::Loop, 10.0, t0);
         c.advance(t0 + Duration::from_millis(300));
         let t1 = t0 + Duration::from_millis(310);
-        c.restart(30.0, EndMode::Loop, t1);
+        c.restart(30.0, None, EndMode::Loop, t1);
         assert_eq!(c.recent_dropped(t1, Duration::from_secs(5)), 2);
     }
 
@@ -368,9 +413,59 @@ mod tests {
         let mut c = Clock::new(2, 10, EndMode::Loop, 10.0, t0);
         c.advance(t0 + Duration::from_millis(300));
         let t1 = t0 + Duration::from_millis(310);
-        c.restart(60.0, EndMode::PingPong, t1);
+        c.restart(60.0, None, EndMode::PingPong, t1);
         let s = c.advance(t1);
         assert_eq!((s.index, c.fps, c.mode), (5, 60.0, EndMode::PingPong));
+    }
+
+    fn delays(ms: &[u32]) -> Option<Arc<[u32]>> {
+        Some(Arc::from(ms))
+    }
+
+    #[test]
+    fn each_frame_stays_for_its_own_delay() {
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let mut c = Clock::new(0, 3, EndMode::Loop, 10.0, t0).paced_by(delays(&[100, 500, 50]));
+        assert_eq!(c.advance(at(99)).index, 0);
+        assert_eq!(c.advance(at(100)).index, 1);
+        c.mark_shown();
+        assert_eq!(c.advance(at(599)).index, 1);
+        assert_eq!(c.until_next(at(599)), Duration::from_millis(1));
+        assert_eq!(c.advance(at(600)).index, 2);
+        c.mark_shown();
+        assert_eq!(c.advance(at(650)).index, 0);
+    }
+
+    #[test]
+    fn delays_follow_the_position_when_starting_in_the_middle() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(1, 3, EndMode::Loop, 10.0, t0).paced_by(delays(&[100, 500, 50]));
+        assert_eq!(c.advance(t0 + Duration::from_millis(499)).index, 1);
+        assert_eq!(c.advance(t0 + Duration::from_millis(500)).index, 2);
+    }
+
+    #[test]
+    fn delays_that_do_not_match_the_frames_are_ignored() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(0, 3, EndMode::Loop, 10.0, t0).paced_by(delays(&[500, 500]));
+        assert_eq!(c.advance(t0 + Duration::from_millis(100)).index, 1);
+    }
+
+    #[test]
+    fn stopping_at_the_end_with_delays_waits_on_the_last_frame() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(0, 2, EndMode::Stop, 10.0, t0).paced_by(delays(&[10, 10]));
+        let s = c.advance(t0 + Duration::from_secs(60));
+        assert_eq!((s.index, s.finished), (1, true));
+    }
+
+    #[test]
+    fn restarting_without_delays_goes_back_to_the_fps() {
+        let t0 = Instant::now();
+        let mut c = Clock::new(0, 3, EndMode::Loop, 10.0, t0).paced_by(delays(&[1000, 1000, 1000]));
+        c.restart(10.0, None, EndMode::Loop, t0);
+        assert_eq!(c.advance(t0 + Duration::from_millis(100)).index, 1);
     }
 
     fn playback(fps: f32, frame_bytes: usize) -> Playback {

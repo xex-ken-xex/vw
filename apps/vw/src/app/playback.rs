@@ -21,6 +21,7 @@ impl VwApp {
     /// 普通のスロットなら同じフォルダの画像）をスライドショーで再生する。
     pub(super) fn start_playback(&mut self) {
         let slot = &self.slots[self.active];
+        let file_delays = slot.sequence.as_ref().and_then(|q| q.delays.clone());
         let (frames, start) = match &slot.sequence {
             Some(seq) => (seq.paths.clone(), seq.index),
             None => {
@@ -52,17 +53,16 @@ impl VwApp {
         }
         let v = &self.settings().viewer;
         let fps = self.playback_fps();
-        let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now());
+        let delays = file_delays.and_then(|d| delays_of(&frames, &d));
+        let clock = Clock::new(start, frames.len(), v.slideshow_end, fps, Instant::now())
+            .paced_by(delays.clone().filter(|_| self.use_file_speed));
         let loader_slot = self.next_id;
         self.next_id += 1;
         self.stopped_clock = None;
-        self.playback = Some(Playback::new(
-            self.slots[self.active].id,
-            loader_slot,
-            frames,
-            clock,
-            fps,
-        ));
+        let mut playback =
+            Playback::new(self.slots[self.active].id, loader_slot, frames, clock, fps);
+        playback.delays = delays;
+        self.playback = Some(playback);
     }
 
     pub(super) fn stop_playback(&mut self) {
@@ -336,9 +336,41 @@ impl VwApp {
     /// 再生中なら、変えた FPS と終端の扱いで数え直す。
     pub(super) fn restart_clock(&mut self) {
         let viewer = &self.settings.settings.viewer;
+        let file_speed = self.use_file_speed;
         if let Some(pb) = &mut self.playback {
+            let delays = pb.delays.clone().filter(|_| file_speed);
             pb.clock
-                .restart(pb.fps, viewer.slideshow_end, Instant::now());
+                .restart(pb.fps, delays, viewer.slideshow_end, Instant::now());
         }
+    }
+}
+
+/// フレームの表示時間 `delays`（フレーム番号ごと）を、再生する並び `frames` の位置ごとに並べ直す。
+/// 絞り込みで並びからフレームが抜けることがあるため。フレームでないパスが混じれば `None`。
+fn delays_of(frames: &[PathBuf], delays: &[u32]) -> Option<Arc<[u32]>> {
+    frames
+        .iter()
+        .map(|p| crate::frames::split(p).and_then(|(_, i)| delays.get(i).copied()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_delays_follow_the_frames_left_after_filtering() {
+        let all = crate::frames::frame_paths(Path::new("/a.gif"), 4);
+        let shown = vec![all[0].clone(), all[2].clone(), all[3].clone()];
+        assert_eq!(
+            delays_of(&shown, &[10, 20, 30, 40]).as_deref(),
+            Some(&[10, 30, 40][..])
+        );
+    }
+
+    #[test]
+    fn a_sequence_of_files_has_no_frame_delays() {
+        let files = vec![PathBuf::from("/a.gif"), PathBuf::from("/b.gif")];
+        assert_eq!(delays_of(&files, &[10, 20]), None);
     }
 }

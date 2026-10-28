@@ -65,6 +65,8 @@ pub struct ImageInfo {
     pub compose: Option<Arc<compose::Composite>>,
     /// 縮小画像の指紋。似た画像の組を探すのに使う（[`vw_compare::pairs`]）。
     pub fingerprint: Option<u64>,
+    /// アニメーションの各フレームの表示時間（ミリ秒）。フレームごとに違う形式だけ。
+    pub frame_delays: Option<Arc<[u32]>>,
 }
 
 impl ImageInfo {
@@ -351,9 +353,12 @@ fn load_look(
         Some(_) => 1,
         None => registry.frame_count(&file, &bytes).unwrap_or(1),
     };
+    let delays = (frames > 1)
+        .then(|| registry.frame_delays(&file, &bytes))
+        .flatten();
     let t2 = Instant::now();
     let times = (t1 - t0, t2 - t1);
-    Ok(finish(
+    let mut loaded = finish(
         image,
         plugin,
         frames,
@@ -363,7 +368,9 @@ fn load_look(
         full,
         fit_side,
         look,
-    ))
+    );
+    loaded.info.frame_delays = delays.map(Arc::from);
+    Ok(loaded)
 }
 
 /// 灰色の画像 `files`（赤・緑・青）を読んで重ねる。
@@ -480,6 +487,7 @@ fn finish(
         fingerprint: thumb
             .as_ref()
             .and_then(|t| vw_compare::pairs::fingerprint(t.size[0], t.size[1], t.as_raw())),
+        frame_delays: None,
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),
