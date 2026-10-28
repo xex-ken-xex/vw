@@ -864,7 +864,7 @@ mod tests {
     #[test]
     fn bands_are_opaque_gray() {
         let p = pattern(300, 60, 8.0);
-        for px in p.rgba.chunks_exact(4) {
+        for px in p.rgba.as_chunks::<4>().0 {
             assert_eq!((px[0], px[3]), (px[1], 65535));
             assert_eq!(px[1], px[2]);
         }
