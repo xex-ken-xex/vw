@@ -364,7 +364,47 @@ fn metadata(raw: Option<&RawMetadata>, shown: Option<Shown>) -> Metadata {
         e.focal_length.map(|f| format!("{} mm", decimal(f))),
     );
     push("Orientation", e.orientation.map(|o| o.to_string()));
+    // JPEG と同じキーでも入れる。検索の条件は AND だけなので、キーが形式ごとに違うと
+    // 「ISO 800 以上」を JPEG と RAW でまとめて探せないため。
+    if let Some(iso) = iso {
+        m.push("EXIF", "PhotographicSensitivity", iso.to_string());
+    }
+    if let Some(gps) = e.gps.as_ref().and_then(gps) {
+        gps.push_to(&mut m);
+    }
     m
+}
+
+/// EXIF の GPS のタグ（度・分・秒）から撮影地点を読む。
+fn gps(g: &rawler::exif::ExifGPS) -> Option<vw_core::exif::Gps> {
+    let ratio = |r: &Rational| (r.d != 0).then(|| f64::from(r.n) / f64::from(r.d));
+    let degrees = |parts: &[Rational; 3], reference: &Option<String>, negative: &str| {
+        let mut d = 0.0;
+        for (r, unit) in parts.iter().zip([1.0, 60.0, 3600.0]) {
+            d += ratio(r)? / unit;
+        }
+        let sign = if reference
+            .as_deref()
+            .is_some_and(|r| r.starts_with(negative))
+        {
+            -1.0
+        } else {
+            1.0
+        };
+        Some(d * sign)
+    };
+    let altitude = g.gps_altitude.as_ref().and_then(ratio).map(|a| {
+        if g.gps_altitude_ref == Some(1) {
+            -a
+        } else {
+            a
+        }
+    });
+    vw_core::exif::Gps::new(
+        degrees(g.gps_latitude.as_ref()?, &g.gps_latitude_ref, "S")?,
+        degrees(g.gps_longitude.as_ref()?, &g.gps_longitude_ref, "W")?,
+        altitude,
+    )
 }
 
 /// 1 秒未満は `1/250 s`、それ以上は `2.5 s` のように出す。
@@ -447,6 +487,44 @@ mod tests {
     fn f_number_and_focal_length_drop_needless_decimals() {
         assert_eq!(decimal(Rational { n: 28, d: 10 }), "2.8");
         assert_eq!(decimal(Rational { n: 50, d: 1 }), "50");
+    }
+
+    fn rational(n: u32, d: u32) -> Rational {
+        Rational { n, d }
+    }
+
+    #[test]
+    fn iso_and_gps_use_the_same_keys_as_jpeg() {
+        let mut raw = RawMetadata::default();
+        raw.exif.iso_speed = Some(800);
+        raw.exif.gps = Some(rawler::exif::ExifGPS {
+            gps_latitude_ref: Some("N".into()),
+            gps_latitude: Some([rational(35, 1), rational(30, 1), rational(0, 1)]),
+            gps_longitude_ref: Some("W".into()),
+            gps_longitude: Some([rational(139, 1), rational(45, 1), rational(36, 1)]),
+            gps_altitude_ref: Some(1),
+            gps_altitude: Some(rational(25, 10)),
+            ..Default::default()
+        });
+        let m = metadata(Some(&raw), None);
+        assert_eq!(m.get("EXIF", "PhotographicSensitivity"), Some("800"));
+        assert_eq!(m.get("RAW", "ISO"), Some("800"));
+        let gps = vw_core::exif::Gps::from_metadata(&m).unwrap();
+        assert!((gps.latitude - 35.5).abs() < 1e-9);
+        assert!((gps.longitude + 139.76).abs() < 1e-9);
+        assert_eq!(m.get(vw_core::exif::LOCATION, "Altitude"), Some("-2.5 m"));
+    }
+
+    #[test]
+    fn a_broken_gps_record_is_left_out() {
+        let mut raw = RawMetadata::default();
+        raw.exif.gps = Some(rawler::exif::ExifGPS {
+            gps_latitude: Some([rational(35, 0), rational(0, 1), rational(0, 1)]),
+            gps_longitude: Some([rational(139, 1), rational(0, 1), rational(0, 1)]),
+            ..Default::default()
+        });
+        let m = metadata(Some(&raw), None);
+        assert_eq!(m.get(vw_core::exif::LOCATION, "Latitude"), None);
     }
 
     #[test]
