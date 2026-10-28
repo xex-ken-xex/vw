@@ -74,7 +74,7 @@
         AppListEntry="none" />
       <Extensions>
         <uap5:Extension Category="windows.appExecutionAlias" Executable="vwbatch.exe" EntryPoint="Windows.FullTrustApplication">
-          <uap5:AppExecutionAlias desktop4:Subsystem="console" desktop4:SupportsMultipleInstances="true">
+          <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="vwbatch.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
