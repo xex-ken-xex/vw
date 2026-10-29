@@ -26,6 +26,7 @@ use charset::Charset;
 pub mod charset;
 pub mod net;
 pub mod pipeline;
+pub mod structure;
 pub mod suv;
 pub mod synth;
 
@@ -149,6 +150,7 @@ fn push_tag(m: &mut Metadata, tag: Tag, value: &str) {
 
 /// DICOM ファイルを開く。`header_only` なら画素データの手前で読むのをやめる。
 fn open(data: &[u8], header_only: bool) -> Result<DefaultDicomObject, DecodeError> {
+    structure::check(data, data.len() as u64, header_only)?;
     let mut options = OpenFileOptions::new().read_preamble(ReadPreamble::Always);
     if header_only {
         options = options.read_until(tags::PIXEL_DATA);

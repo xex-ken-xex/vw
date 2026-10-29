@@ -679,8 +679,9 @@ impl VwApp {
             .as_deref()
             .and_then(Path::parent)
             .map(|p| p.join("ai-tags"));
+        let trace = log.detail_writer();
         let mut app = Self {
-            loader: Loader::new(registry, cc.egui_ctx.clone()),
+            loader: Loader::new(registry, cc.egui_ctx.clone(), trace),
             tree,
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
             fits,

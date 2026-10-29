@@ -20,3 +20,32 @@ pub fn compute<T: Send + 'static>(
     });
     rx
 }
+
+/// 失敗しうる `work` を別スレッドで走らせる。`work` が panic しても、その説明を `Err` で返す。
+/// 受け口を待つ画面が、結果の来ないまま待ち続けないようにするため。
+pub fn try_compute<T: Send + 'static>(
+    ctx: &egui::Context,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Receiver<Result<T, String>> {
+    compute(ctx, move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|panic| {
+            Err(format!(
+                "internal error: {}",
+                crate::loader::panic_text(&panic)
+            ))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_in_the_work_arrives_as_an_error() {
+        let ctx = egui::Context::default();
+        let rx = try_compute(&ctx, || -> Result<(), String> { panic!("broken date") });
+        let got = rx.recv().unwrap();
+        assert_eq!(got, Err("internal error: broken date".to_owned()));
+    }
+}

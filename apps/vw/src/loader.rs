@@ -15,6 +15,7 @@ use vw_core::{display, ColorModel, DisplayImage, DisplayParams, Metadata, Regist
 use crate::colormap::{self, Look};
 use crate::compose;
 use crate::frames;
+use crate::log::{DetailWriter, Level};
 use crate::memory::THUMB_SIDE;
 
 /// 読み込みが成功したときの結果。
@@ -165,7 +166,8 @@ pub struct Counts {
 const DEVELOP_WORKERS: usize = 2;
 
 impl Loader {
-    pub fn new(registry: Registry, ctx: egui::Context) -> Self {
+    /// `trace` があれば、読み込みのスレッドが 1 枚を読む前にその名前をログファイルに書く。
+    pub fn new(registry: Registry, ctx: egui::Context, trace: Option<DetailWriter>) -> Self {
         let (tx, rx) = channel();
         let queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
         let workers = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 8));
@@ -174,14 +176,17 @@ impl Loader {
         let queues = std::iter::repeat_n(&queue, workers)
             .chain(std::iter::repeat_n(&develop_queue, DEVELOP_WORKERS));
         for queue in queues {
-            let (registry, queue, tx, ctx, running) = (
+            let (registry, queue, tx, ctx, running, trace) = (
                 registry.clone(),
                 queue.clone(),
                 tx.clone(),
                 ctx.clone(),
                 running.clone(),
+                trace.clone(),
             );
-            std::thread::spawn(move || worker(&registry, &queue, &tx, &ctx, &running));
+            std::thread::spawn(move || {
+                worker(&registry, &queue, &tx, &ctx, &running, trace.as_ref())
+            });
         }
         Self {
             registry,
@@ -256,6 +261,7 @@ fn worker(
     tx: &Sender<LoadResult>,
     ctx: &egui::Context,
     running: &AtomicUsize,
+    trace: Option<&DetailWriter>,
 ) {
     let (lock, cvar) = queue;
     loop {
@@ -272,6 +278,9 @@ fn worker(
             }
         };
         running.fetch_add(1, Ordering::Relaxed);
+        if let Some(t) = trace {
+            t.detail(Level::Info, format!("Reading {}", job.path.display()));
+        }
         // デコーダの panic でこのスレッドが終わると二度と戻らず、何本か当たると画像が
         // 永遠に「読み込み中」になる。panic はその 1 枚のエラーにして、スレッドは続ける。
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -714,7 +723,7 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.path().join("a.png");
         write_png(&path, 1, 1, &[1, 2, 3]);
-        let loader = Loader::new(png_registry(), egui::Context::default());
+        let loader = Loader::new(png_registry(), egui::Context::default(), None);
         loader.request(job(7, &path));
         let r = loader.rx.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(r.request, 7);
@@ -748,7 +757,7 @@ mod tests {
         write_png(&good, 1, 1, &[1, 2, 3]);
         let mut registry = png_registry();
         registry.register(Arc::new(PanicPlugin));
-        let loader = Loader::new(registry, egui::Context::default());
+        let loader = Loader::new(registry, egui::Context::default(), None);
         // 作業スレッドの数より多く panic させても、その後の要求に答える。
         for i in 0..(loader.workers as u64 + 2) {
             loader.request(job(i, &bad));
@@ -775,7 +784,7 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.path().join("a.png");
         write_png(&path, 1, 1, &[1, 2, 3]);
-        let loader = Loader::new(png_registry(), egui::Context::default());
+        let loader = Loader::new(png_registry(), egui::Context::default(), None);
         loader.request(Job {
             develop: true,
             ..job(8, &path)
@@ -790,7 +799,7 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.path().join("a.png");
         write_png(&path, 1, 1, &[1, 2, 3]);
-        let loader = Loader::new(png_registry(), egui::Context::default());
+        let loader = Loader::new(png_registry(), egui::Context::default(), None);
         // 取り消しが先に届いた要求は、ワーカーが取り出しても読まない。
         loader.cancel(1);
         loader.request(job(1, &path));

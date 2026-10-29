@@ -142,7 +142,7 @@ fn at(date: Option<&str>, time: &str) -> Option<When> {
 /// DT（`YYYYMMDDHHMMSS.FFFFFF&ZZXX`）。時差の部分は、比べる相手の時刻にも無いので読まない。
 fn date_time(dt: &str) -> Option<When> {
     let dt = dt.split(['+', '-']).next()?;
-    if dt.len() < 8 {
+    if dt.len() < 8 || !dt.is_ascii() {
         return None;
     }
     let (date, time) = dt.split_at(8);
@@ -173,7 +173,7 @@ fn time_of_day(tm: &str) -> Option<f64> {
 /// DA（`YYYYMMDD`）を、ある日からの日数にする。差だけを使うので、起点はどこでもよい。
 fn day_number(da: &str) -> Option<i64> {
     let da: String = da.chars().filter(|c| *c != '.').collect();
-    if da.len() != 8 {
+    if da.len() != 8 || !da.is_ascii() {
         return None;
     }
     let y: i64 = da[0..4].parse().ok()?;
@@ -308,6 +308,13 @@ mod tests {
         );
         assert_eq!(time_of_day("0930"), Some(9.0 * 3600.0 + 30.0 * 60.0));
         assert_eq!(time_of_day("9x"), None);
+    }
+
+    #[test]
+    fn dates_with_letters_outside_ascii_are_not_dates() {
+        assert_eq!(day_number("2026101ä"), None);
+        assert_eq!(day_number("20ä61018"), None);
+        assert_eq!(date_time("2026101ä090000"), None);
     }
 
     #[test]

@@ -110,6 +110,14 @@ impl Log {
         self.lines.push(line);
     }
 
+    /// 別のスレッドから、ログファイルにだけ細かい行を書く口。ファイルに書いていなければ `None`。
+    pub fn detail_writer(&self) -> Option<DetailWriter> {
+        Some(DetailWriter {
+            origin: self.origin,
+            file: self.file.clone()?,
+        })
+    }
+
     /// ログファイルにだけ書く、1 枚ごとの記録のような細かい行。ログ欄には集計だけを出す。
     pub fn detail(&mut self, level: Level, msg: impl Into<String>) {
         if let Some(f) = &self.file {
@@ -188,6 +196,28 @@ impl LogFile {
             file.write_line(&format!("{at} PANIC {info}\n{backtrace}"));
             previous(info);
         }));
+    }
+}
+
+/// [`Log::detail`] を別のスレッドから書く。読み込みのスレッドが、読む前のファイルの名前を
+/// 残すのに使う。デコーダがメモリの確保に失敗してプロセスごと止まると panic の知らせも
+/// 残らないので、最後の行がどのファイルで止まったかを教える。
+#[derive(Clone)]
+pub struct DetailWriter {
+    origin: Instant,
+    file: LogFile,
+}
+
+impl DetailWriter {
+    pub fn detail(&self, level: Level, msg: impl Into<String>) {
+        let line = Line {
+            elapsed: self.origin.elapsed().as_secs_f64(),
+            at: Local::now(),
+            level,
+            text: msg.into(),
+            verb: 0,
+        };
+        self.file.write_line(&line.raw());
     }
 }
 
