@@ -3,7 +3,6 @@
 //! 設定ファイルは設定画面で値を変えるたびに書き出す。ファイルが外部のエディタで
 //! 書き換えられたら読み直して、すぐ画面に反映する。
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -2171,17 +2170,7 @@ pub fn parse_hex_color(s: &str) -> Option<Color32> {
     Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?))
 }
 
-/// 設定ファイルの場所。Windows は `%APPDATA%\vw`、それ以外は XDG の規約に従う。
-/// `env` は環境変数を引く関数（テストで差し替えるため）。
-pub fn config_path(windows: bool, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let absolute = |name: &str| env(name).map(PathBuf::from).filter(|p| p.is_absolute());
-    let dir = if windows {
-        absolute("APPDATA")?
-    } else {
-        absolute("XDG_CONFIG_HOME").or_else(|| absolute("HOME").map(|h| h.join(".config")))?
-    };
-    Some(dir.join("vw").join("settings.toml"))
-}
+pub use vw_pipeline::settings_file::config_path;
 
 /// 外部での書き換えを確かめる間隔。毎フレーム stat するほどの即時性は要らない。
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -2335,6 +2324,36 @@ mod tests {
     use super::*;
     use crate::keymap::{Action, KeyCombo};
     use crate::test_util::TempDir;
+    use std::ffi::OsString;
+
+    #[test]
+    fn vwbatch_and_vw_agree_on_the_fits_defaults() {
+        let (settings, _) = Settings::from_toml("").unwrap();
+        let (batch, _) = vw_pipeline::settings_file::read_fits("");
+        assert_eq!(batch.options, settings.fits.options());
+        assert_eq!(batch.calibration, settings.fits.calibration.options());
+    }
+
+    #[test]
+    fn vwbatch_reads_the_fits_settings_the_same_way() {
+        let text = "[fits]\nstretch = \"zscale\"\nlow_percent = 2\nhigh_percent = 98\n\
+                    curve = \"sqrt\"\nflip_rows = true\ndemosaic = false\n\
+                    same_window_for_planes = false\nmissing_color = \"#404040\"\n\
+                    [fits.calibration]\napply = \"off\"\nsearch_nearby = false\n\
+                    library = [\"/masters\", \"\"]\nuse_dark = false\nuse_flat = false\n\
+                    use_bias = false\nexposure_tolerance_secs = 3\ntemperature_tolerance = 4\n\
+                    match_gain_offset = false\ndark_scaling = \"exposure\"\n\
+                    flat_match = \"filter_and_night\"\nflat_normalize = \"mean\"\n\
+                    equalize_cfa = true\nsynthetic_bias = \"512\"\n";
+        let (settings, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let (batch, problems) = vw_pipeline::settings_file::read_fits(text);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(batch.options, settings.fits.options());
+        assert_eq!(batch.calibration, settings.fits.calibration.options());
+        assert_ne!(batch.options, vw_fits::Options::default());
+        assert_ne!(batch.calibration, vw_fits::calibration::Options::default());
+    }
 
     fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |name| {

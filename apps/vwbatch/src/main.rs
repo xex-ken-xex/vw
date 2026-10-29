@@ -15,6 +15,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use vw_core::Registry;
 use vw_pipeline::preset;
+use vw_pipeline::settings_file::{self, FitsSettings};
 
 use convert::Recipe;
 use write::Format;
@@ -55,11 +56,20 @@ struct Args {
     /// 何枚も入ったファイル（アニメーションなど）は全部のフレームを書く（名前の後ろに -0001 などを付ける）
     #[arg(long)]
     all_frames: bool,
+    /// FITS の表示と校正の設定を読む vw の設定ファイル（既定は vw と同じ場所の settings.toml）
+    #[arg(long, value_name = "FILE")]
+    settings: Option<PathBuf>,
+    /// FITS にダーク・フラット・バイアスを当てない
+    #[arg(long)]
+    no_calibrate: bool,
 }
 
 /// 組み込みのデコーダプラグイン。ビューアの `registry`（apps/vw/src/main.rs）と同じ並び。
-/// FITS の表示と校正は、プラグインの既定（ビューアの設定は読まない）。
-fn registry() -> Registry {
+fn registry(fits: FitsSettings) -> Registry {
+    let options = vw_fits::SharedOptions::default();
+    options.set(fits.options);
+    let calibration = vw_fits::Calibration::default();
+    calibration.set_options(fits.calibration);
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
     registry.register(Arc::new(vw_jpeg::JpegPlugin));
@@ -67,7 +77,7 @@ fn registry() -> Registry {
     registry.register(Arc::new(vw_webp::WebpPlugin::default()));
     registry.register(Arc::new(vw_gif::GifPlugin::default()));
     registry.register(Arc::new(vw_tiff::TiffPlugin));
-    registry.register(Arc::new(vw_fits::FitsPlugin::default()));
+    registry.register(Arc::new(vw_fits::FitsPlugin::new(options, calibration)));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
     registry
@@ -113,6 +123,33 @@ fn load_recipe(args: &Args) -> Result<Recipe, String> {
     })
 }
 
+/// vw と同じ絵で書き出すため、FITS の表示と校正は vw の設定ファイルから読む。
+/// `--settings` で指したファイルが読めないのは打ち間違いなので止める。既定の場所にないのは、
+/// vw をまだ起動していないだけなので既定の値で進める。
+fn load_fits_settings(args: &Args) -> Result<FitsSettings, String> {
+    let path = args
+        .settings
+        .clone()
+        .or_else(|| settings_file::config_path(cfg!(windows), |n| std::env::var_os(n)));
+    let mut fits = match path.map(|p| (std::fs::read_to_string(&p), p)) {
+        Some((Ok(text), p)) => {
+            let (fits, problems) = settings_file::read_fits(&text);
+            for problem in problems {
+                eprintln!("注意: {}: {problem}（既定の値を使う）", p.display());
+            }
+            fits
+        }
+        Some((Err(e), p)) if args.settings.is_some() => {
+            return Err(format!("{}: {e}", p.display()));
+        }
+        _ => FitsSettings::default(),
+    };
+    if args.no_calibrate {
+        fits.calibration.apply = false;
+    }
+    Ok(fits)
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
     let recipe = match load_recipe(&args) {
@@ -122,7 +159,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let registry = registry();
+    let fits = match load_fits_settings(&args) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let registry = registry(fits);
     let jobs = jobs::collect(&registry, &args.inputs, &args.output);
     for e in &jobs.errors {
         eprintln!("失敗: {e}");
