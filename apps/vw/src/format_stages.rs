@@ -467,6 +467,7 @@ mod tests {
             look: None,
             compose: None,
             fingerprint: None,
+            frame_delays: None,
         }
     }
 

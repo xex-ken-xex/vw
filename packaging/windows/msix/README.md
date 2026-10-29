@@ -7,16 +7,20 @@ vwbatch を入れない理由: コマンドだけの道具をスタートメニ�
 Store は「画面のないアプリ」とみなし、Microsoft の個別の許可（HeadlessAppBypass）がないと受け付けません
 （2026-10-28 に Partner Center の検証で弾かれました）。
 
+`check\`（起動しないときの診断スクリプト）も入れません。Store 版が入る場所には書き込めないので報告を
+書き出せず、`-ExecutionPolicy Bypass` で起動するのも審査で疑われうるためです。
+
 Store に出すと、Store が Microsoft の証明書で署名し直します。そのため、署名のない zip 版を止める
 Windows の「スマート アプリ コントロール」でも、Store 版の vw は起動できます。証明書を買う必要はありません。
 
 ## できること
 
-- `make-msix.ps1` が、zip 版と同じ中身（`vw.exe`・README・ライセンス・`check\`）に
-  アイコンと `AppxManifest.xml` を足して、`.msix` を 1 つ作ります。フォルダに `vwbatch.exe` があっても入れません。
+- `make-msix.ps1` が、zip 版と同じ中身（`vw.exe`・README・ライセンス）に
+  アイコンと `AppxManifest.xml` を足して、`.msix` を 1 つ作ります。フォルダに `vwbatch.exe` や `check\` があっても入れません。
 - できた MSIX では、次のように動きます。
   - スタートメニューに vw が出ます。
   - コマンドプロンプトから `vw` で呼べます（実行エイリアス）。
+  - エクスプローラーで画像を右クリックしたときの「プログラムから開く」に vw が出ます。既定のアプリは変えません。
   - 設定やログは zip 版と同じ `%APPDATA%\vw` に置かれます。zip 版の設定をそのまま使えます。
   - VC++ ランタイム（`Microsoft.VCLibs.140.00.UWPDesktop`）は Store が一緒に入れます。
 - MSIX には署名をしません。そのため、**できた `.msix` はそのままでは PC に入れられません**。

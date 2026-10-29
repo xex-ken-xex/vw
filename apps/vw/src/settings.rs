@@ -40,6 +40,41 @@ pub enum Language {
 impl Language {
     pub const ALL: [Language; 2] = [Language::English, Language::Japanese];
 
+    /// `ja_JP.UTF-8`・`ja-JP`・`ja` のような言語の名前から選ぶ。知らない言語は英語。
+    // Windows では使わない。名前（GetUserDefaultLocaleName）は日付や数字の書き方の地域で、
+    // 表示の言語とは別に選べるため、表示の言語の番号（LANGID）を見る。
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn of_locale(name: &str) -> Language {
+        let lang = name.split(['_', '-', '.', '@']).next().unwrap_or("");
+        if lang.eq_ignore_ascii_case("ja") {
+            Language::Japanese
+        } else {
+            Language::English
+        }
+    }
+
+    /// OS の表示の言語。設定ファイルがまだないとき（初めての起動）に使う。
+    pub fn of_os() -> Language {
+        #[cfg(windows)]
+        {
+            // LANGID の下位 10bit が主言語。0x11 が日本語（LANG_JAPANESE）。
+            let id = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+            if id & 0x3ff == 0x11 {
+                Language::Japanese
+            } else {
+                Language::English
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // POSIX の決まりどおり LC_ALL、LC_MESSAGES、LANG の順に、最初に値のあるものを見る。
+            ["LC_ALL", "LC_MESSAGES", "LANG"]
+                .iter()
+                .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+                .map_or(Language::English, |v| Language::of_locale(&v))
+        }
+    }
+
     /// 言語の選択肢に出す名前。どの言語で表示中でも選べるよう、その言語自身で書く。
     pub fn native_name(self) -> &'static str {
         match self {
@@ -1533,6 +1568,7 @@ impl Default for Dataset {
                     "AI tags",
                     &["ai tags:person", "ai tags:character", "ai tags:tag"],
                 ),
+                group("Labels", &["labels:flag", "labels:tag"]),
             ],
         }
     }
@@ -2194,9 +2230,13 @@ impl SettingsStore {
                         }
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    settings.appearance.language = Language::of_os();
+                }
                 Err(e) => notes.push(format!("{}: {e}", p.display())),
             }
+        } else {
+            settings.appearance.language = Language::of_os();
         }
         let store = Self {
             path,
@@ -3441,5 +3481,24 @@ mod fits_tests {
             "{}",
             problems[0]
         );
+    }
+
+    #[test]
+    fn the_first_language_follows_the_locale_name() {
+        for name in ["ja_JP.UTF-8", "ja-JP", "ja", "JA_jp"] {
+            assert_eq!(Language::of_locale(name), Language::Japanese, "{name}");
+        }
+        for name in ["en_US.UTF-8", "C", "POSIX", "", "jav_ID"] {
+            assert_eq!(Language::of_locale(name), Language::English, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_settings_file_keeps_its_language_whatever_the_os_says() {
+        let dir = crate::test_util::TempDir::new();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "[appearance]\nlanguage = \"en\"\n").unwrap();
+        let (store, _) = SettingsStore::open(Some(path));
+        assert_eq!(store.settings.appearance.language, Language::English);
     }
 }

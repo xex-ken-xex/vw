@@ -8,9 +8,12 @@ use crate::pixel_pipeline::{self, Decoded};
 use crate::roi::Region;
 
 /// 数える画素の添字。`region` がなければ画像全体。
+/// 画像からはみ出す ROI は切り落とす。色導出の途中の縮めた絵のように、ROI を引いた画像より
+/// 小さい画像を数えることがあるため。
 fn indices(width: u32, height: u32, region: Option<Region>) -> Box<dyn Iterator<Item = usize>> {
-    match region {
-        Some(r) => Box::new(r.indices(width)),
+    match region.map(|r| r.clipped(width, height)) {
+        Some(Some(r)) => Box::new(r.indices(width)),
+        Some(None) => Box::new(std::iter::empty()),
         None => Box::new(0..width as usize * height as usize),
     }
 }
@@ -261,6 +264,28 @@ mod tests {
         intercept: -1024.0,
         negated: false,
     };
+
+    #[test]
+    fn a_region_reaching_past_a_smaller_picture_counts_only_what_is_inside() {
+        // 2x2 の絵に、元の画像（もっと大きい）の座標で引いた ROI を当てる。
+        let rgba = [10, 10, 10, 255].repeat(4);
+        let region = Region {
+            x: 1,
+            y: 1,
+            w: 100,
+            h: 100,
+        };
+        let l = levels_of_rgba(&rgba, 2, Some(region));
+        assert_eq!(l.channel(Channel::Luma)[10], 1);
+        let outside = Region { x: 5, ..region };
+        assert_eq!(
+            levels_of_rgba(&rgba, 2, Some(outside))
+                .luma
+                .iter()
+                .sum::<u32>(),
+            0
+        );
+    }
 
     #[test]
     fn gray_pixels_count_the_same_in_every_channel_and_are_not_color() {

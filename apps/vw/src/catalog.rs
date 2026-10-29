@@ -25,6 +25,8 @@ pub const READING_FILE: &str = "vw-search-catalog.reading";
 const FORMAT: u32 = 1;
 /// AI タグと人物の組の種類。メタデータ欄のグループ「AI tags」に合わせる。
 pub const AI_TAGS: &str = "ai tags";
+/// 手で付けたフラグとタグの組の種類。
+pub const LABELS: &str = "labels";
 /// ZIP の場所と ZIP の中のパスの区切り（`data.zip!/series1/IM0001.dcm`）。
 pub const IN_ARCHIVE: &str = "!/";
 
@@ -424,11 +426,13 @@ pub fn scan_resumable(
             match std::fs::read(path) {
                 Ok(data) => {
                     let size = data.len() as u64;
-                    match guarded_triples(registry, path, &data, labels.get(path).position) {
+                    let label = labels.get(path);
+                    match guarded_triples(registry, path, &data, label.position) {
                         Ok(mut t) => {
                             if let Some(entry) = ai_tags.get(path) {
                                 t.extend(ai_triples(&entry));
                             }
+                            t.extend(label_triples(&label));
                             builder.add(relative.clone(), size, modified, t)
                         }
                         Err(e) => problems.push(skip(&relative, e)),
@@ -676,6 +680,20 @@ fn ai_triples(entry: &ai_tags::Entry) -> Vec<Triple> {
         out.push(triple("model", &entry.model));
     }
     out
+}
+
+/// 手で付けたフラグ（good / bad）とタグを組にする。
+/// ZIP / 7z の中の画像にはフラグもタグも付けられないので、ここでも見ない。
+fn label_triples(label: &labels::Label) -> Vec<Triple> {
+    let triple = |key: &str, value: &str| (LABELS.to_owned(), key.to_owned(), value.to_owned());
+    let flag = label.flag.map(|f| match f {
+        labels::Flag::Good => "good",
+        labels::Flag::Bad => "bad",
+    });
+    flag.into_iter()
+        .map(|f| triple("flag", f))
+        .chain(label.tags.iter().map(|t| triple("tag", t)))
+        .collect()
 }
 
 /// これより長い値はカタログに入れない。画像のデータを文字列のタグに入れたファイルがあり、
@@ -954,6 +972,35 @@ mod tests {
             values_of(c, "a.png", "location", labels::POSITION_FROM),
             [labels::FROM_MAP]
         );
+    }
+
+    #[test]
+    fn flags_and_tags_put_on_by_hand_are_stored_for_searching() {
+        let tmp = TempDir::new();
+        let (a, b) = (tmp.path().join("a.png"), tmp.path().join("b.png"));
+        write_png(&a, 1, 1, &[0; 3]);
+        write_png(&b, 1, 1, &[0; 3]);
+        let mut labels = LabelStore::new(None);
+        labels.toggle_flag(&a, labels::Flag::Good).unwrap();
+        labels.toggle_tag(&a, "cat").unwrap();
+        labels.toggle_tag(&a, "night").unwrap();
+        labels.toggle_flag(&b, labels::Flag::Bad).unwrap();
+        let report = scan(
+            tmp.path(),
+            Info::default(),
+            None,
+            &png_registry(),
+            &AiTagStore::new(None),
+            &labels,
+            &Progress::default(),
+            &mut no_password,
+        )
+        .unwrap();
+        let c = &report.catalog;
+        assert_eq!(values_of(c, "a.png", LABELS, "flag"), ["good"]);
+        assert_eq!(values_of(c, "a.png", LABELS, "tag"), ["cat", "night"]);
+        assert_eq!(values_of(c, "b.png", LABELS, "flag"), ["bad"]);
+        assert!(values_of(c, "b.png", LABELS, "tag").is_empty());
     }
 
     #[test]

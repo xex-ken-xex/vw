@@ -334,6 +334,8 @@ pub struct VwApp {
     stopped_clock: Option<Clock>,
     /// 再生バーの「ファイルの速さ」。シネやアニメーションをファイルに書かれた速さで再生する。
     use_file_speed: bool,
+    /// 自動で再生したアニメーション（スロットの番号と元のファイル）。止めた後にまた回り出さないため。
+    autoplayed: Option<(u64, PathBuf)>,
     /// フォルダの監視。自動リロードが無効なら `None`。
     watcher: Option<FolderWatcher>,
     /// cd したフォルダと、画像の入れ方。画像がなかったフォルダも監視して、
@@ -782,6 +784,7 @@ impl VwApp {
             playback: None,
             stopped_clock: None,
             use_file_speed: true,
+            autoplayed: None,
             watcher: None,
             watcher_failed: false,
             loaded_folders: Vec::new(),
@@ -1093,6 +1096,7 @@ impl eframe::App for VwApp {
         for problem in self.labels.take_problems() {
             self.log.error(problem);
         }
+        self.autoplay_animation();
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
         self.reload_presets();

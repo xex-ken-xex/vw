@@ -120,6 +120,8 @@ pub struct Sequence {
     pub index: usize,
     /// ファイルが勧めるスライドショーの速さ（シネのフレーム間隔から）。
     pub fps: Option<f32>,
+    /// フレームの並びで、フレームごとに表示時間（ミリ秒）が書かれていればその値。`fps` はその平均。
+    pub delays: Option<Arc<[u32]>>,
     /// ヘッダに出す並びの名前。`None` ならフォルダ名かファイル名。
     pub title: Option<String>,
 }
@@ -145,6 +147,7 @@ impl Sequence {
             paths: vec![first],
             index: 0,
             fps: None,
+            delays: None,
             title: None,
         }
     }
@@ -157,6 +160,7 @@ impl Sequence {
             kind: SequenceKind::Frames,
             index: 0,
             fps,
+            delays: None,
             title: None,
         }
     }
@@ -169,6 +173,7 @@ impl Sequence {
             paths: Vec::new(),
             index: 0,
             fps: None,
+            delays: None,
             title: None,
         }
     }
@@ -181,6 +186,7 @@ impl Sequence {
             paths: files,
             index: 0,
             fps: None,
+            delays: None,
             title: Some(title),
         }
     }

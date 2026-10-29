@@ -57,6 +57,10 @@ impl DecoderPlugin for GifPlugin {
         Ok(self.summary(data)?.frames)
     }
 
+    fn frame_delays(&self, data: &[u8]) -> Option<Vec<u32>> {
+        Some(self.summary(data).ok()?.delays)
+    }
+
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
         let mut cache = self.animation.lock().unwrap_or_else(|e| e.into_inner());
         if cache.as_ref().is_none_or(|a| *a.data != *data) {
@@ -91,6 +95,8 @@ struct Summary {
     width: u32,
     height: u32,
     frames: usize,
+    /// フレームごとの表示時間（ミリ秒）。
+    delays: Vec<u32>,
     total_delay_ms: u64,
     /// 透明な画素があり得るか。透明色を持つフレーム、キャンバスを覆いきらない最初の
     /// フレーム、透明に消すフレームのどれかがあれば RGBA にする。フレームごとに RGB / RGBA を変えないのは、同じスロットで
@@ -112,6 +118,7 @@ impl Summary {
             width,
             height,
             frames: 0,
+            delays: Vec::new(),
             total_delay_ms: 0,
             alpha: false,
             repeat: Repeat::Finite(0),
@@ -127,6 +134,7 @@ impl Summary {
                 || (s.frames == 0 && !covers)
                 || f.dispose == DisposalMethod::Background;
             s.interlaced |= f.interlaced;
+            s.delays.push(delay_ms(f.delay));
             s.total_delay_ms += u64::from(delay_ms(f.delay));
             s.frames += 1;
         }
@@ -583,6 +591,16 @@ mod tests {
         assert_eq!(m.get("Animation", "Frames"), Some("2"));
         assert_eq!(m.get("Animation", "Frame time (ms)"), Some("60.0"));
         assert_eq!(m.get("Animation", "Loop count"), Some("forever"));
+    }
+
+    #[test]
+    fn each_frame_keeps_its_own_delay() {
+        let frames = [full(1, 1, 0, 4), full(1, 1, 1, 0), full(1, 1, 0, 25)];
+        let gif = encode(1, 1, &frames, Some(Repeat::Infinite));
+        assert_eq!(
+            GifPlugin::default().frame_delays(&gif),
+            Some(vec![40, 100, 250])
+        );
     }
 
     #[test]
