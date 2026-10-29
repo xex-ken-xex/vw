@@ -199,6 +199,7 @@ footer a { color: var(--muted); text-decoration: underline; }
         </ol>
         <p class="note">Chrome で「一般的にダウンロードされていないファイルです」と止められたときは、<code>chrome://downloads</code> を開き、vw の行の <b>保存</b> を押します。
           初回起動で「Windows によって PC が保護されました」と出たら、<b>詳細情報</b> → <b>実行</b> で起動できます。どちらも、vw にまだ署名がないために出る表示です。</p>
+        <p class="note">Windows 11 の<b>スマート アプリ コントロール</b>が有効な PC では、<b>実行</b> のボタンが出ずに止められます。Microsoft Store 版（審査中）を使うか、<b>Windows セキュリティ</b> → <b>アプリとブラウザー コントロール</b> → <b>スマート アプリ コントロールの設定</b> で <b>オフ</b> にします。Windows の版によっては、一度切ると入れ直すまで戻せません。ほかのアプリの守りも弱くなるので、切るかどうかはご自身の判断と責任で決めてください。</p>
         <p class="note">アンインストールは、展開したフォルダと <code>%APPDATA%\vw</code> を消すだけです。レジストリは使っていません。</p>
       </div>
       <div>
@@ -215,7 +216,7 @@ cd vw
       </div>
     </div>
     <h3>日本語表示にする</h3>
-    <p>vw は初めは英語で表示されます。左下の歯車（または Ctrl+,）で設定画面を開き、<b>Appearance</b> の <b>Language</b> を <b>日本語</b> にします。その場で切り替わります。</p>
+    <p>vw は初めは OS の言語に合わせて表示されます。英語のままなら、左下の歯車（または Ctrl+,）で設定画面を開き、<b>Appearance</b> の <b>Language</b> を <b>日本語</b> にします。その場で切り替わります。</p>
     <h3>次に読むもの</h3>
     <ul class="plain">
       <li><a href="https://github.com/xex-ken-xex/vw#はじめの-5-分">はじめの 5 分</a> — 写真を見る、タグを付ける、カタログを作る、をひととおり</li>
