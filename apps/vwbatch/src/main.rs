@@ -9,7 +9,7 @@ mod write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use rayon::prelude::*;
@@ -132,6 +132,8 @@ fn main() -> ExitCode {
     let failed = AtomicUsize::new(jobs.errors.len());
     let skipped = AtomicUsize::new(0);
     let written = AtomicUsize::new(0);
+    // 最後にまとめて出す、書けなかったファイル。途中の行は並列の出力に紛れて探しにくいため。
+    let unwritten = Mutex::new(Vec::new());
     jobs.files.par_iter().for_each(|job| {
         let n = done.fetch_add(1, Ordering::Relaxed) + 1;
         let pictures = match convert::convert(&registry, &job.source, &recipe) {
@@ -139,6 +141,7 @@ fn main() -> ExitCode {
             Err(e) => {
                 failed.fetch_add(1, Ordering::Relaxed);
                 eprintln!("[{n}/{total}] 失敗: {}: {e}", job.source.display());
+                lock(&unwritten).push(job.source.clone());
                 return;
             }
         };
@@ -161,11 +164,20 @@ fn main() -> ExitCode {
                 Err(e) => {
                     failed.fetch_add(1, Ordering::Relaxed);
                     eprintln!("[{n}/{total}] 失敗: {}: {e}", job.source.display());
+                    lock(&unwritten).push(out);
                 }
             }
         }
     });
     let failed = failed.into_inner();
+    let mut unwritten = unwritten.into_inner().unwrap_or_else(|e| e.into_inner());
+    if !unwritten.is_empty() {
+        unwritten.sort();
+        eprintln!("書けなかったファイル:");
+        for path in &unwritten {
+            eprintln!("  {}", path.display());
+        }
+    }
     eprintln!(
         "書いた {}、飛ばした {}、失敗 {}",
         written.into_inner(),
@@ -176,4 +188,8 @@ fn main() -> ExitCode {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }

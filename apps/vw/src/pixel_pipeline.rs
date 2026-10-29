@@ -61,7 +61,7 @@ pub fn read_in_background(
     path: &std::path::Path,
 ) -> std::sync::mpsc::Receiver<Result<Pipeline, String>> {
     let path = path.to_path_buf();
-    crate::background::compute(ctx, move || read(&path))
+    crate::background::try_compute(ctx, move || read(&path))
 }
 
 /// ファイルの段を読む（フレームのパスなら、そのフレームの段）。

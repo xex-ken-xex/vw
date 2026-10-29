@@ -129,7 +129,12 @@ fn trim_uid(uid: &str) -> &str {
 }
 
 /// DICOM ファイル（128 バイトのプリアンブルつき）を読む。`header_only` なら画素の手前まで。
-pub fn open(source: impl Read, header_only: bool) -> Result<DefaultDicomObject, String> {
+pub fn open(data: &[u8], header_only: bool) -> Result<DefaultDicomObject, String> {
+    crate::structure::check(data, data.len() as u64, header_only).map_err(|e| e.to_string())?;
+    from_reader(data, header_only)
+}
+
+fn from_reader(source: impl Read, header_only: bool) -> Result<DefaultDicomObject, String> {
     let mut options = OpenFileOptions::new().read_preamble(ReadPreamble::Always);
     if header_only {
         options = options.read_until(tags::PIXEL_DATA);
@@ -137,10 +142,21 @@ pub fn open(source: impl Read, header_only: bool) -> Result<DefaultDicomObject, 
     options.from_reader(source).map_err(|e| e.to_string())
 }
 
-/// ファイルの、提案に使う属性を読む。
+/// 提案に使う属性を読むときに、長さを確かめる頭の大きさ。画素の手前まではふつう数 KB。
+const HEAD_BYTES: u64 = 1 << 20;
+
+/// ファイルの、提案に使う属性を読む。たくさんのファイルを順に見るので、全体は読まない。
 pub fn read_header(path: &Path) -> Result<Header, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    open(std::io::BufReader::new(file), true).map(|obj| Header::of(&obj))
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let total = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut head = Vec::new();
+    (&mut file)
+        .take(HEAD_BYTES)
+        .read_to_end(&mut head)
+        .map_err(|e| e.to_string())?;
+    crate::structure::check(&head, total, true).map_err(|e| e.to_string())?;
+    let rest = std::io::BufReader::new(file);
+    from_reader(std::io::Cursor::new(head).chain(rest), true).map(|obj| Header::of(&obj))
 }
 
 fn transfer_syntax(uid: &str) -> Option<&'static TransferSyntax> {

@@ -85,9 +85,13 @@ impl VwApp {
     /// 大きければ、最初の読み込みでフル解像度も一緒に作る。縮小画像だけ先に読んで
     /// 後からフル解像度を読み直すと、1 枚を大きく見る普段の使い方でデコードが 2 回になるため。
     /// 画像の大きさは読むまで分からないので、枠の大きさだけで決める。
+    ///
+    /// 最初のフレームの前（枠の大きさがまだ分からない）は縮小画像だけにする。起動時の
+    /// フォルダの復元や引数で大きなフォルダに入ると、見えない枠まで全部フル解像度で頼み、
+    /// 数千枚で何 GB も使っていたため。画面が出てから、要る枠だけが後から頼む。
     pub(super) fn cell_needs_full(&self) -> bool {
         let Some(area) = self.images_area else {
-            return true;
+            return false;
         };
         let view = self.view();
         let cell = (area.x / view.cols as f32).max(area.y / view.rows as f32);
@@ -304,7 +308,16 @@ impl VwApp {
                             self.attach_full(ctx, index, full);
                         }
                     }
-                    Err(e) => self.load_failed(&r.path, &e),
+                    Err(e) => {
+                        self.load_failed(&r.path, &e);
+                        let shown = self.slots[index].shown.as_mut();
+                        if shown.is_some_and(|s| s.give_up_developing()) {
+                            self.log.warn(format!(
+                                "{}: could not develop the RAW; showing the embedded preview",
+                                r.path.display()
+                            ));
+                        }
+                    }
                 }
             }
         }

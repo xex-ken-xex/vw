@@ -427,9 +427,9 @@ fn send_all(endpoint: &Endpoint, items: &[Item], shared: &Shared, events: &Sende
             break;
         }
         let result = match item {
-            Item::File(path, _) => match std::fs::File::open(path)
+            Item::File(path, _) => match std::fs::read(path)
                 .map_err(|e| e.to_string())
-                .and_then(|f| net::open(std::io::BufReader::new(f), false))
+                .and_then(|bytes| net::open(&bytes, false))
             {
                 Ok(obj) => one(path.display().to_string(), &obj),
                 Err(reason) => {

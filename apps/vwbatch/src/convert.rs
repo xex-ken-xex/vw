@@ -54,7 +54,28 @@ impl Picture {
 }
 
 /// `path` の画像（`all_frames` ならフレームごと）。フレームが 1 枚なら番号は `None`。
+/// デコーダや現像の panic は、そのファイルのエラーにする。並列に回しているので、
+/// 1 枚の panic で全体が止まり、残りのファイルが書かれなくなるため。
 pub fn convert(
+    registry: &Registry,
+    path: &Path,
+    recipe: &Recipe,
+) -> Result<Vec<(Option<usize>, Picture)>, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        convert_unguarded(registry, path, recipe)
+    }))
+    .unwrap_or_else(|panic| Err(format!("internal error: {}", panic_text(&*panic))))
+}
+
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("panic")
+}
+
+fn convert_unguarded(
     registry: &Registry,
     path: &Path,
     recipe: &Recipe,
@@ -164,6 +185,38 @@ mod tests {
     fn gray16(values: Vec<u16>) -> VwImage {
         let width = values.len() as u32;
         VwImage::new(width, 1, ColorModel::Gray, PixelData::U16(values)).unwrap()
+    }
+
+    /// どのファイルも読もうとすると panic するデコーダ。
+    struct Panics;
+
+    impl vw_core::DecoderPlugin for Panics {
+        fn name(&self) -> &str {
+            "Panics"
+        }
+        fn extensions(&self) -> &[&str] {
+            &["bad"]
+        }
+        fn probe(&self, _header: &[u8]) -> bool {
+            false
+        }
+        fn decode(&self, _data: &[u8]) -> Result<VwImage, vw_core::DecodeError> {
+            panic!("decoder bug")
+        }
+    }
+
+    #[test]
+    fn a_decoder_panic_is_an_error_for_that_file_only() {
+        let dir = std::env::temp_dir().join(format!("vwbatch-panic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.bad");
+        std::fs::write(&file, b"x").unwrap();
+        let mut registry = Registry::new();
+        registry.register(std::sync::Arc::new(Panics));
+        let look = Look::default();
+        let result = convert(&registry, &file, &recipe(Vec::new(), look));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result.err().as_deref(), Some("internal error: decoder bug"));
     }
 
     #[test]
