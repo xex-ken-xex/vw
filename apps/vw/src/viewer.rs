@@ -52,6 +52,18 @@ impl Shown {
         self.developed && self.info.develop_size.is_some()
     }
 
+    /// 現像できなかった。普通に読む画像（埋め込みのプレビュー）で見続け、二度と現像を頼まない。
+    /// 現像を頼む前に戻すだけだと、開き直すたびや D キーでまた失敗し、そのたびに印が回り出すため。
+    /// 現像していなかったなら何もせず `false`。
+    pub fn give_up_developing(&mut self) -> bool {
+        if !self.developing() {
+            return false;
+        }
+        self.developed = false;
+        self.info.develop_size = None;
+        true
+    }
+
     /// 描画に使うテクスチャ。フル解像度があればそれ、なければ縮小画像。
     pub fn texture(&self) -> &TextureHandle {
         self.full.as_ref().map_or(&self.thumb, |f| &f.texture)
@@ -2161,6 +2173,56 @@ fn draw_swatch(painter: &egui::Painter, at: Pos2, line: f32, swatch: Option<[u8;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 埋め込みのプレビューを出している、現像できる RAW。
+    fn raw_preview() -> Shown {
+        let ctx = eframe::egui::Context::default();
+        let thumb = ctx.load_texture("t", eframe::egui::ColorImage::example(), Default::default());
+        Shown {
+            path: PathBuf::from("/a.ARW"),
+            thumb,
+            info: crate::loader::ImageInfo {
+                width: 160,
+                height: 120,
+                color: vw_core::ColorModel::Rgb,
+                bits_per_sample: 8,
+                significant_bits: 8,
+                metadata: Default::default(),
+                develop_size: Some((6000, 4000)),
+                plugin: "RAW".into(),
+                frames: 1,
+                file_size: 0,
+                read: Default::default(),
+                decode: Default::default(),
+                convert: Default::default(),
+                look: None,
+                compose: None,
+                fingerprint: None,
+                frame_delays: None,
+            },
+            full: None,
+            developed: false,
+        }
+    }
+
+    #[test]
+    fn a_failed_develop_stops_the_developing_mark_for_good() {
+        let mut shown = raw_preview();
+        shown.developed = true;
+        assert!(shown.developing());
+        assert!(shown.give_up_developing());
+        assert!(!shown.developing());
+        // もう現像を頼まない（develop_slot は develop_size のない画像を飛ばす）。
+        assert_eq!(shown.info.develop_size, None);
+        assert!(!shown.developed);
+    }
+
+    #[test]
+    fn a_failed_preview_load_is_not_a_failed_develop() {
+        let mut shown = raw_preview();
+        assert!(!shown.give_up_developing());
+        assert_eq!(shown.info.develop_size, Some((6000, 4000)));
+    }
 
     #[test]
     fn whole_image_is_visible_when_it_fits() {

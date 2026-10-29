@@ -304,7 +304,16 @@ impl VwApp {
                             self.attach_full(ctx, index, full);
                         }
                     }
-                    Err(e) => self.load_failed(&r.path, &e),
+                    Err(e) => {
+                        self.load_failed(&r.path, &e);
+                        let shown = self.slots[index].shown.as_mut();
+                        if shown.is_some_and(|s| s.give_up_developing()) {
+                            self.log.warn(format!(
+                                "{}: could not develop the RAW; showing the embedded preview",
+                                r.path.display()
+                            ));
+                        }
+                    }
                 }
             }
         }
