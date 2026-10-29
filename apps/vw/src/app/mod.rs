@@ -25,7 +25,7 @@ use crate::labels::{Flag, LabelStore};
 use crate::loader::{Job, Loader};
 use crate::log::{self, Log, LogFile};
 use crate::series::SeriesIndex;
-use crate::settings::{parse_hex_color, Language, LoadInto, LogStyle, SettingsStore};
+use crate::settings::{parse_hex_color, BaseTool, Language, LoadInto, LogStyle, SettingsStore};
 use crate::settings_ui::SettingsUi;
 use crate::slideshow::{Clock, EndMode, Playback};
 use crate::state::{self, AppState, Placement, WindowState};
@@ -108,7 +108,7 @@ impl Tool {
     fn available(self) -> bool {
         matches!(
             self,
-            Tool::Browse | Tool::Pan | Tool::PixelProbe | Tool::Roi
+            Tool::Browse | Tool::Pan | Tool::Zoom | Tool::PixelProbe | Tool::Roi
         )
     }
 
@@ -118,6 +118,7 @@ impl Tool {
             Tool::PixelProbe => Some(Action::TogglePixelProbe),
             Tool::Roi => Some(Action::ToggleRoi),
             Tool::Pan => Some(Action::ToggleHandTool),
+            Tool::Zoom => Some(Action::ToggleZoomTool),
             _ => None,
         }
     }
@@ -128,6 +129,7 @@ impl Tool {
             Tool::Roi => Some("Drag to draw the target ROI, Shift+drag for the background ROI"),
             Tool::Browse => Some("Drag an image to a folder to move it, Ctrl+drag to copy it"),
             Tool::Pan => Some("Drag an image to move the view"),
+            Tool::Zoom => Some("Drag up or down to zoom, click to zoom in, Alt+click to zoom out"),
             _ => None,
         }
     }
@@ -680,6 +682,7 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("ai-tags"));
         let trace = log.detail_writer();
+        let start_tool = base_tool(settings.settings.viewer.start_tool.tool(saved.tool));
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone(), trace),
             tree,
@@ -695,8 +698,8 @@ impl VwApp {
             active: 0,
             next_id: 1,
             dock: Some(docking::restored_dock(&saved, monitors_changed)),
-            tool: base_tool(saved.arrow_tool),
-            base_tool: base_tool(saved.arrow_tool),
+            tool: start_tool,
+            base_tool: start_tool,
             settings,
             settings_ui: SettingsUi::default(),
             send_job: None,
@@ -834,7 +837,7 @@ impl VwApp {
     }
 
     fn select_tool(&mut self, tool: Tool) {
-        if matches!(tool, Tool::Browse | Tool::Pan) {
+        if matches!(tool, Tool::Browse | Tool::Pan | Tool::Zoom) {
             self.base_tool = tool;
         }
         self.tool = tool;
@@ -881,6 +884,7 @@ impl VwApp {
             Action::TogglePixelProbe => self.toggle_tool(Tool::PixelProbe),
             Action::ToggleRoi => self.toggle_tool(Tool::Roi),
             Action::ToggleHandTool => self.toggle_tool(Tool::Pan),
+            Action::ToggleZoomTool => self.toggle_tool(Tool::Zoom),
             Action::DeleteProbePoint => {
                 let slot = &mut self.slots[self.active];
                 if !slot.delete_selected_mark() {
@@ -1262,19 +1266,29 @@ pub fn frame_rate(metadata: &vw_core::Metadata) -> Option<f32> {
 }
 
 /// 絞り込みの名前。タグはそのまま（翻訳しない）。
-fn base_tool(arrow: bool) -> Tool {
-    if arrow {
-        Tool::Browse
-    } else {
-        Tool::Pan
+fn base_tool(saved: BaseTool) -> Tool {
+    match saved {
+        BaseTool::Select => Tool::Browse,
+        BaseTool::Hand => Tool::Pan,
+        BaseTool::Zoom => Tool::Zoom,
+    }
+}
+
+/// [`base_tool`] の逆。戻り先にならないツールは来ない。
+fn saved_tool(tool: Tool) -> BaseTool {
+    match tool {
+        Tool::Pan => BaseTool::Hand,
+        Tool::Zoom => BaseTool::Zoom,
+        _ => BaseTool::Select,
     }
 }
 
 /// キーでツールを切り替えたあとのツール。使っているツールのキーなら戻り先へ戻る。
 fn toggled(current: Tool, base: Tool, pressed: Tool) -> Tool {
     match pressed {
-        // 手のひらは戻り先にもなるので、ほかと同じく戻り先へ戻すと止まらない。止めたら矢印にする。
-        Tool::Pan if current == Tool::Pan => Tool::Browse,
+        // 手のひらとズームは戻り先にもなるので、ほかと同じく戻り先へ戻すと止まらない。
+        // 止めたら矢印にする。
+        _ if current == pressed && base == pressed => Tool::Browse,
         _ if current == pressed => base,
         _ => pressed,
     }
@@ -1467,9 +1481,25 @@ mod tests {
     }
 
     #[test]
-    fn the_hand_is_the_default_so_dragging_an_image_still_pans() {
-        assert!(base_tool(false) == Tool::Pan);
-        assert!(base_tool(true) == Tool::Browse);
+    fn the_zoom_key_switches_between_zoom_and_arrow() {
+        assert!(toggled(Tool::Pan, Tool::Pan, Tool::Zoom) == Tool::Zoom);
+        assert!(toggled(Tool::Zoom, Tool::Zoom, Tool::Zoom) == Tool::Browse);
+        assert!(toggled(Tool::PixelProbe, Tool::Zoom, Tool::PixelProbe) == Tool::Zoom);
+    }
+
+    #[test]
+    fn the_saved_tool_comes_back_as_the_same_tool() {
+        for t in [Tool::Browse, Tool::Pan, Tool::Zoom] {
+            assert!(base_tool(saved_tool(t)) == t);
+        }
+    }
+
+    #[test]
+    fn the_start_tool_setting_wins_over_the_last_tool() {
+        use crate::settings::StartTool;
+        assert_eq!(StartTool::Last.tool(BaseTool::Zoom), BaseTool::Zoom);
+        assert_eq!(StartTool::Select.tool(BaseTool::Zoom), BaseTool::Select);
+        assert_eq!(StartTool::Hand.tool(BaseTool::Select), BaseTool::Hand);
     }
     #[test]
     fn file_counts_are_grouped_by_thousands() {

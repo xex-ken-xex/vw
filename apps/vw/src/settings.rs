@@ -168,6 +168,58 @@ pub struct Viewer {
     pub magnify_filter: ScaleFilter,
     /// 画像を縮小して表示するときの補間。
     pub minify_filter: ScaleFilter,
+    /// 起動したときのツール。
+    pub start_tool: StartTool,
+}
+
+/// 画像の上の左ドラッグの役のツール。ほかのツール（十字・ROI）を切ると、これに戻る。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseTool {
+    Select,
+    #[default]
+    Hand,
+    Zoom,
+}
+
+/// 起動したときのツール（`viewer.start_tool`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartTool {
+    /// 前に終了したときのツール（state.toml）。
+    #[default]
+    Last,
+    Select,
+    Hand,
+    Zoom,
+}
+
+impl StartTool {
+    pub const ALL: [StartTool; 4] = [
+        StartTool::Last,
+        StartTool::Select,
+        StartTool::Hand,
+        StartTool::Zoom,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            StartTool::Last => "Last used",
+            StartTool::Select => "Select",
+            StartTool::Hand => "Hand",
+            StartTool::Zoom => "Zoom",
+        }
+    }
+
+    /// 起動したときのツール。`last` は前に終了したときのツール。
+    pub fn tool(self, last: BaseTool) -> BaseTool {
+        match self {
+            StartTool::Last => last,
+            StartTool::Select => BaseTool::Select,
+            StartTool::Hand => BaseTool::Hand,
+            StartTool::Zoom => BaseTool::Zoom,
+        }
+    }
 }
 
 impl Viewer {
@@ -206,6 +258,7 @@ impl Default for Viewer {
             develop_raw: true,
             magnify_filter: ScaleFilter::Nearest,
             minify_filter: ScaleFilter::Linear,
+            start_tool: StartTool::Last,
         }
     }
 }
@@ -271,6 +324,7 @@ impl Viewer {
             develop_raw: r.get("develop_raw").unwrap_or(d.develop_raw),
             magnify_filter: r.get("magnify_filter").unwrap_or(d.magnify_filter),
             minify_filter: r.get("minify_filter").unwrap_or(d.minify_filter),
+            start_tool: r.get("start_tool").unwrap_or(d.start_tool),
         }
     }
 }

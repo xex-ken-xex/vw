@@ -19,8 +19,8 @@ use crate::settings::{
     parse_hex_color, CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling,
     FitsCalibration, FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode,
     GaugeSide, HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings,
-    LogStyle, MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, ThemeChoice, Tree,
-    Viewer,
+    LogStyle, MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, StartTool,
+    ThemeChoice, Tree, Viewer,
 };
 use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
 use crate::sort::SortKey;
@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 109] = [
+const ITEMS: [Item; 110] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -222,6 +222,13 @@ const ITEMS: [Item; 109] = [
         title: "Develop RAW in the background",
         description: "Camera RAW files first show the preview JPEG embedded by the camera, then are developed from the sensor data in the background and replaced (a film icon is shown on the slot meanwhile). When off, develop from the right-click menu.",
         widget: develop_raw_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.start_tool",
+        title: "Tool at startup",
+        description: "The tool selected when vw starts: the one used when vw was last closed, or always the same one. Select drags an image to a folder, Hand moves the view, Zoom zooms.",
+        widget: start_tool_widget,
     },
     Item {
         section: Section::Viewer,
@@ -1420,6 +1427,16 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
 fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.keep_view, tr(lang, "Enabled"))
         .changed()
+}
+
+fn start_tool_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.viewer.start_tool;
+    ui.horizontal(|ui| {
+        for tool in StartTool::ALL {
+            ui.radio_value(&mut s.viewer.start_tool, tool, tr(lang, tool.title()));
+        }
+    });
+    s.viewer.start_tool != before
 }
 
 fn magnify_filter_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

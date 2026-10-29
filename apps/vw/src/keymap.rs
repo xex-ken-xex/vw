@@ -89,6 +89,7 @@ pub enum Action {
     TogglePixelProbe,
     ToggleRoi,
     ToggleHandTool,
+    ToggleZoomTool,
     DeleteProbePoint,
     TogglePixelPipeline,
     ToggleHistogram,
@@ -174,7 +175,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 95] = [
+    pub const ALL: [Action; 96] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -205,6 +206,7 @@ impl Action {
         Action::TogglePixelProbe,
         Action::ToggleRoi,
         Action::ToggleHandTool,
+        Action::ToggleZoomTool,
         Action::DeleteProbePoint,
         Action::TogglePixelPipeline,
         Action::ToggleHistogram,
@@ -369,6 +371,7 @@ impl Action {
             Action::TogglePixelProbe => "toggle_pixel_probe",
             Action::ToggleRoi => "toggle_roi",
             Action::ToggleHandTool => "toggle_hand_tool",
+            Action::ToggleZoomTool => "toggle_zoom_tool",
             Action::DeleteProbePoint => "delete_probe_point",
         }
     }
@@ -474,6 +477,7 @@ impl Action {
             Action::TogglePixelProbe => "Pixel probe on/off",
             Action::ToggleRoi => "ROI tool on/off",
             Action::ToggleHandTool => "Hand tool on/off",
+            Action::ToggleZoomTool => "Zoom tool on/off",
             Action::DeleteProbePoint => "Delete selected probe point or ROI",
         }
     }
@@ -514,6 +518,7 @@ impl Action {
             Action::TogglePixelProbe
             | Action::ToggleRoi
             | Action::ToggleHandTool
+            | Action::ToggleZoomTool
             | Action::DeleteProbePoint
             | Action::UndoPosition => KeyGroup::Tools,
             Action::ToggleTagging
@@ -779,6 +784,7 @@ impl Action {
             Action::TogglePixelProbe => vec![KeyCombo::plain(V)],
             Action::ToggleRoi => vec![KeyCombo::plain(R)],
             Action::ToggleHandTool => vec![KeyCombo::plain(H)],
+            Action::ToggleZoomTool => vec![KeyCombo::plain(Z)],
             Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],
             Action::FullscreenExit => vec![KeyCombo::plain(Escape)],
             Action::FullscreenNext => vec![KeyCombo::plain(ArrowRight)],
