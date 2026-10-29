@@ -286,6 +286,9 @@ pub struct SlotLook<'a> {
     /// 画像の上の左ドラッグで表示位置を動かす（手のひら・画素値の確認ツール）。
     /// 動かさないとき（矢印）は、見出しと同じく画像を運ぶドラッグになる。
     pub pan: bool,
+    /// ズームのツールを使っている（左ドラッグの上下で拡大縮小、クリックで 1 段拡大、
+    /// Alt+クリックで 1 段縮小）。
+    pub zoom: bool,
     /// 右クリックの「送る ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
     /// 右クリックの「送る ▸」に並べるアプリ。
@@ -1216,6 +1219,7 @@ impl Slot {
             probe: probing,
             roi: roi_tool,
             pan: pan_tool,
+            zoom: zoom_tool,
             destinations,
             apps,
             presets,
@@ -1301,7 +1305,8 @@ impl Slot {
                 .dnd_release_payload::<DraggedFile>()
                 .map(|f| f.0.clone());
         }
-        out.toggle_maximize = response.double_clicked();
+        // ズームのツールでは続けてクリックして拡大するので、ダブルクリックを最大化にしない。
+        out.toggle_maximize = response.double_clicked() && !zoom_tool;
         if response.hovered() {
             let (wheel, shifted) = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
             out.step = wheel_steps(&mut self.wheel, wheel);
@@ -1318,11 +1323,31 @@ impl Slot {
                 } else if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
-            } else if !roi_tool && self.folder.is_none() {
+            } else if !roi_tool && !zoom_tool && self.folder.is_none() {
                 response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
                 out.dragging |= response.dragged_by(egui::PointerButton::Primary);
             }
-            if response.dragged_by(ZOOM_BUTTON) {
+            let zoom_drag = zoom_tool && !roi_tool && response.dragged_by(PAN_BUTTON);
+            if zoom_tool && !roi_tool {
+                let (alt, pointer) = ui.input(|i| (i.modifiers.alt, i.pointer.interact_pos()));
+                if response.clicked() {
+                    let factor = if alt {
+                        1.0 / KEY_ZOOM_FACTOR
+                    } else {
+                        KEY_ZOOM_FACTOR
+                    };
+                    let cursor = pointer.map(|p| p - body.center());
+                    (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
+                }
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(if alt {
+                        egui::CursorIcon::ZoomOut
+                    } else {
+                        egui::CursorIcon::ZoomIn
+                    });
+                }
+            }
+            if response.dragged_by(ZOOM_BUTTON) || zoom_drag {
                 let factor = (-response.drag_delta().y * DRAG_ZOOM_RATE).exp();
                 let anchor = ui.input(|i| i.pointer.press_origin());
                 let cursor = anchor.map(|p| p - body.center());

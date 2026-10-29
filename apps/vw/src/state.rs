@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::settings::BaseTool;
 use crate::sub_window;
 use crate::toml_reader::Reader;
 
@@ -60,8 +61,8 @@ pub struct AppState {
     pub metadata_closed: Vec<String>,
     /// ペイン（フォルダ・画像・メタデータ・ログ）の並びと、別ウインドウに出したもの。
     pub dock: Option<vw_dock::Layout>,
-    /// 画像の左ドラッグを矢印（画像を運ぶ）にしていた。既定は手のひら（表示位置を動かす）。
-    pub arrow_tool: bool,
+    /// 画像の左ドラッグの役のツール。既定は手のひら（表示位置を動かす）。
+    pub tool: BaseTool,
 }
 
 /// `[sub_windows.名前]` を読む。読めない項目だけを捨てる（なければ既定の大きさで開くだけ）。
@@ -161,7 +162,13 @@ impl AppState {
             .get::<Vec<String>>("metadata", "closed")
             .unwrap_or_default();
         let dock = read_dock(&table, &mut r.problems);
-        let arrow_tool = r.get::<bool>("viewer", "arrow_tool").unwrap_or(false);
+        // `arrow_tool` は、ズームのツールがなく矢印と手のひらの 2 つだった版の書き方。
+        let tool = r.get::<BaseTool>("viewer", "tool").unwrap_or_else(|| {
+            match r.get::<bool>("viewer", "arrow_tool") {
+                Some(true) => BaseTool::Select,
+                _ => BaseTool::default(),
+            }
+        });
         (
             Self {
                 window,
@@ -173,7 +180,7 @@ impl AppState {
                 sub_windows,
                 metadata_closed,
                 dock,
-                arrow_tool,
+                tool,
             },
             r.problems,
         )
@@ -221,9 +228,10 @@ impl AppState {
             fullscreen.insert("root".into(), dir.into());
             root.insert("fullscreen".into(), fullscreen.into());
         }
-        if self.arrow_tool {
+        if self.tool != BaseTool::default() {
             let mut viewer = toml::Table::new();
-            viewer.insert("arrow_tool".into(), true.into());
+            let tool = toml::Value::try_from(self.tool).unwrap();
+            viewer.insert("tool".into(), tool);
             root.insert("viewer".into(), viewer.into());
         }
         if !self.metadata_closed.is_empty() {
@@ -530,9 +538,18 @@ mod tests {
             .into(),
             metadata_closed: vec!["EXIF".into(), "AI tags".into()],
             dock: Some(saved_dock()),
-            arrow_tool: true,
+            tool: BaseTool::Zoom,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
+    }
+
+    #[test]
+    fn the_arrow_tool_saved_by_an_older_version_is_the_select_tool() {
+        let (state, problems) = AppState::from_toml("[viewer]\narrow_tool = true\n");
+        assert_eq!(state.tool, BaseTool::Select);
+        assert!(problems.is_empty());
+        let (state, _) = AppState::from_toml("[viewer]\narrow_tool = false\n");
+        assert_eq!(state.tool, BaseTool::Hand);
     }
 
     /// ログを別ウインドウに出し、メタデータを隠した並び。
@@ -604,7 +621,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
-            arrow_tool: false,
+            tool: BaseTool::Hand,
             dock: None,
         };
         assert_eq!(AppState::from_toml(&state.to_toml()), (state, vec![]));
@@ -665,7 +682,7 @@ mod tests {
             pipeline_nodes: BTreeMap::new(),
             sub_windows: BTreeMap::new(),
             metadata_closed: Vec::new(),
-            arrow_tool: false,
+            tool: BaseTool::Hand,
             dock: None,
         };
         state.save(&path).unwrap();

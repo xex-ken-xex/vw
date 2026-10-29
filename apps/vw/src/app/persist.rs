@@ -319,7 +319,7 @@ impl VwApp {
                 Vec::new()
             },
             dock: self.dock.as_ref().map(vw_dock::Dock::layout),
-            arrow_tool: self.base_tool == Tool::Browse,
+            tool: saved_tool(self.base_tool),
             // 道具の位置は欄の並び（`dock`）が持つ。前の版の値は最初の起動で読んだら要らない。
             sub_windows: Default::default(),
         };
