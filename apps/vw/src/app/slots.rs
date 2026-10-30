@@ -879,7 +879,16 @@ impl VwApp {
                 self.log.info(format!("{title}: off"));
             }
             None => {
-                values.chain.push(node);
+                // 伸縮は印より前に置く（印は入ってきた値を塗るので、後ろに伸縮があると印の色まで変わる）。
+                let at = match kind {
+                    "auto_stretch" => values
+                        .chain
+                        .iter()
+                        .position(|n| vw_pipeline::nodes::Node::CHECK_KINDS.contains(&n.kind()))
+                        .unwrap_or(values.chain.len()),
+                    _ => values.chain.len(),
+                };
+                values.chain.insert(at, node);
                 self.log.info(format!("{title}: on"));
             }
         }

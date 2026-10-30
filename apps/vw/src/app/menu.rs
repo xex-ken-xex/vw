@@ -122,6 +122,7 @@ impl VwApp {
                     ],
                     &[Action::NextColorMap, Action::ToggleColorGauge],
                     &[
+                        Action::ToggleAutoStretch,
                         Action::ToggleClippingWarning,
                         Action::ToggleFocusPeaking,
                         Action::ToggleColorVision,

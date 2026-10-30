@@ -2746,6 +2746,100 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
                 "Fills the stars found from the small bright details with the surrounding sky. Large glows of bright stars may stay.",
             ));
         }
+        nodes::Node::Ghs {
+            stretch,
+            local,
+            symmetry,
+            shadows,
+            highlights,
+        } => {
+            egui::Grid::new("ghs").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Stretch ln(D+1)"));
+                edited |= unit(ui, stretch, 0.0, 10.0, 0.01);
+                ui.end_row();
+                ui.label(tr(lang, "Intensity b"));
+                edited |= unit(ui, local, -5.0, 15.0, 0.02);
+                ui.end_row();
+                ui.label(tr(lang, "Center SP"));
+                edited |= unit(ui, symmetry, 0.0, 1.0, 0.0005);
+                ui.end_row();
+                ui.label(tr(lang, "Shadows LP"));
+                edited |= unit(ui, shadows, 0.0, *symmetry, 0.0005);
+                ui.end_row();
+                ui.label(tr(lang, "Highlights HP"));
+                edited |= unit(ui, highlights, *symmetry, 1.0, 0.0005);
+                ui.end_row();
+            });
+            let ghs = vw_pipeline::stretch_curves::Ghs {
+                stretch: *stretch,
+                local: *local,
+                symmetry: *symmetry,
+                shadows: *shadows,
+                highlights: *highlights,
+            };
+            curve_plot(ui, |x| ghs.map(x));
+            ui.weak(tr(
+                lang,
+                "Stretches most steeply around the symmetry point; set it to the brightness of the sky background. A larger b narrows the stretch around it. Below LP and above HP the curve is a straight line. Put it after the stretch node.",
+            ));
+        }
+        nodes::Node::AutoStretch {
+            target,
+            shadows,
+            linked,
+        } => {
+            egui::Grid::new("auto_stretch")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label(tr(lang, "Background"));
+                    edited |= unit(ui, target, 0.01, 0.9, 0.002);
+                    ui.end_row();
+                    ui.label(tr(lang, "Black (× noise)"));
+                    edited |= unit(ui, shadows, 0.0, 10.0, 0.02);
+                    ui.end_row();
+                    ui.label("");
+                    edited |= ui
+                        .checkbox(linked, tr(lang, "Same curve for RGB"))
+                        .changed();
+                    ui.end_row();
+                });
+            ui.weak(tr(
+                lang,
+                "Finds the sky background (median) and its noise in each channel, makes the background this bright with the midtones transfer function, and sets black that many times the noise below it. With the same curve for RGB, the color balance (and any color cast of the sky) is kept. Put it after the stretch node.",
+            ));
+        }
+        nodes::Node::StarRecombine {
+            amount,
+            blend,
+            stars_only,
+        } => {
+            egui::Grid::new("star_recombine")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label(tr(lang, "Amount"));
+                    edited |= unit(ui, amount, 0.0, 3.0, 0.005);
+                    ui.end_row();
+                    ui.label(tr(lang, "Blend"));
+                    egui::ComboBox::from_id_salt("star_recombine_blend")
+                        .selected_text(tr(lang, blend.title()))
+                        .show_ui(ui, |ui| {
+                            for b in nodes::Blend::ALL {
+                                edited |=
+                                    ui.selectable_value(blend, b, tr(lang, b.title())).changed();
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("");
+                    edited |= ui
+                        .checkbox(stars_only, tr(lang, "Show only the stars"))
+                        .changed();
+                    ui.end_row();
+                });
+            ui.weak(tr(
+                lang,
+                "Adds back the stars taken out by the star removal node before it. Curves between them (stretch, GHS, auto stretch, levels, tone) are applied to the stars too; nodes that look at neighbouring pixels (noise reduction, sharpen) change only the starless image. Add gives the stars the same brightness as without removing them; Screen keeps stars on bright nebulae from blowing out but makes them fainter.",
+            ));
+        }
         nodes::Node::Clipping { low, high } => {
             egui::Grid::new("clipping").num_columns(2).show(ui, |ui| {
                 ui.label(tr(lang, "Crushed at or below"));
@@ -2860,7 +2954,50 @@ fn note_text(lang: Language, note: &nodes::Note) -> String {
         nodes::Note::Psf(None) => {
             tr(lang, "No stars were found; the FWHM below is used.").to_owned()
         }
+        nodes::Note::Stretched(fitted) => fitted
+            .iter()
+            .map(|f| {
+                tr(lang, "Black {}, midtones {}")
+                    .replacen("{}", &format!("{:.4}", f.black), 1)
+                    .replacen("{}", &format!("{:.4}", f.midtones), 1)
+            })
+            .collect::<Vec<_>>()
+            .join(" / "),
     }
+}
+
+/// 0〜1 を写す曲線の小さな図（横が入力、縦が出力）。
+fn curve_plot(ui: &mut egui::Ui, f: impl Fn(f32) -> f32) {
+    let size = egui::vec2(ui.available_width().min(220.0), 90.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let visuals = ui.visuals();
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.0, visuals.weak_text_color()),
+        egui::StrokeKind::Inside,
+    );
+    let at = |x: f32, y: f32| {
+        egui::pos2(
+            rect.left() + x * rect.width(),
+            rect.bottom() - y.clamp(0.0, 1.0) * rect.height(),
+        )
+    };
+    painter.line_segment(
+        [at(0.0, 0.0), at(1.0, 1.0)],
+        egui::Stroke::new(1.0, visuals.weak_text_color()),
+    );
+    let points: Vec<egui::Pos2> = (0..=128)
+        .map(|i| {
+            let x = i as f32 / 128.0;
+            at(x, f(x))
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(1.5, visuals.strong_text_color()),
+    ));
 }
 
 fn expression_help(lang: Language) -> String {

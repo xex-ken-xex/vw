@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 120] = [
+const ITEMS: [Item; 121] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -698,6 +698,13 @@ const ITEMS: [Item; 120] = [
         title: "Custom color maps",
         description: "Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
         widget: pipeline_palettes_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "check.auto_stretch_background",
+        title: "Auto stretch for viewing",
+        description: "Values used when the A key adds the auto stretch node to a slot: the sky background (median) is made this bright and black is set that many times the noise below the background. Without the same curve for RGB, each channel is stretched on its own, so a sky with a color cast looks gray. Values are the shown brightness from 0 to 1.",
+        widget: check_auto_stretch_widget,
     },
     Item {
         section: Section::Pipeline,
@@ -1599,6 +1606,34 @@ fn check_peaking_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
         );
         changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
     });
+    changed
+}
+
+fn check_auto_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::settings::CheckSettings;
+    let c = &mut s.check;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(tr(lang, "Background"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.auto_stretch_background)
+                .range(CheckSettings::BACKGROUND_RANGE)
+                .speed(0.002)
+                .max_decimals(3),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "Black (× noise)"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.auto_stretch_shadows)
+                .range(CheckSettings::SHADOWS_RANGE)
+                .speed(0.02)
+                .max_decimals(2),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+    });
+    changed |= ui
+        .checkbox(&mut c.auto_stretch_linked, tr(lang, "Same curve for RGB"))
+        .changed();
     changed
 }
 

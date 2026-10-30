@@ -1076,7 +1076,7 @@ impl SimilarSettings {
     }
 }
 
-/// 確かめるためのノード（`[check]`）を、キーで足すときの値。
+/// 確かめるためのノードと「自動で明るく見せる」（`[check]`）を、キーで足すときの値。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CheckSettings {
     /// 黒つぶれとみなす値（0〜1 の表示の値）以下。
@@ -1088,6 +1088,12 @@ pub struct CheckSettings {
     /// フォーカスピーキングで、輪郭でない所を暗くする割合。
     pub peaking_dim: f32,
     pub color_vision: vw_pipeline::color_vision::Deficiency,
+    /// 「自動で明るく見せる」で背景を何の明るさにするか（0〜1）。
+    pub auto_stretch_background: f32,
+    /// 「自動で明るく見せる」で、背景から雑音（σ）の何倍暗い所を黒にするか。
+    pub auto_stretch_shadows: f32,
+    /// 「自動で明るく見せる」で R・G・B に同じ曲線を使うか。
+    pub auto_stretch_linked: bool,
 }
 
 impl Default for CheckSettings {
@@ -1098,12 +1104,17 @@ impl Default for CheckSettings {
             peaking_threshold: 0.15,
             peaking_dim: 0.3,
             color_vision: vw_pipeline::color_vision::Deficiency::default(),
+            auto_stretch_background: 0.25,
+            auto_stretch_shadows: 2.8,
+            auto_stretch_linked: false,
         }
     }
 }
 
 impl CheckSettings {
     pub const PEAKING_RANGE: std::ops::RangeInclusive<f32> = 0.01..=4.0;
+    pub const BACKGROUND_RANGE: std::ops::RangeInclusive<f32> = 0.01..=0.9;
+    pub const SHADOWS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 
     fn read(r: &mut Reader<'_>) -> Self {
         let d = Self::default();
@@ -1127,6 +1138,23 @@ impl CheckSettings {
                 .get_valid("peaking_dim", unit, "must be 0 to 1")
                 .unwrap_or(d.peaking_dim),
             color_vision: r.get("color_vision").unwrap_or(d.color_vision),
+            auto_stretch_background: r
+                .get_valid(
+                    "auto_stretch_background",
+                    |v: &f32| Self::BACKGROUND_RANGE.contains(v),
+                    "must be 0.01 to 0.9",
+                )
+                .unwrap_or(d.auto_stretch_background),
+            auto_stretch_shadows: r
+                .get_valid(
+                    "auto_stretch_shadows",
+                    |v: &f32| Self::SHADOWS_RANGE.contains(v),
+                    "must be 0 to 10",
+                )
+                .unwrap_or(d.auto_stretch_shadows),
+            auto_stretch_linked: r
+                .get("auto_stretch_linked")
+                .unwrap_or(d.auto_stretch_linked),
         }
     }
 
@@ -1150,6 +1178,11 @@ impl CheckSettings {
             }
             "color_vision" => Node::ColorVision {
                 deficiency: self.color_vision,
+            },
+            "auto_stretch" => Node::AutoStretch {
+                target: self.auto_stretch_background,
+                shadows: self.auto_stretch_shadows,
+                linked: self.auto_stretch_linked,
             },
             _ => return None,
         })
@@ -3249,6 +3282,26 @@ ae_title = "PACS"
         );
         let (s, problems) = Settings::from_toml("[similar]\nburst_seconds = 600\n").unwrap();
         assert_eq!(s.similar.burst_seconds, 2);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn auto_stretch_key_takes_its_values_from_the_settings() {
+        let (s, problems) = Settings::from_toml(
+            "[check]\nauto_stretch_background = 0.2\nauto_stretch_shadows = 3.5\nauto_stretch_linked = true\n",
+        )
+        .unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            s.check.node("auto_stretch"),
+            Some(vw_pipeline::nodes::Node::AutoStretch {
+                target: 0.2,
+                shadows: 3.5,
+                linked: true
+            })
+        );
+        let (s, problems) = Settings::from_toml("[check]\nauto_stretch_background = 0\n").unwrap();
+        assert_eq!(s.check.auto_stretch_background, 0.25);
         assert_eq!(problems.len(), 1);
     }
 

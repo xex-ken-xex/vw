@@ -315,10 +315,14 @@ impl VwApp {
         if std::mem::take(&mut self.pipeline.open_zoom_map) {
             self.zoom_map.open = true;
         }
+        self.synced_tools.clear();
         for tool in TOOLS {
             let open = *self.tool_open(tool);
             if let Some(dock) = self.dock.as_mut() {
                 dock.set_shown(tool, open);
+            }
+            if open {
+                self.synced_tools.push(tool);
             }
         }
     }
@@ -326,7 +330,8 @@ impl VwApp {
     /// 欄の側で閉じた道具（別ウインドウの × や、見出しの右クリックの「隠す」）の後始末をする。
     fn close_hidden_tools(&mut self) {
         for tool in TOOLS {
-            if !*self.tool_open(tool) || self.pane_shown(tool) {
+            if !*self.tool_open(tool) || self.pane_shown(tool) || !self.synced_tools.contains(&tool)
+            {
                 continue;
             }
             match tool {

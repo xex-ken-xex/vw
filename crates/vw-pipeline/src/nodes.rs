@@ -182,6 +182,39 @@ pub enum Node {
         #[serde(default = "default_star_threshold")]
         threshold: f32,
     },
+    /// 一般化双曲線ストレッチ（[`crate::stretch_curves::Ghs`]）。
+    Ghs {
+        #[serde(default = "default_ghs_stretch")]
+        stretch: f32,
+        #[serde(default)]
+        local: f32,
+        #[serde(default)]
+        symmetry: f32,
+        #[serde(default)]
+        shadows: f32,
+        #[serde(default = "one")]
+        highlights: f32,
+    },
+    /// MTF による「自動で明るく見せる」（[`crate::stretch_curves::AutoStretch`]）。
+    AutoStretch {
+        #[serde(default = "default_auto_target")]
+        target: f32,
+        #[serde(default = "default_auto_shadows")]
+        shadows: f32,
+        /// 初めは外す。光害で空の色がかぶった画像でも、背景が灰色に見えるように。
+        #[serde(default)]
+        linked: bool,
+    },
+    /// 星の除去のノードで抜いた星を、ここまでに変えた星なしの画像に戻す。間の曲線のノード
+    /// （[`Node::tone_only`]）は星にも当てる。`stars_only` なら、戻す星だけを見せる（加減を確かめるため）。
+    StarRecombine {
+        #[serde(default = "one")]
+        amount: f32,
+        #[serde(default)]
+        blend: Blend,
+        #[serde(default)]
+        stars_only: bool,
+    },
     /// 白飛び・黒つぶれの印。`high` 以上の値を赤（全チャンネル）か黄（一部のチャンネル）、
     /// 全チャンネルが `low` 以下の画素を青で塗る。
     Clipping {
@@ -213,6 +246,40 @@ pub enum Node {
         #[serde(default = "default_gamut_gamma")]
         gamma: f32,
     },
+}
+
+/// 星を戻すときの重ね方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Blend {
+    /// 星なし + 星。星は、星を除かなかったときと同じ明るさで戻る（間で何も変えていなければ元どおり）。
+    #[default]
+    Add,
+    /// 1 − (1 − 星なし)(1 − 星)。明るい所でも 1 を超えず、星雲の上の星が白く飛ばない。そのぶん星は暗くなる。
+    Screen,
+}
+
+impl Blend {
+    pub const ALL: [Blend; 2] = [Blend::Add, Blend::Screen];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Blend::Add => "Add",
+            Blend::Screen => "Screen",
+        }
+    }
+}
+
+fn default_ghs_stretch() -> f32 {
+    2.0
+}
+
+fn default_auto_target() -> f32 {
+    0.25
+}
+
+fn default_auto_shadows() -> f32 {
+    2.8
 }
 
 fn display_p3() -> [[f32; 3]; 3] {
@@ -310,13 +377,16 @@ impl Node {
     pub const CHECK_KINDS: [&'static str; 4] = ["clipping", "peaking", "color_vision", "gamut"];
 
     /// 「天体」のまとまりに並べる順。
-    pub const ASTRO_KINDS: [&'static str; 6] = [
+    pub const ASTRO_KINDS: [&'static str; 9] = [
         "stretch",
+        "auto_stretch",
+        "ghs",
         "deconvolve",
         "denoise",
         "sharpen",
         "star_reduce",
         "star_remove",
+        "star_recombine",
     ];
 
     pub fn new(kind: &str) -> Option<Self> {
@@ -366,6 +436,23 @@ impl Node {
                 size: three(),
                 threshold: default_star_threshold(),
             },
+            "ghs" => Node::Ghs {
+                stretch: default_ghs_stretch(),
+                local: 0.0,
+                symmetry: 0.0,
+                shadows: 0.0,
+                highlights: 1.0,
+            },
+            "auto_stretch" => Node::AutoStretch {
+                target: default_auto_target(),
+                shadows: default_auto_shadows(),
+                linked: false,
+            },
+            "star_recombine" => Node::StarRecombine {
+                amount: 1.0,
+                blend: Blend::default(),
+                stars_only: false,
+            },
             "clipping" => Node::Clipping {
                 low: 0.0,
                 high: 1.0,
@@ -402,6 +489,9 @@ impl Node {
             Node::StarReduce { .. } => "star_reduce",
             Node::Deconvolve { .. } => "deconvolve",
             Node::StarRemove { .. } => "star_remove",
+            Node::Ghs { .. } => "ghs",
+            Node::AutoStretch { .. } => "auto_stretch",
+            Node::StarRecombine { .. } => "star_recombine",
             Node::Clipping { .. } => "clipping",
             Node::Peaking { .. } => "peaking",
             Node::ColorVision { .. } => "color_vision",
@@ -426,6 +516,9 @@ impl Node {
             "star_reduce" => "Star reduction",
             "deconvolve" => "Deconvolution",
             "star_remove" => "Star removal",
+            "ghs" => "Hyperbolic stretch (GHS)",
+            "auto_stretch" => "Auto stretch (MTF)",
+            "star_recombine" => "Add stars back",
             "clipping" => "Clipping warning",
             "peaking" => "Focus peaking",
             "color_vision" => "Color vision simulation",
@@ -479,7 +572,14 @@ impl Node {
 
     /// 周りの画素も見るノード（色だけで決まらないので、3D LUT にできない）。
     pub fn spatial(&self) -> bool {
-        self.heavy() || matches!(self, Node::Noise { .. } | Node::Peaking { .. })
+        self.heavy()
+            || matches!(
+                self,
+                Node::Noise { .. }
+                    | Node::Peaking { .. }
+                    | Node::AutoStretch { .. }
+                    | Node::StarRecombine { .. }
+            )
     }
 
     /// 大きな画像では時間のかかるノード。値を動かしている間は縮めた画像で計算する。
@@ -494,6 +594,34 @@ impl Node {
                 | Node::Deconvolve { .. }
                 | Node::StarRemove { .. }
         )
+    }
+
+    /// 値だけで決まる、明るさや色の曲線のノード。星の除去と星を戻すノードの間にあれば、抜いた星にも
+    /// 当てる（星なしの画像だけを伸ばすと、戻した星が伸ばす前の暗さのままになるため）。
+    /// 周りの画素を見るノード（ノイズ除去など）は星なしの画像だけにかける。それが星を分ける目的だから。
+    fn tone_only(&self) -> bool {
+        matches!(
+            self,
+            Node::Expression { .. }
+                | Node::Levels { .. }
+                | Node::Invert
+                | Node::Mix { .. }
+                | Node::Tone { .. }
+                | Node::Ghs { .. }
+                | Node::AutoStretch { .. }
+        )
+    }
+
+    /// 本体の画像に当てたのと同じ変換を、別の画像に当てる。「自動で明るく見せる」は本体の画像で決めた値を使う
+    /// （星の画像の分布で決め直すと、本体と違う曲線になるため）。
+    fn replay(&self, img: &mut Float, note: Option<&Note>) -> Result<(), String> {
+        match (self, note) {
+            (Node::AutoStretch { linked, .. }, Some(Note::Stretched(fitted))) => {
+                crate::stretch_curves::replay(&mut img.data, img.channels, *linked, fitted);
+                Ok(())
+            }
+            _ => self.apply(img).map(|_| ()),
+        }
     }
 
     /// 当てる。知らせることがあれば（星から測った PSF など）返す。
@@ -588,6 +716,34 @@ impl Node {
             Node::StarRemove { size, threshold } => {
                 crate::astro::remove_stars(img, *size, *threshold)
             }
+            Node::Ghs {
+                stretch,
+                local,
+                symmetry,
+                shadows,
+                highlights,
+            } => crate::stretch_curves::Ghs {
+                stretch: *stretch,
+                local: *local,
+                symmetry: *symmetry,
+                shadows: *shadows,
+                highlights: *highlights,
+            }
+            .apply(&mut img.data),
+            Node::AutoStretch {
+                target,
+                shadows,
+                linked,
+            } => {
+                let auto = crate::stretch_curves::AutoStretch {
+                    target: *target,
+                    shadows: *shadows,
+                    linked: *linked,
+                };
+                note = Some(Note::Stretched(auto.apply(&mut img.data, img.channels)));
+            }
+            // 抜いた星を持っている呼び手が当てる（[`apply_noting`]）。
+            Node::StarRecombine { .. } => {}
             Node::Clipping { low, high } => mark_clipping(img, *low, *high),
             Node::Peaking {
                 threshold,
@@ -704,10 +860,12 @@ fn peaking(img: &mut Float, threshold: f32, color: [f32; 3], dim: f32) {
 }
 
 /// ノードが知らせること。画素の変換のウインドウでノードの下に出す。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Note {
     /// デコンボリューションで星から測った PSF。星が足りなければ `None`（手で入れた FWHM を使った）。
     Psf(Option<crate::deconv::Measured>),
+    /// 「自動で明るく見せる」で決めた黒と中間調（チャンネルごと。つないだときは 1 つ）。
+    Stretched(Vec<crate::stretch_curves::Fitted>),
 }
 
 impl Note {
@@ -718,6 +876,7 @@ impl Note {
                 fwhm: m.fwhm * factor as f32,
                 ..m
             })),
+            other => other,
         }
     }
 }
@@ -936,10 +1095,108 @@ pub fn apply_noting(
     img: &mut Float,
     notes: &mut Vec<(usize, Note)>,
 ) -> Result<(), (usize, String)> {
+    apply_keeping(chain, img, notes, &mut Kept::for_chain(chain))
+}
+
+/// 鎖の途中で取っておいて、後ろのノードで使うもの。
+#[derive(Debug, Default)]
+pub struct Kept {
+    /// 星を戻すノードがあるか（なければ星を取っておかない。大きな画像で 2 枚分のメモリを使うため）。
+    wants_stars: bool,
+    /// 星の除去のノードの前と後ろの画像。
+    stars: Option<(Float, Float)>,
+}
+
+impl Kept {
+    pub fn for_chain(chain: &[Node]) -> Self {
+        Kept {
+            wants_stars: chain
+                .iter()
+                .any(|n| matches!(n, Node::StarRecombine { .. })),
+            stars: None,
+        }
+    }
+
+    /// 取っておいた画像にも `f`（伸縮ノードの伸縮）を当てる。星を抜いた後に伸縮があっても、
+    /// 星なしの画像と同じ値の尺度で星を戻せるように。
+    pub fn map(&mut self, f: impl Fn(&mut Float)) {
+        if let Some((with, without)) = &mut self.stars {
+            f(with);
+            f(without);
+        }
+    }
+}
+
+/// [`apply_noting`] と同じ。鎖を伸縮ノードで分けて当てるときに、分けた鎖の間で `kept` を引き継ぐ。
+pub fn apply_keeping(
+    chain: &[Node],
+    img: &mut Float,
+    notes: &mut Vec<(usize, Note)>,
+    kept: &mut Kept,
+) -> Result<(), (usize, String)> {
     for (i, node) in chain.iter().enumerate() {
-        if let Some(note) = node.apply(img).map_err(|e| (i, e))? {
+        let before =
+            (kept.wants_stars && matches!(node, Node::StarRemove { .. })).then(|| img.clone());
+        if let Node::StarRecombine {
+            amount,
+            blend,
+            stars_only,
+        } = node
+        {
+            let (with, without) = kept
+                .stars
+                .as_ref()
+                .ok_or((i, "Put a star removal node before this node.".to_string()))?;
+            recombine_stars(img, with, without, *amount, *blend, *stars_only)
+                .map_err(|e| (i, e))?;
+            continue;
+        }
+        let note = node.apply(img).map_err(|e| (i, e))?;
+        if let Some((with, without)) = kept.stars.as_mut() {
+            if node.tone_only() {
+                for layer in [with, without] {
+                    node.replay(layer, note.as_ref()).map_err(|e| (i, e))?;
+                }
+            }
+        }
+        if let Some(note) = note {
             notes.push((i, note));
         }
+        if let Some(before) = before {
+            kept.stars = Some((before, img.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// 星だけの画像（星の除去の前 − 後。負は 0）を、`amount` 倍して `img` に重ねる。
+///
+/// 星を「前 − 後」で持つのは、別の星の検出をし直すと、除去で埋めた所と食い違う星が出るため。
+fn recombine_stars(
+    img: &mut Float,
+    with: &Float,
+    without: &Float,
+    amount: f32,
+    blend: Blend,
+    stars_only: bool,
+) -> Result<(), String> {
+    if (img.width, img.height) != (with.width, with.height) {
+        return Err("The image size changed after the star removal node.".into());
+    }
+    let n = img.channels;
+    let star = |i: usize| {
+        let pixel = i / n;
+        let c = (i % n).min(with.channels - 1);
+        let at = pixel * with.channels + c;
+        (with.data[at] - without.data[at]).max(0.0) * amount
+    };
+    for (i, v) in img.data.iter_mut().enumerate() {
+        let s = star(i);
+        *v = match (stars_only, blend) {
+            (true, _) => s,
+            (false, Blend::Screen) => 1.0 - (1.0 - *v) * (1.0 - s.min(1.0)),
+            (false, Blend::Add) => *v + s,
+        };
     }
     Ok(())
 }
@@ -1377,5 +1634,121 @@ mod tests {
         };
         apply(&[node], &mut img).unwrap();
         assert_eq!(img.data, vec![0.0, 1.0, 0.0]);
+    }
+
+    /// 暗い空に、明るい星が 1 つある画像。
+    fn sky_with_star() -> Float {
+        let (w, h) = (32, 32);
+        let mut state = splitmix(3);
+        let data = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32 - 16.0, (i / w) as f32 - 16.0);
+                0.1 + 0.005 * gaussian(&mut state) + 0.8 * (-(x * x + y * y) / 2.0).exp()
+            })
+            .collect();
+        Float::new(w, h, 1, data)
+    }
+
+    #[test]
+    fn adding_the_stars_back_unchanged_restores_the_image() {
+        let original = sky_with_star();
+        let mut img = original.clone();
+        let chain = [
+            Node::new("star_remove").unwrap(),
+            Node::StarRecombine {
+                amount: 1.0,
+                blend: Blend::Add,
+                stars_only: false,
+            },
+        ];
+        apply(&chain, &mut img).unwrap();
+        let at_star = 16 * 32 + 16;
+        assert!((img.data[at_star] - original.data[at_star]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn stars_only_shows_just_the_removed_stars() {
+        let mut img = sky_with_star();
+        let chain = [
+            Node::new("star_remove").unwrap(),
+            Node::StarRecombine {
+                amount: 1.0,
+                blend: Blend::Screen,
+                stars_only: true,
+            },
+        ];
+        apply(&chain, &mut img).unwrap();
+        assert!(img.data[16 * 32 + 16] > 0.5);
+        assert!(img.data[0].abs() < 1e-6);
+    }
+
+    #[test]
+    fn curves_between_removal_and_recombination_stretch_the_stars_too() {
+        let original = sky_with_star();
+        let mut img = original.clone();
+        let chain = [
+            Node::new("star_remove").unwrap(),
+            Node::Levels {
+                black: 0.0,
+                white: 1.0,
+                gamma: 2.0,
+            },
+            Node::StarRecombine {
+                amount: 1.0,
+                blend: Blend::Add,
+                stars_only: false,
+            },
+        ];
+        apply(&chain, &mut img).unwrap();
+        // 空は持ち上がり、星は元の画像に同じ曲線を当てた明るさで戻る。
+        let at_star = 16 * 32 + 16;
+        assert!(img.data[0] > 0.25);
+        assert!((img.data[at_star] - original.data[at_star].sqrt()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn noise_reduction_between_them_changes_only_the_starless_image() {
+        let original = sky_with_star();
+        let mut img = original.clone();
+        let chain = [
+            Node::new("star_remove").unwrap(),
+            Node::new("denoise").unwrap(),
+            Node::StarRecombine {
+                amount: 1.0,
+                blend: Blend::Add,
+                stars_only: true,
+            },
+        ];
+        apply(&chain, &mut img).unwrap();
+        let mut removed = original.clone();
+        apply(&[Node::new("star_remove").unwrap()], &mut removed).unwrap();
+        let at_star = 16 * 32 + 16;
+        let expected = original.data[at_star] - removed.data[at_star];
+        assert!((img.data[at_star] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn adding_stars_back_without_removing_them_first_is_an_error() {
+        let mut img = sky_with_star();
+        let err = apply(&[Node::new("star_recombine").unwrap()], &mut img).unwrap_err();
+        assert_eq!(err.0, 0);
+    }
+
+    #[test]
+    fn new_stretch_nodes_load_with_their_defaults() {
+        let ghs: Node = toml::from_str(r#"kind = "ghs""#).unwrap();
+        assert_eq!(ghs, Node::new("ghs").unwrap());
+        let auto: Node = toml::from_str(r#"kind = "auto_stretch""#).unwrap();
+        assert_eq!(auto, Node::new("auto_stretch").unwrap());
+        let back: Node = toml::from_str(r#"kind = "star_recombine""#).unwrap();
+        assert_eq!(back, Node::new("star_recombine").unwrap());
+    }
+
+    #[test]
+    fn auto_stretch_notes_the_black_point_and_midtones_it_chose() {
+        let mut img = sky_with_star();
+        let mut notes = Vec::new();
+        apply_noting(&[Node::new("auto_stretch").unwrap()], &mut img, &mut notes).unwrap();
+        assert!(matches!(&notes[..], [(0, Note::Stretched(f))] if f.len() == 1));
     }
 }
