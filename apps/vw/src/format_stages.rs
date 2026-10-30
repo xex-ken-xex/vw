@@ -468,6 +468,7 @@ mod tests {
             compose: None,
             fingerprint: None,
             sharpness: None,
+            gamut: None,
             frame_delays: None,
         }
     }

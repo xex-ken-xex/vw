@@ -60,6 +60,11 @@ impl About {
                     crate::geonames::CREDIT_URL,
                 )
                 .on_hover_text(crate::geonames::CREDIT);
+                ui.hyperlink_to(
+                    tr(lang, "Digital source type names: IPTC NewsCodes, CC BY 4.0"),
+                    "https://cv.iptc.org/newscodes/digitalsourcetype/",
+                )
+                .on_hover_text("Digital source type names: IPTC NewsCodes (Copyright IPTC), licensed under CC BY 4.0.");
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Map tiles:"));
                     ui.hyperlink_to(&map.attribution, &map.attribution_url);

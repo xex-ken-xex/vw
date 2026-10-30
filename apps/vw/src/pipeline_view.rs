@@ -2800,6 +2800,37 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
                 "How the colors look with this type of color vision (Machado et al. 2009). Gray images look the same.",
             ));
         }
+        nodes::Node::Gamut { to_xyz, gamma } => {
+            let known = vw_core::icc::known();
+            let current = known
+                .iter()
+                .find(|g| g.to_xyz == *to_xyz)
+                .map_or(tr(lang, "From the image's profile"), |g| g.name.as_str());
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Values are in"));
+                egui::ComboBox::from_id_salt("gamut_source")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for g in &known {
+                            if ui.selectable_label(g.to_xyz == *to_xyz, &g.name).clicked() {
+                                *to_xyz = g.to_xyz;
+                                *gamma = g.gamma;
+                                edited = true;
+                            }
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Gamma"));
+                edited |= ui
+                    .add(egui::DragValue::new(gamma).range(1.0..=3.0).speed(0.01))
+                    .changed();
+            });
+            ui.weak(tr(
+                lang,
+                "Paints magenta the colors that sRGB cannot show. vw shows the values as sRGB without converting, so these colors look duller than they are. Added with Shift+O, it takes the color space from the image's ICC profile.",
+            ));
+        }
         nodes::Node::Mix { matrix } => {
             ui.weak(tr(lang, "Output = matrix × (r, g, b)"));
             egui::Grid::new("mix").num_columns(4).show(ui, |ui| {

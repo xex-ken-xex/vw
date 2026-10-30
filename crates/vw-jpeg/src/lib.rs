@@ -73,6 +73,9 @@ impl DecoderPlugin for JpegPlugin {
         .map_err(DecodeError::Invalid)?;
         let (metadata, orientation) = metadata(&decoder);
         img.metadata = metadata;
+        img.gamut = decoder
+            .icc_profile()
+            .and_then(|icc| vw_core::icc::gamut(&icc));
         img.apply_orientation(orientation);
         Ok(img)
     }
@@ -120,12 +123,19 @@ fn metadata(decoder: &JpegDecoder<ZCursor<&[u8]>>) -> (Metadata, u32) {
             format!("{} x {} {unit}", info.x_density, info.y_density),
         );
     }
-    if decoder.icc_profile().is_some() {
+    let icc = decoder.icc_profile();
+    if icc.is_some() {
         m.push("JPEG", "ICC profile", "present");
     }
     let orientation = decoder
         .exif()
         .map_or(1, |raw| vw_core::exif::push_exif(&mut m, raw.clone()));
+    if let Some(xmp) = decoder.xmp() {
+        vw_core::xmp::push_xmp(&mut m, xmp);
+    }
+    if let Some(icc) = icc {
+        vw_core::icc::push_profile(&mut m, &icc);
+    }
     (m, orientation)
 }
 

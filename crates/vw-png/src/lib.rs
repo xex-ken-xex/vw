@@ -75,6 +75,7 @@ impl DecoderPlugin for PngPlugin {
             }
         }
         img.metadata = metadata(reader.info());
+        img.gamut = gamut(reader.info());
         Ok(img)
     }
 
@@ -85,6 +86,16 @@ impl DecoderPlugin for PngPlugin {
             .map_err(invalid)?;
         Ok(metadata(reader.info()))
     }
+}
+
+/// 色域。PNG の決まり（第 3 版）どおり、cICP があれば iCCP より、iCCP があれば sRGB より先に使う。
+fn gamut(info: &png::Info) -> Option<vw_core::icc::Gamut> {
+    if let Some(c) = &info.coding_independent_code_points {
+        return vw_core::icc::cicp_gamut(c.color_primaries, c.transfer_function);
+    }
+    info.icc_profile
+        .as_ref()
+        .and_then(|icc| vw_core::icc::gamut(icc))
 }
 
 fn invalid(e: png::DecodingError) -> DecodeError {
@@ -114,6 +125,18 @@ fn metadata(info: &png::Info) -> Metadata {
     if info.icc_profile.is_some() {
         m.push("PNG", "ICC profile", "present");
     }
+    if let Some(c) = &info.coding_independent_code_points {
+        vw_core::icc::push_cicp(
+            &mut m,
+            vw_core::icc::GROUP,
+            [
+                c.color_primaries,
+                c.transfer_function,
+                c.matrix_coefficients,
+            ],
+            c.is_video_full_range_image,
+        );
+    }
     if let Some(a) = &info.animation_control {
         m.push("PNG", "Animation frames", a.num_frames);
     }
@@ -127,8 +150,22 @@ fn metadata(info: &png::Info) -> Metadata {
     }
     for t in &info.utf8_text {
         if let Ok(text) = t.get_text() {
+            if t.keyword == "XML:com.adobe.xmp" {
+                vw_core::xmp::push_xmp(&mut m, text.as_bytes());
+            }
             m.push("Text", &t.keyword, text);
         }
+    }
+    match (&info.coding_independent_code_points, &info.icc_profile) {
+        (Some(c), _) => {
+            if let Some(g) = vw_core::icc::cicp_gamut(c.color_primaries, c.transfer_function) {
+                vw_core::icc::push_gamut(&mut m, &g);
+            }
+        }
+        (None, Some(icc)) => {
+            vw_core::icc::push_profile(&mut m, icc);
+        }
+        (None, None) => {}
     }
     m
 }

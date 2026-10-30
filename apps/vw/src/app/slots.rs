@@ -799,9 +799,66 @@ impl VwApp {
     /// アクティブなスロットの画素の変換に、確かめるためのノード（白飛びの印など）を足す。
     /// もう入っていれば外す。値は設定の `[check]` のもの。
     pub(super) fn toggle_check_node(&mut self, kind: &str) {
-        let Some(node) = self.settings().check.node(kind) else {
+        if let Some(node) = self.settings().check.node(kind) {
+            self.toggle_node(node);
+        }
+    }
+
+    /// sRGB で出せない色の印を、アクティブなスロットに足す・外す。色域は画像の ICC プロファイルか
+    /// CICP から取る。分からない画像は sRGB とみなされ、はみ出す色がないので足さない。
+    pub(super) fn toggle_gamut_warning(&mut self) {
+        let Some(slot) = self.slots.get(self.active) else {
             return;
         };
+        let Some(shown) = &slot.shown else {
+            return;
+        };
+        let on = slot
+            .derive
+            .as_ref()
+            .is_some_and(|d| d.values.chain.iter().any(|n| n.kind() == "gamut"));
+        if !on {
+            let name = crate::compare::file_name(&shown.path);
+            match &shown.info.gamut {
+                None if shown
+                    .info
+                    .metadata
+                    .get(vw_core::icc::GROUP, "CICP transfer")
+                    .is_some() =>
+                {
+                    self.log.warn(format!(
+                        "{name}: the colors are given only by CICP with a curve vw cannot follow (such as HDR), so colors outside sRGB cannot be marked"
+                    ));
+                    return;
+                }
+                None => {
+                    self.log.warn(format!(
+                        "{name}: no color profile, so the values are taken as sRGB and no color is outside it"
+                    ));
+                    return;
+                }
+                Some(g) if !g.wider_than_srgb() => {
+                    self.log.info(format!(
+                        "{name}: the color space ({}) fits in sRGB, so no color is outside it",
+                        g.name
+                    ));
+                    return;
+                }
+                Some(_) => {}
+            }
+        }
+        let node = match &shown.info.gamut {
+            Some(g) => vw_pipeline::nodes::Node::Gamut {
+                to_xyz: g.to_xyz,
+                gamma: g.gamma,
+            },
+            None => vw_pipeline::nodes::Node::new("gamut").expect("gamut is a node kind"),
+        };
+        self.toggle_node(node);
+    }
+
+    /// 確かめるためのノードを、アクティブなスロットの鎖の最後に足す。同じ種類があれば外す。
+    fn toggle_node(&mut self, node: vw_pipeline::nodes::Node) {
         let presets = self.presets.presets().to_vec();
         let Some(slot) = self.slots.get_mut(self.active) else {
             return;
@@ -814,6 +871,7 @@ impl VwApp {
             .as_ref()
             .map(|d| d.values.clone())
             .unwrap_or_default();
+        let kind = node.kind();
         let title = vw_pipeline::nodes::Node::title(kind);
         match values.chain.iter().position(|n| n.kind() == kind) {
             Some(i) => {

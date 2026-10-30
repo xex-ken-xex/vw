@@ -205,6 +205,26 @@ pub enum Node {
         #[serde(default)]
         deficiency: crate::color_vision::Deficiency,
     },
+    /// sRGB で出せない色の印。値を `to_xyz`・`gamma` の色域（画像の ICC プロファイルなど）の
+    /// 色として sRGB に直し、範囲を外れる画素を赤紫で塗る。
+    Gamut {
+        #[serde(default = "display_p3")]
+        to_xyz: [[f32; 3]; 3],
+        #[serde(default = "default_gamut_gamma")]
+        gamma: f32,
+    },
+}
+
+fn display_p3() -> [[f32; 3]; 3] {
+    vw_core::icc::known()
+        .into_iter()
+        .find(|g| g.name == "Display P3")
+        .expect("Display P3 is a known gamut")
+        .to_xyz
+}
+
+fn default_gamut_gamma() -> f32 {
+    2.2
 }
 
 fn default_peaking_threshold() -> f32 {
@@ -287,7 +307,7 @@ impl Node {
     ];
 
     /// 「確認」のまとまり（見るための印や模擬。画像を作る処理ではない）に並べる順。
-    pub const CHECK_KINDS: [&'static str; 3] = ["clipping", "peaking", "color_vision"];
+    pub const CHECK_KINDS: [&'static str; 4] = ["clipping", "peaking", "color_vision", "gamut"];
 
     /// 「天体」のまとまりに並べる順。
     pub const ASTRO_KINDS: [&'static str; 6] = [
@@ -358,6 +378,10 @@ impl Node {
             "color_vision" => Node::ColorVision {
                 deficiency: crate::color_vision::Deficiency::default(),
             },
+            "gamut" => Node::Gamut {
+                to_xyz: display_p3(),
+                gamma: default_gamut_gamma(),
+            },
             _ => return None,
         })
     }
@@ -381,6 +405,7 @@ impl Node {
             Node::Clipping { .. } => "clipping",
             Node::Peaking { .. } => "peaking",
             Node::ColorVision { .. } => "color_vision",
+            Node::Gamut { .. } => "gamut",
         }
     }
 
@@ -404,6 +429,7 @@ impl Node {
             "clipping" => "Clipping warning",
             "peaking" => "Focus peaking",
             "color_vision" => "Color vision simulation",
+            "gamut" => "Out of sRGB gamut",
             _ => "Node",
         }
     }
@@ -569,6 +595,7 @@ impl Node {
                 dim,
             } => peaking(img, *threshold, *color, *dim),
             Node::ColorVision { deficiency } => crate::color_vision::simulate(img, *deficiency),
+            Node::Gamut { to_xyz, gamma } => mark_out_of_gamut(img, *to_xyz, *gamma),
         }
         Ok(note)
     }
@@ -581,6 +608,27 @@ fn to_rgb(img: &mut Float) {
     }
     img.data = img.data.iter().flat_map(|&v| [v; 3]).collect();
     img.channels = 3;
+}
+
+/// sRGB で出せない色の画素を赤紫で塗る。灰色の画像はどの色域でも灰色なので変えない。
+fn mark_out_of_gamut(img: &mut Float, to_xyz: [[f32; 3]; 3], gamma: f32) {
+    const MARK: [f32; 3] = [1.0, 0.0, 1.0];
+    // 8 bit の丸めや曲線の近似で、色域の境目の色がわずかにはみ出して見えるのを塗らないための幅。
+    const SLACK: f32 = 0.004;
+    if img.channels != 3 {
+        return;
+    }
+    let gamut = vw_core::icc::Gamut {
+        name: String::new(),
+        to_xyz,
+        gamma,
+    };
+    for px in img.data.as_chunks_mut::<3>().0 {
+        let srgb = gamut.to_linear_srgb(*px);
+        if srgb.iter().any(|&v| !(-SLACK..=1.0 + SLACK).contains(&v)) {
+            *px = MARK;
+        }
+    }
 }
 
 /// 白飛びは赤（全チャンネルが `high` 以上）か黄（一部のチャンネルだけ）、黒つぶれ（全チャンネルが
@@ -1305,5 +1353,29 @@ mod tests {
             Float::new(1, 1, 3, vec![0.0, 0.5, 1.0]).to_rgb8(),
             [0, 128, 255]
         );
+    }
+
+    #[test]
+    fn colors_outside_srgb_are_painted_and_others_are_kept() {
+        let mut img = Float::new(3, 1, 3, vec![0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.8, 0.3, 0.2]);
+        apply(&[Node::new("gamut").unwrap()], &mut img).unwrap();
+        assert_eq!(&img.data[0..3], &[1.0, 0.0, 1.0]);
+        assert_eq!(&img.data[3..6], &[0.5, 0.5, 0.5]);
+        assert_eq!(&img.data[6..9], &[0.8, 0.3, 0.2]);
+    }
+
+    #[test]
+    fn nothing_is_outside_when_the_values_are_srgb() {
+        let srgb = vw_core::icc::known()
+            .into_iter()
+            .find(|g| g.name == "sRGB")
+            .unwrap();
+        let mut img = Float::new(1, 1, 3, vec![0.0, 1.0, 0.0]);
+        let node = Node::Gamut {
+            to_xyz: srgb.to_xyz,
+            gamma: srgb.gamma,
+        };
+        apply(&[node], &mut img).unwrap();
+        assert_eq!(img.data, vec![0.0, 1.0, 0.0]);
     }
 }
