@@ -186,6 +186,9 @@ pub struct VwApp {
     next_id: u64,
     /// フォルダ・画像・メタデータ・ログの並びと表示・非表示。描く間だけ取り出すので `Option`。
     dock: Option<vw_dock::Dock>,
+    /// 描く前に欄へ出した道具。描いている間に開いた道具（スロットの「編集」など）は、まだ欄に
+    /// 出ていないので、描き終えた後の後始末で閉じられたとみなさないため。
+    synced_tools: Vec<&'static str>,
     tool: Tool,
     /// 画素値の確認や ROI のツールを止めたときに戻るツール（矢印か手のひら）。
     base_tool: Tool,
@@ -700,6 +703,7 @@ impl VwApp {
             active: 0,
             next_id: 1,
             dock: Some(docking::restored_dock(&saved, monitors_changed)),
+            synced_tools: Vec::new(),
             tool: start_tool,
             base_tool: start_tool,
             settings,
