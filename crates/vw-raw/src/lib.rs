@@ -15,7 +15,10 @@ use rawler::imgop::srgb::{srgb_apply_gamma, srgb_invert_gamma};
 use rawler::rawsource::RawSource;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+mod sensor;
 mod tiff_guard;
+
+pub use sensor::{sensor_histogram, SensorChannel, SensorColor, SensorHistogram, DARKEST_EV};
 
 /// 富士フイルムの RAF の先頭。
 const RAF_SIGNATURE: &[u8] = b"FUJIFILMCCD-RAW";

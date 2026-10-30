@@ -206,6 +206,7 @@ impl VwApp {
             info: frame.info,
             full: None,
             developed: false,
+            other: None,
         });
     }
 

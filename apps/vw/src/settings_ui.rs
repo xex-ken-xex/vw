@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 110] = [
+const ITEMS: [Item; 111] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -222,6 +222,13 @@ const ITEMS: [Item; 110] = [
         title: "Develop RAW in the background",
         description: "Camera RAW files first show the preview JPEG embedded by the camera, then are developed from the sensor data in the background and replaced (a film icon is shown on the slot meanwhile). When off, develop from the right-click menu.",
         widget: develop_raw_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "viewer.keep_raw_preview",
+        title: "Keep the RAW preview after developing",
+        description: "After a camera RAW is developed, keep the camera's embedded preview too, so the J key or the JPEG / RAW mark on the slot header switches between them. Uses more memory while both are kept.",
+        widget: keep_raw_preview_widget,
     },
     Item {
         section: Section::Viewer,
@@ -1815,6 +1822,11 @@ fn calib_synthetic_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) 
 
 fn develop_raw_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.viewer.develop_raw, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn keep_raw_preview_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.viewer.keep_raw_preview, tr(lang, "Enabled"))
         .changed()
 }
 

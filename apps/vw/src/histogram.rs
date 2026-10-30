@@ -176,6 +176,16 @@ pub fn physical(
 }
 
 /// 最小・最大・平均・標準偏差（母標準偏差）。画素がなければすべて 0。
+/// 区間ごとの数から、`lo`〜`hi` を等分した区間の真ん中の値として統計を出す。
+pub fn bin_stats(counts: &[u32], lo: f64, hi: f64) -> Stats {
+    let mut acc = Accumulator::default();
+    let step = (hi - lo) / counts.len().max(1) as f64;
+    for (i, &n) in counts.iter().enumerate() {
+        acc.add_many(lo + step * (i as f64 + 0.5), n);
+    }
+    acc.stats()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Stats {
     pub min: f64,
@@ -246,6 +256,14 @@ pub fn level_stats(counts: &[u32]) -> Stats {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bin_stats_take_each_bin_at_its_middle() {
+        // 0〜100 を 4 区間に分け、2 番目（25〜50、真ん中 37.5）に 1、4 番目（真ん中 87.5）に 1。
+        let s = bin_stats(&[0, 1, 0, 1], 0.0, 100.0);
+        assert_eq!((s.min, s.max, s.mean), (37.5, 87.5, 62.5));
+    }
+
     use super::*;
     use vw_core::{ColorModel, PixelData};
 

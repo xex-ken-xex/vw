@@ -115,7 +115,11 @@ impl VwApp {
                         Action::ZoomIn,
                         Action::ZoomOut,
                     ],
-                    &[Action::DevelopRaw, Action::ToggleCalibration],
+                    &[
+                        Action::DevelopRaw,
+                        Action::SwapRawPreview,
+                        Action::ToggleCalibration,
+                    ],
                     &[Action::NextColorMap, Action::ToggleColorGauge],
                     &[Action::ReadQrCodes],
                 ];

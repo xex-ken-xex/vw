@@ -164,6 +164,8 @@ pub struct Viewer {
     pub keep_view: bool,
     /// カメラ RAW を開いたら、まず埋め込みプレビューを出し、裏で現像して差し替える。
     pub develop_raw: bool,
+    /// 現像したカメラ RAW でも埋め込みプレビューを持ち続け、切り替えて見比べられるようにする。
+    pub keep_raw_preview: bool,
     /// 画像を拡大して表示するときの補間。最近傍なら画素単位で確かめられる。
     pub magnify_filter: ScaleFilter,
     /// 画像を縮小して表示するときの補間。
@@ -256,6 +258,7 @@ impl Default for Viewer {
             slideshow_drop_window_secs: 5,
             keep_view: true,
             develop_raw: true,
+            keep_raw_preview: true,
             magnify_filter: ScaleFilter::Nearest,
             minify_filter: ScaleFilter::Linear,
             start_tool: StartTool::Last,
@@ -322,6 +325,7 @@ impl Viewer {
                 .unwrap_or(d.slideshow_drop_window_secs),
             keep_view: r.get("keep_view").unwrap_or(d.keep_view),
             develop_raw: r.get("develop_raw").unwrap_or(d.develop_raw),
+            keep_raw_preview: r.get("keep_raw_preview").unwrap_or(d.keep_raw_preview),
             magnify_filter: r.get("magnify_filter").unwrap_or(d.magnify_filter),
             minify_filter: r.get("minify_filter").unwrap_or(d.minify_filter),
             start_tool: r.get("start_tool").unwrap_or(d.start_tool),

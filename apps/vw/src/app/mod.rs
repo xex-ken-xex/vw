@@ -1009,6 +1009,7 @@ impl VwApp {
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
             Action::DevelopRaw => self.develop_slot(self.active),
+            Action::SwapRawPreview => self.swap_raw_face(self.active),
             Action::ReadQrCodes => self.read_qr_codes_active(ctx),
             Action::ToggleCalibration => self.toggle_calibration(self.active),
             Action::NextColorMap => self.next_color_map(self.active),
