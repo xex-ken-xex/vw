@@ -85,17 +85,19 @@ pub fn render(
         chain = std::borrow::Cow::Owned(chain.iter().map(|n| n.scaled(factor)).collect());
     }
     let mut notes = Vec::new();
+    let mut kept = nodes::Kept::for_chain(&chain);
     let error = match nodes::split_at_stretch(&chain) {
         Err(e) => Some(e),
-        Ok(None) => nodes::apply_noting(&chain, &mut float, &mut notes).err(),
-        Ok(Some(staged)) => nodes::apply_noting(staged.before, &mut float, &mut notes)
+        Ok(None) => nodes::apply_keeping(&chain, &mut float, &mut notes, &mut kept).err(),
+        Ok(Some(staged)) => nodes::apply_keeping(staged.before, &mut float, &mut notes, &mut kept)
             .err()
             .or_else(|| {
                 if let Some(s) = &stretch {
                     s.apply(&mut float);
+                    kept.map(|f| s.apply(f));
                 }
                 let mut after = Vec::new();
-                let error = nodes::apply_noting(staged.after, &mut float, &mut after)
+                let error = nodes::apply_keeping(staged.after, &mut float, &mut after, &mut kept)
                     .err()
                     .map(|(i, e)| (i + staged.offset, e));
                 notes.extend(after.into_iter().map(|(i, n)| (i + staged.offset, n)));

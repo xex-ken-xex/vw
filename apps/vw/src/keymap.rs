@@ -69,6 +69,7 @@ pub enum Action {
     ToggleClippingWarning,
     ToggleFocusPeaking,
     ToggleColorVision,
+    ToggleAutoStretch,
     ToggleGamutWarning,
     ReadQrCodes,
     ToggleCalibration,
@@ -182,7 +183,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 103] = [
+    pub const ALL: [Action; 104] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -202,6 +203,7 @@ impl Action {
         Action::ToggleClippingWarning,
         Action::ToggleFocusPeaking,
         Action::ToggleColorVision,
+        Action::ToggleAutoStretch,
         Action::ToggleGamutWarning,
         Action::ReadQrCodes,
         Action::ToggleCalibration,
@@ -345,6 +347,7 @@ impl Action {
             Action::ToggleClippingWarning => "toggle_clipping_warning",
             Action::ToggleFocusPeaking => "toggle_focus_peaking",
             Action::ToggleColorVision => "toggle_color_vision",
+            Action::ToggleAutoStretch => "toggle_auto_stretch",
             Action::ToggleGamutWarning => "toggle_gamut_warning",
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
@@ -430,6 +433,7 @@ impl Action {
             Action::ToggleClippingWarning => "Show clipping warning",
             Action::ToggleFocusPeaking => "Show focus peaking",
             Action::ToggleColorVision => "Simulate color vision",
+            Action::ToggleAutoStretch => "Auto stretch for viewing",
             Action::ToggleGamutWarning => "Show colors outside sRGB",
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
@@ -543,6 +547,7 @@ impl Action {
             | Action::ToggleClippingWarning
             | Action::ToggleFocusPeaking
             | Action::ToggleColorVision
+            | Action::ToggleAutoStretch
             | Action::ToggleGamutWarning
             | Action::ReadQrCodes
             | Action::ToggleCalibration
@@ -760,6 +765,7 @@ impl Action {
             Action::ToggleClippingWarning => vec![KeyCombo::plain(O)],
             Action::ToggleFocusPeaking => vec![KeyCombo::plain(K)],
             Action::ToggleColorVision => vec![],
+            Action::ToggleAutoStretch => vec![KeyCombo::plain(A)],
             Action::ToggleGamutWarning => vec![KeyCombo::plain(O).with(false, true, false)],
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],

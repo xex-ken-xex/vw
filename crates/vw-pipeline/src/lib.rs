@@ -12,3 +12,4 @@ pub mod pixel;
 pub mod preset;
 pub mod render;
 pub mod settings_file;
+pub mod stretch_curves;
