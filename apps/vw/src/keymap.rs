@@ -65,6 +65,9 @@ pub enum Action {
     ParentFolder,
     DevelopRaw,
     SwapRawPreview,
+    ToggleClippingWarning,
+    ToggleFocusPeaking,
+    ToggleColorVision,
     ReadQrCodes,
     ToggleCalibration,
     NextColorMap,
@@ -176,7 +179,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 97] = [
+    pub const ALL: [Action; 100] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -193,6 +196,9 @@ impl Action {
         Action::ZoomOut,
         Action::DevelopRaw,
         Action::SwapRawPreview,
+        Action::ToggleClippingWarning,
+        Action::ToggleFocusPeaking,
+        Action::ToggleColorVision,
         Action::ReadQrCodes,
         Action::ToggleCalibration,
         Action::NextColorMap,
@@ -329,6 +335,9 @@ impl Action {
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
             Action::SwapRawPreview => "swap_raw_preview",
+            Action::ToggleClippingWarning => "toggle_clipping_warning",
+            Action::ToggleFocusPeaking => "toggle_focus_peaking",
+            Action::ToggleColorVision => "toggle_color_vision",
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
             Action::NextColorMap => "next_color_map",
@@ -409,6 +418,9 @@ impl Action {
             Action::ZoomOut => "Zoom out",
             Action::DevelopRaw => "Develop RAW from sensor data",
             Action::SwapRawPreview => "Switch RAW between embedded preview and developed image",
+            Action::ToggleClippingWarning => "Show clipping warning",
+            Action::ToggleFocusPeaking => "Show focus peaking",
+            Action::ToggleColorVision => "Simulate color vision",
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
             Action::NextColorMap => "Next color map",
@@ -516,6 +528,9 @@ impl Action {
             | Action::CloseAllSlots => KeyGroup::Layout,
             Action::DevelopRaw
             | Action::SwapRawPreview
+            | Action::ToggleClippingWarning
+            | Action::ToggleFocusPeaking
+            | Action::ToggleColorVision
             | Action::ReadQrCodes
             | Action::ToggleCalibration
             | Action::NextColorMap
@@ -724,6 +739,9 @@ impl Action {
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
             Action::DevelopRaw => vec![KeyCombo::plain(D)],
             Action::SwapRawPreview => vec![KeyCombo::plain(J)],
+            Action::ToggleClippingWarning => vec![KeyCombo::plain(O)],
+            Action::ToggleFocusPeaking => vec![KeyCombo::plain(K)],
+            Action::ToggleColorVision => vec![],
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],
             Action::NextColorMap => vec![KeyCombo::plain(C)],

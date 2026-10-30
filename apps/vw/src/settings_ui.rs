@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 111] = [
+const ITEMS: [Item; 114] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -656,6 +656,27 @@ const ITEMS: [Item; 111] = [
         title: "Custom color maps",
         description: "Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
         widget: pipeline_palettes_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "check.clipping_high",
+        title: "Clipping warning",
+        description: "Values used when the O key adds the clipping warning node to a slot: at or above the upper value is blown out (red when all channels are, yellow when only some are), at or below the lower value is crushed (blue). Values are the shown brightness from 0 to 1.",
+        widget: check_clipping_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "check.peaking_threshold",
+        title: "Focus peaking",
+        description: "Values used when the K key adds the focus peaking node to a slot: sharp edges whose fine brightness change is above the threshold are painted, and the rest is darkened by the dimming amount. A lower threshold paints more edges.",
+        widget: check_peaking_widget,
+    },
+    Item {
+        section: Section::Pipeline,
+        key: "check.color_vision",
+        title: "Color vision simulation",
+        description: "The type of color vision used when the color vision simulation node is added from the Image menu or its key (Machado et al. 2009).",
+        widget: check_color_vision_widget,
     },
     Item {
         section: Section::Fits,
@@ -1472,6 +1493,67 @@ fn fits_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
         }
     });
     s.fits.stretch != before
+}
+
+fn check_clipping_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.check;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(tr(lang, "Crushed at or below"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.clipping_low)
+                .range(0.0..=1.0)
+                .speed(0.002)
+                .max_decimals(3),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "Blown out at or above"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.clipping_high)
+                .range(0.0..=1.0)
+                .speed(0.002)
+                .max_decimals(3),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+    });
+    changed
+}
+
+fn check_peaking_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let c = &mut s.check;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(tr(lang, "Threshold"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.peaking_threshold)
+                .range(crate::settings::CheckSettings::PEAKING_RANGE)
+                .speed(0.005)
+                .max_decimals(3),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "Dimming"));
+        let r = ui.add(
+            egui::DragValue::new(&mut c.peaking_dim)
+                .range(0.0..=1.0)
+                .speed(0.005)
+                .max_decimals(2),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+    });
+    changed
+}
+
+fn check_color_vision_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use vw_pipeline::color_vision::Deficiency;
+    let before = s.check.color_vision;
+    vw_ui::menu::combo("check_color_vision")
+        .selected_text(tr(lang, before.title()))
+        .show_ui(ui, |ui| {
+            for d in Deficiency::ALL {
+                ui.selectable_value(&mut s.check.color_vision, d, tr(lang, d.title()));
+            }
+        });
+    s.check.color_vision != before
 }
 
 fn pipeline_color_node_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
