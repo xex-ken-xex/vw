@@ -76,6 +76,10 @@ impl VwApp {
                         chosen = Some(Action::ToggleSkyChart);
                     }
                 }
+                let subframes = self.subframes.open;
+                if self.menu_item(ui, Action::ToggleSubframes, Some(subframes)) {
+                    chosen = Some(Action::ToggleSubframes);
+                }
                 ui.separator();
                 let maximized = self.maximized.is_some();
                 if self.menu_item(ui, Action::ToggleMaximize, Some(maximized)) {

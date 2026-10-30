@@ -2392,6 +2392,71 @@ impl MapSettings {
     }
 }
 
+/// サブフレームの評価（`[subframes]`）。除く画像を決めるしきい値と blink の速さ。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SubframesSettings {
+    /// FWHM が中央値のこの倍を超えたら除く。
+    pub fwhm_ratio: f32,
+    /// 離心率がこれを超えたら除く。
+    pub eccentricity: f32,
+    /// 星の数が中央値のこの倍より少なければ除く。
+    pub stars_ratio: f32,
+    /// 背景が中央値より、雑音の中央値のこの倍を超えて明るければ除く。
+    pub background_sigmas: f32,
+    /// blink の 1 秒あたりの枚数。
+    pub blink_fps: f32,
+}
+
+impl Default for SubframesSettings {
+    fn default() -> Self {
+        Self {
+            fwhm_ratio: 1.3,
+            eccentricity: 0.7,
+            stars_ratio: 0.5,
+            background_sigmas: 10.0,
+            blink_fps: 4.0,
+        }
+    }
+}
+
+impl SubframesSettings {
+    pub const FWHM_RANGE: std::ops::RangeInclusive<f32> = 1.0..=5.0;
+    pub const ECCENTRICITY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=1.0;
+    pub const STARS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+    pub const BACKGROUND_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1000.0;
+    pub const FPS_RANGE: std::ops::RangeInclusive<f32> = 0.5..=30.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("subframes");
+        let mut within = |key: &str, range: std::ops::RangeInclusive<f32>, default: f32| {
+            let message = format!("must be {} to {}", range.start(), range.end());
+            r.get_valid(key, |v: &f32| range.contains(v), &message)
+                .unwrap_or(default)
+        };
+        Self {
+            fwhm_ratio: within("fwhm_ratio", Self::FWHM_RANGE, d.fwhm_ratio),
+            eccentricity: within("eccentricity", Self::ECCENTRICITY_RANGE, d.eccentricity),
+            stars_ratio: within("stars_ratio", Self::STARS_RANGE, d.stars_ratio),
+            background_sigmas: within(
+                "background_sigmas",
+                Self::BACKGROUND_RANGE,
+                d.background_sigmas,
+            ),
+            blink_fps: within("blink_fps", Self::FPS_RANGE, d.blink_fps),
+        }
+    }
+
+    pub fn limits(&self) -> vw_pipeline::subframes::Limits {
+        vw_pipeline::subframes::Limits {
+            fwhm_ratio: self.fwhm_ratio,
+            eccentricity: self.eccentricity,
+            stars_ratio: self.stars_ratio,
+            background_sigmas: self.background_sigmas,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -2416,6 +2481,7 @@ pub struct Settings {
     pub ai: Ai,
     pub map: MapSettings,
     pub sky: SkySettings,
+    pub subframes: SubframesSettings,
     pub keys: Keymap,
 }
 
@@ -2449,6 +2515,7 @@ impl Settings {
         let ai = Ai::read(&mut r);
         let map = MapSettings::read(&mut r);
         let sky = SkySettings::read(&mut r);
+        let subframes = SubframesSettings::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -2483,6 +2550,7 @@ impl Settings {
                 ai,
                 map,
                 sky,
+                subframes,
                 keys,
             },
             problems,
@@ -3282,6 +3350,28 @@ ae_title = "PACS"
         );
         let (s, problems) = Settings::from_toml("[similar]\nburst_seconds = 600\n").unwrap();
         assert_eq!(s.similar.burst_seconds, 2);
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn subframe_limits_come_from_the_settings_and_bad_values_fall_back() {
+        let (s, problems) = Settings::from_toml(
+            "[subframes]\nfwhm_ratio = 1.5\neccentricity = 0.6\nstars_ratio = 0.4\nbackground_sigmas = 5\nblink_fps = 8\n",
+        )
+        .unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            s.subframes.limits(),
+            vw_pipeline::subframes::Limits {
+                fwhm_ratio: 1.5,
+                eccentricity: 0.6,
+                stars_ratio: 0.4,
+                background_sigmas: 5.0,
+            }
+        );
+        assert_eq!(s.subframes.blink_fps, 8.0);
+        let (s, problems) = Settings::from_toml("[subframes]\nfwhm_ratio = 0.5\n").unwrap();
+        assert_eq!(s.subframes.fwhm_ratio, 1.3);
         assert_eq!(problems.len(), 1);
     }
 

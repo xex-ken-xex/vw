@@ -103,6 +103,7 @@ pub enum Action {
     ToggleZoomMap,
     ToggleMap,
     ToggleSkyChart,
+    ToggleSubframes,
     UndoPosition,
     ShowAbout,
     ShowSystemInfo,
@@ -183,7 +184,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 104] = [
+    pub const ALL: [Action; 105] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -227,6 +228,7 @@ impl Action {
         Action::ToggleZoomMap,
         Action::ToggleMap,
         Action::ToggleSkyChart,
+        Action::ToggleSubframes,
         Action::UndoPosition,
         Action::ToggleTagging,
         Action::FlagGood,
@@ -369,6 +371,7 @@ impl Action {
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleMap => "toggle_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
+            Action::ToggleSubframes => "toggle_subframes",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
             Action::ShowSystemInfo => "show_system_info",
@@ -482,6 +485,7 @@ impl Action {
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleMap => "Show/hide map",
             Action::ToggleSkyChart => "Show/hide sky chart",
+            Action::ToggleSubframes => "Show/hide subframes",
             Action::UndoPosition => "Undo the last position change",
             Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
@@ -607,7 +611,8 @@ impl Action {
             | Action::ToggleHistogram
             | Action::ToggleZoomMap
             | Action::ToggleMap
-            | Action::ToggleSkyChart => KeyGroup::Windows,
+            | Action::ToggleSkyChart
+            | Action::ToggleSubframes => KeyGroup::Windows,
             Action::ToggleSettings
             | Action::OpenSettingsFolder
             | Action::ShowAbout
@@ -815,6 +820,7 @@ impl Action {
             Action::ToggleZoomMap => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ToggleSkyChart => vec![],
+            Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
             Action::ShowSystemInfo => vec![],

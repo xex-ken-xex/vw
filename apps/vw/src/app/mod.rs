@@ -207,6 +207,7 @@ pub struct VwApp {
     zoom_map: crate::zoom_map::ZoomMap,
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
+    subframes: crate::subframes_window::SubframesWindow,
     compare: crate::compare::CompareWindow,
     compare_dialog: Option<compare_dialog::CompareDialog>,
     similar: similar::Similar,
@@ -744,6 +745,7 @@ impl VwApp {
             place_names_load: None,
             map: Default::default(),
             sky: Default::default(),
+            subframes: Default::default(),
             compare: Default::default(),
             compare_dialog: None,
             similar: Default::default(),
@@ -924,6 +926,7 @@ impl VwApp {
             Action::ToggleSkyChart => {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
             }
+            Action::ToggleSubframes => self.subframes.open = !self.subframes.open,
             Action::UndoPosition => self.undo_position(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowSystemInfo => self.display.info_open = true,
@@ -1149,6 +1152,7 @@ impl eframe::App for VwApp {
         self.map_tick(&ctx);
         self.sky_tick();
         self.compare.forget_while_closed();
+        self.subframes.forget_while_closed();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         self.qr_ui();
@@ -1334,6 +1338,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
+        Action::ToggleSubframes => "Subframes",
         other => other.title(),
     }
 }

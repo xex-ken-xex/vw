@@ -78,6 +78,7 @@ mod slideshow;
 mod sort;
 mod state;
 mod strip_location;
+mod subframes_window;
 use vw_log::status;
 mod sub_window;
 mod tagger;
