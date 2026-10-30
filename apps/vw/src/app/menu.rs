@@ -125,6 +125,7 @@ impl VwApp {
                         Action::ToggleClippingWarning,
                         Action::ToggleFocusPeaking,
                         Action::ToggleColorVision,
+                        Action::ToggleGamutWarning,
                     ],
                     &[Action::ReadQrCodes],
                 ];

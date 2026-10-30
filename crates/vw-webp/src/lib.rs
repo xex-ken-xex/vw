@@ -83,6 +83,10 @@ impl DecoderPlugin for WebpPlugin {
             .map_err(DecodeError::Invalid)?;
         let (metadata, orientation) = metadata(&mut decoder);
         img.metadata = metadata;
+        img.gamut = match decoder.icc_profile() {
+            Ok(Some(icc)) => vw_core::icc::gamut(&icc),
+            _ => None,
+        };
         img.apply_orientation(orientation);
         Ok(img)
     }
@@ -226,7 +230,8 @@ fn metadata<R: std::io::BufRead + std::io::Seek>(decoder: &mut WebPDecoder<R>) -
         "Alpha",
         if decoder.has_alpha() { "yes" } else { "no" },
     );
-    if let Ok(Some(_)) = decoder.icc_profile() {
+    let icc = decoder.icc_profile().ok().flatten();
+    if icc.is_some() {
         m.push("WebP", "ICC profile", "present");
     }
     if decoder.is_animated() {
@@ -246,6 +251,12 @@ fn metadata<R: std::io::BufRead + std::io::Seek>(decoder: &mut WebPDecoder<R>) -
         Ok(Some(raw)) => vw_core::exif::push_exif(&mut m, raw),
         _ => 1,
     };
+    if let Ok(Some(xmp)) = decoder.xmp_metadata() {
+        vw_core::xmp::push_xmp(&mut m, &xmp);
+    }
+    if let Some(icc) = icc {
+        vw_core::icc::push_profile(&mut m, &icc);
+    }
     (m, orientation)
 }
 

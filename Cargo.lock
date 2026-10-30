@@ -4525,6 +4525,7 @@ name = "vw-core"
 version = "0.8.2"
 dependencies = [
  "kamadak-exif",
+ "moxcms",
  "regex",
 ]
 

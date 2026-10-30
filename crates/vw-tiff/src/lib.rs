@@ -105,6 +105,7 @@ impl DecoderPlugin for TiffPlugin {
             pixels(&mut decoder)?
         };
         img.metadata = metadata;
+        img.gamut = icc_profile(&mut decoder).and_then(|icc| vw_core::icc::gamut(&icc));
         img.apply_orientation(orientation);
         Ok(img)
     }
@@ -320,7 +321,28 @@ fn metadata(
     // 1 ページ目の IFD を EXIF として読む。2 ページ目以降のタグは読めないが、カメラや作成ソフトの
     // 情報はふつう 1 ページ目にしかないため、全ページに同じものを出す。
     vw_core::exif::push_exif_except(&mut m, data.to_vec(), HIDDEN_TAGS);
+    if let Some(xmp) = bytes_tag(decoder, Tag::Unknown(XMP)) {
+        vw_core::xmp::push_xmp(&mut m, &xmp);
+    }
+    if let Some(icc) = icc_profile(decoder) {
+        m.push("TIFF", "ICC profile", "present");
+        vw_core::icc::push_profile(&mut m, &icc);
+    }
     m
+}
+
+const XMP: u16 = 700;
+
+fn icc_profile(decoder: &mut Decoder<Cursor<&[u8]>>) -> Option<Vec<u8>> {
+    bytes_tag(decoder, Tag::IccProfile)
+}
+
+fn bytes_tag(decoder: &mut Decoder<Cursor<&[u8]>>, tag: Tag) -> Option<Vec<u8>> {
+    decoder
+        .find_tag(tag)
+        .ok()
+        .flatten()
+        .and_then(|v| v.into_u8_vec().ok())
 }
 
 fn compression(c: u32) -> String {

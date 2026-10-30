@@ -66,6 +66,8 @@ pub struct ImageInfo {
     pub compose: Option<Arc<compose::Composite>>,
     /// 縮小画像の指紋。似た画像の組を探すのに使う（[`vw_compare::pairs`]）。
     pub fingerprint: Option<u64>,
+    /// ICC プロファイルか CICP から分かった色域。sRGB で出せない色の印に使う。
+    pub gamut: Option<vw_core::icc::Gamut>,
     /// 縮小画像の鮮鋭度。似た画像の組の中で、くっきりした順に並べるのに使う。
     pub sharpness: Option<f64>,
     /// アニメーションの各フレームの表示時間（ミリ秒）。フレームごとに違う形式だけ。
@@ -498,6 +500,7 @@ fn finish(
         fingerprint: thumb
             .as_ref()
             .and_then(|t| vw_compare::pairs::fingerprint(t.size[0], t.size[1], t.as_raw())),
+        gamut: image.gamut.clone(),
         sharpness: thumb
             .as_ref()
             .and_then(|t| vw_compare::pairs::sharpness(t.size[0], t.size[1], t.as_raw())),

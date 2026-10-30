@@ -1014,6 +1014,7 @@ impl VwApp {
             Action::ToggleClippingWarning => self.toggle_check_node("clipping"),
             Action::ToggleFocusPeaking => self.toggle_check_node("peaking"),
             Action::ToggleColorVision => self.toggle_check_node("color_vision"),
+            Action::ToggleGamutWarning => self.toggle_gamut_warning(),
             Action::ReadQrCodes => self.read_qr_codes_active(ctx),
             Action::ToggleCalibration => self.toggle_calibration(self.active),
             Action::NextColorMap => self.next_color_map(self.active),

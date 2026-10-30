@@ -9,3 +9,6 @@ license.workspace = true
 kamadak-exif = "0.6.1"
 # 設定の正規表現を読むだけなので、高速化の機能は外して実行ファイルを小さく保つ。
 regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
+# ICC プロファイルを読むだけ（色の変換はしない）。eframe が使う image クレートがすでに引いているので、
+# 実行ファイルは大きくならない。
+moxcms = { version = "0.8", default-features = false }

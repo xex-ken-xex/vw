@@ -15,11 +15,13 @@
 
 pub mod display;
 pub mod exif;
+pub mod icc;
 pub mod image;
 pub mod limits;
 pub mod palette;
 mod palette_tables;
 pub mod plugin;
+pub mod xmp;
 
 pub use display::{DisplayImage, DisplayImage16, DisplayParams};
 pub use image::{ColorModel, Curve, Metadata, PixelData, VwImage};

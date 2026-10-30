@@ -138,6 +138,8 @@ pub struct VwImage {
     /// 灰色の実数の画像で、欠損（NaN）を描く色。`None` は黒。色の表を引いても変わらないよう、
     /// 灰色でない（赤・緑・青が揃わない）色にする。
     pub missing: Option<[u8; 3]>,
+    /// ICC プロファイルか CICP から分かった色域。分からなければ `None`（sRGB とみなす）。
+    pub gamut: Option<crate::icc::Gamut>,
 }
 
 impl VwImage {
@@ -172,6 +174,7 @@ impl VwImage {
             metadata: Metadata::default(),
             develop_size: None,
             missing: None,
+            gamut: None,
         })
     }
 }
