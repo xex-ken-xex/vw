@@ -1,4 +1,4 @@
-//! 天体写真の非線形の伸縮の曲線。一般化双曲線ストレッチ（GHS）と、MTF による自動ストレッチ。
+//! 天体写真の非線形の伸縮の曲線。一般化双曲線ストレッチ（GHS）と、MTF による「自動で明るく見せる」。
 //!
 //! どちらも 0〜1 の値にかかる。伸縮ノードの後ろ（黒と白で 0〜1 にした線形の値）に置く。
 //!
@@ -118,7 +118,7 @@ pub fn midtones_for(x: f32, y: f32) -> f32 {
     ((x * (1.0 - y)) / den).clamp(1e-6, 1.0 - 1e-6) as f32
 }
 
-/// 自動ストレッチの値。背景（中央値）を `target` の明るさにし、中央値から
+/// 「自動で明るく見せる」の値。背景（中央値）を `target` の明るさにし、中央値から
 /// MAD（正規分布の σ に直した値）の `shadows` 倍だけ暗い所を黒にする。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoStretch {
@@ -128,7 +128,7 @@ pub struct AutoStretch {
     pub linked: bool,
 }
 
-/// 自動ストレッチで決めた、黒の値と中間調。
+/// 「自動で明るく見せる」で決めた、黒の値と中間調。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fitted {
     pub black: f32,

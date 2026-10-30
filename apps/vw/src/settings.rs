@@ -1076,7 +1076,7 @@ impl SimilarSettings {
     }
 }
 
-/// 確かめるためのノードと見るための自動ストレッチ（`[check]`）を、キーで足すときの値。
+/// 確かめるためのノードと「自動で明るく見せる」（`[check]`）を、キーで足すときの値。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CheckSettings {
     /// 黒つぶれとみなす値（0〜1 の表示の値）以下。
@@ -1088,11 +1088,11 @@ pub struct CheckSettings {
     /// フォーカスピーキングで、輪郭でない所を暗くする割合。
     pub peaking_dim: f32,
     pub color_vision: vw_pipeline::color_vision::Deficiency,
-    /// 自動ストレッチで背景を何の明るさにするか（0〜1）。
+    /// 「自動で明るく見せる」で背景を何の明るさにするか（0〜1）。
     pub auto_stretch_background: f32,
-    /// 自動ストレッチで、背景から雑音（σ）の何倍暗い所を黒にするか。
+    /// 「自動で明るく見せる」で、背景から雑音（σ）の何倍暗い所を黒にするか。
     pub auto_stretch_shadows: f32,
-    /// 自動ストレッチで R・G・B に同じ曲線を使うか。
+    /// 「自動で明るく見せる」で R・G・B に同じ曲線を使うか。
     pub auto_stretch_linked: bool,
 }
 

@@ -195,7 +195,7 @@ pub enum Node {
         #[serde(default = "one")]
         highlights: f32,
     },
-    /// MTF による自動ストレッチ（[`crate::stretch_curves::AutoStretch`]）。
+    /// MTF による「自動で明るく見せる」（[`crate::stretch_curves::AutoStretch`]）。
     AutoStretch {
         #[serde(default = "default_auto_target")]
         target: f32,
@@ -612,7 +612,7 @@ impl Node {
         )
     }
 
-    /// 本体の画像に当てたのと同じ変換を、別の画像に当てる。自動ストレッチは本体の画像で決めた値を使う
+    /// 本体の画像に当てたのと同じ変換を、別の画像に当てる。「自動で明るく見せる」は本体の画像で決めた値を使う
     /// （星の画像の分布で決め直すと、本体と違う曲線になるため）。
     fn replay(&self, img: &mut Float, note: Option<&Note>) -> Result<(), String> {
         match (self, note) {
@@ -864,7 +864,7 @@ fn peaking(img: &mut Float, threshold: f32, color: [f32; 3], dim: f32) {
 pub enum Note {
     /// デコンボリューションで星から測った PSF。星が足りなければ `None`（手で入れた FWHM を使った）。
     Psf(Option<crate::deconv::Measured>),
-    /// 自動ストレッチで決めた黒と中間調（チャンネルごと。つないだときは 1 つ）。
+    /// 「自動で明るく見せる」で決めた黒と中間調（チャンネルごと。つないだときは 1 つ）。
     Stretched(Vec<crate::stretch_curves::Fitted>),
 }
 
