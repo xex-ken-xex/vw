@@ -302,6 +302,8 @@ impl VwApp {
         }
         let failed = std::mem::take(&mut *job.failed.lock().unwrap());
         let copied = job.copied.load(std::sync::atomic::Ordering::Relaxed);
+        let located = job.located.load(std::sync::atomic::Ordering::Relaxed);
+        let strip = dialog.strip_location;
         dialog.job = None;
         // ログの欄はこの画面より先に描いているので、結果を出すにはもう一度描く。
         ctx.request_repaint();
@@ -309,6 +311,11 @@ impl VwApp {
             "Exported",
             format!("{copied} images ({} not copied)", failed.len()),
         );
+        if strip {
+            self.log.info(format!(
+                "Export: removed the location from {located} images"
+            ));
+        }
         for e in failed {
             self.log.error(format!("Export: {e}"));
         }

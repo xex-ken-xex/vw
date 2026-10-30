@@ -25,6 +25,17 @@ pub const TAGGER_NAME: &str = "wd-vit-tagger-v3";
 const TAGGER_REVISION: &str = "7f6b584d0bd3f55c4531f14ba3d4761b2bccdc0f";
 /// opencv/opencv_zoo のコミット。
 const FACES_REVISION: &str = "47534e27c9851bb1128ccc0102f1145e27f23f98";
+/// 顔を探して見分けるモデルの名前。AI タグの記録に残す。
+pub const FACES_NAME: &str = "YuNet + SFace";
+
+/// AI タグの記録に残すモデルの版。コミットの頭の 8 文字。
+pub fn tagger_version() -> &'static str {
+    &TAGGER_REVISION[..8]
+}
+
+pub fn faces_version() -> &'static str {
+    &FACES_REVISION[..8]
+}
 /// モデルが揃う前に、タグ付けや顔探しの項目に出す説明（英語の原文）。
 pub const NOT_READY: &str = "Download all AI models first (AI tags > AI models...)";
 

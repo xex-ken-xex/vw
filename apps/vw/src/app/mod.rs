@@ -392,6 +392,8 @@ struct ExportDialog {
     kind: ExportKind,
     dest: String,
     keep_structure: bool,
+    /// 写すファイルから撮影地点を消す。
+    strip_location: bool,
     list_path: String,
     /// 実行中・実行後のコピー。
     job: Option<CopyJob>,
@@ -926,6 +928,7 @@ impl VwApp {
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
             Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
+            Action::RedoOutdatedAi => self.redo_outdated_ai(ctx),
             Action::OpenSettingsFolder => {
                 let dir = self
                     .settings

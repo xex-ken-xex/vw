@@ -762,6 +762,8 @@ pub struct Labels {
     pub tags: Vec<String>,
     /// フラグやタグを付けたら次の画像へ進む。
     pub advance: bool,
+    /// 書き出し（Ctrl+E）で写すファイルから、撮影地点を消す。書き出しの画面の欄の初めの値。
+    pub export_strip_location: bool,
 }
 
 impl Default for Labels {
@@ -769,6 +771,7 @@ impl Default for Labels {
         Self {
             tags: Vec::new(),
             advance: true,
+            export_strip_location: false,
         }
     }
 }
@@ -786,6 +789,9 @@ impl Labels {
                 )
                 .unwrap_or_else(|| d.tags.clone()),
             advance: r.get("advance").unwrap_or(d.advance),
+            export_strip_location: r
+                .get("export_strip_location")
+                .unwrap_or(d.export_strip_location),
         }
     }
 }

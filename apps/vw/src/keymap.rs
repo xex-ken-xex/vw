@@ -110,6 +110,7 @@ pub enum Action {
     ShowAiModels,
     AiTagFolder,
     FindFacesFolder,
+    RedoOutdatedAi,
     RemoveAiTagsFolder,
     TidyAiTags,
     ShowPeople,
@@ -181,7 +182,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 102] = [
+    pub const ALL: [Action; 103] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -271,6 +272,7 @@ impl Action {
         Action::ShowAiModels,
         Action::AiTagFolder,
         Action::FindFacesFolder,
+        Action::RedoOutdatedAi,
         Action::RemoveAiTagsFolder,
         Action::TidyAiTags,
         Action::ShowPeople,
@@ -372,6 +374,7 @@ impl Action {
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
             Action::FindFacesFolder => "find_faces_folder",
+            Action::RedoOutdatedAi => "redo_outdated_ai",
             Action::RemoveAiTagsFolder => "remove_ai_tags_folder",
             Action::TidyAiTags => "tidy_ai_tags",
             Action::OpenSettingsFolder => "open_settings_folder",
@@ -483,6 +486,7 @@ impl Action {
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
             Action::FindFacesFolder => "Find faces in this folder",
+            Action::RedoOutdatedAi => "Redo AI tags and faces made with older models",
             Action::RemoveAiTagsFolder => "Remove AI tags from this folder...",
             Action::TidyAiTags => "Tidy AI tags in this folder...",
             Action::OpenSettingsFolder => "Open the settings folder",
@@ -582,6 +586,7 @@ impl Action {
             Action::ShowAiModels
             | Action::AiTagFolder
             | Action::FindFacesFolder
+            | Action::RedoOutdatedAi
             | Action::RemoveAiTagsFolder
             | Action::TidyAiTags
             | Action::ShowPeople
@@ -812,6 +817,7 @@ impl Action {
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
             Action::FindFacesFolder => vec![],
+            Action::RedoOutdatedAi => vec![],
             Action::RemoveAiTagsFolder => vec![],
             Action::TidyAiTags => vec![],
             Action::OpenSettingsFolder => vec![],
