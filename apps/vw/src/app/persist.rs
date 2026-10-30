@@ -24,6 +24,22 @@ impl VwApp {
         self.settings_changed(ctx);
     }
 
+    /// 検索に名前を付けて設定に取っておく。同じ名前の検索は置き換える。
+    pub(super) fn save_search(
+        &mut self,
+        ctx: &egui::Context,
+        search: crate::settings::SavedSearch,
+    ) {
+        let searches = &mut self.settings.settings.dataset.saved_searches;
+        let message = format!("Saved search {:?}", search.name);
+        match searches.iter_mut().find(|s| s.name == search.name) {
+            Some(s) => *s = search,
+            None => searches.push(search),
+        }
+        self.log.info(message);
+        self.settings_changed(ctx);
+    }
+
     /// 設定画面で値が変わったときに、反映して保存する。
     pub(super) fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings().appearance);

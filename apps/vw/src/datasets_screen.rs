@@ -8,9 +8,10 @@ use std::sync::Arc;
 use eframe::egui;
 use egui_phosphor::regular as icon;
 
+use crate::dataset_groups::{self, Group, GroupBy};
 use crate::dataset_search::{self, Condition, Hit, Index, Op, Progress, Query, Target};
 use crate::i18n::{tr, tr1};
-use crate::settings::{Language, SearchGroup};
+use crate::settings::{Language, SavedSearch, SearchGroup};
 
 /// 詳しい情報を表の横に並べる、欄の幅の下限。これより細ければ表の下に出す。
 const SIDE_DETAIL_MIN_WIDTH: f32 = 640.0;
@@ -33,6 +34,8 @@ pub enum Action {
     Send(PathBuf, Option<Vec<String>>, crate::send_app::Choice),
     /// 今のメタデータの条件のキーを、検索のグループとして設定に足す（同じ名前なら置き換える）。
     SaveGroup(SearchGroup),
+    /// 今の検索に名前を付けて設定に取っておく（同じ名前なら置き換える）。
+    SaveSearch(SavedSearch),
 }
 
 /// 「送る ▸」に並べるもの。
@@ -97,6 +100,24 @@ pub struct DatasetsScreen {
     /// 名前の欄を出したフレーム。そのときだけ入力を欄へ向ける（毎フレーム向けると
     /// 「保存」ボタンの押下を奪うため）。
     focus_group_name: bool,
+    /// 選んだデータセットのファイルのまとめ方。
+    group_by: GroupBy,
+    /// まとめた結果と、まとめたときの条件。条件が変わったときだけまとめ直す（ファイルが多いと重いため）。
+    grouped: Option<(GroupKey, Vec<Group>)>,
+    /// カタログを読み直すたびに増やす。読み直したデータセットのまとめを作り直すため。
+    generation: u64,
+    /// 検索に名前を付けて取っておくときに入力中の名前。
+    search_name: Option<String>,
+    focus_search_name: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GroupKey {
+    dir: PathBuf,
+    by: GroupBy,
+    query: Query,
+    generation: u64,
+    rules: (u64, u64),
 }
 
 impl Default for DatasetsScreen {
@@ -115,6 +136,11 @@ impl Default for DatasetsScreen {
             descending: false,
             group_name: None,
             focus_group_name: false,
+            group_by: GroupBy::None,
+            grouped: None,
+            generation: 0,
+            search_name: None,
+            focus_search_name: false,
         }
     }
 }
@@ -176,6 +202,7 @@ impl DatasetsScreen {
         if let Some(index) = &mut self.index {
             index.reload(dir);
             self.searched = None;
+            self.generation += 1;
         }
     }
 
@@ -210,6 +237,71 @@ impl DatasetsScreen {
         }
         self.index = Some(index);
         self.searched = None;
+        self.generation += 1;
+    }
+
+    /// 取っておいた検索を開く。条件だけを戻すので、結果は今のカタログで探し直したものになる。
+    pub fn open_saved(&mut self, saved: &SavedSearch) -> Vec<String> {
+        let mut problems = Vec::new();
+        self.query = Query {
+            text: saved.text.clone(),
+            conditions: saved
+                .conditions
+                .iter()
+                .filter_map(|c| {
+                    Condition::from_saved(c)
+                        .map_err(|e| problems.push(format!("{:?}: {e}", saved.name)))
+                        .ok()
+                })
+                .collect(),
+        };
+        self.advanced |= !self.query.conditions.is_empty();
+        self.group_by = GroupBy::from_setting(&saved.group_by);
+        problems
+    }
+
+    fn saved_from(&self, name: &str) -> Option<SavedSearch> {
+        let name = name.trim();
+        (!name.is_empty()).then(|| SavedSearch {
+            name: name.to_owned(),
+            text: self.query.text.clone(),
+            group_by: self.group_by.to_setting(),
+            conditions: self
+                .query
+                .conditions
+                .iter()
+                .map(Condition::to_saved)
+                .collect(),
+        })
+    }
+
+    /// 選んだデータセットの、当たったファイルをまとめ直す（条件が変わったときだけ）。
+    fn regroup(&mut self, rules: dataset_groups::Rules) {
+        let (Some(index), Some(dir)) = (&self.index, &self.selected) else {
+            self.grouped = None;
+            return;
+        };
+        let Some(hit) = self
+            .hits
+            .iter()
+            .find(|h| index.entries[h.entry].dir == *dir)
+        else {
+            self.grouped = None;
+            return;
+        };
+        let key = GroupKey {
+            dir: dir.clone(),
+            by: self.group_by.clone(),
+            query: self.query.clone(),
+            generation: self.generation,
+            rules: (rules.gap_hours.to_bits(), rules.distance_km.to_bits()),
+        };
+        if self.grouped.as_ref().is_some_and(|(k, _)| *k == key) {
+            return;
+        }
+        let catalog = &index.entries[hit.entry].catalog;
+        let groups = dataset_groups::group(catalog, &hit.files, &self.group_by, rules);
+        self.grouped = Some((key, groups));
     }
 
     fn search(&mut self) {
@@ -233,13 +325,13 @@ impl DatasetsScreen {
         &mut self,
         ui: &mut egui::Ui,
         lang: Language,
-        roots: &[String],
-        fields: &[String],
-        groups: &[SearchGroup],
+        dataset: &crate::settings::Dataset,
         send: &SendTo,
     ) -> Option<Action> {
+        let (roots, fields, groups) = (&dataset.roots, &dataset.fields, &dataset.search_groups);
         self.poll();
         self.search();
+        self.regroup(dataset.event_rules());
         let mut action = None;
         let field_names = self
             .index
@@ -266,6 +358,9 @@ impl DatasetsScreen {
                     .clicked()
                 {
                     self.advanced ^= true;
+                }
+                if let Some(a) = self.saved_ui(ui, lang, &dataset.saved_searches) {
+                    action = Some(a);
                 }
                 if ui
                     .button(format!("{} {}", icon::ARROW_CLOCKWISE, tr(lang, "Reload")))
@@ -296,9 +391,11 @@ impl DatasetsScreen {
             }
             ui.add_space(4.0);
         });
-        if let Some(a) = self.detail_panel(ui, lang, &field_names, send) {
+        let mut group_by = self.group_by.clone();
+        if let Some(a) = self.detail_panel(ui, lang, &field_names, send, &mut group_by) {
             action = Some(a);
         }
+        self.group_by = group_by;
         egui::CentralPanel::default().show(ui, |ui| {
             self.status_line(ui, lang, roots);
             if let Some(a) = self.table_ui(ui, lang, &field_names, send) {
@@ -542,12 +639,149 @@ impl DatasetsScreen {
         action
     }
 
+    /// 取っておいた検索のメニューと、今の検索を取っておくボタン。
+    fn saved_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        saved: &[SavedSearch],
+    ) -> Option<Action> {
+        let mut action = None;
+        let mut open = None;
+        vw_ui::menu::button(
+            ui,
+            format!("{} {} {}", icon::BOOKMARK_SIMPLE, tr(lang, "Saved"), icon::CARET_DOWN),
+            |ui| {
+                if saved.is_empty() {
+                    ui.weak(tr(lang, "Save a search to open it here again with the latest results."));
+                }
+                for s in saved {
+                    if ui.button(&s.name).on_hover_text(saved_summary(s)).clicked() {
+                        open = Some(s);
+                        ui.close();
+                    }
+                }
+            },
+        )
+        .0
+        .on_hover_text(tr(
+            lang,
+            "Searches saved with a name. Opening one searches the catalogs again, so datasets added or updated since are included.",
+        ));
+        if let Some(s) = open {
+            self.search_name = None;
+            let problems = self.open_saved(s);
+            if let Some(p) = problems.first() {
+                self.error = Some(p.clone());
+            }
+        }
+        let focus = std::mem::take(&mut self.focus_search_name);
+        match &mut self.search_name {
+            None => {
+                if ui
+                    .button(tr(lang, "Save search..."))
+                    .on_hover_text(tr(
+                        lang,
+                        "Save the search words, conditions and grouping with a name, to open them again from Saved.",
+                    ))
+                    .clicked()
+                {
+                    self.search_name = Some(String::new());
+                    self.focus_search_name = true;
+                }
+            }
+            Some(name) => {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .hint_text(tr(lang, "Search name"))
+                        .desired_width(140.0),
+                );
+                if focus {
+                    edit.request_focus();
+                }
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.search_name = None;
+                    return None;
+                }
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let name = name.clone();
+                let search = self.saved_from(&name);
+                let save = ui.add_enabled(search.is_some(), egui::Button::new(tr(lang, "Save")));
+                if save.clicked() || (enter && search.is_some()) {
+                    action = search.map(Action::SaveSearch);
+                    self.search_name = None;
+                } else if ui.button(tr(lang, "Cancel")).clicked() {
+                    self.search_name = None;
+                }
+            }
+        }
+        action
+    }
+
+    /// まとめ方の選択と、まとめた組の一覧。組ごとの「表示」で、その組のファイルだけを並べる。
+    fn groups_ui(
+        &self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        entry: &dataset_search::Entry,
+        group_by: &mut GroupBy,
+    ) -> Option<Action> {
+        const MAX_SHOWN: usize = 300;
+        ui.horizontal(|ui| {
+            ui.label(tr(lang, "Group by"));
+            let keys = self
+                .index
+                .as_ref()
+                .map_or(&[][..], |i| i.meta_keys.as_slice());
+            group_by_menu(ui, lang, group_by, keys);
+        });
+        // まとめるのは次のフレームの初めなので、選び直したフレームでは古い組を出さない。
+        let (key, groups) = self.grouped.as_ref()?;
+        if key.by != *group_by || key.dir != entry.dir || groups.is_empty() {
+            return None;
+        }
+        let mut action = None;
+        let files = &entry.catalog.files;
+        // 表の列にすると、題と日時の列が細くなり 1 字ずつ折り返すので、ボタンを左に寄せ、字は残りの幅を使う。
+        for g in groups.iter().take(MAX_SHOWN) {
+            ui.horizontal(|ui| {
+                if ui
+                    .button(tr1(lang, "Show {}", &g.files.len().to_string()))
+                    .on_hover_text(tr(
+                        lang,
+                        "Show only the files of this group, one slot each.",
+                    ))
+                    .clicked()
+                {
+                    let paths = g.files.iter().map(|&i| files[i].path.clone()).collect();
+                    action = Some(Action::ShowFiles(entry.dir.clone(), paths));
+                }
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(group_title(g, group_by, lang)).strong());
+                    let details = group_details(g, group_by, lang);
+                    if !details.is_empty() {
+                        ui.add(egui::Label::new(egui::RichText::new(details).weak()).wrap());
+                    }
+                });
+            });
+        }
+        if groups.len() > MAX_SHOWN {
+            ui.weak(tr1(
+                lang,
+                "{} more groups are not shown.",
+                &(groups.len() - MAX_SHOWN).to_string(),
+            ));
+        }
+        action
+    }
+
     fn detail_panel(
         &self,
         ui: &mut egui::Ui,
         lang: Language,
         field_names: &[String],
         send: &SendTo,
+        group_by: &mut GroupBy,
     ) -> Option<Action> {
         let index = self.index.as_ref()?;
         let dir = self.selected.as_ref()?;
@@ -648,6 +882,10 @@ impl DatasetsScreen {
                             ui.end_row();
                         }
                     });
+                ui.separator();
+                if let Some(a) = self.groups_ui(ui, lang, entry, group_by) {
+                    action = Some(a);
+                }
                 if let Some(hits) = &hits {
                     ui.separator();
                     // パネルの下まで使う。読めなかったファイルの見出しの分だけ空けておく。
@@ -893,6 +1131,127 @@ fn group_from(conditions: &[Condition], name: &str) -> Option<SearchGroup> {
         keys,
     };
     group.problem().is_none().then_some(group)
+}
+
+/// まとめ方を選ぶメニュー。値でまとめるキーは、よく使うもののほか、カタログにあるキーから選べる。
+fn group_by_menu(
+    ui: &mut egui::Ui,
+    lang: Language,
+    group_by: &mut GroupBy,
+    keys: &[(String, String)],
+) {
+    const MAX_KEYS: usize = 300;
+    let current = group_by_title(group_by, lang);
+    vw_ui::menu::button(ui, format!("{current} {}", icon::CARET_DOWN), |ui| {
+        let mut choose = |ui: &mut egui::Ui, by: GroupBy, title: String, hover: &'static str| {
+            let r = ui.add(vw_ui::menu::item(*group_by == by, title, ""));
+            let r = if hover.is_empty() {
+                r
+            } else {
+                r.on_hover_text(tr(lang, hover))
+            };
+            if r.clicked() {
+                *group_by = by;
+                ui.close();
+            }
+        };
+        choose(ui, GroupBy::None, tr(lang, "None").to_owned(), "");
+        choose(
+            ui,
+            GroupBy::Events,
+            tr(lang, "Events").to_owned(),
+            "Trips and events: a new group starts after a long pause in shooting or a move far away (Settings > Datasets).",
+        );
+        choose(
+            ui,
+            GroupBy::Nights,
+            tr(lang, "Nights").to_owned(),
+            "Observing nights, from noon to noon in local time, so a night past midnight stays one group.",
+        );
+        for (title, kind, key) in GroupBy::PRESETS {
+            let by = GroupBy::Key {
+                kind: kind.into(),
+                key: key.into(),
+            };
+            choose(ui, by, format!("{} ({kind}:{key})", tr(lang, title)), "");
+        }
+        vw_ui::menu::submenu(ui, tr(lang, "Metadata key"), |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(360.0)
+                .show(ui, |ui| {
+                    for (kind, key) in keys.iter().take(MAX_KEYS) {
+                        let by = GroupBy::Key {
+                            kind: kind.clone(),
+                            key: key.clone(),
+                        };
+                        choose(ui, by, format!("{kind}: {key}"), "");
+                    }
+                });
+        });
+    });
+}
+
+fn group_by_title(by: &GroupBy, lang: Language) -> String {
+    match by {
+        GroupBy::None => tr(lang, "None").to_owned(),
+        GroupBy::Events => tr(lang, "Events").to_owned(),
+        GroupBy::Nights => tr(lang, "Nights").to_owned(),
+        GroupBy::Key { kind, key } => GroupBy::PRESETS
+            .iter()
+            .find(|(_, k, n)| k == kind && n == key)
+            .map(|(title, ..)| tr(lang, title).to_owned())
+            .unwrap_or_else(|| format!("{kind}: {key}")),
+    }
+}
+
+fn group_title(g: &Group, by: &GroupBy, lang: Language) -> String {
+    match (
+        by,
+        g.is_rest() || (g.title.is_empty() && *by != GroupBy::Events),
+    ) {
+        (GroupBy::Events | GroupBy::Nights, true) => tr(lang, "(no date)").to_owned(),
+        (_, true) => tr(lang, "(no value)").to_owned(),
+        (GroupBy::Events, false) => g.span.map(dataset_groups::span_text).unwrap_or_default(),
+        (GroupBy::Nights, false) => tr1(lang, "Night of {}", &g.title),
+        _ => g.title.clone(),
+    }
+}
+
+/// 組の下に小さく出す、日時（出来事では題に出す）・場所・積算時間。
+fn group_details(g: &Group, by: &GroupBy, lang: Language) -> String {
+    let mut parts = Vec::new();
+    if *by != GroupBy::Events {
+        parts.extend(g.span.map(dataset_groups::span_text));
+    }
+    parts.extend(g.place.clone());
+    if let Some(e) = g.exposure {
+        parts.push(tr1(
+            lang,
+            "total exposure {}",
+            &dataset_groups::exposure_text(e, [" h", " m", " s"].map(|u| tr(lang, u))),
+        ));
+    }
+    parts.join(" · ")
+}
+
+/// 取っておいた検索の中身を、メニューのヒントに出す形にする。
+fn saved_summary(s: &SavedSearch) -> String {
+    let mut lines = Vec::new();
+    if !s.text.trim().is_empty() {
+        lines.push(format!("\"{}\"", s.text.trim()));
+    }
+    for c in &s.conditions {
+        let value = match c.op.as_str() {
+            "exists" => String::new(),
+            "range" => format!(" {} – {}", c.value, c.max),
+            _ => format!(" {}", c.value),
+        };
+        lines.push(format!("{} {}{value}", c.on, c.op));
+    }
+    if !s.group_by.is_empty() {
+        lines.push(format!("group by {}", s.group_by));
+    }
+    lines.join("\n")
 }
 
 fn narrowed_paths(index: &Index, hit: &Hit) -> Option<Vec<String>> {

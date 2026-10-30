@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 116] = [
+const ITEMS: [Item; 119] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -425,6 +425,27 @@ const ITEMS: [Item; 116] = [
         title: "Search groups",
         description: "Sets of metadata keys offered in the advanced search, one per line as name = key; key; key. Picking one adds an \"equals\" condition for each key, so you only type the values. Keys are tag numbers (0010,0020) or names (PatientID); put kind: in front to limit the kind (exif:Model).",
         widget: search_groups_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.saved_searches",
+        title: "Saved searches",
+        description: "Searches saved with a name from the datasets screen (Save search...). Opening one from Saved searches the catalogs again, so the results always include datasets added or updated since.",
+        widget: saved_searches_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.event_gap_hours",
+        title: "Event: pause",
+        description: "When grouping a dataset by events, a pause in shooting longer than this starts a new event. Around 18 hours keeps a trip with nights in between together and splits separate days out.",
+        widget: event_gap_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "dataset.event_distance_km",
+        title: "Event: distance",
+        description: "When grouping a dataset by events, a shot taken farther than this from the previous shot with a position starts a new event. 0 splits by time only.",
+        widget: event_distance_widget,
     },
     Item {
         section: Section::Log,
@@ -2367,6 +2388,67 @@ fn color_format_radio(ui: &mut egui::Ui, lang: Language, value: &mut ColorFormat
         }
     });
     *value != before
+}
+
+fn event_gap_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.dataset.event_gap_hours)
+            .range(crate::settings::Dataset::GAP_RANGE)
+            .speed(0.5)
+            .suffix(tr(lang, " h")),
+    )
+    .changed()
+}
+
+fn event_distance_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.dataset.event_distance_km)
+            .range(crate::settings::Dataset::DISTANCE_RANGE)
+            .speed(1.0)
+            .suffix(tr(lang, " km")),
+    )
+    .changed()
+}
+
+/// 名前を変えるか消すだけ。条件はデータセットの画面で開いて直し、同じ名前で取っておき直す。
+fn saved_searches_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let searches = &mut s.dataset.saved_searches;
+    if searches.is_empty() {
+        ui.weak(tr(lang, "None yet."));
+        return false;
+    }
+    let mut changed = false;
+    let mut remove = None;
+    for (i, search) in searches.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let id = ui.make_persistent_id(("dataset.saved_searches.name", i));
+            let mut name: String = ui
+                .data_mut(|d| d.get_temp(id))
+                .unwrap_or_else(|| search.name.clone());
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0));
+            if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, name));
+            } else {
+                if r.lost_focus() && !name.trim().is_empty() && name.trim() != search.name {
+                    search.name = name.trim().to_owned();
+                    changed = true;
+                }
+                ui.data_mut(|d| d.remove::<String>(id));
+            }
+            if ui
+                .button(icon::TRASH)
+                .on_hover_text(tr(lang, "Delete"))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        searches.remove(i);
+        changed = true;
+    }
+    changed
 }
 
 /// タグと同じくカンマ区切りで編集する。
