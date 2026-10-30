@@ -25,6 +25,8 @@ pub struct Target<'a> {
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
     pub dicom: bool,
+    /// カメラ RAW。センサーの値（現像前）の軸を出せる。
+    pub raw: bool,
     /// ピクセルパイプラインで手で変えている値（この画像に当てているときだけ）。
     pub edited: Option<Params>,
     /// 色導出で描いた画像（当てているときだけ）。明るさの軸の「変更後」に使う。
@@ -88,6 +90,8 @@ enum Axis {
     Physical,
     /// ファイルに入っている値そのもの。DICOM 以外の 16 bit・実数のグレースケール。
     Original,
+    /// カメラ RAW の現像前のセンサーの値。白レベルから何 EV 下か。
+    Sensor,
 }
 
 /// チャンネルの選び方。
@@ -137,6 +141,7 @@ enum Counted {
         changed: bool,
         unit: Option<String>,
     },
+    Sensor(Result<vw_raw::SensorHistogram, String>),
 }
 
 #[derive(Default)]
@@ -148,6 +153,7 @@ pub struct HistogramView {
     log: bool,
     range: Range,
     path: Option<PathBuf>,
+    raw: bool,
     gray: Option<Gray>,
     counted: Option<(Key, Counted)>,
     counting: Option<(Key, Receiver<Counted>)>,
@@ -248,6 +254,7 @@ impl HistogramView {
 
     fn follow(&mut self, ctx: &egui::Context, target: Option<&Target<'_>>) {
         let path = target.map(|t| t.path.to_path_buf());
+        self.raw = target.is_some_and(|t| t.raw);
         if path != self.path {
             self.path = path;
             self.gray = target.map(|t| {
@@ -280,6 +287,8 @@ impl HistogramView {
     fn axis_beyond_brightness(&self, image: Option<&Arc<VwImage>>) -> Option<Axis> {
         if matches!(self.gray, Some(Gray::Loaded(_))) {
             Some(Axis::Physical)
+        } else if self.raw {
+            Some(Axis::Sensor)
         } else if image.is_some_and(|i| has_original_values(i)) {
             Some(Axis::Original)
         } else {
@@ -304,13 +313,23 @@ impl HistogramView {
         if self.range.region(t).is_none() {
             self.range = Range::Whole;
         }
+        // センサーの値はファイルから数えるので、表示の画像や ROI が変わっても数え直さない。
+        // ROI は向きを直した後の画素で引くので、センサーの並びには当てられない。
+        let sensor = self.axis == Axis::Sensor;
         let key = Key {
             path: t.path.to_path_buf(),
-            image: Arc::as_ptr(image) as usize,
+            image: if sensor {
+                0
+            } else {
+                Arc::as_ptr(image) as usize
+            },
             axis: self.axis,
-            edited: t.edited.filter(|_| gray.is_some()),
-            derived: t.derived.map(|d| Arc::as_ptr(d) as usize),
-            region: self.range.region(t),
+            edited: t.edited.filter(|_| gray.is_some() && !sensor),
+            derived: t
+                .derived
+                .filter(|_| !sensor)
+                .map(|d| Arc::as_ptr(d) as usize),
+            region: self.range.region(t).filter(|_| !sensor),
         };
         let done = self.counted.as_ref().is_some_and(|(k, _)| *k == key);
         if done || self.counting.is_some() {
@@ -323,7 +342,15 @@ impl HistogramView {
         });
         let (axis, edited, region) = (key.axis, key.edited, key.region);
         let derived = t.derived.cloned();
+        let path = t.path.to_path_buf();
         let rx = crate::background::compute(ctx, move || match (axis, gray) {
+            (Axis::Sensor, _) => Counted::Sensor(
+                std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        vw_raw::sensor_histogram(&bytes, histogram::BINS).map_err(|e| e.to_string())
+                    }),
+            ),
             (Axis::Physical, Some((decoded, file, unit))) => Counted::Physical {
                 histogram: histogram::physical(
                     &image,
@@ -411,7 +438,7 @@ impl HistogramView {
                     });
             }
             ui.checkbox(&mut self.log, tr(lang, "Logarithmic vertical axis"));
-            if rois.0 || rois.1 {
+            if (rois.0 || rois.1) && self.axis != Axis::Sensor {
                 ui.label(tr(lang, "Range"));
                 vw_ui::menu::combo("histogram_range")
                     .selected_text(tr(lang, self.range.title()))
@@ -440,14 +467,29 @@ impl HistogramView {
             ui.centered_and_justified(|ui| ui.spinner());
             return;
         };
+        if let Counted::Sensor(Err(e)) = counted {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+            return;
+        }
         let channel = if color { self.channel } else { Shown::Luma };
         let graph = Graph::of(counted, channel, ui.visuals());
         let changed = graph.series.iter().any(|s| s.after.is_some())
             || matches!(counted, Counted::Physical { changed: true, .. });
-        legend(ui, lang, changed);
-        let height = (ui.available_height() - 100.0).max(80.0);
+        let sensor = match counted {
+            Counted::Sensor(Ok(h)) => Some(h),
+            _ => None,
+        };
+        if sensor.is_none() {
+            legend(ui, lang, changed);
+        }
+        // センサーの軸は下に白飛びの表が付くので、その分グラフを低くする。
+        let below = if sensor.is_some() { 190.0 } else { 100.0 };
+        let height = (ui.available_height() - below).max(80.0);
         let hover = draw(ui, &graph, self.log, height);
         stats_table(ui, lang, &graph, changed);
+        if let Some(h) = sensor {
+            exposure_table(ui, lang, h);
+        }
         let text = match hover {
             Some(i) => graph.hover_text(lang, i),
             None => tr(lang, "Point at the graph to see the counts.").to_owned(),
@@ -474,6 +516,7 @@ fn axis_title(lang: Language, axis: Axis) -> &'static str {
         Axis::Brightness => tr(lang, "Display brightness"),
         Axis::Physical => tr(lang, "Physical value"),
         Axis::Original => tr(lang, "Original value"),
+        Axis::Sensor => tr(lang, "RAW sensor value (stops below white)"),
     }
 }
 
@@ -513,6 +556,8 @@ struct Graph {
     physical: bool,
     /// 塗りの色（変更前）。チャンネルを重ねるときは各チャンネルの色を薄くして使う。
     single: bool,
+    /// ピクセルパイプラインの変更前と変更後を比べられる軸。統計の行に「変更前」と付ける。
+    compared: bool,
 }
 
 impl Graph {
@@ -549,6 +594,35 @@ impl Graph {
                     unit: None,
                     physical: false,
                     single,
+                    compared: true,
+                }
+            }
+            Counted::Sensor(h) => {
+                let channels = h.as_ref().map_or(&[][..], |h| &h.channels[..]);
+                let single = channels.len() == 1;
+                Self {
+                    series: channels
+                        .iter()
+                        .map(|c| Series {
+                            before_stats: histogram::bin_stats(&c.counts, vw_raw::DARKEST_EV, 0.0),
+                            after_stats: None,
+                            before: c.counts.clone(),
+                            after: None,
+                            color: if single {
+                                accent
+                            } else {
+                                sensor_color(c.color)
+                            },
+                            name: sensor_title(c.color),
+                        })
+                        .collect(),
+                    lo: vw_raw::DARKEST_EV,
+                    hi: 0.0,
+                    windows: None,
+                    unit: Some("EV".to_owned()),
+                    physical: true,
+                    single,
+                    compared: false,
                 }
             }
             Counted::Physical {
@@ -571,6 +645,7 @@ impl Graph {
                 unit: unit.clone(),
                 physical: true,
                 single: true,
+                compared: true,
             },
         }
     }
@@ -588,6 +663,8 @@ impl Graph {
     }
 
     fn format(&self, v: f64) -> String {
+        // 0 のすぐ下の値が「-0.0」と出ないように。
+        let v = if v.abs() < 0.05 { 0.0 } else { v };
         let n = if self.physical {
             format!("{v:.1}")
         } else {
@@ -634,6 +711,57 @@ fn channel_color(c: Channel) -> Color32 {
         Channel::Blue => Color32::from_rgb(100, 140, 240),
         Channel::Luma => Color32::GRAY,
     }
+}
+
+fn sensor_color(c: vw_raw::SensorColor) -> Color32 {
+    match c {
+        vw_raw::SensorColor::Red => channel_color(Channel::Red),
+        vw_raw::SensorColor::Green => channel_color(Channel::Green),
+        vw_raw::SensorColor::Blue => channel_color(Channel::Blue),
+        vw_raw::SensorColor::Other => Color32::GRAY,
+    }
+}
+
+fn sensor_title(c: vw_raw::SensorColor) -> &'static str {
+    match c {
+        vw_raw::SensorColor::Red => Channel::Red.title(),
+        vw_raw::SensorColor::Green => Channel::Green.title(),
+        vw_raw::SensorColor::Blue => Channel::Blue.title(),
+        vw_raw::SensorColor::Other => "Sensor",
+    }
+}
+
+/// センサーの色ごとの、白飛び・黒つぶれの割合と白レベルまでの余裕。
+fn exposure_table(ui: &mut egui::Ui, lang: Language, h: &vw_raw::SensorHistogram) {
+    ui.add_space(4.0);
+    egui::Grid::new("sensor_exposure")
+        .num_columns(4)
+        .spacing([18.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("");
+            for title in ["Clipped (white level)", "At black level", "Headroom"] {
+                ui.weak(tr(lang, title));
+            }
+            ui.end_row();
+            for c in &h.channels {
+                let percent = |n: u64| 100.0 * n as f64 / c.total.max(1) as f64;
+                ui.label(tr(lang, sensor_title(c.color)));
+                let clipped = format!("{:.3} %", percent(c.clipped));
+                if c.clipped > 0 {
+                    ui.colored_label(ui.visuals().error_fg_color, clipped);
+                } else {
+                    ui.label(clipped);
+                }
+                ui.label(format!("{:.3} %", percent(c.at_black)));
+                let headroom = c.headroom_ev();
+                ui.label(if headroom.is_finite() {
+                    format!("{headroom:.2} EV")
+                } else {
+                    "-".to_owned()
+                });
+                ui.end_row();
+            }
+        });
 }
 
 fn legend(ui: &mut egui::Ui, lang: Language, changed: bool) {
@@ -783,7 +911,9 @@ fn stats_table(ui: &mut egui::Ui, lang: Language, g: &Graph, changed: bool) {
             ui.end_row();
             for s in &g.series {
                 let name = |when: &'static str| {
-                    if g.single {
+                    if !g.compared {
+                        tr(lang, s.name).to_owned()
+                    } else if g.single {
                         tr(lang, when).to_owned()
                     } else {
                         format!("{} {}", tr(lang, s.name), tr(lang, when))

@@ -35,6 +35,17 @@ pub struct Shown {
     /// フル解像度の画像を、普通に読む代わりに現像して作る（カメラ RAW）。
     /// 現像を頼んだときに立て、捨てたフル解像度の画像を読み直すときも現像する。
     pub developed: bool,
+    /// 現像したカメラ RAW の、いま出していない方（埋め込みのプレビューか現像した画像）。
+    /// [`Shown::swap_raw_face`] で出している方と入れ替える。
+    pub other: Option<Box<RawFace>>,
+}
+
+/// カメラ RAW の片方の絵。埋め込みのプレビューか、現像した画像。
+pub struct RawFace {
+    pub thumb: TextureHandle,
+    pub info: ImageInfo,
+    pub full: Option<Full>,
+    pub developed: bool,
 }
 
 pub struct Full {
@@ -61,6 +72,23 @@ impl Shown {
         }
         self.developed = false;
         self.info.develop_size = None;
+        true
+    }
+
+    /// 埋め込みのプレビューと現像した画像の両方を持っていて、いまプレビューを出している。
+    pub fn showing_raw_preview(&self) -> bool {
+        self.other.is_some() && !self.developed
+    }
+
+    /// 埋め込みのプレビューと現像した画像を入れ替える。片方しか持っていなければ何もせず `false`。
+    pub fn swap_raw_face(&mut self) -> bool {
+        let Some(other) = self.other.as_deref_mut() else {
+            return false;
+        };
+        std::mem::swap(&mut self.thumb, &mut other.thumb);
+        std::mem::swap(&mut self.info, &mut other.info);
+        std::mem::swap(&mut self.full, &mut other.full);
+        std::mem::swap(&mut self.developed, &mut other.developed);
         true
     }
 
@@ -362,6 +390,8 @@ pub struct SlotResponse {
     pub wants_full: bool,
     /// 右クリックメニューで「現像」が選ばれた。
     pub develop: bool,
+    /// 見出しの「JPEG」「RAW」を押した（埋め込みのプレビューと現像した画像の切り替え）。
+    pub swap_raw_face: bool,
     /// 右クリックメニューで、ダーク・フラットを当てるかの切り替えが選ばれた。
     pub toggle_calibration: bool,
     /// ダブルクリックされた（最大化の切り替え）。
@@ -1791,10 +1821,9 @@ impl Slot {
                 if self.shown.is_some() {
                     ui.separator();
                 }
-                let developable = self
-                    .shown
-                    .as_ref()
-                    .is_some_and(|s| s.info.develop_size.is_some() && !s.developed);
+                let developable = self.shown.as_ref().is_some_and(|s| {
+                    s.info.develop_size.is_some() && !s.developed && s.other.is_none()
+                });
                 if developable
                     && ui
                         .button(tr(lang, "Develop RAW from sensor data"))
@@ -1967,6 +1996,44 @@ impl Slot {
             );
             film.on_hover_text(tr(lang, "Developing RAW..."));
             labels_right = film_rect.left();
+        }
+
+        if let Some(preview) = self
+            .shown
+            .as_ref()
+            .filter(|s| s.other.is_some())
+            .map(Shown::showing_raw_preview)
+        {
+            let badge_rect = Rect::from_min_max(
+                pos2(labels_right - 36.0, close_rect.top()),
+                pos2(labels_right, close_rect.bottom()),
+            );
+            let badge = ui.interact(
+                badge_rect,
+                ui.id().with(("raw_face", self.id)),
+                Sense::click(),
+            );
+            let color = if badge.hovered() {
+                visuals.strong_text_color()
+            } else {
+                visuals.weak_text_color()
+            };
+            painter.text(
+                badge_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                if preview { "JPEG" } else { "RAW" },
+                egui::FontId::proportional(11.0),
+                color,
+            );
+            let hint = if preview {
+                "Showing the preview embedded by the camera. Click to show the developed image."
+            } else {
+                "Showing the image developed from the sensor data. Click to show the camera's embedded preview."
+            };
+            if badge.on_hover_text(tr(lang, hint)).clicked() {
+                out.swap_raw_face = true;
+            }
+            labels_right = badge_rect.left();
         }
 
         let calibration = self.shown.as_ref().and_then(|s| {
@@ -2227,6 +2294,7 @@ mod tests {
             },
             full: None,
             developed: false,
+            other: None,
         }
     }
 
@@ -2247,6 +2315,49 @@ mod tests {
         let mut shown = raw_preview();
         assert!(!shown.give_up_developing());
         assert_eq!(shown.info.develop_size, Some((6000, 4000)));
+    }
+
+    /// 現像し終えて、埋め込みのプレビューを残した RAW。
+    fn developed_with_preview() -> Shown {
+        let preview = raw_preview();
+        let mut shown = raw_preview();
+        shown.developed = true;
+        shown.info.develop_size = None;
+        shown.info.width = 6000;
+        shown.other = Some(Box::new(RawFace {
+            thumb: preview.thumb,
+            info: preview.info,
+            full: None,
+            developed: false,
+        }));
+        shown
+    }
+
+    #[test]
+    fn swapping_shows_the_embedded_preview_and_back() {
+        let mut shown = developed_with_preview();
+        assert!(!shown.showing_raw_preview());
+        assert!(shown.swap_raw_face());
+        assert!(shown.showing_raw_preview());
+        assert_eq!(shown.info.width, 160);
+        assert_eq!(shown.info.develop_size, Some((6000, 4000)));
+        assert!(shown.swap_raw_face());
+        assert!(!shown.showing_raw_preview());
+        assert_eq!(shown.info.width, 6000);
+    }
+
+    #[test]
+    fn the_preview_shown_is_not_mistaken_for_a_develop_in_progress() {
+        let mut shown = developed_with_preview();
+        shown.swap_raw_face();
+        assert!(!shown.developing());
+    }
+
+    #[test]
+    fn a_raw_not_yet_developed_has_nothing_to_swap() {
+        let mut shown = raw_preview();
+        assert!(!shown.swap_raw_face());
+        assert!(!shown.showing_raw_preview());
     }
 
     #[test]

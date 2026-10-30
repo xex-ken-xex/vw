@@ -64,6 +64,7 @@ pub enum Action {
     ExportImages,
     ParentFolder,
     DevelopRaw,
+    SwapRawPreview,
     ReadQrCodes,
     ToggleCalibration,
     NextColorMap,
@@ -175,7 +176,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 96] = [
+    pub const ALL: [Action; 97] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -191,6 +192,7 @@ impl Action {
         Action::ZoomIn,
         Action::ZoomOut,
         Action::DevelopRaw,
+        Action::SwapRawPreview,
         Action::ReadQrCodes,
         Action::ToggleCalibration,
         Action::NextColorMap,
@@ -326,6 +328,7 @@ impl Action {
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
             Action::DevelopRaw => "develop_raw",
+            Action::SwapRawPreview => "swap_raw_preview",
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
             Action::NextColorMap => "next_color_map",
@@ -405,6 +408,7 @@ impl Action {
             Action::ZoomIn => "Zoom in",
             Action::ZoomOut => "Zoom out",
             Action::DevelopRaw => "Develop RAW from sensor data",
+            Action::SwapRawPreview => "Switch RAW between embedded preview and developed image",
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
             Action::NextColorMap => "Next color map",
@@ -511,6 +515,7 @@ impl Action {
             | Action::CloseSlot
             | Action::CloseAllSlots => KeyGroup::Layout,
             Action::DevelopRaw
+            | Action::SwapRawPreview
             | Action::ReadQrCodes
             | Action::ToggleCalibration
             | Action::NextColorMap
@@ -718,6 +723,7 @@ impl Action {
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
             Action::DevelopRaw => vec![KeyCombo::plain(D)],
+            Action::SwapRawPreview => vec![KeyCombo::plain(J)],
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],
             Action::NextColorMap => vec![KeyCombo::plain(C)],
@@ -761,7 +767,7 @@ impl Action {
             Action::SendToApp8 => vec![],
             Action::SendToApp9 => vec![],
             Action::TogglePixelPipeline => vec![],
-            Action::ToggleHistogram => vec![],
+            Action::ToggleHistogram => vec![KeyCombo::ctrl(H)],
             Action::ToggleZoomMap => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ToggleSkyChart => vec![],

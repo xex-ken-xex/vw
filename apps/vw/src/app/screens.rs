@@ -350,6 +350,7 @@ impl VwApp {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
                 dicom: shown.info.plugin == "DICOM",
+                raw: shown.info.plugin == "RAW",
                 edited: slot
                     .derive
                     .as_ref()

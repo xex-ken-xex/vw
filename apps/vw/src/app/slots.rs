@@ -14,7 +14,7 @@ use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
-use crate::viewer::{Full, Sequence, Shown, Slot, SlotLook};
+use crate::viewer::{Full, RawFace, Sequence, Shown, Slot, SlotLook};
 
 use super::*;
 
@@ -341,6 +341,7 @@ impl VwApp {
         loaded: &mut Loaded,
     ) {
         let options = self.texture_options;
+        let keep_preview = self.settings().viewer.keep_raw_preview;
         let Some(shown) = &mut self.slots[index].shown else {
             return;
         };
@@ -349,10 +350,20 @@ impl VwApp {
         }
         let info = &loaded.info;
         let fingerprint = shown.info.fingerprint;
-        shown.info = info.clone();
+        let preview_info = std::mem::replace(&mut shown.info, info.clone());
         shown.info.fingerprint = info.fingerprint.or(fingerprint);
+        let preview_full = shown.full.take();
         if let Some(thumb) = loaded.thumb.take() {
-            shown.thumb = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
+            let developed = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
+            let preview_thumb = std::mem::replace(&mut shown.thumb, developed);
+            if keep_preview {
+                shown.other = Some(Box::new(RawFace {
+                    thumb: preview_thumb,
+                    info: preview_info,
+                    full: preview_full,
+                    developed: false,
+                }));
+            }
         }
         self.log.detail(
             Level::Info,
@@ -439,6 +450,7 @@ impl VwApp {
             info: loaded.info,
             full: None,
             developed: false,
+            other: None,
         });
         s.error = None;
         // 同じ画像の読み直し（上書きされたとき）は、拡大している場所を見続けられるよう倍率と位置を保つ。
@@ -514,7 +526,7 @@ impl VwApp {
                 Some(memory::FullState {
                     id: s.id,
                     wanted: s.wants_full_now,
-                    resident: shown.full.as_ref().map(|f| f.bytes),
+                    resident: resident_bytes(shown),
                     pending: s.full_request.map(|(_, bytes)| bytes),
                     last_used: shown.full.as_ref().map_or(0, |f| f.last_used),
                     estimate: shown.info.full_bytes(),
@@ -533,6 +545,9 @@ impl VwApp {
             };
             if plan.evict.contains(&s.id) {
                 shown.full = None;
+                if let Some(other) = &mut shown.other {
+                    other.full = None;
+                }
             }
             if plan.request.contains(&s.id) {
                 request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
@@ -743,6 +758,10 @@ impl VwApp {
         let Some(shown) = &mut s.shown else {
             return;
         };
+        if shown.showing_raw_preview() {
+            self.swap_raw_face(index);
+            return;
+        }
         if shown.info.develop_size.is_none() || shown.developed {
             return;
         }
@@ -752,6 +771,28 @@ impl VwApp {
             self.loader.cancel(request);
         }
         request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
+    }
+
+    /// 現像したカメラ RAW の、埋め込みのプレビューと現像した画像を入れ替える。
+    /// 読み込み中のフル解像度の画像は、入れ替える前の方のものなので取り消す。
+    pub(super) fn swap_raw_face(&mut self, index: usize) {
+        let s = &mut self.slots[index];
+        let Some(shown) = &mut s.shown else {
+            return;
+        };
+        if !shown.swap_raw_face() {
+            return;
+        }
+        if let Some((request, _)) = s.full_request.take() {
+            self.loader.cancel(request);
+        }
+        let what = if shown.showing_raw_preview() {
+            "the camera's embedded preview"
+        } else {
+            "the image developed from the sensor data"
+        };
+        self.log
+            .info(format!("{}: showing {what}", shown.path.display()));
     }
 
     /// スロットをグリッドに並べて描く。
@@ -969,6 +1010,9 @@ impl VwApp {
             }
             if resp.develop {
                 self.develop_slot(i);
+            }
+            if resp.swap_raw_face {
+                self.swap_raw_face(i);
             }
             if resp.toggle_calibration {
                 self.toggle_calibration(i);
@@ -1334,4 +1378,14 @@ fn calibration_note(path: &Path, metadata: &vw_core::Metadata) -> Option<(PathBu
             details.join("; ")
         ),
     ))
+}
+
+/// スロットが持っているフル解像度の画像の大きさ。現像したカメラ RAW では、出していない方の分も足す。
+/// 足さないと、プレビューと現像の 2 枚を持つ RAW がメモリの上限を見かけより多く使ってしまう。
+fn resident_bytes(shown: &Shown) -> Option<usize> {
+    let other = shown.other.as_ref().and_then(|o| o.full.as_ref());
+    match (shown.full.as_ref(), other) {
+        (None, None) => None,
+        (a, b) => Some(a.map_or(0, |f| f.bytes) + b.map_or(0, |f| f.bytes)),
+    }
 }
