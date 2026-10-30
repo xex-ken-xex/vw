@@ -348,6 +348,10 @@ pub struct SimilarMark {
     pub color: Color32,
     /// 同じ組のほかの画像の名前（印にマウスを乗せたときに出す）。
     pub others: String,
+    /// 組の中での残す候補の順位（1 から、[`vw_compare::pairs::ranked`]）。鮮鋭度の分からない画像だけの組では `None`。
+    pub rank: Option<usize>,
+    /// 組の画像の数。
+    pub of: usize,
 }
 
 /// ゲージの出し方。
@@ -422,6 +426,8 @@ pub struct SlotResponse {
     pub compare: bool,
     /// 見出しの似た画像の印がクリックされた（組を比べる）。
     pub compare_similar: bool,
+    /// 似た画像の印の右クリックメニューで「これを残し、ほかを Bad にする」が選ばれた。
+    pub keep_in_group: bool,
     /// 右クリックメニューで「AI タグを付ける」が選ばれた。
     pub ai_tag: bool,
     /// 右クリックメニューで「顔を探す」が選ばれた。
@@ -2072,7 +2078,16 @@ impl Slot {
         }
 
         if let Some(mark) = similar.filter(|_| self.shown.is_some()) {
-            let text = format!("{}{}", egui_phosphor::regular::LINK_SIMPLE, mark.number);
+            let keeper = if mark.rank == Some(1) {
+                egui_phosphor::regular::STAR
+            } else {
+                ""
+            };
+            let text = format!(
+                "{}{}{keeper}",
+                egui_phosphor::regular::LINK_SIMPLE,
+                mark.number
+            );
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), mark.color);
             let mark_rect = Rect::from_min_max(
                 pos2(labels_right - galley.size().x - 8.0, header.min.y + 2.0),
@@ -2087,17 +2102,42 @@ impl Slot {
                 painter.rect_filled(mark_rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
             }
             painter.galley(mark_rect.center() - galley.size() / 2.0, galley, mark.color);
-            if response
-                .on_hover_text(tr1(
-                    lang,
-                    "Similar to {}. Click to align and compare.",
-                    &mark.others,
-                ))
-                .clicked()
-            {
+            let mut hint = tr1(
+                lang,
+                "Similar to {}. Click to align and compare.",
+                &mark.others,
+            );
+            if let Some(rank) = mark.rank {
+                hint.push('\n');
+                hint.push_str(
+                    &tr(
+                        lang,
+                        "Pick {rank} of {of} by sharpness, then size (the star marks the one to keep)",
+                    )
+                    .replace("{rank}", &rank.to_string())
+                    .replace("{of}", &mark.of.to_string()),
+                );
+            }
+            let response = response.on_hover_text(hint);
+            if response.clicked() {
                 out.compare_similar = true;
                 out.clicked = true;
             }
+            response.context_menu(|ui| {
+                if ui.button(tr(lang, "Compare the group")).clicked() {
+                    out.compare_similar = true;
+                    out.clicked = true;
+                    ui.close();
+                }
+                if ui
+                    .button(tr(lang, "Keep this one, flag the rest bad"))
+                    .clicked()
+                {
+                    out.keep_in_group = true;
+                    out.clicked = true;
+                    ui.close();
+                }
+            });
             labels_right = mark_rect.left();
         }
 
@@ -2290,6 +2330,7 @@ mod tests {
                 look: None,
                 compose: None,
                 fingerprint: None,
+                sharpness: None,
                 frame_delays: None,
             },
             full: None,

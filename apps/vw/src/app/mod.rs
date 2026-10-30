@@ -949,6 +949,7 @@ impl VwApp {
             Action::ToggleFaceFrames => self.show_faces = !self.show_faces,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
+            Action::KeepInGroup => self.keep_in_group(self.active),
             Action::Tag1
             | Action::Tag2
             | Action::Tag3

@@ -349,9 +349,10 @@ impl VwApp {
             return;
         }
         let info = &loaded.info;
-        let fingerprint = shown.info.fingerprint;
+        let (fingerprint, sharpness) = (shown.info.fingerprint, shown.info.sharpness);
         let preview_info = std::mem::replace(&mut shown.info, info.clone());
         shown.info.fingerprint = info.fingerprint.or(fingerprint);
+        shown.info.sharpness = info.sharpness.or(sharpness);
         let preview_full = shown.full.take();
         if let Some(thumb) = loaded.thumb.take() {
             let developed = ctx.load_texture(format!("{}#thumb", path.display()), thumb, options);
@@ -988,6 +989,9 @@ impl VwApp {
             }
             if resp.compare_similar {
                 self.compare_similar(i);
+            }
+            if resp.keep_in_group {
+                self.keep_in_group(i);
             }
             if resp.read_qr {
                 if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {

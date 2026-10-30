@@ -184,7 +184,7 @@ impl VwApp {
         if self.menu_item(ui, Action::ToggleTagging, Some(self.tagging)) {
             chosen = Some(Action::ToggleTagging);
         }
-        for action in [Action::FlagGood, Action::FlagBad] {
+        for action in [Action::FlagGood, Action::FlagBad, Action::KeepInGroup] {
             if self.menu_item(ui, action, None) {
                 chosen = Some(action);
             }

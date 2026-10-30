@@ -1018,6 +1018,58 @@ impl CustomPalette {
     }
 }
 
+/// 似た画像の組（`[similar]`）の決まり。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SimilarSettings {
+    /// 同じカメラでこの秒数以内に続けて撮ったものを、連写として 1 つの組にする。0 で時刻が同じものだけ。
+    pub burst_seconds: u32,
+    /// 見た目の指紋（64 ビット）がこのビット数以下しか違わなければ似ているとみなす。
+    pub similar_bits: u32,
+}
+
+impl Default for SimilarSettings {
+    fn default() -> Self {
+        let rules = vw_compare::pairs::Rules::default();
+        Self {
+            burst_seconds: rules.burst_seconds,
+            similar_bits: rules.similar_bits,
+        }
+    }
+}
+
+impl SimilarSettings {
+    pub const BURST_RANGE: std::ops::RangeInclusive<u32> = 0..=60;
+    pub const BITS_RANGE: std::ops::RangeInclusive<u32> = 0..=24;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("similar");
+        Self {
+            burst_seconds: r
+                .get_valid(
+                    "burst_seconds",
+                    |v: &u32| Self::BURST_RANGE.contains(v),
+                    "must be 0 to 60",
+                )
+                .unwrap_or(d.burst_seconds),
+            similar_bits: r
+                .get_valid(
+                    "similar_bits",
+                    |v: &u32| Self::BITS_RANGE.contains(v),
+                    "must be 0 to 24",
+                )
+                .unwrap_or(d.similar_bits),
+        }
+    }
+
+    pub fn rules(&self) -> vw_compare::pairs::Rules {
+        vw_compare::pairs::Rules {
+            similar_bits: self.similar_bits,
+            burst_seconds: self.burst_seconds,
+        }
+    }
+}
+
 /// 確かめるためのノード（`[check]`）を、キーで足すときの値。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CheckSettings {
@@ -2215,6 +2267,7 @@ pub struct Settings {
     pub fits: Fits,
     pub pipeline: PipelineSettings,
     pub check: CheckSettings,
+    pub similar: SimilarSettings,
     pub send: SendSettings,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
@@ -2247,6 +2300,7 @@ impl Settings {
         let fits = Fits::read(&mut r);
         let pipeline = PipelineSettings::read(&mut r);
         let check = CheckSettings::read(&mut r);
+        let similar = SimilarSettings::read(&mut r);
         let send = SendSettings::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
@@ -2280,6 +2334,7 @@ impl Settings {
                 fits,
                 pipeline,
                 check,
+                similar,
                 send,
                 dicom_send,
                 dataset,
@@ -3030,6 +3085,23 @@ ae_title = "PACS"
                 deficiency: vw_pipeline::color_vision::Deficiency::Protan
             })
         ));
+    }
+
+    #[test]
+    fn similar_rules_take_their_values_from_the_settings() {
+        let (s, problems) =
+            Settings::from_toml("[similar]\nburst_seconds = 0\nsimilar_bits = 4\n").unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            s.similar.rules(),
+            vw_compare::pairs::Rules {
+                similar_bits: 4,
+                burst_seconds: 0
+            }
+        );
+        let (s, problems) = Settings::from_toml("[similar]\nburst_seconds = 600\n").unwrap();
+        assert_eq!(s.similar.burst_seconds, 2);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

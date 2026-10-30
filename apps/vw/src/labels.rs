@@ -133,6 +133,11 @@ impl LabelStore {
         })
     }
 
+    /// 画像のフラグを `flag` にする（`None` で外す）。
+    pub fn set_flag(&mut self, path: &Path, flag: Option<Flag>) -> Result<(), String> {
+        self.edit_file(path, |label| label.flag = flag)
+    }
+
     /// 画像のタグを付ける・外す。付いたら `true`。
     pub fn toggle_tag(&mut self, path: &Path, tag: &str) -> Result<bool, String> {
         self.edit_file(path, |label| {
