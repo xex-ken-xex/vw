@@ -288,6 +288,37 @@ pub struct Measured {
 /// 重みなしのモーメントは裾の雑音で大きく振れ、半値の面積は画素の粗さに引っ張られるため。
 /// 重みの幅が星の σ と一致したとき、重み付きの分散は σ² / 2 になる。
 pub fn measure_fwhm(img: &Float) -> Option<Measured> {
+    let mut sigmas: Vec<f32> = find_stars(img)?
+        .into_iter()
+        .filter(|s| s.ellipticity < 0.3)
+        .map(|s| s.sigma)
+        .collect();
+    if sigmas.len() < MIN_STARS {
+        return None;
+    }
+    let stars = sigmas.len();
+    crate::astro::median(&mut sigmas).map(|s| Measured {
+        fwhm: s * FWHM_PER_SIGMA,
+        stars,
+    })
+}
+
+/// 1 つの星の形（適応モーメントで測ったもの）。位置は画素の中心を整数にした座標。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shape {
+    pub x: f32,
+    pub y: f32,
+    /// ガウスの σ（画素）。FWHM はこれに [`FWHM_PER_SIGMA`] を掛けたもの。
+    pub sigma: f32,
+    /// (長軸² − 短軸²) / (長軸² + 短軸²)。丸い星で 0。
+    pub ellipticity: f32,
+    /// 背景を引いた明るさの和（重み付き）。明るい星を選ぶのに使う。
+    pub flux: f32,
+}
+
+/// 写っている星を探して形を測る。画像が小さすぎるか、星らしいものが 1 つもなければ `None`。
+/// 端にかかるもの、測る途中で外れたものは除く。丸くないもの（重なった星や流れた星）は残す。
+pub fn find_stars(img: &Float) -> Option<Vec<Shape>> {
     let (w, h, n) = (img.width, img.height, img.channels);
     if w < 16 || h < 16 {
         return None;
@@ -310,19 +341,12 @@ pub fn measure_fwhm(img: &Float) -> Option<Measured> {
     if limit <= 0.0 {
         return None;
     }
-    let found = components(&detail, w, h, limit);
-    let mut sigmas: Vec<f32> = found
-        .iter()
-        .filter_map(|c| star_sigma(&luma, w, h, c))
-        .collect();
-    if sigmas.len() < MIN_STARS {
-        return None;
-    }
-    let stars = sigmas.len();
-    crate::astro::median(&mut sigmas).map(|s| Measured {
-        fwhm: s * FWHM_PER_SIGMA,
-        stars,
-    })
+    Some(
+        components(&detail, w, h, limit)
+            .iter()
+            .filter_map(|c| star_shape(&luma, w, h, c))
+            .collect(),
+    )
 }
 
 /// しきい値を超えた画素のつながり（8 近傍）。`(画素の数, いちばん明るい細部の位置)`。
@@ -366,13 +390,13 @@ fn components(detail: &[f32], w: usize, h: usize, limit: f32) -> Vec<(usize, usi
     out
 }
 
-/// 1 つの星のガウスの σ。丸くない（重なった星や銀河）、端にかかる、収まらないものは `None`。
-fn star_sigma(luma: &[f32], w: usize, h: usize, &(area, at): &(usize, usize)) -> Option<f32> {
+/// 1 つの星の形。端にかかる、収まらないものは `None`。
+fn star_shape(luma: &[f32], w: usize, h: usize, &(area, at): &(usize, usize)) -> Option<Shape> {
     let mut s = ((area as f32 / std::f32::consts::PI).sqrt() / 1.5).max(0.8);
     let (mut cx, mut cy) = ((at % w) as f32, (at / w) as f32);
     let ring = ((s * 5.0).ceil() as usize + 3).min(40);
     let background = ring_median(luma, w, h, cx as usize, cy as usize, ring)?;
-    let (mut mxx, mut myy, mut mxy) = (0.0, 0.0, 0.0);
+    let (mut mxx, mut myy, mut mxy, mut flux) = (0.0, 0.0, 0.0, 0.0);
     for _ in 0..30 {
         let r = (s * 4.0).ceil() as isize + 1;
         let (x0, y0) = (cx.round() as isize, cy.round() as isize);
@@ -397,6 +421,7 @@ fn star_sigma(luma: &[f32], w: usize, h: usize, &(area, at): &(usize, usize)) ->
         if sum <= 0.0 {
             return None;
         }
+        flux = sum;
         let (ox, oy) = (sx / sum, sy / sum);
         mxx = sxx / sum - ox * ox;
         myy = syy / sum - oy * oy;
@@ -414,7 +439,13 @@ fn star_sigma(luma: &[f32], w: usize, h: usize, &(area, at): &(usize, usize)) ->
         }
     }
     let ellipticity = ((mxx - myy).powi(2) + 4.0 * mxy * mxy).sqrt() / (mxx + myy);
-    (ellipticity < 0.3).then_some(s)
+    Some(Shape {
+        x: cx,
+        y: cy,
+        sigma: s,
+        ellipticity,
+        flux,
+    })
 }
 
 /// `(x, y)` を中心とする一辺 `2r + 1` の正方形の縁の画素の中央値（星の周りの背景）。

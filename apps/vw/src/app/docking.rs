@@ -26,11 +26,12 @@ pub(super) const MAP: &str = "map";
 pub(super) const DATASETS: &str = "datasets";
 pub(super) const SKY: &str = "sky_chart";
 pub(super) const COMPARE: &str = "compare_images";
+pub(super) const SUBFRAMES: &str = "subframes";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 8] = [
-    ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY, COMPARE,
+pub(super) const TOOLS: [&str; 9] = [
+    ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY, COMPARE, SUBFRAMES,
 ];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
@@ -43,6 +44,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         DATASETS => ([1100.0, 700.0], None),
         SKY => ([900.0, 640.0], None),
         COMPARE => ([1280.0, 800.0], None),
+        SUBFRAMES => ([1000.0, 700.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -125,6 +127,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         MAP => "Map",
         SKY => "Sky chart",
         COMPARE => "Compare images",
+        SUBFRAMES => "Subframes",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -233,6 +236,7 @@ impl Panes for AppPanes<'_> {
             MAP => self.app.map_pane(ui),
             SKY => self.app.sky_pane(ui),
             COMPARE => self.app.compare_pane(ui),
+            SUBFRAMES => self.app.subframes_pane(ui),
             DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
@@ -303,6 +307,7 @@ impl VwApp {
             DATASETS => &mut self.show_datasets,
             SKY => &mut self.sky.open,
             COMPARE => &mut self.compare.open,
+            SUBFRAMES => &mut self.subframes.open,
             _ => &mut self.map.open,
         }
     }

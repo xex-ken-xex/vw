@@ -498,6 +498,46 @@ impl VwApp {
         }
     }
 
+    /// サブフレームの欄。表で選んだ画像はそのフォルダへ移って選び、除く画像には悪いフラグを付ける。
+    pub(super) fn subframes_pane(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let settings = &self.settings.settings;
+        let registry = self.loader.registry().clone();
+        let inputs = crate::subframes_window::Inputs {
+            lang: self.lang(),
+            folder: self.current.as_deref(),
+            registry: &registry,
+            order: settings.tree.order(),
+            limits: settings.subframes.limits(),
+            fps: settings.subframes.blink_fps,
+        };
+        let commands = self.subframes.ui(ui, &inputs);
+        for problem in self.subframes.take_problems() {
+            self.log.error(format!("Subframes: {problem}"));
+        }
+        for command in commands {
+            match command {
+                crate::subframes_window::Command::Open(path) => self.open_and_select(&ctx, path),
+                crate::subframes_window::Command::FlagBad(paths) => self.flag_rejected(&paths),
+            }
+        }
+    }
+
+    fn flag_rejected(&mut self, paths: &[PathBuf]) {
+        if !paths.iter().all(|p| self.labelable(p)) {
+            return;
+        }
+        let mut flagged = 0;
+        for path in paths {
+            match self.labels.set_flag(path, Some(crate::labels::Flag::Bad)) {
+                Ok(()) => flagged += 1,
+                Err(e) => self.log.error(e),
+            }
+        }
+        self.log
+            .info(format!("Subframes: {flagged} rejected images flagged bad"));
+    }
+
     /// 地図や星図から開いた画像のフォルダへ移り、その画像を選ぶ。読み込みの列ではその画像を
     /// 先にする（数百枚のフォルダで、選んだ画像が最後に読まれるのを待たないように）。
     fn open_and_select(&mut self, ctx: &egui::Context, path: PathBuf) {

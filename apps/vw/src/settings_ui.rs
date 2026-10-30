@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 121] = [
+const ITEMS: [Item; 123] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -789,6 +789,20 @@ const ITEMS: [Item; 121] = [
         title: "Beam",
         description: "Draw the beam (BMAJ, BMIN and BPA, the resolution of radio images) as an ellipse at the bottom left of the image.",
         widget: fits_beam_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "subframes.fwhm_ratio",
+        title: "Subframe rejection",
+        description: "Limits for rejecting subframes in the Subframes pane. FWHM and star count are compared with the median of the folder: a frame is rejected when its FWHM is over that many times the median (blurred by seeing or focus), its eccentricity is over the limit (trailed stars), it has fewer stars than that share of the median (clouds), or its background is brighter than the median by that many times the noise (twilight, the moon).",
+        widget: subframes_limits_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "subframes.blink_fps",
+        title: "Blink speed",
+        description: "Images per second when the Subframes pane plays the aligned images one after another.",
+        widget: subframes_fps_widget,
     },
     Item {
         section: Section::Fits,
@@ -1605,6 +1619,57 @@ fn check_peaking_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
                 .max_decimals(2),
         );
         changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+    });
+    changed
+}
+
+fn subframes_limits_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::settings::SubframesSettings as S;
+    let c = &mut s.subframes;
+    let mut changed = false;
+    egui::Grid::new("subframes_limits").show(ui, |ui| {
+        for (label, value, range, speed) in [
+            ("FWHM (× median)", &mut c.fwhm_ratio, S::FWHM_RANGE, 0.01),
+            (
+                "Eccentricity",
+                &mut c.eccentricity,
+                S::ECCENTRICITY_RANGE,
+                0.01,
+            ),
+            ("Stars (× median)", &mut c.stars_ratio, S::STARS_RANGE, 0.01),
+            (
+                "Background (× noise)",
+                &mut c.background_sigmas,
+                S::BACKGROUND_RANGE,
+                0.1,
+            ),
+        ] {
+            ui.label(tr(lang, label));
+            let r = ui.add(
+                egui::DragValue::new(value)
+                    .range(range)
+                    .speed(speed)
+                    .max_decimals(2),
+            );
+            changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+            ui.end_row();
+        }
+    });
+    changed
+}
+
+fn subframes_fps_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::settings::SubframesSettings as S;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::DragValue::new(&mut s.subframes.blink_fps)
+                .range(S::FPS_RANGE)
+                .speed(0.1)
+                .max_decimals(1),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "images per second"));
     });
     changed
 }
