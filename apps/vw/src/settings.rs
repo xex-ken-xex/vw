@@ -1018,6 +1018,86 @@ impl CustomPalette {
     }
 }
 
+/// 確かめるためのノード（`[check]`）を、キーで足すときの値。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CheckSettings {
+    /// 黒つぶれとみなす値（0〜1 の表示の値）以下。
+    pub clipping_low: f32,
+    /// 白飛びとみなす値以上。
+    pub clipping_high: f32,
+    /// フォーカスピーキングで輪郭とみなす、明るさの細かな変化（ラプラシアン）。小さいほど多く塗る。
+    pub peaking_threshold: f32,
+    /// フォーカスピーキングで、輪郭でない所を暗くする割合。
+    pub peaking_dim: f32,
+    pub color_vision: vw_pipeline::color_vision::Deficiency,
+}
+
+impl Default for CheckSettings {
+    fn default() -> Self {
+        Self {
+            clipping_low: 0.0,
+            clipping_high: 1.0,
+            peaking_threshold: 0.15,
+            peaking_dim: 0.3,
+            color_vision: vw_pipeline::color_vision::Deficiency::default(),
+        }
+    }
+}
+
+impl CheckSettings {
+    pub const PEAKING_RANGE: std::ops::RangeInclusive<f32> = 0.01..=4.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("check");
+        let unit = |v: &f32| (0.0..=1.0).contains(v);
+        Self {
+            clipping_low: r
+                .get_valid("clipping_low", unit, "must be 0 to 1")
+                .unwrap_or(d.clipping_low),
+            clipping_high: r
+                .get_valid("clipping_high", unit, "must be 0 to 1")
+                .unwrap_or(d.clipping_high),
+            peaking_threshold: r
+                .get_valid(
+                    "peaking_threshold",
+                    |v: &f32| Self::PEAKING_RANGE.contains(v),
+                    "must be 0.01 to 4",
+                )
+                .unwrap_or(d.peaking_threshold),
+            peaking_dim: r
+                .get_valid("peaking_dim", unit, "must be 0 to 1")
+                .unwrap_or(d.peaking_dim),
+            color_vision: r.get("color_vision").unwrap_or(d.color_vision),
+        }
+    }
+
+    /// キーで足すノード。
+    pub fn node(&self, kind: &str) -> Option<vw_pipeline::nodes::Node> {
+        use vw_pipeline::nodes::Node;
+        Some(match kind {
+            "clipping" => Node::Clipping {
+                low: self.clipping_low,
+                high: self.clipping_high,
+            },
+            "peaking" => {
+                let Some(Node::Peaking { color, .. }) = Node::new("peaking") else {
+                    return None;
+                };
+                Node::Peaking {
+                    threshold: self.peaking_threshold,
+                    color,
+                    dim: self.peaking_dim,
+                }
+            }
+            "color_vision" => Node::ColorVision {
+                deficiency: self.color_vision,
+            },
+            _ => return None,
+        })
+    }
+}
+
 /// 画素の変換（`[pipeline]`）。どの種類の画像に、どの段を初めから入れるか。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PipelineSettings {
@@ -2134,6 +2214,7 @@ pub struct Settings {
     pub dicom: Dicom,
     pub fits: Fits,
     pub pipeline: PipelineSettings,
+    pub check: CheckSettings,
     pub send: SendSettings,
     pub dicom_send: DicomSend,
     pub dataset: Dataset,
@@ -2165,6 +2246,7 @@ impl Settings {
         let dicom = Dicom::read(&mut r);
         let fits = Fits::read(&mut r);
         let pipeline = PipelineSettings::read(&mut r);
+        let check = CheckSettings::read(&mut r);
         let send = SendSettings::read(&mut r);
         let dicom_send = DicomSend::read(&mut r);
         let dataset = Dataset::read(&mut r);
@@ -2197,6 +2279,7 @@ impl Settings {
                 dicom,
                 fits,
                 pipeline,
+                check,
                 send,
                 dicom_send,
                 dataset,
@@ -2924,6 +3007,36 @@ ae_title = "PACS"
         let names: Vec<_> = s.dicom_send.destinations.iter().map(|d| &d.name).collect();
         assert_eq!(names, ["ok"]);
         assert_eq!(problems.len(), 3);
+    }
+
+    #[test]
+    fn check_nodes_take_their_values_from_the_settings() {
+        let (s, problems) = Settings::from_toml(
+            "[check]\nclipping_high = 0.98\npeaking_threshold = 0.3\ncolor_vision = \"protan\"\n",
+        )
+        .unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(matches!(
+            s.check.node("clipping"),
+            Some(vw_pipeline::nodes::Node::Clipping { high, .. }) if high == 0.98
+        ));
+        assert!(matches!(
+            s.check.node("peaking"),
+            Some(vw_pipeline::nodes::Node::Peaking { threshold, .. }) if threshold == 0.3
+        ));
+        assert!(matches!(
+            s.check.node("color_vision"),
+            Some(vw_pipeline::nodes::Node::ColorVision {
+                deficiency: vw_pipeline::color_vision::Deficiency::Protan
+            })
+        ));
+    }
+
+    #[test]
+    fn out_of_range_check_values_fall_back_to_the_default() {
+        let (s, problems) = Settings::from_toml("[check]\nclipping_high = 2.0\n").unwrap();
+        assert_eq!(s.check.clipping_high, 1.0);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

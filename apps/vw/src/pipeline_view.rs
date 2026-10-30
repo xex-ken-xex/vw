@@ -872,6 +872,15 @@ impl PipelineView {
                         ui.close();
                     }
                 }
+                ui.menu_button(tr(lang, "Check"), |ui| {
+                    for kind in nodes::Node::CHECK_KINDS {
+                        if ui.button(tr(lang, nodes::Node::title(kind))).clicked() {
+                            self.add_node(kind);
+                            added = true;
+                            ui.close();
+                        }
+                    }
+                });
                 ui.menu_button(tr(lang, "Astronomy"), |ui| {
                     for kind in nodes::Node::ASTRO_KINDS {
                         if ui.button(tr(lang, nodes::Node::title(kind))).clicked() {
@@ -906,6 +915,7 @@ impl PipelineView {
                 let matching: Vec<&str> = nodes::Node::KINDS
                     .into_iter()
                     .chain(nodes::Node::ASTRO_KINDS)
+                    .chain(nodes::Node::CHECK_KINDS)
                     .filter(|k| {
                         let title = tr(lang, nodes::Node::title(k));
                         filter.is_empty()
@@ -2734,6 +2744,60 @@ fn chain_body(ui: &mut egui::Ui, lang: Language, node: &mut nodes::Node) -> bool
             ui.weak(tr(
                 lang,
                 "Fills the stars found from the small bright details with the surrounding sky. Large glows of bright stars may stay.",
+            ));
+        }
+        nodes::Node::Clipping { low, high } => {
+            egui::Grid::new("clipping").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Crushed at or below"));
+                edited |= unit(ui, low, 0.0, 1.0, 0.002);
+                ui.end_row();
+                ui.label(tr(lang, "Blown out at or above"));
+                edited |= unit(ui, high, 0.0, 1.0, 0.002);
+                ui.end_row();
+            });
+            ui.weak(tr(
+                lang,
+                "Red: all channels blown out. Yellow: some channels blown out. Blue: crushed. Put it last; it shows the values coming into it.",
+            ));
+        }
+        nodes::Node::Peaking {
+            threshold,
+            color,
+            dim,
+        } => {
+            egui::Grid::new("peaking").num_columns(2).show(ui, |ui| {
+                ui.label(tr(lang, "Threshold"));
+                edited |= unit(ui, threshold, 0.01, 4.0, 0.005);
+                ui.end_row();
+                ui.label(tr(lang, "Color"));
+                edited |= ui.color_edit_button_rgb(color).changed();
+                ui.end_row();
+                ui.label(tr(lang, "Dimming"));
+                edited |= unit(ui, dim, 0.0, 1.0, 0.005);
+                ui.end_row();
+            });
+            ui.weak(tr(
+                lang,
+                "Paints the edges whose brightness changes sharply (in focus). A lower threshold paints more. Zoom to 100% to judge; a shrunk view blurs the edges.",
+            ));
+        }
+        nodes::Node::ColorVision { deficiency } => {
+            use vw_pipeline::color_vision::Deficiency;
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Type"));
+                egui::ComboBox::from_id_salt("color_vision_type")
+                    .selected_text(tr(lang, deficiency.title()))
+                    .show_ui(ui, |ui| {
+                        for d in Deficiency::ALL {
+                            edited |= ui
+                                .selectable_value(deficiency, d, tr(lang, d.title()))
+                                .changed();
+                        }
+                    });
+            });
+            ui.weak(tr(
+                lang,
+                "How the colors look with this type of color vision (Machado et al. 2009). Gray images look the same.",
             ));
         }
         nodes::Node::Mix { matrix } => {

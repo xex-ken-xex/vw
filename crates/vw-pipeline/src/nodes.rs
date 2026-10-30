@@ -182,6 +182,41 @@ pub enum Node {
         #[serde(default = "default_star_threshold")]
         threshold: f32,
     },
+    /// 白飛び・黒つぶれの印。`high` 以上の値を赤（全チャンネル）か黄（一部のチャンネル）、
+    /// 全チャンネルが `low` 以下の画素を青で塗る。
+    Clipping {
+        #[serde(default)]
+        low: f32,
+        #[serde(default = "one")]
+        high: f32,
+    },
+    /// フォーカスピーキング。明るさの細かな変化（ラプラシアン）が `threshold` を超える所を `color` で塗り、
+    /// ほかは `dim` だけ暗くして輪郭を目立たせる。
+    Peaking {
+        #[serde(default = "default_peaking_threshold")]
+        threshold: f32,
+        #[serde(default = "default_peaking_color")]
+        color: [f32; 3],
+        #[serde(default = "default_peaking_dim")]
+        dim: f32,
+    },
+    /// 色覚特性の見え方の模擬（[`crate::color_vision`]）。
+    ColorVision {
+        #[serde(default)]
+        deficiency: crate::color_vision::Deficiency,
+    },
+}
+
+fn default_peaking_threshold() -> f32 {
+    0.15
+}
+
+fn default_peaking_color() -> [f32; 3] {
+    [1.0, 0.15, 0.15]
+}
+
+fn default_peaking_dim() -> f32 {
+    0.3
 }
 
 fn default_iterations() -> u32 {
@@ -251,6 +286,9 @@ impl Node {
         "tone",
     ];
 
+    /// 「確認」のまとまり（見るための印や模擬。画像を作る処理ではない）に並べる順。
+    pub const CHECK_KINDS: [&'static str; 3] = ["clipping", "peaking", "color_vision"];
+
     /// 「天体」のまとまりに並べる順。
     pub const ASTRO_KINDS: [&'static str; 6] = [
         "stretch",
@@ -308,6 +346,18 @@ impl Node {
                 size: three(),
                 threshold: default_star_threshold(),
             },
+            "clipping" => Node::Clipping {
+                low: 0.0,
+                high: 1.0,
+            },
+            "peaking" => Node::Peaking {
+                threshold: default_peaking_threshold(),
+                color: default_peaking_color(),
+                dim: default_peaking_dim(),
+            },
+            "color_vision" => Node::ColorVision {
+                deficiency: crate::color_vision::Deficiency::default(),
+            },
             _ => return None,
         })
     }
@@ -328,6 +378,9 @@ impl Node {
             Node::StarReduce { .. } => "star_reduce",
             Node::Deconvolve { .. } => "deconvolve",
             Node::StarRemove { .. } => "star_remove",
+            Node::Clipping { .. } => "clipping",
+            Node::Peaking { .. } => "peaking",
+            Node::ColorVision { .. } => "color_vision",
         }
     }
 
@@ -348,6 +401,9 @@ impl Node {
             "star_reduce" => "Star reduction",
             "deconvolve" => "Deconvolution",
             "star_remove" => "Star removal",
+            "clipping" => "Clipping warning",
+            "peaking" => "Focus peaking",
+            "color_vision" => "Color vision simulation",
             _ => "Node",
         }
     }
@@ -397,7 +453,7 @@ impl Node {
 
     /// 周りの画素も見るノード（色だけで決まらないので、3D LUT にできない）。
     pub fn spatial(&self) -> bool {
-        self.heavy() || matches!(self, Node::Noise { .. })
+        self.heavy() || matches!(self, Node::Noise { .. } | Node::Peaking { .. })
     }
 
     /// 大きな画像では時間のかかるノード。値を動かしている間は縮めた画像で計算する。
@@ -506,9 +562,97 @@ impl Node {
             Node::StarRemove { size, threshold } => {
                 crate::astro::remove_stars(img, *size, *threshold)
             }
+            Node::Clipping { low, high } => mark_clipping(img, *low, *high),
+            Node::Peaking {
+                threshold,
+                color,
+                dim,
+            } => peaking(img, *threshold, *color, *dim),
+            Node::ColorVision { deficiency } => crate::color_vision::simulate(img, *deficiency),
         }
         Ok(note)
     }
+}
+
+/// 灰色の画像を RGB にする。印を色で塗るノードが、灰色の画像にも色を付けられるように。
+fn to_rgb(img: &mut Float) {
+    if img.channels == 3 {
+        return;
+    }
+    img.data = img.data.iter().flat_map(|&v| [v; 3]).collect();
+    img.channels = 3;
+}
+
+/// 白飛びは赤（全チャンネルが `high` 以上）か黄（一部のチャンネルだけ）、黒つぶれ（全チャンネルが
+/// `low` 以下）は青で塗る。一部のチャンネルの白飛びを分けるのは、空の青や花の赤のように 1 色だけ
+/// 飛んで色が変わっている所を、全部飛んだ白と見分けるため。
+fn mark_clipping(img: &mut Float, low: f32, high: f32) {
+    const ALL: [f32; 3] = [1.0, 0.0, 0.0];
+    const SOME: [f32; 3] = [1.0, 0.9, 0.0];
+    const SHADOW: [f32; 3] = [0.0, 0.35, 1.0];
+    let gray = img.channels == 1;
+    to_rgb(img);
+    for px in img.data.as_chunks_mut::<3>().0 {
+        // 灰色から広げた画素は 3 つとも同じ値なので、一部だけ飛ぶことはない。
+        let over = px.iter().filter(|&&v| v >= high).count();
+        let under = px.iter().all(|&v| v <= low);
+        *px = match (over, under) {
+            (3, _) => ALL,
+            (1 | 2, _) if !gray => SOME,
+            (_, true) => SHADOW,
+            _ => *px,
+        };
+    }
+}
+
+/// 明るさ（RGB なら Rec. 709 の重み）。
+fn luma(img: &Float) -> Vec<f32> {
+    match img.channels {
+        1 => img.data.clone(),
+        _ => img
+            .data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|[r, g, b]| 0.2126 * r + 0.7152 * g + 0.0722 * b)
+            .collect(),
+    }
+}
+
+/// 明るさのラプラシアン（上下左右との差の和）の大きさが `threshold` を超える画素を `color` で塗り、
+/// ほかを `dim` だけ暗くする。白と黒のくっきりした境目で 1 になる。
+///
+/// 勾配（ソーベル）で測らないのは、ぼけていても明暗の差の大きい境目は勾配が大きく、ぼけた所を
+/// 広く塗ってしまうため。ラプラシアンは、ぼけると急に小さくなる細かな変化だけを拾う。
+fn peaking(img: &mut Float, threshold: f32, color: [f32; 3], dim: f32) {
+    let (w, h) = (img.width, img.height);
+    if w < 3 || h < 3 {
+        return;
+    }
+    let l = luma(img);
+    let at = |x: usize, y: usize| l[y * w + x];
+    let keep = 1.0 - dim.clamp(0.0, 1.0);
+    to_rgb(img);
+    for_row_bands(img, |first, rows| {
+        for (i, row) in rows.chunks_exact_mut(w * 3).enumerate() {
+            let y = first + i;
+            for x in 0..w {
+                let px = &mut row[x * 3..x * 3 + 3];
+                let edge = x > 0 && y > 0 && x + 1 < w && y + 1 < h && {
+                    let laplacian =
+                        4.0 * at(x, y) - at(x - 1, y) - at(x + 1, y) - at(x, y - 1) - at(x, y + 1);
+                    laplacian.abs() > threshold
+                };
+                if edge {
+                    px.copy_from_slice(&color);
+                } else {
+                    for v in px {
+                        *v *= keep;
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// ノードが知らせること。画素の変換のウインドウでノードの下に出す。
@@ -853,6 +997,80 @@ mod tests {
         assert!(matches!(stars, Node::StarReduce { size: 1, .. }));
         let deconvolve = Node::new("deconvolve").unwrap().scaled(2);
         assert!(matches!(deconvolve, Node::Deconvolve { fwhm: 1.5, .. }));
+    }
+
+    #[test]
+    fn check_nodes_are_saved_with_their_values() {
+        for kind in Node::CHECK_KINDS {
+            let node = Node::new(kind).unwrap();
+            assert_eq!(node.kind(), kind);
+            let text = toml::to_string(&Wrap { node: node.clone() }).unwrap();
+            let back: Wrap = toml::from_str(&text).unwrap();
+            assert_eq!(back.node, node, "{text}");
+        }
+    }
+
+    #[test]
+    fn clipping_paints_fully_blown_red_partly_blown_yellow_and_crushed_blue() {
+        let mut img = Float::new(
+            4,
+            1,
+            3,
+            vec![
+                1.0, 1.0, 1.0, // 全部飛んだ
+                1.0, 0.5, 0.2, // 赤だけ飛んだ
+                0.0, 0.0, 0.0, // つぶれた
+                0.4, 0.5, 0.6, // そのまま
+            ],
+        );
+        apply(&[Node::new("clipping").unwrap()], &mut img).unwrap();
+        let px: Vec<[f32; 3]> = img.data.as_chunks::<3>().0.to_vec();
+        assert_eq!(px[0], [1.0, 0.0, 0.0]);
+        assert_eq!(px[1], [1.0, 0.9, 0.0]);
+        assert_eq!(px[2], [0.0, 0.35, 1.0]);
+        assert_eq!(px[3], [0.4, 0.5, 0.6]);
+    }
+
+    #[test]
+    fn clipping_colors_gray_images_too() {
+        let mut img = Float::new(2, 1, 1, vec![1.0, 0.5]);
+        apply(&[Node::new("clipping").unwrap()], &mut img).unwrap();
+        assert_eq!(img.channels, 3);
+        assert_eq!(&img.data[..3], &[1.0, 0.0, 0.0]);
+        assert_eq!(&img.data[3..], &[0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn peaking_marks_sharp_edges_and_dims_the_rest() {
+        // 左半分が黒、右半分が白の 6×3。境目の列だけ塗られる。
+        let data = (0..18).map(|i| if i % 6 < 3 { 0.0 } else { 1.0 }).collect();
+        let mut img = Float::new(6, 3, 1, data);
+        apply(&[Node::new("peaking").unwrap()], &mut img).unwrap();
+        let px = |x: usize, y: usize| {
+            let i = (y * 6 + x) * 3;
+            [img.data[i], img.data[i + 1], img.data[i + 2]]
+        };
+        assert_eq!(px(2, 1), [1.0, 0.15, 0.15]);
+        assert_eq!(px(3, 1), [1.0, 0.15, 0.15]);
+        assert_eq!(px(5, 1), [0.7, 0.7, 0.7]);
+        assert_eq!(px(0, 1), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn peaking_leaves_a_blurred_edge_unmarked_even_when_its_contrast_is_high() {
+        // 黒から白へ 10 画素かけて上がる（ぼけた境目）。傾きは 0.1／画素で、隣との差は小さい。
+        let data = (0..36).map(|i| ((i % 12) as f32 * 0.1).min(1.0)).collect();
+        let mut img = Float::new(12, 3, 1, data);
+        apply(&[Node::new("peaking").unwrap()], &mut img).unwrap();
+        assert!(img.data.chunks(3).all(|p| p[0] == p[1]), "{:?}", img.data);
+    }
+
+    #[test]
+    fn peaking_ignores_gentle_gradients() {
+        let data = (0..18).map(|i| (i % 6) as f32 * 0.01).collect();
+        let mut img = Float::new(6, 3, 1, data);
+        apply(&[Node::new("peaking").unwrap()], &mut img).unwrap();
+        assert!(img.data.chunks(3).all(|p| p[0] == p[1]));
     }
 
     #[test]

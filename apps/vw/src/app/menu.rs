@@ -105,7 +105,7 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 7] = [
+                let groups: [&[Action]; 8] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -121,6 +121,11 @@ impl VwApp {
                         Action::ToggleCalibration,
                     ],
                     &[Action::NextColorMap, Action::ToggleColorGauge],
+                    &[
+                        Action::ToggleClippingWarning,
+                        Action::ToggleFocusPeaking,
+                        Action::ToggleColorVision,
+                    ],
                     &[Action::ReadQrCodes],
                 ];
                 for (i, group) in groups.into_iter().enumerate() {

@@ -795,6 +795,42 @@ impl VwApp {
             .info(format!("{}: showing {what}", shown.path.display()));
     }
 
+    /// アクティブなスロットの画素の変換に、確かめるためのノード（白飛びの印など）を足す。
+    /// もう入っていれば外す。値は設定の `[check]` のもの。
+    pub(super) fn toggle_check_node(&mut self, kind: &str) {
+        let Some(node) = self.settings().check.node(kind) else {
+            return;
+        };
+        let presets = self.presets.presets().to_vec();
+        let Some(slot) = self.slots.get_mut(self.active) else {
+            return;
+        };
+        if slot.shown.is_none() {
+            return;
+        }
+        let mut values = slot
+            .derive
+            .as_ref()
+            .map(|d| d.values.clone())
+            .unwrap_or_default();
+        let title = vw_pipeline::nodes::Node::title(kind);
+        match values.chain.iter().position(|n| n.kind() == kind) {
+            Some(i) => {
+                values.chain.remove(i);
+                self.log.info(format!("{title}: off"));
+            }
+            None => {
+                values.chain.push(node);
+                self.log.info(format!("{title}: on"));
+            }
+        }
+        crate::derive::edit(&mut slot.derive, values, &presets);
+        // 比較や差の表示にしていると、足したノードの効き目が半分しか見えないため。
+        if let Some(d) = &mut slot.derive {
+            d.view = crate::derive::View::Derived;
+        }
+    }
+
     /// スロットをグリッドに並べて描く。
     ///
     /// egui の Grid ウィジェットを使わず矩形を自分で割り当てるのは、Grid が中身の大きさに
