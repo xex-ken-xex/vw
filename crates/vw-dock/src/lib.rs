@@ -7,8 +7,13 @@
 //! 別ウインドウへ移り、元のウィジェットが消えてもドラッグを続けるため。また、マウスを
 //! 押したままの出来事は押したウインドウにしか届かない（Windows のキャプチャ、X11 の暗黙の
 //! つかみ）ので、ほかのウインドウの上にいるかどうかは画面の座標どうしで比べる。
+//!
+//! ペインが 1 つだけの別ウインドウは、OS のウインドウバーでドラッグしてもドッキングできる。
+//! そのドラッグはウインドウマネージャが行い、マウスの出来事がアプリに届かないので、
+//! ウインドウが動いた間だけ OS にマウスの位置とボタンを直接たずねる（[`os_pointer`]）。
 
 pub mod guides;
+mod os_pointer;
 pub mod tree;
 
 use std::collections::BTreeMap;
@@ -34,10 +39,19 @@ pub trait Panes {
     }
     /// 見出しの行の右に置くボタン。
     fn header_buttons(&mut self, _ui: &mut Ui, _pane: &str) {}
-    /// 見出しの行の中身。左から右へ並べる行で呼ぶ。既定は名前と、右に詰めた [`Panes::header_buttons`]。
+    /// 名前のほかに、見出しの行に置くもの（[`Panes::header_buttons`] など）があるか。
+    /// ペインが 1 つだけの別ウインドウでは、名前は OS のウインドウバーに出すので、
+    /// ほかに置くものがなければ見出しの行ごと出さない。
+    fn has_header_controls(&self, _pane: &str) -> bool {
+        false
+    }
+    /// 見出しの行の中身。左から右へ並べる行で呼ぶ。`titled` が偽なら名前を出さない。
+    /// 既定は名前と、右に詰めた [`Panes::header_buttons`]。
     /// 行のどこを押してもドラッグになるが、行に置いたボタンはボタンとして押せる。
-    fn header(&mut self, ui: &mut Ui, pane: &str) {
-        vw_ui::panel::header(ui, &self.title(pane));
+    fn header(&mut self, ui: &mut Ui, pane: &str, titled: bool) {
+        if titled {
+            vw_ui::panel::header(ui, &self.title(pane));
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.header_buttons(ui, pane);
         });
@@ -122,6 +136,9 @@ struct Float {
     /// 今いるモニタでの 1 ポイントの物理ピクセル数。
     ppp: f32,
     close: bool,
+    /// 前のフレームの外枠（画面の座標、物理ピクセル）。OS のウインドウバーで動かされたことを
+    /// 知るのに使う。
+    last_outer: Option<Rect>,
 }
 
 impl Float {
@@ -161,6 +178,9 @@ fn to_screen(inner: Rect, local: Pos2, ppp: f32) -> Pos2 {
 struct Geometry {
     /// 中身の範囲（画面の座標、物理ピクセル）。
     inner: Rect,
+    /// `inner` が画面での本当の位置か。Wayland ではウインドウの位置が分からず、
+    /// どのウインドウも左上が原点にあるものとして並べる。
+    on_screen: bool,
     /// このウインドウでの 1 ポイントの物理ピクセル数。
     ppp: f32,
     /// ペインを並べた範囲（ウインドウの中の座標）。
@@ -202,6 +222,9 @@ struct Drag {
     /// 画面の外へ飛んでいくため（X11 で確かめた）。そのウインドウは OS の題名の帯でも動かせる。
     follows: bool,
     title: String,
+    /// OS のウインドウバーでウインドウを動かしているドラッグ。ウインドウは OS が動かし、
+    /// マウスの位置とボタンは OS にたずねる。
+    os_move: bool,
 }
 
 struct Resize {
@@ -276,6 +299,7 @@ impl Dock {
                     frame: Vec2::ZERO,
                     ppp: 1.0,
                     close: false,
+                    last_outer: None,
                 }
             })
             .collect();
@@ -439,6 +463,7 @@ impl Dock {
             frame: Vec2::ZERO,
             ppp: 1.0,
             close: false,
+            last_outer: None,
         });
         self.note(format!("new window #{id} for {pane} at {rect:?}"));
         id
@@ -605,6 +630,7 @@ impl Dock {
             return;
         };
         let f = self.floats.remove(i);
+        self.geometry.remove(&Window::Float(id));
         let rect = f.rect();
         for p in f.root.as_ref().map(Node::panes).unwrap_or_default() {
             self.event(format!("window #{id} closed: hide {p}"));
@@ -671,6 +697,8 @@ impl Dock {
                     f.close = true;
                 }
             }
+            let outer = outer.map(|r| Rect::from_min_max(r.min * ppp, r.max * ppp));
+            self.watch_os_move(id, outer);
             egui::CentralPanel::no_frame().show(ctx, |ui| {
                 let area = ui.max_rect();
                 self.window_ui(ui, Window::Float(id), area, panes, labels);
@@ -711,18 +739,16 @@ impl Dock {
             .root(window)
             .map(|n| tree::arrange(n, area))
             .unwrap_or_default();
-        let (inner, ppp) = ui.ctx().input(|i| {
-            (
-                i.viewport()
-                    .inner_rect
-                    .unwrap_or(Rect::from_min_size(Pos2::ZERO, area.size())),
-                i.pixels_per_point,
-            )
-        });
+        let (inner, ppp) = ui
+            .ctx()
+            .input(|i| (i.viewport().inner_rect, i.pixels_per_point));
+        let on_screen = inner.is_some();
+        let inner = inner.unwrap_or(Rect::from_min_size(Pos2::ZERO, area.size()));
         self.geometry.insert(
             window,
             Geometry {
                 inner: inner * ppp,
+                on_screen,
                 ppp,
                 area,
                 panes: arranged.panes.clone(),
@@ -749,7 +775,8 @@ impl Dock {
     ) {
         let pane = &placed.pane;
         let mut content = placed.rect;
-        if panes.has_header(pane) {
+        let alone = self.alone_in(window).is_some();
+        if panes.has_header(pane) && (!alone || panes.has_header_controls(pane)) {
             let header = Rect::from_min_size(content.min, vec2(content.width(), HEADER));
             content.min.y += HEADER;
             let id = Id::new(("vw-dock-header", pane));
@@ -761,7 +788,7 @@ impl Dock {
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
             row.set_clip_rect(header.intersect(ui.clip_rect()));
-            panes.header(&mut row, pane);
+            panes.header(&mut row, pane, !alone);
             if response.drag_started_by(egui::PointerButton::Primary) {
                 self.begin_drag(ui.ctx(), window, placed, &panes.title(pane));
             }
@@ -893,6 +920,7 @@ impl Dock {
             shrunk: None,
             follows,
             title: title.to_owned(),
+            os_move: false,
         });
     }
 
@@ -903,7 +931,7 @@ impl Dock {
             return;
         };
         let source = drag.source;
-        let (local, down, ctrl, esc, inner, ppp) = ctx.input_for(source, |i| {
+        let (local, mut down, ctrl, esc, inner, ppp) = ctx.input_for(source, |i| {
             (
                 i.pointer.latest_pos(),
                 i.pointer.primary_down(),
@@ -914,7 +942,15 @@ impl Dock {
             )
         });
         let drag = self.drag.as_mut().expect("checked above");
-        if let (Some(local), Some(inner)) = (local, inner) {
+        if drag.os_move {
+            match os_pointer::global() {
+                Some((screen, pressed)) => {
+                    drag.screen = screen;
+                    down = pressed;
+                }
+                None => down = false,
+            }
+        } else if let (Some(local), Some(inner)) = (local, inner) {
             drag.screen = to_screen(inner, local, ppp);
         }
         if ctrl != drag.ctrl {
@@ -939,7 +975,15 @@ impl Dock {
             let line = format!("  moving: screen {screen:?} (source {source:?}, local {local:?}, source inner {inner:?})");
             self.note(line);
         }
-        let under = self.window_under(screen, float);
+        let from = if source == ViewportId::ROOT {
+            Window::Main
+        } else {
+            self.floats
+                .iter()
+                .find(|f| f.viewport() == source)
+                .map_or(Window::Main, |f| Window::Float(f.id))
+        };
+        let under = self.window_under(screen, float, from);
         self.follow(ctx, under.is_some());
         let hover = if ctrl {
             None
@@ -978,7 +1022,7 @@ impl Dock {
     /// 隠してしまうため。ガイドを別ウインドウのさらに上に描くには、常に最前面の透明な
     /// ウインドウが要り、透明なウインドウは OS とドライバによって映らないことがあるので採らない。
     fn follow(&mut self, ctx: &egui::Context, over_window: bool) {
-        let Some(drag) = self.drag.as_mut().filter(|d| d.follows) else {
+        let Some(drag) = self.drag.as_mut().filter(|d| d.follows && !d.os_move) else {
             return;
         };
         let Some(f) = drag
@@ -1019,12 +1063,18 @@ impl Dock {
 
     /// 画面の点 `screen` の下のウインドウ。引き出して動かしているウインドウ `moving` は除く。
     /// 別ウインドウどうしの重なりの順は分からないので、別ウインドウを本体より先に見る。
-    fn window_under(&self, screen: Pos2, moving: Option<u64>) -> Option<Window> {
+    ///
+    /// 画面での位置が分からないウインドウ（Wayland）どうしは、座標を比べても意味がないので、
+    /// そのときはドラッグを始めたウインドウ `from` の中だけを見る。
+    fn window_under(&self, screen: Pos2, moving: Option<u64>, from: Window) -> Option<Window> {
+        let known = |w: &Window| self.geometry.get(w).is_some_and(|g| g.on_screen);
+        let across = known(&from);
         self.floats
             .iter()
             .filter(|f| Some(f.id) != moving)
             .map(|f| Window::Float(f.id))
             .chain(std::iter::once(Window::Main))
+            .filter(|w| *w == from || (across && known(w)))
             .find(|w| {
                 self.geometry
                     .get(w)
@@ -1041,6 +1091,13 @@ impl Dock {
             return;
         };
         let Some((window, button)) = drag.hover else {
+            if drag.os_move {
+                self.event(format!(
+                    "window bar drag end: {} stays in its window at screen {:?} ({} frames)",
+                    drag.pane, drag.screen, drag.moves
+                ));
+                return;
+            }
             if let (false, Some(f)) = (
                 drag.follows,
                 drag.float
@@ -1114,6 +1171,61 @@ impl Dock {
         }
     }
 
+    /// 別ウインドウ `window` にペインが 1 つだけなら、そのペイン。
+    fn alone_in(&self, window: Window) -> Option<&str> {
+        match (window, self.root(window)) {
+            (Window::Float(_), Some(Node::Pane(p))) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// 別ウインドウ `id` が、大きさを変えずに主ボタンを押したまま動いたら、OS のウインドウバーで
+    /// 動かされていると見て、ドッキングのドラッグを始める。`outer` は今の外枠（物理ピクセル）。
+    ///
+    /// ウインドウが動いたという知らせ（winit の Moved）はアプリに届くが、そのドラッグの
+    /// マウスの出来事は届かないので、こうして見分ける。大きさも変わったときは縁での
+    /// 大きさの変更（左や上の縁では位置も変わる）なので除く。
+    fn watch_os_move(&mut self, id: u64, outer: Option<Rect>) {
+        let Some(f) = self.floats.iter_mut().find(|f| f.id == id) else {
+            return;
+        };
+        let before = std::mem::replace(&mut f.last_outer, outer);
+        let (viewport, placed) = (f.viewport(), f.placed);
+        let (Some(before), Some(now)) = (before, outer) else {
+            return;
+        };
+        let moved = before.min != now.min && (before.size() - now.size()).length() < 0.5;
+        if !moved || !placed || self.drag.is_some() {
+            return;
+        }
+        let Some(pane) = self.alone_in(Window::Float(id)).map(str::to_owned) else {
+            return;
+        };
+        let Some((screen, true)) = os_pointer::global() else {
+            return;
+        };
+        self.note(format!(
+            "window bar drag start: window #{id} ({pane}) moved {:?} -> {:?}, pointer at screen {screen:?}",
+            before.min, now.min
+        ));
+        self.drag = Some(Drag {
+            pane: pane.clone(),
+            source: viewport,
+            grab: Vec2::ZERO,
+            float: Some(id),
+            origin: None,
+            screen,
+            under: None,
+            hover: None,
+            ctrl: false,
+            moves: 0,
+            shrunk: None,
+            follows: false,
+            title: pane,
+            os_move: true,
+        });
+    }
+
     /// カーソルがこのウインドウの上にあればガイドを描く。
     fn guides_ui(&mut self, ui: &mut Ui, window: Window) {
         let Some(drag) = &self.drag else {
@@ -1133,7 +1245,7 @@ impl Dock {
             .layer_painter(LayerId::new(Order::Foreground, Id::new("vw-dock-guides")));
         let look = guides::Look::from_visuals(ui.visuals());
         guides::paint(&painter, &buttons, hot, &look);
-        if !drag.follows {
+        if !drag.follows && !drag.os_move {
             guides::paint_chip(
                 &painter,
                 local + CHIP_OFFSET,
@@ -1247,6 +1359,7 @@ mod tests {
             frame: vec2(12.0, 45.0),
             ppp: 1.5,
             close: false,
+            last_outer: None,
         };
         assert_eq!(f.rect(), [138.0, 30.0, 300.0, 200.0]);
     }
@@ -1263,6 +1376,7 @@ mod tests {
             frame: vec2(12.0, 45.0),
             ppp: 1.5,
             close: false,
+            last_outer: None,
         };
         assert_eq!(f.rect(), [-1500.0, 200.0, 300.0, 200.0]);
     }
@@ -1283,5 +1397,51 @@ mod tests {
         d.set_shown("map", true);
         d.float("map");
         assert!(d.layout().mentions("map"));
+    }
+
+    fn geometry(min: Pos2, on_screen: bool) -> Geometry {
+        Geometry {
+            inner: Rect::from_min_size(min, vec2(400.0, 300.0)),
+            on_screen,
+            ppp: 1.0,
+            area: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)),
+            panes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_window_under_the_pointer_is_found_across_windows() {
+        let mut d = dock();
+        d.show_next_in_float("map", [0.0; 4]);
+        d.set_shown("map", true);
+        let Some(float @ Window::Float(_)) = d.window_of("map") else {
+            panic!("map should float");
+        };
+        d.geometry
+            .insert(Window::Main, geometry(pos2(0.0, 0.0), true));
+        d.geometry.insert(float, geometry(pos2(1000.0, 0.0), true));
+        assert_eq!(
+            d.window_under(pos2(1100.0, 50.0), None, Window::Main),
+            Some(float)
+        );
+        assert_eq!(
+            d.window_under(pos2(100.0, 50.0), None, float),
+            Some(Window::Main)
+        );
+    }
+
+    #[test]
+    fn without_window_positions_only_the_dragged_from_window_is_under_the_pointer() {
+        let mut d = dock();
+        d.show_next_in_float("map", [0.0; 4]);
+        d.set_shown("map", true);
+        let Some(float @ Window::Float(_)) = d.window_of("map") else {
+            panic!("map should float");
+        };
+        d.geometry.insert(Window::Main, geometry(Pos2::ZERO, false));
+        d.geometry.insert(float, geometry(Pos2::ZERO, false));
+        let p = pos2(100.0, 50.0);
+        assert_eq!(d.window_under(p, None, Window::Main), Some(Window::Main));
+        assert_eq!(d.window_under(p, None, float), Some(float));
     }
 }

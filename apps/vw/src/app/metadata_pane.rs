@@ -161,11 +161,14 @@ impl VwApp {
         Some(copy_groups(&self.pane_groups()?))
     }
 
-    /// 欄の見出しの行。隠した項目があるときだけ、それを一時的に出す切り替えを右に置く。
-    pub(super) fn metadata_header_ui(&mut self, ui: &mut egui::Ui) {
+    /// ウインドウの見出しの行。隠した項目があるときだけ、それを一時的に出す切り替えを右に置く。
+    /// `titled` が偽なら名前を出さない（名前は OS のウインドウバーに出ている）。
+    pub(super) fn metadata_header_ui(&mut self, ui: &mut egui::Ui, titled: bool) {
         let lang = self.lang();
         ui.horizontal(|ui| {
-            vw_ui::panel::header(ui, tr(lang, "Metadata"));
+            if titled {
+                vw_ui::panel::header(ui, tr(lang, "Metadata"));
+            }
             if !meta_view::any_hidden(&self.settings().metadata) {
                 return;
             }

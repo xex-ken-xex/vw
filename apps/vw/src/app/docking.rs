@@ -7,6 +7,7 @@ use vw_dock::{Axis, Dock, Labels, Node, Panes};
 
 use crate::copy::Focus;
 use crate::i18n::tr;
+use crate::meta_view;
 use crate::settings::Language;
 use crate::tree;
 
@@ -159,6 +160,14 @@ impl Panes for AppPanes<'_> {
             ZOOM_MAP => {
                 crate::sub_window::title(lang, "Zoom map", self.app.active_image().as_deref())
             }
+            // 絞り込み中は、ファイルが隠れていることに気づけるよう名前に条件を添える。
+            // 別ウインドウでは OS のウインドウバーにも出る。
+            TREE if !self.app.filter.is_all() => format!(
+                "{}  ({}: {})",
+                tr(lang, "Folders"),
+                tr(lang, "Filter"),
+                filter_name(&self.app.filter, lang)
+            ),
             _ => tr(lang, pane_name(pane)).to_owned(),
         }
     }
@@ -167,26 +176,22 @@ impl Panes for AppPanes<'_> {
         pane != IMAGES
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, pane: &str) {
+    fn has_header_controls(&self, pane: &str) -> bool {
+        match pane {
+            METADATA => meta_view::any_hidden(&self.app.settings().metadata),
+            LOG => true,
+            _ => false,
+        }
+    }
+
+    fn header(&mut self, ui: &mut egui::Ui, pane: &str, titled: bool) {
         let lang = self.app.lang();
         match pane {
-            TREE => {
-                // 絞り込み中は、ファイルが隠れていることに気づけるよう見出しに条件を出す。
-                if self.app.filter.is_all() {
-                    vw_ui::panel::header(ui, tr(lang, "Folders"));
-                } else {
-                    let text = format!(
-                        "{}  ({}: {})",
-                        tr(lang, "Folders"),
-                        tr(lang, "Filter"),
-                        filter_name(&self.app.filter, lang)
-                    );
-                    vw_ui::panel::header(ui, &text);
-                }
-            }
-            METADATA => self.app.metadata_header_ui(ui),
+            METADATA => self.app.metadata_header_ui(ui, titled),
             LOG => {
-                vw_ui::panel::header(ui, tr(lang, "Log"));
+                if titled {
+                    vw_ui::panel::header(ui, tr(lang, "Log"));
+                }
                 let sending = self.app.send_job.as_ref().and_then(|j| j.progress());
                 let mut cancel = false;
                 if let Some((done, total)) = sending {
@@ -207,8 +212,10 @@ impl Panes for AppPanes<'_> {
                 }
             }
             _ => {
-                let title = self.title(pane);
-                vw_ui::panel::header(ui, &title);
+                if titled {
+                    let title = self.title(pane);
+                    vw_ui::panel::header(ui, &title);
+                }
             }
         }
     }
