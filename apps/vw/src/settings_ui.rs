@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 114] = [
+const ITEMS: [Item; 116] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -250,6 +250,20 @@ const ITEMS: [Item; 114] = [
         title: "Zoom-out interpolation",
         description: "How an image shrunk on screen is drawn. Linear averages pixels smoothly; nearest neighbor picks single pixels, keeping original values but showing jagged edges and moire.",
         widget: minify_filter_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "similar.burst_seconds",
+        title: "Burst interval",
+        description: "Shots from the same camera taken within this many seconds of each other are one group of similar images (a burst), shown with the same link mark in the slot header. 0 groups only shots taken in the same second.",
+        widget: similar_burst_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "similar.similar_bits",
+        title: "Look-alike tolerance",
+        description: "How different two images may look and still be grouped as similar, as the number of differing bits of their 64-bit fingerprint. 0 groups only near-identical copies; around 10 also groups the same scene resized, recompressed or slightly re-exposed.",
+        widget: similar_bits_widget,
     },
     Item {
         section: Section::Display,
@@ -1363,6 +1377,23 @@ fn drop_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
         egui::DragValue::new(&mut s.viewer.slideshow_drop_window_secs)
             .range(DROP_WINDOW_RANGE)
             .suffix(tr(lang, " s")),
+    )
+    .changed()
+}
+
+fn similar_burst_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.similar.burst_seconds)
+            .range(crate::settings::SimilarSettings::BURST_RANGE)
+            .suffix(tr(lang, " s")),
+    )
+    .changed()
+}
+
+fn similar_bits_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.similar.similar_bits)
+            .range(crate::settings::SimilarSettings::BITS_RANGE),
     )
     .changed()
 }

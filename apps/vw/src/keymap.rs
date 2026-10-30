@@ -48,6 +48,7 @@ pub enum Action {
     ToggleTagging,
     FlagGood,
     FlagBad,
+    KeepInGroup,
     Tag1,
     Tag2,
     Tag3,
@@ -179,7 +180,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 100] = [
+    pub const ALL: [Action; 101] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -225,6 +226,7 @@ impl Action {
         Action::ToggleTagging,
         Action::FlagGood,
         Action::FlagBad,
+        Action::KeepInGroup,
         Action::Tag1,
         Action::Tag2,
         Action::Tag3,
@@ -318,6 +320,7 @@ impl Action {
             Action::ToggleTagging => "toggle_tagging",
             Action::FlagGood => "flag_good",
             Action::FlagBad => "flag_bad",
+            Action::KeepInGroup => "keep_in_group",
             Action::Tag1 => "tag_1",
             Action::Tag2 => "tag_2",
             Action::Tag3 => "tag_3",
@@ -437,6 +440,7 @@ impl Action {
             Action::ToggleTagging => "Tagging mode on/off",
             Action::FlagGood => "Flag as good",
             Action::FlagBad => "Flag as bad",
+            Action::KeepInGroup => "Keep this one, flag the rest of its similar group bad",
             Action::Tag1 => "Tag 1",
             Action::Tag2 => "Tag 2",
             Action::Tag3 => "Tag 3",
@@ -544,6 +548,7 @@ impl Action {
             Action::ToggleTagging
             | Action::FlagGood
             | Action::FlagBad
+            | Action::KeepInGroup
             | Action::Tag1
             | Action::Tag2
             | Action::Tag3
@@ -671,7 +676,10 @@ impl Action {
     /// タグ付けモードの間だけ働く操作。普段は ↑ ↓ や数字キーを押しても何も起きないようにして、
     /// 見ているだけのときにうっかりラベルを付けないため。
     pub fn needs_tagging_mode(self) -> bool {
-        matches!(self, Action::FlagGood | Action::FlagBad) || self.tag_index().is_some()
+        matches!(
+            self,
+            Action::FlagGood | Action::FlagBad | Action::KeepInGroup
+        ) || self.tag_index().is_some()
     }
 
     /// メニューのレイアウト項目が選ぶマス目。`LayoutCustom` は設定の値を使うのでここにはない。
@@ -758,6 +766,7 @@ impl Action {
             Action::ToggleTagging => vec![KeyCombo::plain(T)],
             Action::FlagGood => vec![KeyCombo::plain(ArrowUp)],
             Action::FlagBad => vec![KeyCombo::plain(ArrowDown)],
+            Action::KeepInGroup => vec![KeyCombo::plain(ArrowUp).with(false, true, false)],
             Action::Tag1 => vec![KeyCombo::plain(Num1)],
             Action::Tag2 => vec![KeyCombo::plain(Num2)],
             Action::Tag3 => vec![KeyCombo::plain(Num3)],
