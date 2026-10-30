@@ -314,6 +314,44 @@ impl VwApp {
         self.find_faces_paths(ctx, images);
     }
 
+    /// 今のフォルダで、今とは違うモデルか版で付けた AI タグと顔だけを、今のモデルで付け直す。
+    pub(super) fn redo_outdated_ai(&mut self, ctx: &egui::Context) {
+        let Some(dir) = self.current.clone() else {
+            self.log.warn("No folder is open");
+            return;
+        };
+        let images = self.folder_images(&dir);
+        let entries: Vec<_> = images.iter().map(|p| (p, self.ai_tags.get(p))).collect();
+        let pick = |outdated: fn(&crate::ai_tags::Entry) -> bool| -> Vec<PathBuf> {
+            entries
+                .iter()
+                .filter(|(_, e)| e.as_ref().is_some_and(outdated))
+                .map(|(p, _)| (*p).clone())
+                .collect()
+        };
+        let tags = pick(crate::ai_tags::Entry::tags_outdated);
+        let faces = pick(crate::ai_tags::Entry::faces_outdated);
+        if tags.is_empty() && faces.is_empty() {
+            self.log.info(format!(
+                "All AI tags and faces in {} are from the current models",
+                dir.display()
+            ));
+            return;
+        }
+        self.log.info(format!(
+            "Redoing AI results from older models in {}: tags of {} images, faces of {} images",
+            dir.display(),
+            tags.len(),
+            faces.len()
+        ));
+        if !tags.is_empty() {
+            self.ai_tag_paths(ctx, tags);
+        }
+        if !faces.is_empty() {
+            self.find_faces_paths(ctx, faces);
+        }
+    }
+
     pub(super) fn ai_tag_current_folder(&mut self, ctx: &egui::Context, work: Work) {
         match self.current.clone() {
             Some(dir) if work == Work::Tag => self.ai_tag_folder(ctx, &dir),
@@ -349,7 +387,12 @@ impl VwApp {
             return None;
         }
         let n = marks.len();
-        match self.ai_tags.update(&path, |e| e.faces = marks) {
+        let saved = self.ai_tags.update(&path, |e| {
+            e.faces = marks;
+            e.face_model = ai_models::FACES_NAME.to_owned();
+            e.face_version = ai_models::faces_version().to_owned();
+        });
+        match saved {
             Err(e) => {
                 self.log.error(format!("Cannot save AI tags: {e}"));
                 None
@@ -371,6 +414,7 @@ impl VwApp {
                         tags.remove(&self.settings().ai.excluded_tags);
                         let saved = self.ai_tags.update(&path, |e| {
                             e.model = ai_models::TAGGER_NAME.to_owned();
+                            e.version = ai_models::tagger_version().to_owned();
                             e.tags = tags;
                         });
                         match saved {
@@ -543,14 +587,37 @@ impl VwApp {
                 Some(g.name.clone()),
             );
         }
-        if !entry.model.is_empty() {
+        if let Some((model, version)) = entry.tagger() {
             push(
                 "AI model",
                 tr(lang, "AI model").to_owned(),
-                entry.model.clone(),
+                model_text(model, version, entry.tags_outdated(), lang),
+                None,
+            );
+        }
+        if let Some((model, version)) = entry.face_finder() {
+            push(
+                "Face model",
+                tr(lang, "Face model").to_owned(),
+                model_text(model, version, entry.faces_outdated(), lang),
                 None,
             );
         }
         (!rows.is_empty()).then_some(rows)
+    }
+}
+
+/// `wd-vit-tagger-v3 (7f6b584d)`。今のモデルと違えば、古いことを書き添える。
+fn model_text(
+    model: &str,
+    version: &str,
+    outdated: bool,
+    lang: crate::settings::Language,
+) -> String {
+    let text = format!("{model} ({version})");
+    if outdated {
+        tr1(lang, "{} – older than the current model", &text)
+    } else {
+        text
     }
 }

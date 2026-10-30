@@ -212,6 +212,8 @@ pub struct CopyJob {
     /// 写せた画像の数。ZIP は中の画像を 1 枚ずつ数える。
     pub copied: Arc<AtomicUsize>,
     pub failed: Arc<std::sync::Mutex<Vec<String>>>,
+    /// 撮影地点を消して写した画像の数。
+    pub located: Arc<AtomicUsize>,
     pub finished: Arc<AtomicBool>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -219,9 +221,11 @@ pub struct CopyJob {
 impl CopyJob {
     /// `items` をコピーし始める。大きな画像を何百枚もコピーすると数十秒かかるので、
     /// 画面を止めないよう別スレッドで行う。既にあるファイルは上書きしない。
+    /// `strip_location` なら、写すファイルから撮影地点を消す（[`crate::strip_location`]）。
     pub fn start(
         items: Vec<Copy>,
         registry: Registry,
+        strip_location: bool,
         repaint: impl Fn() + Send + 'static,
     ) -> Self {
         let job = Self {
@@ -229,30 +233,33 @@ impl CopyJob {
             done: Arc::default(),
             copied: Arc::default(),
             failed: Arc::default(),
+            located: Arc::default(),
             finished: Arc::default(),
             cancel: Arc::default(),
         };
-        let (done, copied, failed, finished, cancel) = (
+        let (done, copied, failed, located, finished, cancel) = (
             job.done.clone(),
             job.copied.clone(),
             job.failed.clone(),
+            job.located.clone(),
             job.finished.clone(),
             job.cancel.clone(),
         );
         std::thread::spawn(move || {
+            let strip = strip_location.then_some(located.as_ref());
             for item in items {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 match item {
-                    Copy::File { from, to } => match copy_one(&from, &to) {
+                    Copy::File { from, to } => match copy_one(&from, &to, strip) {
                         Ok(()) => {
                             copied.fetch_add(1, Ordering::Relaxed);
                         }
                         Err(e) => failed.lock().unwrap().push(e),
                     },
                     Copy::Archive { archive, dir, flat } => {
-                        let result = unpack_images(&archive, &dir, flat, &registry, &cancel);
+                        let result = unpack_images(&archive, &dir, flat, &registry, &cancel, strip);
                         copied.fetch_add(result.copied, Ordering::Relaxed);
                         failed.lock().unwrap().extend(result.failed);
                     }
@@ -267,15 +274,37 @@ impl CopyJob {
     }
 }
 
-fn copy_one(from: &Path, to: &Path) -> Result<(), String> {
+/// `strip` があれば撮影地点を消して写し、消したら数える。
+fn copy_one(from: &Path, to: &Path, strip: Option<&AtomicUsize>) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("{} -> {}: {e}", from.display(), to.display());
     if to.exists() {
         return Err(format!("{}: already exists", to.display()));
     }
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(fail)?;
+    let Some(located) = strip else {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(fail)?;
+        }
+        return std::fs::copy(from, to).map(|_| ()).map_err(fail);
+    };
+    let mut bytes = std::fs::read(from).map_err(fail)?;
+    strip_bytes(&mut bytes, located).map_err(|e| format!("{}: {e}", from.display()))?;
+    write_new(to, &bytes).map_err(fail)
+}
+
+/// 撮影地点を消す。消せない形式なら写さない。消すように頼まれたのに、地点を残したまま
+/// 黙って写すと、人に渡したあとで気づくことになるため。
+fn strip_bytes(bytes: &mut [u8], located: &AtomicUsize) -> Result<(), String> {
+    match crate::strip_location::strip(bytes) {
+        Ok(removed) => {
+            if removed.any() {
+                located.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "{e}, so it was not copied (turn off removing the location to copy it as it is)"
+        )),
     }
-    std::fs::copy(from, to).map(|_| ()).map_err(fail)
 }
 
 #[derive(Debug, Default)]
@@ -295,6 +324,7 @@ fn unpack_images(
     flat: bool,
     registry: &Registry,
     cancel: &AtomicBool,
+    strip: Option<&AtomicUsize>,
 ) -> Unpacked {
     let mut out = Unpacked::default();
     let result = archive::for_each_entry(archive, None, |inner, data| {
@@ -317,6 +347,17 @@ fn unpack_images(
         } else {
             dir.join(inner)
         };
+        if let Some(located) = strip {
+            if let Err(e) = strip_bytes(&mut bytes, located) {
+                out.failed.push(format!(
+                    "{}{}{}: {e}",
+                    archive.display(),
+                    crate::catalog::IN_ARCHIVE,
+                    inner.display()
+                ));
+                return Ok(());
+            }
+        }
         match write_new(&target, &bytes) {
             Ok(()) => out.copied += 1,
             Err(e) => out.failed.push(format!("{}: {e}", target.display())),
@@ -486,7 +527,10 @@ mod tests {
     }
 
     fn copy_all(items: Vec<Copy>) -> CopyJob {
-        let job = CopyJob::start(items, png_registry(), || {});
+        run(CopyJob::start(items, png_registry(), false, || {}))
+    }
+
+    fn run(job: CopyJob) -> CopyJob {
         while !job.finished.load(Ordering::Relaxed) {
             std::thread::yield_now();
         }
@@ -566,5 +610,37 @@ mod tests {
         let failed = job.failed.lock().unwrap();
         assert!(failed[0].contains("password-protected"), "{failed:?}");
         assert!(!dest.path().join("secret.zip").exists());
+    }
+
+    #[test]
+    fn removing_the_location_copies_without_gps_and_refuses_unknown_formats() {
+        let src = TempDir::new();
+        let dest = TempDir::new();
+        let exif = vw_core::exif::sample::gps(35.0, 139.0, None);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend(((exif.len() + 8) as u16).to_be_bytes());
+        jpeg.extend(b"Exif\0\0");
+        jpeg.extend(&exif);
+        jpeg.extend([0xFF, 0xD9]);
+        let a = src.path().join("a.jpg");
+        let b = src.path().join("b.heic");
+        std::fs::write(&a, &jpeg).unwrap();
+        std::fs::write(&b, b"\0\0\0\x18ftypheic").unwrap();
+        let items = [&a, &b]
+            .into_iter()
+            .map(|from| Copy::File {
+                from: from.clone(),
+                to: dest.path().join(from.file_name().unwrap()),
+            })
+            .collect();
+        let job = run(CopyJob::start(items, png_registry(), true, || {}));
+        assert_eq!(job.copied.load(Ordering::Relaxed), 1);
+        assert_eq!(job.located.load(Ordering::Relaxed), 1);
+        assert_eq!(job.failed.lock().unwrap().len(), 1);
+        assert!(!dest.path().join("b.heic").exists());
+        let copied = std::fs::read(dest.path().join("a.jpg")).unwrap();
+        assert_eq!(copied.len(), jpeg.len());
+        assert_eq!(vw_core::exif::gps_of_file(&dest.path().join("a.jpg")), None);
+        assert!(vw_core::exif::gps_of_file(&a).is_some());
     }
 }

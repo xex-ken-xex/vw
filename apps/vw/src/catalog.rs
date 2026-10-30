@@ -676,8 +676,13 @@ fn ai_triples(entry: &ai_tags::Entry) -> Vec<Triple> {
     out.extend(tags.general.iter().map(|t| triple("tag", &t.name)));
     out.extend(tags.characters.iter().map(|t| triple("character", &t.name)));
     out.extend(tags.rating.iter().map(|t| triple("rating", &t.name)));
-    if !entry.model.is_empty() {
-        out.push(triple("model", &entry.model));
+    if let Some((model, version)) = entry.tagger() {
+        out.push(triple("model", model));
+        out.push(triple("model version", version));
+    }
+    if let Some((model, version)) = entry.face_finder() {
+        out.push(triple("face model", model));
+        out.push(triple("face model version", version));
     }
     out
 }
@@ -1057,6 +1062,10 @@ mod tests {
         );
         assert_eq!(values_of(c, "a.png", AI_TAGS, "rating"), ["general"]);
         assert_eq!(values_of(c, "a.png", AI_TAGS, "model"), ["tagger"]);
+        assert_eq!(
+            values_of(c, "a.png", AI_TAGS, "face model"),
+            [crate::ai_models::FACES_NAME]
+        );
         assert!(values_of(c, "b.png", AI_TAGS, "tag").is_empty());
     }
 

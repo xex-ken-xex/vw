@@ -241,7 +241,11 @@ impl VwApp {
     fn ai_menu(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let ready = self.ai_ready();
         let mut chosen = None;
-        for action in [Action::AiTagFolder, Action::FindFacesFolder] {
+        for action in [
+            Action::AiTagFolder,
+            Action::FindFacesFolder,
+            Action::RedoOutdatedAi,
+        ] {
             if self.menu_item_if(ui, action, ready, crate::ai_models::NOT_READY) {
                 chosen = Some(action);
             }

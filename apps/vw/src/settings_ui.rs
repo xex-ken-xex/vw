@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 119] = [
+const ITEMS: [Item; 120] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -404,6 +404,13 @@ const ITEMS: [Item; 119] = [
         title: "Next image after labeling",
         description: "Move to the next image after putting a flag or tag on an image in tagging mode.",
         widget: advance_widget,
+    },
+    Item {
+        section: Section::Labels,
+        key: "labels.export_strip_location",
+        title: "Remove the location when exporting",
+        description: "The first value of \"Remove the location\" in Export images (Ctrl+E): blank out the GPS position and place names in the copied files.",
+        widget: export_strip_location_widget,
     },
     Item {
         section: Section::Datasets,
@@ -2522,6 +2529,11 @@ fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) 
 
 fn advance_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.labels.advance, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn export_strip_location_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.labels.export_strip_location, tr(lang, "Enabled"))
         .changed()
 }
 

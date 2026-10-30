@@ -67,6 +67,7 @@ impl VwApp {
             recursive: true,
             kind: ExportKind::Copy,
             keep_structure: true,
+            strip_location: self.settings().labels.export_strip_location,
             job: None,
         });
     }
@@ -131,6 +132,14 @@ impl VwApp {
                             &mut dialog.keep_structure,
                             tr(lang, "Keep folder structure"),
                         );
+                        ui.checkbox(
+                            &mut dialog.strip_location,
+                            tr(lang, "Remove the location (GPS and place names)"),
+                        )
+                        .on_hover_text(tr(
+                            lang,
+                            "Blank out the GPS position and place names in JPEG, PNG, WebP, TIFF, TIFF-based RAW and FITS files. Files of other formats are not copied, so that no location leaks out unnoticed. The default is in Settings > Flags and tags.",
+                        ));
                     }
                     ExportKind::List(_) => {
                         ui.label(tr(lang, "Output file"));
@@ -258,13 +267,19 @@ impl VwApp {
                     ));
                 }
                 self.log.info(format!(
-                    "Export: copying {images} images and {archives} ZIP / 7z files to {}",
-                    dest.display()
+                    "Export: copying {images} images and {archives} ZIP / 7z files to {}{}",
+                    dest.display(),
+                    if dialog.strip_location {
+                        ", removing the location"
+                    } else {
+                        ""
+                    }
                 ));
                 let ctx = ctx.clone();
                 dialog.job = Some(CopyJob::start(
                     items,
                     self.loader.registry().clone(),
+                    dialog.strip_location,
                     move || ctx.request_repaint(),
                 ));
             }

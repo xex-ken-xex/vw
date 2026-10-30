@@ -24,6 +24,14 @@ pub struct Entry {
     /// タグを付けたモデル。顔だけを探した画像では空。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
+    /// タグを付けたモデルの版（[`crate::ai_models::tagger_version`]）。版を残す前に付けたものでは空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// 顔を探したモデルの名前と版。顔が 1 つもなくても、探したら書く。版を残す前に探したものでは空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub face_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub face_version: String,
     #[serde(flatten)]
     pub tags: Tags,
     /// 見つけた顔の枠と人物。特徴ベクトルは個人情報なのでここには書かない（[`crate::face_store`]）。
@@ -31,7 +39,55 @@ pub struct Entry {
     pub faces: Vec<FaceMark>,
 }
 
+/// 版を残す前の記録の版。それまでに配ったのはこの版のモデルだけなので、空ならこの版で付けたとみなす。
+/// 空を「古い版」として扱わないのは、前から付けてあるタグをすべて付け直させないため。
+const FIRST_TAGGER_VERSION: &str = "7f6b584d";
+const FIRST_FACES_VERSION: &str = "47534e27";
+
 impl Entry {
+    /// タグを付けたモデルの名前と版。タグを付けていなければ `None`。
+    pub fn tagger(&self) -> Option<(&str, &str)> {
+        if self.model.is_empty() {
+            return None;
+        }
+        let version = match self.version.as_str() {
+            "" if self.model == crate::ai_models::TAGGER_NAME => FIRST_TAGGER_VERSION,
+            v => v,
+        };
+        Some((&self.model, version))
+    }
+
+    /// 顔を探したモデルの名前と版。版を残す前に探して顔があったものは、最初の版とみなす。
+    pub fn face_finder(&self) -> Option<(&str, &str)> {
+        if !self.face_model.is_empty() {
+            Some((&self.face_model, &self.face_version))
+        } else if !self.faces.is_empty() {
+            Some((crate::ai_models::FACES_NAME, FIRST_FACES_VERSION))
+        } else {
+            None
+        }
+    }
+
+    /// 今のモデルとは違う名前か版で付けたタグがある。
+    pub fn tags_outdated(&self) -> bool {
+        self.tagger().is_some_and(|t| {
+            t != (
+                crate::ai_models::TAGGER_NAME,
+                crate::ai_models::tagger_version(),
+            )
+        })
+    }
+
+    /// 今のモデルとは違う名前か版で探した顔がある。
+    pub fn faces_outdated(&self) -> bool {
+        self.face_finder().is_some_and(|f| {
+            f != (
+                crate::ai_models::FACES_NAME,
+                crate::ai_models::faces_version(),
+            )
+        })
+    }
+
     /// 写っている人物の名前（重なりなし、見つけた順）。
     pub fn people(&self) -> Vec<&str> {
         let mut names: Vec<&str> = Vec::new();
@@ -379,5 +435,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn tags_and_faces_made_before_versions_were_kept_count_as_the_first_version() {
+        use crate::ai_models::{faces_version, tagger_version, FACES_NAME, TAGGER_NAME};
+        let old = Entry {
+            model: TAGGER_NAME.into(),
+            faces: vec![FaceMark {
+                rect: [0.1, 0.1, 0.2, 0.2],
+                score: 0.9,
+                person: None,
+                similarity: 0.0,
+                unlinked: false,
+                hidden: false,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(old.tagger(), Some((TAGGER_NAME, tagger_version())));
+        assert_eq!(old.face_finder(), Some((FACES_NAME, faces_version())));
+        assert!(!old.tags_outdated());
+        assert!(!old.faces_outdated());
+        assert_eq!(Entry::default().tagger(), None);
+        assert_eq!(Entry::default().face_finder(), None);
+    }
+
+    #[test]
+    fn another_model_or_version_is_outdated() {
+        use crate::ai_models::{tagger_version, FACES_NAME, TAGGER_NAME};
+        let other_version = Entry {
+            model: TAGGER_NAME.into(),
+            version: "00000000".into(),
+            ..Default::default()
+        };
+        assert!(other_version.tags_outdated());
+        let other_model = Entry {
+            model: "wd-eva02-large-tagger-v3".into(),
+            version: tagger_version().into(),
+            ..Default::default()
+        };
+        assert!(other_model.tags_outdated());
+        let faces = Entry {
+            face_model: FACES_NAME.into(),
+            face_version: "00000000".into(),
+            ..Default::default()
+        };
+        assert!(faces.faces_outdated());
+        assert!(!faces.tags_outdated());
     }
 }
