@@ -580,9 +580,7 @@ impl VwApp {
         let action = self.datasets.ui(
             ui,
             lang,
-            &dataset.roots,
-            &dataset.fields,
-            &dataset.search_groups,
+            dataset,
             &crate::datasets_screen::SendTo {
                 destinations: &destinations,
                 apps,
@@ -603,6 +601,7 @@ impl VwApp {
                 self.send_targets(choice, targets);
             }
             Some(Action::SaveGroup(group)) => self.save_search_group(&ctx, group),
+            Some(Action::SaveSearch(search)) => self.save_search(&ctx, search),
             Some(Action::Reload) => {
                 self.datasets.reload(&dataset.roots, &ctx);
                 // ツリーのデータセットの色も、カタログの有無に合わせて付け直す。

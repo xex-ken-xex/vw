@@ -1732,12 +1732,18 @@ impl DicomSend {
 /// データセット（[`crate::catalog`]）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Dataset {
+    /// 出来事でまとめるとき、この時間（時）より長く撮っていなければ次の出来事にする。
+    pub event_gap_hours: f64,
+    /// 出来事でまとめるとき、前の地点からこの距離（km）より離れて撮ったら次の出来事にする。0 なら地点では区切らない。
+    pub event_distance_km: f64,
     /// データセットを探しにいくフォルダ。
     pub roots: Vec<String>,
     /// 名前・メモ・タグのほかに、データセットに書き込む項目（入手元など）。
     pub fields: Vec<String>,
     /// 詳細検索で選べる、メタデータの条件の組。
     pub search_groups: Vec<SearchGroup>,
+    /// 名前を付けて取っておいた検索。開くたびにその時のカタログで探し直す。
+    pub saved_searches: Vec<SavedSearch>,
 }
 
 impl Default for Dataset {
@@ -1747,6 +1753,8 @@ impl Default for Dataset {
             keys: keys.iter().map(|&k| k.into()).collect(),
         };
         Self {
+            event_gap_hours: 18.0,
+            event_distance_km: 100.0,
             roots: Vec::new(),
             fields: Vec::new(),
             search_groups: vec![
@@ -1759,15 +1767,40 @@ impl Default for Dataset {
                 ),
                 group("Labels", &["labels:flag", "labels:tag"]),
             ],
+            saved_searches: Vec::new(),
         }
     }
 }
 
 impl Dataset {
+    pub const GAP_RANGE: std::ops::RangeInclusive<f64> = 0.5..=720.0;
+    pub const DISTANCE_RANGE: std::ops::RangeInclusive<f64> = 0.0..=20000.0;
+
+    pub fn event_rules(&self) -> crate::dataset_groups::Rules {
+        crate::dataset_groups::Rules {
+            gap_hours: self.event_gap_hours,
+            distance_km: self.event_distance_km,
+        }
+    }
+
     fn read(r: &mut Reader<'_>) -> Self {
         let d = Self::default();
         let mut r = r.at("dataset");
         Self {
+            event_gap_hours: r
+                .get_valid(
+                    "event_gap_hours",
+                    |h: &f64| Self::GAP_RANGE.contains(h),
+                    "must be 0.5 to 720",
+                )
+                .unwrap_or(d.event_gap_hours),
+            event_distance_km: r
+                .get_valid(
+                    "event_distance_km",
+                    |k: &f64| Self::DISTANCE_RANGE.contains(k),
+                    "must be 0 to 20000",
+                )
+                .unwrap_or(d.event_distance_km),
             roots: r.get("roots").unwrap_or_else(|| d.roots.clone()),
             fields: r
                 .get_valid(
@@ -1778,7 +1811,73 @@ impl Dataset {
                 .unwrap_or_else(|| d.fields.clone()),
             search_groups: read_groups(&mut r, "search_groups")
                 .unwrap_or_else(|| d.search_groups.clone()),
+            saved_searches: read_saved_searches(&mut r),
         }
+    }
+}
+
+/// 取っておいた検索を読む。名前のないものと、条件が読めないものだけを外す。
+fn read_saved_searches(r: &mut crate::toml_reader::Section<'_, '_>) -> Vec<SavedSearch> {
+    let key = "saved_searches";
+    let Some(searches) = r.get::<Vec<SavedSearch>>(key) else {
+        return Vec::new();
+    };
+    searches
+        .into_iter()
+        .filter(|s| match s.problem() {
+            Some(p) => {
+                r.problem(key, format!("{:?}: {p} (ignored)", s.name));
+                false
+            }
+            None => true,
+        })
+        .collect()
+}
+
+/// 名前を付けて取っておいた検索（簡易検索の語、詳細検索の条件、まとめ方）。
+///
+/// 当たったファイルの一覧ではなく条件を取っておくのは、開くたびに、そのあと足したり
+/// 更新したりしたデータセットも含めた今の結果を出すため。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SavedSearch {
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+    /// まとめ方（`events`・`nights`・`fits:OBJECT`。空ならまとめない）。
+    #[serde(default)]
+    pub group_by: String,
+    #[serde(default)]
+    pub conditions: Vec<SavedCondition>,
+}
+
+impl SavedSearch {
+    pub fn problem(&self) -> Option<String> {
+        if self.name.trim().is_empty() {
+            return Some("name is empty".into());
+        }
+        self.conditions.iter().find_map(SavedCondition::problem)
+    }
+}
+
+/// 詳細検索の 1 行。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SavedCondition {
+    /// かける先。`name`・`memo`・`tags`・`field:入手元`・`meta:exif:Model`（種類を限らなければ `meta::Model`）。
+    pub on: String,
+    /// `contains`・`equals`・`regex`・`range`・`exists`。
+    pub op: String,
+    #[serde(default)]
+    pub value: String,
+    /// 範囲の上限。
+    #[serde(default)]
+    pub max: String,
+}
+
+impl SavedCondition {
+    fn problem(&self) -> Option<String> {
+        crate::dataset_search::Condition::from_saved(self)
+            .err()
+            .map(|e| format!("condition {:?} {:?}: {e}", self.on, self.op))
     }
 }
 
@@ -2847,6 +2946,49 @@ dither = true
         s.dataset.search_groups.clear();
         let (back, _) = Settings::from_toml(&s.to_toml()).unwrap();
         assert!(back.dataset.search_groups.is_empty());
+    }
+
+    #[test]
+    fn saved_searches_and_event_rules_are_written_and_read_back() {
+        let mut s = Settings::default();
+        s.dataset.event_gap_hours = 6.5;
+        s.dataset.event_distance_km = 0.0;
+        s.dataset.saved_searches = vec![SavedSearch {
+            name: "Orion".into(),
+            text: "winter".into(),
+            group_by: "nights".into(),
+            conditions: vec![SavedCondition {
+                on: "meta:fits:OBJECT".into(),
+                op: "equals".into(),
+                value: "M42".into(),
+                max: String::new(),
+            }],
+        }];
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.dataset, s.dataset);
+    }
+
+    #[test]
+    fn a_saved_search_with_an_unknown_condition_is_dropped_alone() {
+        let toml = r#"
+[[dataset.saved_searches]]
+name = "good"
+text = "a"
+
+[[dataset.saved_searches]]
+name = "bad"
+conditions = [{ on = "size", op = "equals", value = "1" }]
+"#;
+        let (s, problems) = Settings::from_toml(toml).unwrap();
+        let names: Vec<&str> = s
+            .dataset
+            .saved_searches
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["good"]);
+        assert_eq!(problems.len(), 1);
     }
 
     #[test]

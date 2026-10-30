@@ -21,6 +21,7 @@ mod compare;
 mod compose;
 mod copy;
 mod dataset_extract;
+mod dataset_groups;
 mod dataset_search;
 mod dataset_ui;
 mod datasets_screen;

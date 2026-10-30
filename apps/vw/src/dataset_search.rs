@@ -14,6 +14,7 @@ use std::time::SystemTime;
 use rayon::prelude::*;
 
 use crate::catalog::{self, Catalog};
+use crate::settings::SavedCondition;
 
 /// 探している途中の数。別のスレッドから数え、画面が毎フレーム読む。
 #[derive(Default)]
@@ -311,6 +312,54 @@ impl Condition {
             Op::Contains | Op::Equals | Op::Regex => empty(&self.value),
             Op::Range => empty(&self.value) && empty(&self.max),
             Op::Exists => false,
+        }
+    }
+}
+
+impl Condition {
+    /// 設定に取っておいた形から戻す。
+    pub fn from_saved(c: &SavedCondition) -> Result<Self, String> {
+        let target = match c.on.as_str() {
+            "name" => Target::Name,
+            "memo" => Target::Memo,
+            "tags" => Target::Tags,
+            on => match on.split_once(':') {
+                Some(("field", f)) => Target::Field(f.to_owned()),
+                Some(("meta", rest)) => {
+                    let (kind, key) = rest.split_once(':').unwrap_or(("", rest));
+                    Target::Meta {
+                        kind: kind.to_owned(),
+                        key: key.to_owned(),
+                    }
+                }
+                _ => return Err(format!("unknown target {on:?}")),
+            },
+        };
+        let op = Op::ALL
+            .into_iter()
+            .find(|op| op.title() == c.op)
+            .ok_or_else(|| format!("unknown operator {:?}", c.op))?;
+        Ok(Self {
+            target,
+            op,
+            value: c.value.clone(),
+            max: c.max.clone(),
+        })
+    }
+
+    pub fn to_saved(&self) -> SavedCondition {
+        let on = match &self.target {
+            Target::Name => "name".to_owned(),
+            Target::Memo => "memo".to_owned(),
+            Target::Tags => "tags".to_owned(),
+            Target::Field(f) => format!("field:{f}"),
+            Target::Meta { kind, key } => format!("meta:{kind}:{key}"),
+        };
+        SavedCondition {
+            on,
+            op: self.op.title().to_owned(),
+            value: self.value.clone(),
+            max: self.max.clone(),
         }
     }
 }
@@ -950,5 +999,50 @@ mod tests {
             .unwrap();
         index.reload(&dir);
         assert_eq!(index.entries[0].catalog.name, "abd");
+    }
+
+    #[test]
+    fn conditions_round_trip_through_the_saved_form() {
+        let conditions = [
+            Condition {
+                target: Target::Meta {
+                    kind: "fits".into(),
+                    key: "OBJECT".into(),
+                },
+                op: Op::Equals,
+                value: "M42".into(),
+                max: String::new(),
+            },
+            Condition {
+                target: Target::Meta {
+                    kind: String::new(),
+                    key: "a:b".into(),
+                },
+                op: Op::Range,
+                value: "1".into(),
+                max: "2".into(),
+            },
+            Condition {
+                target: Target::Field("入手元".into()),
+                op: Op::Regex,
+                value: "^x".into(),
+                max: String::new(),
+            },
+            Condition {
+                target: Target::Tags,
+                op: Op::Exists,
+                value: String::new(),
+                max: String::new(),
+            },
+        ];
+        for c in conditions {
+            assert_eq!(Condition::from_saved(&c.to_saved()), Ok(c));
+        }
+        let bad = SavedCondition {
+            on: "size".into(),
+            op: "equals".into(),
+            ..Default::default()
+        };
+        assert!(Condition::from_saved(&bad).is_err());
     }
 }
