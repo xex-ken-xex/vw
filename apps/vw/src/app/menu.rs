@@ -195,14 +195,12 @@ impl VwApp {
                 chosen = Some(action);
             }
         }
-        if self.settings().map.enabled
-            && self.menu_item_if(
-                ui,
-                Action::UndoPosition,
-                !self.position_undo.is_empty(),
-                "Nothing to undo",
-            )
-        {
+        if self.menu_item_if(
+            ui,
+            Action::UndoPosition,
+            !self.undo.is_empty(),
+            "Nothing to undo",
+        ) {
             chosen = Some(Action::UndoPosition);
         }
         ui.separator();
@@ -236,8 +234,10 @@ impl VwApp {
         if self.menu_item(ui, Action::ExportImages, None) {
             chosen = Some(Action::ExportImages);
         }
-        if self.menu_item(ui, Action::ClearFlags, None) {
-            chosen = Some(Action::ClearFlags);
+        for action in [Action::ClearShownFlags, Action::ClearFolderFlags] {
+            if self.menu_item(ui, action, None) {
+                chosen = Some(action);
+            }
         }
         if self.menu_item(ui, Action::TrashBadImages, None) {
             chosen = Some(Action::TrashBadImages);

@@ -61,6 +61,7 @@ mod send;
 mod similar;
 mod slots;
 mod transfers;
+mod undo;
 
 /// 左端のツール列のツール。Zoom と Measure はまだ機能がなく、押せない状態で置いてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -353,7 +354,8 @@ pub struct VwApp {
     warned_archives: std::collections::HashSet<PathBuf>,
     labels: LabelStore,
     /// 地図で置いた位置の変更。Ctrl+Z で戻す。
-    position_undo: positions::PositionUndo,
+    /// 元に戻せる操作。新しいものが後ろ。
+    undo: Vec<undo::Undo>,
     /// タグ付けモード。↑ ↓ と数字キーでフラグとタグを付ける。
     tagging: bool,
     /// ツリー・画像送り・フォルダの読み込み・スライドショーで対象にする画像。
@@ -362,7 +364,7 @@ pub struct VwApp {
     /// ごみ箱へ送るか確かめている悪いフラグの画像。
     pending_trash: Option<discard::Pending>,
     /// フラグを消してよいか尋ねている画像。
-    pending_clear_flags: Option<discard::Pending>,
+    pending_clear_flags: Option<labeling::ClearFlags>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
     large_archive_prompt: Option<LargeArchivePrompt>,
@@ -805,7 +807,7 @@ impl VwApp {
             archives,
             warned_archives: Default::default(),
             labels: LabelStore::new(label_fallback),
-            position_undo: Vec::new(),
+            undo: Vec::new(),
             tagging: false,
             filter: Filter::All,
             export: None,
@@ -908,7 +910,8 @@ impl VwApp {
             Action::FilterUnflagged => self.set_filter(ctx, Filter::Flag(None)),
             Action::ExportImages => self.open_export(),
             Action::TrashBadImages => self.ask_trash_bad(),
-            Action::ClearFlags => self.ask_clear_flags(),
+            Action::ClearShownFlags => self.ask_clear_flags(false),
+            Action::ClearFolderFlags => self.ask_clear_flags(true),
             Action::CancelSending => self.cancel_send(),
             Action::SendToApp1
             | Action::SendToApp2
@@ -931,7 +934,7 @@ impl VwApp {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
             }
             Action::ToggleSubframes => self.subframes.open = !self.subframes.open,
-            Action::UndoPosition => self.undo_position(),
+            Action::UndoPosition => self.undo(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowSystemInfo => self.display.info_open = true,
             Action::ShowGradationTest => self.display.test.open_setup(),
