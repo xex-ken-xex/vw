@@ -362,7 +362,7 @@ pub fn gauge(
         painter.galley(pos, u, text_color);
     }
 
-    vw_ui::menu::context(&whole, |ui| {
+    vw_ui::menu::context_with_fields(&whole, |ui| {
         if let Some(e) = window_fields(ui, lang, id, applied) {
             event = Some(e);
         }
@@ -370,6 +370,7 @@ pub fn gauge(
         vw_ui::menu::submenu(ui, tr(lang, "Color map"), |ui| {
             if let Some(p) = pick_menu(ui, lang, applied, rules) {
                 event = Some(GaugeEvent::Pick(p));
+                ui.close();
             }
         });
     });

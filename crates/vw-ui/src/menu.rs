@@ -5,8 +5,8 @@
 
 use egui::containers::menu::{MenuBar, MenuButton, MenuConfig, SubMenuButton};
 use egui::{
-    vec2, Atom, AtomExt, Button, Color32, ComboBox, CornerRadius, IntoAtoms, Popup, Response,
-    Shadow, Stroke, Style, Ui,
+    vec2, Atom, AtomExt, Button, Color32, ComboBox, CornerRadius, IntoAtoms, Popup,
+    PopupCloseBehavior, Response, Shadow, Stroke, Style, Ui,
 };
 
 /// チェック欄の幅。チェックのない項目もこの幅だけ字を右へずらし、頭をそろえる。
@@ -95,6 +95,30 @@ pub fn context(response: &Response, content: impl FnOnce(&mut Ui)) {
     Popup::context_menu(response)
         .style(popup_style)
         .show(content);
+}
+
+/// 書き込む欄のある、右クリックで開くメニュー。項目を押したら呼ぶ側で `ui.close()` する。
+///
+/// 普通のメニューは中を押しても閉じるので、欄を押した途端に閉じて書き込めない。
+/// すべてのメニューをこの閉じ方にしないのは、どの項目にも `ui.close()` が要るようになるため。
+pub fn context_with_fields(response: &Response, content: impl FnOnce(&mut Ui)) {
+    Popup::context_menu(response)
+        .style(popup_style)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(content);
+}
+
+/// 書き込む欄のある、押すと下に開くメニュー。閉じ方は [`context_with_fields`] と同じ。
+pub fn button_with_fields<'a, R>(
+    ui: &mut Ui,
+    atoms: impl IntoAtoms<'a>,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> (Response, Option<R>) {
+    let config = MenuConfig::new()
+        .style(popup_style)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+    let (response, inner) = MenuButton::new(atoms).config(config).ui(ui, content);
+    (response, inner.map(|r| r.inner))
 }
 
 /// 押すと下にメニューを開くボタン（▼ の選択など）。メニューの中で使えば横に開く下の段になる。

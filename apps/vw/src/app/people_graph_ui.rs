@@ -187,7 +187,7 @@ fn toolbar(
         else {
             return;
         };
-        vw_ui::menu::button(
+        vw_ui::menu::button_with_fields(
             ui,
             format!("{} {}", icon::USER_PLUS, tr(lang, "Add person")),
             |ui| {
@@ -227,6 +227,7 @@ fn toolbar(
                                 );
                                 w.selected = BTreeSet::from([p.name.clone()]);
                                 outcome.save = true;
+                                ui.close();
                             }
                         }
                     });
