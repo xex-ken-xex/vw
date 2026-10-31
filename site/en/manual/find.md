@@ -4,7 +4,7 @@ title: "Find and keep images"
 
 Register folders as datasets and find them by content or by where photos were taken.
 
-![Datasets screen](../../images/dataset-search.png)
+![Datasets screen](../../images/en/dataset-search.png)
 
 ## Datasets and search catalogs
 
@@ -20,7 +20,7 @@ In vw, register a coherent folder as a **dataset**, and you can later find it by
 
 ## Setup: choose where to look and which fields
 
-![Dataset settings](../../images/settings-datasets.png)
+![Dataset settings](../../images/en/settings-datasets.png)
 
 Set these two in the **Datasets** settings.
 
@@ -34,7 +34,7 @@ Adding fields later does not erase values already written.
 
 ## Register a dataset
 
-![Register or edit a dataset](../../images/dataset-edit.png)
+![Register or edit a dataset](../../images/en/dataset-edit.png)
 
 1. In the folder tree, right-click the folder → **Register as dataset...**
 2. In the dialog, enter
@@ -53,7 +53,7 @@ Adding fields later does not erase values already written.
 
 ## Edit and update
 
-![Right-click menu in the tree](../../images/tree-menu.png)
+![Right-click menu in the tree](../../images/en/tree-menu.png)
 
 Right-clicking a registered folder shows a different menu.
 
@@ -80,7 +80,7 @@ Type words in the search box at the top to narrow to datasets whose **name, memo
 
 ### Advanced conditions
 
-![Metadata key suggestions](../../images/dataset-key-candidates.png)
+![Metadata key suggestions](../../images/en/dataset-key-candidates.png)
 
 **+ Condition** under the search box adds a condition (the **Advanced** button closes and opens the conditions).
 Each line is one condition, and only datasets meeting all of them remain.
@@ -144,7 +144,7 @@ keeps datasets with at least one **photo taken with a VW-200 at ISO 800 or more*
 
 Click a row to see details on the right: memo, tags, fields, number of files, update time, where it was extracted from, and unreadable files (if any).
 
-![List of files found](../../images/dataset-hits.png)
+![List of files found](../../images/en/dataset-hits.png)
 
 When metadata conditions narrowed the files (including words in a simple search found in image information rather than names or memos),
 the details also list the **files found**, as paths relative to the dataset folder.
@@ -159,7 +159,7 @@ the details also list the **files found**, as paths relative to the dataset fold
 
 ### Group views (events, nights, astronomy, filters)
 
-![FITS dataset grouped by night](../../images/dataset-groups.png)
+![FITS dataset grouped by night](../../images/en/dataset-groups.png)
 
 **Group by** in the details splits the dataset's files (or the files found when searching) into groups. Each group shows the count, dates, place and total exposure, and **Show n** lays out only that group's files, one per slot.
 
@@ -184,7 +184,7 @@ the details also list the **files found**, as paths relative to the dataset fold
 
 ## Extract from datasets
 
-![Extract dialog](../../images/dataset-extract.png)
+![Extract dialog](../../images/en/dataset-extract.png)
 
 **Extract...** copies the dataset's files to another folder,
 to bring them from a shared folder to your PC or to hand them to someone.

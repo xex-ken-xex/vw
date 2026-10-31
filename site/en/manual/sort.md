@@ -4,7 +4,7 @@ title: "Sort photos"
 
 Flag and tag with one key, keep the good photos and clear away the rest.
 
-![Photos in a 3 x 3 layout in tagging mode, with flags and tags](../../images/tagging-grid.png)
+![Photos in a 3 x 3 layout in tagging mode, with flags and tags](../../images/en/tagging-grid.png)
 
 ## Flags and tags
 
@@ -20,7 +20,7 @@ Labels are not written into image files. They are saved in a small file `.vw-lab
 
 ## Setup: choose your tags
 
-![Tag settings](../../images/settings-tags.png)
+![Tag settings](../../images/en/settings-tags.png)
 
 Enter the tags you use, separated by commas, in the **Flags and tags** → **Tags** setting.
 
@@ -34,7 +34,7 @@ mountain, sea, flower, city, sky
 
 ## Tagging mode
 
-![The tagging bar at the bottom](../../images/tagging.png)
+![The tagging bar at the bottom](../../images/en/tagging.png)
 
 Press **T**, or the tag button in the left column, to enter **tagging mode**. Press again to leave it.
 
@@ -62,7 +62,7 @@ You can also click the buttons in the bar to add or remove them.
 
 ## Filter
 
-![Filtered to "good" only](../../images/filter-good.png)
+![Filtered to "good" only](../../images/en/filter-good.png)
 
 Show only the images with given labels.
 
@@ -77,7 +77,7 @@ Show only the images with given labels.
 
 ## Export
 
-![Export dialog](../../images/export-dialog.png)
+![Export dialog](../../images/en/export-dialog.png)
 
 **Labels → Export images...** (**Ctrl+E**) exports the filtered images of the current folder.
 
@@ -160,7 +160,7 @@ Among the images in slots, similar ones get a chain icon and a number in the hea
 
 In each group, the one image suggested to keep gets a star on its icon. vw picks the sharpest image, and among equally sharp ones, the one with more pixels. Hover the icon to see the image's rank in the group.
 
-![Keeping one shot of a burst](../../images/similar-burst-keep.png)
+![Keeping one shot of a burst](../../images/en/similar-burst-keep.png)
 
 To keep the chosen image and drop the others, select it in tagging mode (**T**) and press **Shift+↑**, or right-click the icon and choose **Keep this one, flag the rest bad**. The chosen image is flagged "good" and the rest of the group "bad", so you can later send only the bad ones to the trash.
 

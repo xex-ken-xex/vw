@@ -4,7 +4,7 @@ title: "View images"
 
 Lay out the images of a folder and compare them quickly.
 
-![Photos of a folder in a 3 x 3 layout](../../images/screenshot.png)
+![Photos of a folder in a 3 x 3 layout](../../images/en/screenshot.png)
 
 ## Open a folder
 
@@ -27,7 +27,7 @@ The folder tree works like a file explorer.
 
 ## Reading a slot
 
-![Slots](../../images/folder-slots.png)
+![Slots](../../images/en/folder-slots.png)
 
 The strip at the top of a slot is called the **header**.
 
@@ -76,7 +76,7 @@ What a left drag on the image does depends on the tool column. **Hand** (the def
 
 ## Maximize and slideshow
 
-![Maximized slot and the play bar](../../images/maximize-play.png)
+![Maximized slot and the play bar](../../images/en/maximize-play.png)
 
 | Action | Result |
 | --- | --- |
@@ -93,7 +93,7 @@ When a slot is maximized, the **play bar** appears below the image area. GIF and
 
 ## Fullscreen slideshow
 
-![Slideshow setup](../../images/view-slideshow-setup.png)
+![Slideshow setup](../../images/en/view-slideshow-setup.png)
 
 **F5** (or **View → Fullscreen slideshow...**) opens the setup screen. Choose a start folder and press **Start** to show images one at a time on the whole screen. Images are not loaded into slots, so even folders with tens of thousands of images start at once.
 
@@ -116,7 +116,7 @@ How slots are arranged in the image area is the **layout**. Choose it with **Vie
 | **Alt+4** / **Alt+5** / **Alt+6** | 2 x 2 / 3 x 3 / 4 x 4 | 4 / 9 / 16 images |
 | **Alt+7** | Custom | Columns x rows of the **Custom layout** setting (default 6 x 6, 1 to 8 each) |
 
-![Page bar](../../images/pages.png)
+![Page bar](../../images/en/pages.png)
 
 - **Auto** puts every slot on one page up to the **Auto layout maximum** (default 6 x 6 = 36 slots). With more slots, it splits them into pages at the maximum grid so slots do not get too small
 - With a fixed layout such as 2 x 2, slots that do not fit go to the next page. Empty cells are drawn as empty slots. Click one to select it; the next image opened from the tree goes there

@@ -4,13 +4,15 @@ title: "Measure and check"
 
 Pixel values, clipping, focus and color, the pixel pipeline and batch export.
 
-![Brightness changed with the pixel pipeline and compared side by side with the original, with quality values (PSNR, SSIM...) below](../../images/pipeline-compare.png)
+![Brightness changed with the pixel pipeline and compared side by side with the original, with quality values (PSNR, SSIM...) below](../../images/en/pipeline-compare.png)
 
 ## Measure pixel values (probe, ROI, analysis)
 
-![Pixel values with the probe cross, mean and standard deviation of ROIs, and the histogram in the analysis window](../../images/check-probe.png)
+![Pixel values with the probe cross, mean and standard deviation of ROIs, and the histogram in the analysis window](../../images/en/check-probe.png)
 
-![One large image, with per-channel histograms and minimum, maximum and mean in the analysis window](../../images/single-analysis.png)
+<p class="credit">Photo: NASA (public domain)</p>
+
+![One large image, with per-channel histograms and minimum, maximum and mean in the analysis window](../../images/en/single-analysis.png)
 
 - **Pixel probe** (**V**, or the button in the tool column): click the image to place a cross; the value of that pixel shows beside it. The value under the mouse is shown too. Values are read from the original image (raw 16-bit values, for example), not the reduced display image. Right-click a cross to copy its value or delete it. **Delete** also removes the selected cross
 - **ROI** (**R**, or the button in the tool column): drag to draw a target ROI, **Shift+drag** for a background ROI. The mean and standard deviation of the pixels inside show beside it. Right-click for **Copy ROI statistics** / **Delete ROI**
