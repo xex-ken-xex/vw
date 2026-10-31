@@ -1,7 +1,7 @@
 //! 画像に、保存したパイプラインの値（ファイルの段の値とノードの列）を当てる。
 //! ビューアの色導出と、まとめてかけるツールが同じ結果になるよう、ここに 1 つだけ置く。
 
-use vw_core::VwImage;
+use vw_core::{ColorModel, PixelData, VwImage};
 use vw_dicom::pipeline::Gray;
 
 use crate::nodes::{self, Float};
@@ -20,6 +20,33 @@ pub struct Rendering {
     pub error: Option<(usize, String)>,
     /// ノードが知らせること（ノードの番号と知らせ）。下描きでも元の画素の値に直してある。
     pub notes: Vec<(usize, nodes::Note)>,
+    /// 値のない画素。標準の表示と同じく、描いた結果のその画素をこの色で塗る。
+    pub missing: Option<Missing>,
+}
+
+/// 値のない画素（NaN）と、標準の表示でそこを塗る色（[`VwImage::missing`]）。
+pub struct Missing {
+    pub color: [u8; 3],
+    /// `float` と同じ並びで、値のない画素なら `true`。
+    pub pixels: Vec<bool>,
+}
+
+impl Missing {
+    /// `image` の値のない画素を、`factor` 画素おきに拾う（下描きの [`Float::shrink`] と同じ大きさ）。
+    /// 標準の表示が塗らない画像（色のない灰色の F32 以外、塗る色がない、値のない画素がない）は `None`。
+    fn of(image: &VwImage, factor: usize) -> Option<Self> {
+        let color = image.missing.filter(|_| image.color == ColorModel::Gray)?;
+        let PixelData::F32(v) = &image.data else {
+            return None;
+        };
+        let (w, h) = (image.width as usize, image.height as usize);
+        let factor = factor.max(1);
+        let pixels: Vec<bool> = (0..h)
+            .step_by(factor)
+            .flat_map(|y| (0..w).step_by(factor).map(move |x| v[y * w + x].is_nan()))
+            .collect();
+        pixels.iter().any(|&m| m).then_some(Self { color, pixels })
+    }
 }
 
 /// ノードに渡す最初の値。
@@ -71,7 +98,13 @@ pub fn render(
             (pixel::float_of_display(image), start)
         }
     };
-    let checked = pixel::check_standard(&at_file, &standard);
+    // 標準の表示は値のない画素を決まった色で塗るが、表示の値ではそこが黒になる。塗った画素は
+    // 値から描いたものではないので比べない（比べると、値のない画素のある画像に何も当てられない）。
+    let checked = pixel::check_standard_except(
+        &at_file,
+        &standard,
+        Missing::of(image, 1).as_ref().map(|m| m.pixels.as_slice()),
+    );
     let (mut float, stretch) = match start {
         Start::AtFile => (at_file, None),
         Start::Display(f) => (f, None),
@@ -114,5 +147,58 @@ pub fn render(
         checked,
         error,
         notes,
+        missing: Missing::of(image, factor),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 左上の 1 画素だけ値のない、灰色の F32 の画像。値のない画素を `missing` の色で塗る。
+    fn with_hole(missing: Option<[u8; 3]>) -> VwImage {
+        let mut values: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        values[0] = f32::NAN;
+        let mut image =
+            VwImage::new(4, 4, ColorModel::Gray, PixelData::F32(values)).expect("4x4 gray");
+        image.missing = missing;
+        image
+    }
+
+    #[test]
+    fn images_whose_missing_pixels_are_painted_can_take_nodes() {
+        let r = render(
+            &with_hole(Some([128, 128, 128])),
+            None,
+            &Values::default(),
+            None,
+            None,
+        );
+        assert!(r.checked.is_ok(), "{:?}", r.checked.err());
+        let missing = r.missing.expect("the hole is reported");
+        assert_eq!(missing.color, [128, 128, 128]);
+        assert_eq!(missing.pixels.iter().filter(|&&m| m).count(), 1);
+        assert!(missing.pixels[0]);
+    }
+
+    #[test]
+    fn missing_pixels_are_not_reported_when_the_standard_display_does_not_paint_them() {
+        let r = render(&with_hole(None), None, &Values::default(), None, None);
+        assert!(r.checked.is_ok());
+        assert!(r.missing.is_none());
+    }
+
+    #[test]
+    fn missing_pixels_follow_the_preview_size() {
+        let r = render(
+            &with_hole(Some([0, 0, 255])),
+            None,
+            &Values::default(),
+            None,
+            Some(2),
+        );
+        let missing = r.missing.expect("the hole is reported");
+        assert_eq!(missing.pixels.len(), r.float.width * r.float.height);
+        assert!(missing.pixels[0]);
     }
 }

@@ -140,14 +140,20 @@ pub fn picture(
     };
     let channels = color + usize::from(alpha);
     let mut data = Vec::with_capacity(float.width * float.height * channels);
-    for (px, standard) in float
+    let missing = |i: usize| r.missing.as_ref().filter(|m| m.pixels[i]).map(|m| m.color);
+    for (i, (px, standard)) in float
         .data
         .chunks_exact(float.channels)
         .zip(r.standard.as_chunks::<4>().0)
+        .enumerate()
     {
-        match palette {
-            Some(p) => data.extend(p.colors[level(px[0])].map(|c| f32::from(c) / 255.0)),
-            None => data.extend(px.iter().map(|v| v.clamp(0.0, 1.0))),
+        let painted = missing(i).map(|c| c.map(|v| f32::from(v) / 255.0));
+        match (painted, palette) {
+            // 灰色で書き出すときは、塗る色の明るさにする。
+            (Some(c), _) if color == 1 => data.push((c[0] + c[1] + c[2]) / 3.0),
+            (Some(c), _) => data.extend(c),
+            (None, Some(p)) => data.extend(p.colors[level(px[0])].map(|c| f32::from(c) / 255.0)),
+            (None, None) => data.extend(px.iter().map(|v| v.clamp(0.0, 1.0))),
         }
         if alpha {
             data.push(f32::from(standard[3]) / 255.0);
