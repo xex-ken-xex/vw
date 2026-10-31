@@ -1,38 +1,38 @@
 # vw への協力のしかた
 
-不具合の報告・改良の提案・機能追加の要望は、どれも歓迎します。
-次の流れでお願いします。
+vw が受け付けるのは、**不具合の報告** と、その **修正の提案（プルリクエスト）** です。
 
-1. **Issue（チケット）を起票する**: [Issues](https://github.com/xex-ken-xex/vw/issues/new/choose) で「不具合の報告」か「改良・機能追加の要望」を選び、テンプレートに沿って書きます
-2. **話し合う**: 大きな変更は、作り始める前に Issue で進め方を決めます。小さな修正（誤字・明らかな不具合）はすぐ 3 に進んでかまいません
-3. **プルリクエスト（PR）を出す**: Issue の番号を PR の説明に書きます（例: `Closes #123`）
+1. **Issue（チケット）を起票する**: [Issues](https://github.com/xex-ken-xex/vw/issues/new/choose) で「不具合の報告」を選び、テンプレートに沿って書きます
+2. **修正を提案する**: 直し方が分かる場合は、その Issue を元にプルリクエスト（PR）を出します。Issue の番号を PR の説明に書いてください（例: `Closes #123`）
 
 コードを書かなくても、Issue を起票するだけで十分な協力です。
 
 脆弱性は公開の Issue にせず、[SECURITY.md](SECURITY.md) の方法で非公開で知らせてください。
 
-## Issue の書き方
+## 不具合の報告の書き方
 
-- 不具合は、**vw の版**（「ヘルプ」→「vw について」）、**OS**、**手順**、**期待した結果と実際の結果** を書いてください
-- 下の **ログ欄** のエラー（赤字）や、ログのファイル（ログ欄の見出しのフォルダのボタンで開けます）を貼ってもらえると原因が早く分かります
+- **vw の版**（「ヘルプ」→「vw Image Viewer について」）、**OS**、**手順**、**期待した結果と実際の結果** を書いてください
+- 下のログウインドウのエラー（赤字）や、ログのファイル（ログウインドウの見出しのフォルダのボタンで開けます）を貼ってもらえると原因が早く分かります
 - 特定のファイルでだけ起きる場合は、再現するファイルがあると助かります。**個人情報や人に見せられない画像は貼らないでください**。代わりに形式・大きさ・作ったカメラやソフトを書いてください
+- Windows で起動しないときは、配布物の `check` フォルダの `check-vw.bat` が作る `vw-check-report.txt` を貼ってください（ユーザー名やフォルダの場所は伏せてあります）
 - 同じ Issue がないか、先に検索してください
 
-## プルリクエストの出し方
+## 修正の提案の出し方
 
 1. リポジトリを fork し、main からブランチを作ります
-2. 変更し、次のチェックがすべて通ることを確かめます
+2. 直し、次のチェックがすべて通ることを確かめます
 
    ```sh
-   cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo test
+   cargo fmt --all --check                      # 書式
+   cargo clippy --all-targets -- -D warnings    # 静的解析（警告もエラー扱い）
+   cargo test                                   # 自動テスト
    cargo build --release
    ```
 
-3. PR を出します。テンプレートに沿って、変更の前と後で何が変わるかを書いてください
+3. PR を出します。テンプレートに沿って、直す前と後で何が変わるかを書いてください
 
 CI（GitHub Actions）が Linux と Windows で同じチェックを行います。緑になってからレビューします。
+CI は Cargo.lock のままビルドする（`--locked`）ので、依存を変えたら Cargo.lock もコミットしてください。
 
 ### 書き方の決まり
 
@@ -45,10 +45,57 @@ CI（GitHub Actions）が Linux と Windows で同じチェックを行います
 | コミットログ | なぜこの変更をしたか。変更内容の列挙ではなく理由を書く |
 | コードコメント | なぜ他のやり方を選ばなかったか |
 
-- 新しい振る舞いには、それを表すテストを付けてください
-- 画面の文言を足したら、日本語の訳も `apps/vw/src/i18n.rs` に足してください
-- 新しい依存クレートを足すときは、ライセンスが [packaging/about.toml](packaging/about.toml) の一覧にあるか確かめてください。ないとビルドが失敗します
+- 直した不具合が二度と起きないことを表すテストを付けてください
+- 画面の文言を変えたら、日本語の訳も `apps/vw/src/i18n.rs` で直してください
+- 依存クレートを足すときは、ライセンスが [packaging/about.toml](packaging/about.toml) の一覧にあるか確かめてください。ないとビルドが失敗します
 - 設計の全体像は [docs/architecture.md](docs/architecture.md) にあります
+
+## ビルドの準備
+
+| もの | 用途 |
+| --- | --- |
+| Rust（stable、rustup で導入） | コンパイラとビルドツール（cargo） |
+| Windows: Visual Studio 2022 Build Tools の「C++ によるデスクトップ開発」 | Rust がリンカとして使います |
+| Linux: build-essential | C コンパイラとリンカ |
+| Git | ソースの取得 |
+
+リポジトリを取得してから OS に合ったスクリプトを実行すると、これらを入れたうえで、リリースビルドとテストまで行います。何度実行しても問題ありません。
+
+```sh
+scripts\setup-windows.bat     # Windows（winget を使うので途中で管理者権限の確認が出ます。Build Tools は数 GB・10〜30 分）
+./scripts/setup-ubuntu.sh     # Ubuntu（apt のために sudo のパスワードを聞かれます）
+```
+
+環境だけ揃えてビルドしない場合は `-NoBuild`（Windows）/ `--no-build`（Ubuntu）を付けます。
+
+```sh
+cargo run --release -- [フォルダ または 画像ファイル ...]   # ビルドして起動
+```
+
+実行ファイルは `target/release/vw`（Windows は `target\release\vw.exe`）にできます。
+開発中は `--release` なしの `cargo run` でも動きます。依存ライブラリは最適化してビルドするので、デバッグビルドでも画像の読み込みはそれほど遅くなりません。
+
+使い方のページ（`site/`）を直すときは、[site/README.md](site/README.md) の手順で組み立てて確かめられます。
+
+## リリース
+
+CI（GitHub Actions）が Linux と Windows でチェック・テスト・ビルドを行い、次のときに Release へ載せます。
+
+| きっかけ | Release |
+| --- | --- |
+| main ブランチへの push（プルリクエストのマージ） | 「最新ビルド (main)」を置き換える |
+| `v` で始まるタグの push | そのタグ名の正式版を作る |
+| Actions の画面から CI を手動実行（版番号を入力） | main の最新コミットにタグを付け、正式版を作る |
+
+正式版を出すときは、`Cargo.toml` の `version` を上げてから、次のどちらかを行います。
+
+- GitHub の **Actions** → **CI** → **Run workflow** で、Branch を `main` のまま版番号（例: `v0.3.0`）を入れて実行する
+- 手元の main でタグを付けて push する
+
+```sh
+git tag v0.3.0
+git push origin v0.3.0
+```
 
 ## ライセンス
 
