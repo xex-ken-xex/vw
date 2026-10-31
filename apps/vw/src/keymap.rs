@@ -76,6 +76,8 @@ pub enum Action {
     NextColorMap,
     ToggleColorGauge,
     TrashBadImages,
+    ClearShownFlags,
+    ClearFolderFlags,
     CancelSending,
     SendToApp1,
     SendToApp2,
@@ -184,7 +186,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 105] = [
+    pub const ALL: [Action; 107] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -249,6 +251,8 @@ impl Action {
         Action::FilterUnflagged,
         Action::ExportImages,
         Action::TrashBadImages,
+        Action::ClearShownFlags,
+        Action::ClearFolderFlags,
         Action::CancelSending,
         Action::SendToApp1,
         Action::SendToApp2,
@@ -356,6 +360,8 @@ impl Action {
             Action::NextColorMap => "next_color_map",
             Action::ToggleColorGauge => "toggle_color_gauge",
             Action::TrashBadImages => "trash_bad_images",
+            Action::ClearShownFlags => "clear_shown_flags",
+            Action::ClearFolderFlags => "clear_folder_flags",
             Action::CancelSending => "cancel_sending",
             Action::SendToApp1 => "send_to_app_1",
             Action::SendToApp2 => "send_to_app_2",
@@ -470,6 +476,8 @@ impl Action {
             Action::FilterUnflagged => "Show only unflagged images",
             Action::ExportImages => "Export images...",
             Action::TrashBadImages => "Move bad images to trash...",
+            Action::ClearShownFlags => "Clear flags of the shown images...",
+            Action::ClearFolderFlags => "Clear flags of the whole folder...",
             Action::CancelSending => "Cancel sending",
             Action::SendToApp1 => "Send to app 1",
             Action::SendToApp2 => "Send to app 2",
@@ -486,7 +494,7 @@ impl Action {
             Action::ToggleMap => "Show/hide map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
-            Action::UndoPosition => "Undo the last position change",
+            Action::UndoPosition => "Undo the last position change or flag clearing",
             Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
             Action::ShowGradationTest => "Display gradation test...",
@@ -581,7 +589,9 @@ impl Action {
             | Action::FilterBad
             | Action::FilterUnflagged
             | Action::ExportImages
-            | Action::TrashBadImages => KeyGroup::Filter,
+            | Action::TrashBadImages
+            | Action::ClearShownFlags
+            | Action::ClearFolderFlags => KeyGroup::Filter,
             Action::SendToApp1
             | Action::SendToApp2
             | Action::SendToApp3
@@ -805,6 +815,9 @@ impl Action {
             Action::ExportImages => vec![KeyCombo::ctrl(E)],
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
+            Action::ClearShownFlags => vec![KeyCombo::ctrl(Backspace).with(true, true, false)],
+            // Ctrl+Alt+Backspace は X11 で画面のサーバーを再起動するキーなので避ける。
+            Action::ClearFolderFlags => vec![KeyCombo::plain(Backspace).with(false, true, true)],
             Action::CancelSending => vec![],
             Action::SendToApp1 => vec![],
             Action::SendToApp2 => vec![],

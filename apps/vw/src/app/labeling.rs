@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32};
 
-use crate::export::{Filter, Matcher};
-use crate::i18n::tr;
+use crate::discard;
+use crate::export::{self, Filter, Matcher};
+use crate::i18n::{tr, tr1};
 use crate::keymap::Action;
 use crate::labels::Flag;
 use crate::settings::{Language, LoadInto};
@@ -14,6 +15,12 @@ use crate::tree::{self};
 use crate::viewer::Slot;
 
 use super::*;
+
+/// フラグを消してよいか尋ねている画像と、フォルダ全体か（偽なら見えている画像だけ）。
+pub(super) struct ClearFlags {
+    pending: discard::Pending,
+    whole: bool,
+}
 
 impl VwApp {
     /// 絞り込みの条件。
@@ -198,6 +205,113 @@ impl VwApp {
             }
             Err(e) => self.log.error(e),
         }
+    }
+
+    /// 今いるフォルダのフラグ付きの画像を集め、フラグを消してよいか尋ねる。`whole` が偽なら、
+    /// 今の絞り込みに合う画像（見えている画像）だけにする。悪いフラグだけを見せていれば、
+    /// 悪いフラグだけを消せる。サブフォルダまで辿らないのは、ごみ箱へ送るときと同じく、
+    /// 開いていないフォルダの画像に触れないため。
+    pub(super) fn ask_clear_flags(&mut self, whole: bool) {
+        let lang = self.lang();
+        let Some(dir) = self.current.clone() else {
+            self.log
+                .warn(tr(lang, "Select a folder in the tree first."));
+            return;
+        };
+        let order = self.settings().tree.order();
+        let all = Filter::All;
+        let matcher = if whole {
+            Matcher {
+                filter: &all,
+                labels: &self.labels,
+            }
+        } else {
+            self.matcher()
+        };
+        let shown = export::collect(&dir, false, self.loader.registry(), order, &matcher).images;
+        let files: Vec<PathBuf> = shown
+            .into_iter()
+            .filter(|f| self.labels.get(f).flag.is_some())
+            .collect();
+        if files.is_empty() {
+            self.log
+                .info(format!("No flagged images to clear in {}", dir.display()));
+            return;
+        }
+        self.pending_clear_flags = Some(ClearFlags {
+            pending: discard::Pending { dir, files },
+            whole,
+        });
+    }
+
+    pub(super) fn clear_flags_dialog(&mut self, ctx: &egui::Context) {
+        let Some(ClearFlags { pending, whole }) = &self.pending_clear_flags else {
+            return;
+        };
+        let lang = self.lang();
+        let (names, rest) = pending.preview(10);
+        let filtered = !whole && self.filter != Filter::All;
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("clear_flags_question")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(tr1(
+                lang,
+                "Clear the flags of {} images?",
+                &pending.files.len().to_string(),
+            ));
+            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+            if filtered {
+                ui.label(tr(lang, "Only the images shown by the current filter."));
+            }
+            ui.add_space(4.0);
+            for name in names {
+                ui.label(name);
+            }
+            if rest > 0 {
+                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
+            }
+            ui.add_space(4.0);
+            ui.weak(tr(lang, "Ctrl+Z puts them back."));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Clear flags")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(yes) = answer else {
+            return;
+        };
+        let Some(ClearFlags { pending, .. }) = self.pending_clear_flags.take().filter(|_| yes)
+        else {
+            return;
+        };
+        let mut cleared = Vec::new();
+        for file in pending.files {
+            let Some(flag) = self.labels.get(&file).flag else {
+                continue;
+            };
+            match self.labels.set_flag(&file, None) {
+                Ok(()) => cleared.push((file, flag)),
+                Err(e) => self.log.error(format!("{}: {e}", file.display())),
+            }
+        }
+        let count = cleared.len();
+        if !cleared.is_empty() {
+            self.remember_undo(super::undo::Undo::Flags(cleared));
+        }
+        self.log.info(format!(
+            "Cleared the flags of {count} images in {} (Ctrl+Z to undo)",
+            pending.dir.display()
+        ));
+        // フラグで絞り込んでいれば、消した画像はもう条件に合わないので並びから外す。
+        self.apply_filter_to_slots();
     }
 
     /// 設定の `index` 番目のタグを付ける・外す。
