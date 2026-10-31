@@ -41,10 +41,8 @@ jobs:
           # 古い版で動かないので、22.04 でビルドして 22.04 以降すべてで動くようにする。
           - os: ubuntu-22.04
             package: vw-linux-x64.tar.gz
-            dicoamplio_package: dicoamplio-linux-x64.tar.gz
           - os: windows-latest
             package: vw-windows-x64.zip
-            dicoamplio_package: dicoamplio-windows-x64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,7 +65,6 @@ jobs:
       - name: Collect third-party licenses
         run: |
           cargo about generate -c packaging/about.toml packaging/about.hbs --manifest-path apps/vw/Cargo.toml -o THIRD-PARTY-LICENSES.txt
-          cargo about generate -c packaging/about.toml packaging/about-dicoamplio.hbs --manifest-path apps/dicoamplio/Cargo.toml -o THIRD-PARTY-LICENSES-dicoamplio.txt
           cargo about generate -c packaging/about.toml packaging/about-vwbatch.hbs --manifest-path apps/vwbatch/Cargo.toml -o THIRD-PARTY-LICENSES-vwbatch.txt
 
       - name: Check setup scripts
@@ -85,34 +82,25 @@ jobs:
             if ($errors) { $errors; exit 1 }
           }
 
-      # apps/ のアプリを 1 つずつ別の書庫にする。使う人が要るものだけ取れるように
+      # アプリを 1 つずつ別の書庫にする。使う人が要るものだけ取れるように
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist/vw dist/dicoamplio
+          mkdir -p dist/vw
           # vwbatch は vw で保存したパイプラインをかけるツールなので、別の書庫にせず vw と一緒に配る
           cp target/release/vw target/release/vwbatch README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt THIRD-PARTY-LICENSES-vwbatch.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
-          cp target/release/dicoamplio apps/dicoamplio/README.md apps/dicoamplio/Readme.html LICENSE-MIT LICENSE-APACHE dist/dicoamplio/
-          cp THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
-          cp -r apps/dicoamplio/presets apps/dicoamplio/examples dist/dicoamplio/
-          tar -C dist -czf dist/${{ matrix.dicoamplio_package }} dicoamplio
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/vw, dist/dicoamplio | Out-Null
+          New-Item -ItemType Directory -Force dist/vw | Out-Null
           Copy-Item target/release/vw.exe, target/release/vwbatch.exe, README.md, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-LICENSES.txt, THIRD-PARTY-LICENSES-vwbatch.txt dist/vw/
           # 起動しない PC で原因を調べるスクリプト。起動できないと vw の中からは何も調べられないので、zip に同梱する
           Copy-Item -Recurse packaging/windows/check dist/vw/check
           Compress-Archive -Path dist/vw -DestinationPath dist/${{ matrix.package }}
-          Copy-Item target/release/dicoamplio.exe, apps/dicoamplio/README.md, apps/dicoamplio/Readme.html, LICENSE-MIT, LICENSE-APACHE dist/dicoamplio/
-          Copy-Item THIRD-PARTY-LICENSES-dicoamplio.txt dist/dicoamplio/THIRD-PARTY-LICENSES.txt
-          Copy-Item -Recurse apps/dicoamplio/presets, apps/dicoamplio/examples dist/dicoamplio/
-          Compress-Archive -Path dist/dicoamplio -DestinationPath dist/${{ matrix.dicoamplio_package }}
       # Microsoft Store に出す MSIX。Store が自分の証明書で署名し直すので、未署名のまま作る。
       # 未署名の MSIX は利用者の PC には入れられないので Release には載せず、Actions の成果物にだけ置く。
-      # DicoAmplio は Store に出さない（ken の判断）。
       - name: Package for Microsoft Store
         if: runner.os == 'Windows'
         shell: pwsh
@@ -128,12 +116,10 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.package }}
-          path: |
-            dist/${{ matrix.package }}
-            dist/${{ matrix.dicoamplio_package }}
+          path: dist/${{ matrix.package }}
 
   # main への push と v* タグの push で、両 OS のビルドとテストが通ったら Release に載せる。
-  # apps/ のアプリは同じ版で一緒に出す(vw と dicoamplio の書庫が 1 つの Release に並ぶ)。
+  # 配るアプリは同じ版で一緒に出す（vw の書庫に vwbatch も入る）。
   # プルリクエストでは載せない（未マージの変更を配布しないため）。
   # 既知の脆弱性がある依存のビルドは配布しない。
   release:
@@ -161,15 +147,13 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum vw-* dicoamplio-* > SHA256SUMS.txt
+          sha256sum vw-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
       # 一覧だけでは、Release ごと差し替えられたときに一覧も一緒に差し替えられてしまう。
       # attestation は GitHub が CI の実行に結び付けて記録するので、ここで作ったものかを別に確かめられる。
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: |
-            dist/vw-*
-            dist/dicoamplio-*
+          subject-path: dist/vw-*
       - name: Publish main build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # main の最新ビルドは 1 つのプレリリースを作り直して置き換える。

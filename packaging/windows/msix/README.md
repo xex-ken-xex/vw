@@ -1,7 +1,7 @@
 # Microsoft Store 用の MSIX を作る
 
 vw を Microsoft Store に出すための MSIX パッケージを作ります。
-DicoAmplio と vwbatch は Store に出しません。vwbatch は zip 版で使います。
+vwbatch は Store に出しません。vwbatch は zip 版で使います。
 
 vwbatch を入れない理由: コマンドだけの道具をスタートメニューに出さない設定（`AppListEntry="none"`）にすると、
 Store は「画面のないアプリ」とみなし、Microsoft の個別の許可（HeadlessAppBypass）がないと受け付けません

@@ -3,6 +3,8 @@
 DICOM のタグを書き換えて、評価用に患者・検査・シリーズ・画像を水増しするツール。使い方と設計は [README.md](README.md)。
 リポジトリ全体の決まり(書く場所、よそへ書き込む前の許可)はルートの `CLAUDE.md`。
 
+**今はビルドと配布から外している**(ken 2026-10-31。もう同梱しなくてよい)。直すときは、ルートの `Cargo.toml` の `exclude` から外してワークスペースに戻し、`.github/workflows/ci.yml` の書庫づくり(ライセンスの一覧 `packaging/about-dicoamplio.hbs`、`dicoamplio-*` の書庫、SHA256SUMS、attestation)を戻す。
+
 ## 決めたこと(ken との会話で決めた方針。理由ごと残す)
 
 - **速度重視で Rust**。rayon で並列、ヘッダだけ読んで木を作る(`tree.rs`)。6 万ファイルを 1 秒で書き出せる程度を保つ。

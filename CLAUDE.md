@@ -11,11 +11,11 @@ Linux / Windows 向けの高速画像ビューワ。設計は [docs/architecture
 | --- | --- |
 | `crates/` | 画像の読み込み、DICOM（実験的）、見た目(`vw-ui`)、フォルダツリーの基底(`vw-tree`)など。アプリから共有する |
 | `apps/vw/` | ビューア本体 |
-| `apps/dicoamplio/` | DICOM の評価データを水増しするツール(決まりは `apps/dicoamplio/CLAUDE.md`) |
+| `apps/dicoamplio/` | DICOM の評価データを水増しするツール(決まりは `apps/dicoamplio/CLAUDE.md`)。今はビルドと配布から外している(ルートの `Cargo.toml` の `exclude`) |
 
 - 新しいツールは `apps/` にディレクトリを 1 つ足す。見た目は `vw-ui`、フォルダやファイルを選ぶ窓は `vw-tree` の `picker` を使い(OS のダイアログは使わない)、ワークスペースの `version`・`license` を継ぐ。
 - ビューア固有のツリーの振る舞い(ZIP、DICOM の検査（実験的）、AI タグ、先読み)は `apps/vw/src/tree.rs` が `vw-tree` の `Hooks` で足す。基底には、どのアプリでも同じ部分だけを置く。
-- 版はワークスペースで 1 つ。Release は `apps/` の全アプリを同じ版で一緒に出す(`.github/workflows/ci.yml`)。
+- 版はワークスペースで 1 つ。Release はビルドしているアプリ(`exclude` に入れていないもの)を同じ版で一緒に出す(`.github/workflows/ci.yml`)。
 - 新しい依存を足したら `packaging/about.toml` のライセンスの一覧にあるか確かめる。アプリごとに `cargo about` で第三者ライセンスの一覧を作る。
 
 ## よそへ書き込む前に許可を取る

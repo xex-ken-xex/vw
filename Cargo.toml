@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "apps/*"]
+# DicoAmplio はビルドと配布から外している。直す必要が出たらここから消して戻す。
+# ソースごと消さないのは、戻すときに作り直さずに済むようにするため。
+exclude = ["apps/dicoamplio"]
 
 [workspace.package]
 version = "0.8.2"
