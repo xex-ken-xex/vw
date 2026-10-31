@@ -236,6 +236,10 @@ impl Panes for Content<'_> {
         pane != "images"
     }
 
+    fn has_header_controls(&self, pane: &str) -> bool {
+        pane == "log"
+    }
+
     fn header_buttons(&mut self, ui: &mut egui::Ui, pane: &str) {
         if pane == "log" {
             ui.checkbox(self.follow_log, "追う");
