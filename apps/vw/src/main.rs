@@ -76,6 +76,7 @@ mod sky_chart;
 mod sky_window;
 mod slideshow;
 mod sort;
+mod spectrum_view;
 mod state;
 mod strip_location;
 mod subframes_window;

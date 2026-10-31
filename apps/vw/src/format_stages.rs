@@ -470,6 +470,7 @@ mod tests {
             sharpness: None,
             gamut: None,
             frame_delays: None,
+            spectrum: None,
         }
     }
 

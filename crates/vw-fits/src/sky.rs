@@ -217,7 +217,8 @@ fn read_headers<R: Read>(
         let hdu = header::hdu_at(&bytes, 0).map_err(|e| e.to_string())?;
         let data = hdu.data_len.next_multiple_of(BLOCK) as u64;
         hdus.push(hdu);
-        if crate::find_image(&hdus).is_ok() {
+        // 1 次元のデータは、後ろに画像があればそちらを使うので、読み進める。
+        if crate::find_image_with_axes(&hdus, 2).is_ok() {
             break;
         }
         skip(r, data)?;

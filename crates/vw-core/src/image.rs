@@ -140,6 +140,8 @@ pub struct VwImage {
     pub missing: Option<[u8; 3]>,
     /// ICC プロファイルか CICP から分かった色域。分からなければ `None`（sRGB とみなす）。
     pub gamut: Option<crate::icc::Gamut>,
+    /// 1 次元のスペクトルとして読んだとき、その値と横軸。あれば画像ではなくグラフで描く。
+    pub spectrum: Option<std::sync::Arc<crate::spectrum::Spectrum>>,
 }
 
 impl VwImage {
@@ -175,6 +177,7 @@ impl VwImage {
             develop_size: None,
             missing: None,
             gamut: None,
+            spectrum: None,
         })
     }
 }

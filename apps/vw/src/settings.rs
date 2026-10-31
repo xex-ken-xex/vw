@@ -1297,6 +1297,8 @@ pub struct Fits {
     pub missing_color: String,
     /// 電波の画像のビーム（BMAJ・BMIN・BPA）を左下に楕円で描く。
     pub beam: bool,
+    /// 軸が 1 本だけのデータ（スペクトル）を、高さ 1 画素の画像ではなく折れ線のグラフで描く。
+    pub spectrum_graph: bool,
     /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
     pub calibration: FitsCalibration,
 }
@@ -1317,6 +1319,7 @@ impl Default for Fits {
                 format!("#{r:02x}{g:02x}{b:02x}")
             },
             beam: true,
+            spectrum_graph: true,
             calibration: FitsCalibration::default(),
         }
     }
@@ -1360,6 +1363,7 @@ impl Fits {
                 )
                 .unwrap_or_else(|| d.missing_color.clone()),
             beam: r.get("beam").unwrap_or(d.beam),
+            spectrum_graph: r.get("spectrum_graph").unwrap_or(d.spectrum_graph),
             calibration: FitsCalibration::read(r.reader()),
         }
     }
