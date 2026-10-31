@@ -102,7 +102,6 @@ JPEG でも RAW でも FITS でも、ZIP の中の画像でも、整理と検索
 
 Microsoft Store 版（審査中）には、画素の変換をまとめてかけるコマンド [vwbatch](#画素の変換をまとめてかけるvwbatch) と、起動しないときに調べる `check` フォルダは入っていません。使うときは zip 版を使ってください。
 
-同じ Release に、DICOM の評価データを水増しするツール [DicoAmplio](apps/dicoamplio/README.md) の `dicoamplio-windows-x64.zip` / `dicoamplio-linux-x64.tar.gz` も並びます。vw だけ使うなら要りません。
 
 Releases には 2 種類あります。
 
@@ -1439,7 +1438,6 @@ crates/
 apps/
   vw/          ビューア本体（実行ファイル vw）
   vwbatch/     保存した画素の変換を画像にまとめてかけるコマンド（実行ファイル vwbatch）
-  dicoamplio/  DICOM の評価データを水増しするツール（実行ファイル dicoamplio。apps/dicoamplio/README.md）
 docs/        設計資料と README の画像
 scripts/     開発環境の構築スクリプト
 packaging/   配布物に同梱するファイル
