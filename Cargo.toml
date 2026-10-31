@@ -6,7 +6,7 @@ members = ["crates/*", "apps/*"]
 exclude = ["apps/dicoamplio"]
 
 [workspace.package]
-version = "0.8.2"
+version = "0.8.5"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["xex (xex-ken-xex)"]
