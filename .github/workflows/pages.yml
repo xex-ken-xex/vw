@@ -1,7 +1,6 @@
 name: Pages
 
-# site/ の紹介ページを GitHub Pages に出す。スクリーンショットは README と同じ docs/ のものを
-# 使い回し、ビルド時にコピーする（site/ に複製を置くと README と食い違うため）。
+# site/ の紹介ページと使い方を GitHub Pages に出す。組み立ては scripts/build-site.sh（説明は site/README.md）。
 on:
   push:
     branches: [main]
@@ -10,6 +9,7 @@ on:
       - 'docs/screenshot.png'
       - 'docs/images/**'
       - 'packaging/icons/vw.png'
+      - 'scripts/build-site.sh'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -30,11 +30,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
       - name: Assemble the site
-        run: |
-          mkdir -p _site/images
-          cp -r site/. _site/
-          cp docs/screenshot.png docs/images/*.png packaging/icons/vw.png _site/images/
+        run: ./scripts/build-site.sh _site
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
         with:
           enablement: true

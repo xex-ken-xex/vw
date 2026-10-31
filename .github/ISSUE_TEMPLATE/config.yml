@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/xex-ken-xex/vw/security/advisories/new
     about: セキュリティの問題は公開の Issue にせず、こちらから非公開で知らせてください
   - name: 使い方 / How to use
-    url: https://github.com/xex-ken-xex/vw#よくある質問と困ったとき
-    about: README の「よくある質問と困ったとき」
+    url: https://xex-ken-xex.github.io/vw/manual/faq.html
+    about: 使い方のページの「よくある質問と困ったとき」
