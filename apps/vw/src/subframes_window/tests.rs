@@ -42,7 +42,7 @@ fn preview_shrinks_the_long_side_and_stretches_the_sky_to_gray() {
     let p = preview_of(&Float::new(w, h, 1, data), 100);
     assert_eq!((p.width, p.height), (100, 33));
     assert!((p.scale - 1.0 / 3.0).abs() < 1e-9);
-    let mut sky = p.pixels.clone();
+    let mut sky = p.pixels;
     sky.sort_unstable();
     let median = sky[sky.len() / 2];
     assert!((40..=100).contains(&median), "sky {median}");

@@ -195,7 +195,7 @@ fn zscale(sorted: &[f32]) -> Option<(f32, f32)> {
         let median = if npix % 2 == 1 {
             y[npix / 2]
         } else {
-            (y[npix / 2 - 1] + y[npix / 2]) / 2.0
+            f64::midpoint(y[npix / 2 - 1], y[npix / 2])
         };
         vmin = vmin.max(median - (center as f64 - 1.0) * slope);
         vmax = vmax.min(median + (npix - center) as f64 * slope);

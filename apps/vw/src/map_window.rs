@@ -466,7 +466,7 @@ impl MapWindow {
         None
     }
 
-    fn map(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
+    fn map(&mut self, ui: &egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let rect = ui.max_rect();
         self.last_rect = Some(rect);
         let response = ui.interact(rect, ui.id().with("map"), Sense::click_and_drag());
@@ -571,7 +571,7 @@ impl MapWindow {
     }
 
     /// 選んだ点の上に、縮小画像・名前・撮影日時と「開く」を出す。
-    fn popup(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>, rect: Rect) -> Option<Command> {
+    fn popup(&mut self, ui: &egui::Ui, inputs: &Inputs<'_>, rect: Rect) -> Option<Command> {
         let lang = inputs.lang;
         let selected = self.selected.clone()?;
         let view = self.view?;
@@ -663,7 +663,7 @@ impl MapWindow {
     }
 
     /// 地図の絵の出典。提供元の条件で、いつも見える所に出す。
-    fn attribution(&self, ui: &mut egui::Ui, inputs: &Inputs<'_>, rect: Rect) {
+    fn attribution(&self, ui: &egui::Ui, inputs: &Inputs<'_>, rect: Rect) {
         let s = inputs.settings;
         egui::Area::new(ui.id().with("map_credit"))
             .fixed_pos(rect.right_bottom())
@@ -959,7 +959,7 @@ mod tests {
     fn position_placed_on_the_map_wins_over_exif() {
         let dir = crate::test_util::TempDir::new();
         let img = dir.touch("a.jpg");
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.set_position(&img, Some(SAPPORO)).unwrap();
         let mut map = MapWindow {
             scanned: vec![scanned(&img, Gps::new(35.0, 139.0, None), false)],
@@ -975,7 +975,7 @@ mod tests {
     fn image_without_exif_appears_once_placed() {
         let dir = crate::test_util::TempDir::new();
         let img = dir.touch("a.png");
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         let mut map = MapWindow {
             scanned: vec![scanned(&img, None, false)],
             ..Default::default()
@@ -992,7 +992,7 @@ mod tests {
     fn image_outside_the_scanned_folder_is_shown_after_dropping() {
         let dir = crate::test_util::TempDir::new();
         let img = dir.touch("elsewhere.png");
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.set_position(&img, Some(SAPPORO)).unwrap();
         let mut map = MapWindow::default();
         map.position_changed(&img);
@@ -1024,7 +1024,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new();
         let a = dir.touch("a.jpg");
         let b = dir.touch("b.jpg");
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         let mut map = MapWindow {
             scanned: vec![
                 scanned(&a, None, false),

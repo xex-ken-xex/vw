@@ -255,7 +255,7 @@ impl SkyWindow {
         });
     }
 
-    fn chart(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
+    fn chart(&mut self, ui: &egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let rect = ui.max_rect();
         let response = ui.interact(rect, ui.id().with("sky"), Sense::click_and_drag());
         let view = self.view.get_or_insert_with(View::default);
@@ -332,7 +332,7 @@ impl SkyWindow {
     /// 選んだ枠の横に、縮小画像・名前・撮影日時と「開く」を出す。
     fn popup(
         &mut self,
-        ui: &mut egui::Ui,
+        ui: &egui::Ui,
         inputs: &Inputs<'_>,
         rect: Rect,
         shapes: &[Shape],

@@ -306,8 +306,7 @@ pub fn compose(
             aligned,
         });
     }
-    let mut out =
-        VwImage::new(w, h, ColorModel::Rgb, PixelData::F32(data)).map_err(|e| e.to_string())?;
+    let mut out = VwImage::new(w, h, ColorModel::Rgb, PixelData::F32(data))?;
     out.channel_windows = Some(channel_windows);
     out.curve = reference.1.curve;
     out.metadata = metadata(&channels, &reference.1.metadata);

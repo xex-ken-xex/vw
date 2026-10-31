@@ -483,7 +483,7 @@ mod tests {
         let (w, h) = (16, 16);
         let values: Vec<f32> = (0..w * h).map(|i| (i % w) as f32).collect();
         let mut weights = vec![1.0; w * h];
-        let mut holed = values.clone();
+        let mut holed = values;
         for y in 6..10 {
             for x in 6..10 {
                 weights[y * w + x] = 0.0;

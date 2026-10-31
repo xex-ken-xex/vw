@@ -247,7 +247,7 @@ impl VwApp {
     }
 
     /// AI tags メニュー。モデルが揃うまでは、タグ付けと顔探しを押せなくする。
-    fn ai_menu(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+    fn ai_menu(&self, ui: &mut egui::Ui) -> Option<Action> {
         let ready = self.ai_ready();
         let mut chosen = None;
         for action in [

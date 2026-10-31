@@ -9,3 +9,6 @@ license.workspace = true
 vw-core.workspace = true
 zune-core = "0.5"
 zune-bmp = "0.5"
+
+[lints]
+workspace = true

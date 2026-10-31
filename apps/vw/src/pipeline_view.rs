@@ -607,7 +607,7 @@ impl PipelineView {
     fn follow(&mut self, ctx: &egui::Context, target: Option<&Target<'_>>) {
         let path = target.map(|t| t.path.to_path_buf());
         if path != self.path {
-            self.path = path.clone();
+            self.path = path;
             self.loaded = target.map(|t| match t.info.plugin.as_str() {
                 "DICOM" => Loaded::Reading(pixel_pipeline::read_in_background(ctx, t.path)),
                 _ => Loaded::Plain(Vec::new()),
@@ -856,12 +856,7 @@ impl PipelineView {
     }
 
     /// キャンバスの背景の右クリックメニューと、ダブルクリックで開く検索の小窓。足したら `true`。
-    fn add_menus(
-        &mut self,
-        ui: &mut egui::Ui,
-        lang: Language,
-        background: &egui::Response,
-    ) -> bool {
+    fn add_menus(&mut self, ui: &egui::Ui, lang: Language, background: &egui::Response) -> bool {
         let mut added = false;
         vw_ui::menu::context(background, |ui| {
             ui.menu_button(tr(lang, "Add node"), |ui| {

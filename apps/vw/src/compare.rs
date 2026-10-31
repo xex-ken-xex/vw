@@ -781,7 +781,7 @@ impl Session {
             .collect()
     }
 
-    fn view(&mut self, ui: &mut egui::Ui, lang: Language, area: Rect) {
+    fn view(&mut self, ui: &egui::Ui, lang: Language, area: Rect) {
         if self.adjusting {
             self.adjust_view(ui, lang, area);
             return;
@@ -853,7 +853,7 @@ impl Session {
     }
 
     /// 「ずれを直す」の間の見せ方と操作。基準の上に比べる画像を半透明で重ねる。
-    fn adjust_view(&mut self, ui: &mut egui::Ui, lang: Language, area: Rect) {
+    fn adjust_view(&mut self, ui: &egui::Ui, lang: Language, area: Rect) {
         let response = ui.interact(
             area,
             ui.id().with("compare_adjust"),

@@ -51,7 +51,7 @@ impl Transfer {
 
     /// 元に付いていたラベルを移した先 `dest` に付ける。移動なら元のラベルは消す。
     /// 付けられなかったときはその理由を返す（ファイルは移したままにする）。
-    pub fn carry_labels(&self, labels: &mut LabelStore, dest: &Path) -> Option<String> {
+    pub fn carry_labels(&self, labels: &LabelStore, dest: &Path) -> Option<String> {
         let label = labels.get(&self.file);
         if label.is_empty() {
             return None;
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn moving_takes_the_file_and_its_label_along() {
         let (_dir, file, to) = setup();
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.toggle_flag(&file, Flag::Good).unwrap();
         let t = Transfer {
             file: file.clone(),
@@ -182,7 +182,7 @@ mod tests {
         };
         let dest = t.carry_file(&AtomicUsize::new(0)).unwrap();
         assert_eq!(dest, to.join("a.png"));
-        assert!(t.carry_labels(&mut labels, &dest).is_none());
+        assert!(t.carry_labels(&labels, &dest).is_none());
         assert!(!file.exists());
         assert_eq!(std::fs::read(&dest).unwrap(), b"png");
         assert_eq!(labels.get(&dest).flag, Some(Flag::Good));
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn copying_keeps_the_original_and_its_label() {
         let (_dir, file, to) = setup();
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.toggle_tag(&file, "cat").unwrap();
         let t = Transfer {
             file: file.clone(),
@@ -200,7 +200,7 @@ mod tests {
             op: Op::Copy,
         };
         let dest = t.carry_file(&AtomicUsize::new(0)).unwrap();
-        assert!(t.carry_labels(&mut labels, &dest).is_none());
+        assert!(t.carry_labels(&labels, &dest).is_none());
         assert!(file.exists() && dest.exists());
         assert!(labels.get(&file).tags.contains("cat"));
         assert!(labels.get(&dest).tags.contains("cat"));

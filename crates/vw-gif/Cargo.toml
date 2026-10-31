@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 gif = { version = "0.14", default-features = false, features = ["std"] }
 vw-core.workspace = true
+
+[lints]
+workspace = true

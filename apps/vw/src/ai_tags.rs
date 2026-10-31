@@ -140,7 +140,7 @@ impl AiTagStore {
 
     /// 画像の記録の一部を書き換えて保存する。タグ付けと顔探しは別々に走るので、
     /// 片方の結果でもう片方を消さないよう、丸ごと置き換えずにここを通す。
-    pub fn update(&mut self, path: &Path, change: impl FnOnce(&mut Entry)) -> Result<(), String> {
+    pub fn update(&self, path: &Path, change: impl FnOnce(&mut Entry)) -> Result<(), String> {
         let (dir, name) =
             split(path).ok_or_else(|| format!("{}: not a file in a folder", path.display()))?;
         self.with_dir(dir, |_| ());
@@ -163,7 +163,7 @@ impl AiTagStore {
 
     /// 画像の記録（タグと顔の枠）を消す。フォルダごとに 1 回だけ書く。
     /// 消して空になったフォルダのファイルは、ファイルごと消す。返すのは消した画像の数。
-    pub fn remove(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
+    pub fn remove(&self, paths: &[PathBuf]) -> Result<usize, String> {
         let mut by_dir: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
         for p in paths {
             if let Some((dir, name)) = split(p) {
@@ -202,7 +202,7 @@ impl AiTagStore {
     /// 画像の記録を書き換え、変わったものをフォルダごとに 1 回だけ書く。
     /// `change` は変えたら true を返す。返すのは変わった画像の数。
     pub fn edit_all(
-        &mut self,
+        &self,
         paths: &[PathBuf],
         mut change: impl FnMut(&mut Entry) -> bool,
     ) -> Result<usize, String> {
@@ -351,7 +351,7 @@ mod tests {
     fn tags_are_saved_next_to_the_image_and_read_back() {
         let dir = tempfile_dir();
         let img = dir.join("a.png");
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
         assert!(dir.join(FILE_NAME).exists());
         let fresh = AiTagStore::new(None);
@@ -363,7 +363,7 @@ mod tests {
     fn updating_faces_keeps_the_tags() {
         let dir = tempfile_dir();
         let img = dir.join("a.png");
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         store.update(&img, |e| *e = entry("1girl", 0.9)).unwrap();
         store
             .update(&img, |e| {
@@ -386,7 +386,7 @@ mod tests {
     fn broken_file_is_reported_and_kept_as_backup() {
         let dir = tempfile_dir();
         std::fs::write(dir.join(FILE_NAME), "{not json").unwrap();
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         assert_eq!(store.get(&dir.join("a.png")), None);
         assert_eq!(store.take_problems().len(), 1);
         store
@@ -399,13 +399,13 @@ mod tests {
     fn removing_every_entry_deletes_the_file() {
         let dir = tempfile_dir();
         let (a, b) = (dir.join("a.png"), dir.join("b.png"));
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
         store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
         assert_eq!(store.remove(std::slice::from_ref(&a)).unwrap(), 1);
         assert_eq!(AiTagStore::new(None).get(&a), None);
         assert!(AiTagStore::new(None).get(&b).is_some());
-        assert_eq!(store.remove(&[a, b.clone()]).unwrap(), 1);
+        assert_eq!(store.remove(&[a, b]).unwrap(), 1);
         assert!(!dir.join(FILE_NAME).exists());
     }
 
@@ -413,7 +413,7 @@ mod tests {
     fn removing_a_tag_from_many_images_writes_each_folder_once() {
         let dir = tempfile_dir();
         let (a, b, c) = (dir.join("a.png"), dir.join("b.png"), dir.join("c.png"));
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         store.update(&a, |e| *e = entry("cat", 0.9)).unwrap();
         store.update(&b, |e| *e = entry("dog", 0.9)).unwrap();
         let names = ["cat".to_owned()];

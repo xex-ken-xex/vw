@@ -206,9 +206,7 @@ pub fn echo(endpoint: &Endpoint) -> Result<(), String> {
         us_element(tags::MESSAGE_ID, 1),
         us_element(tags::COMMAND_DATA_SET_TYPE, NO_DATA_SET),
     ]);
-    let result = send_command(&mut assoc, pc, &command)
-        .and_then(|()| receive_status(&mut assoc))
-        .map_err(|e| e.clone());
+    let result = send_command(&mut assoc, pc, &command).and_then(|()| receive_status(&mut assoc));
     let _ = assoc.release();
     match result? {
         0 => Ok(()),

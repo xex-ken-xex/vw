@@ -57,6 +57,7 @@ impl Language {
         #[cfg(windows)]
         {
             // LANGID の下位 10bit が主言語。0x11 が日本語（LANG_JAPANESE）。
+            // SAFETY: 引数なしで整数を返すだけの Win32 API。
             let id = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
             if id & 0x3ff == 0x11 {
                 Language::Japanese
@@ -3841,7 +3842,7 @@ ae_title = "PACS"
         let dir = TempDir::new();
         let path = dir.path().join("settings.toml");
         std::fs::write(&path, "[appearance]\ntheme = \"purple\"\n").unwrap();
-        let (mut store, notes) = SettingsStore::open(Some(path.clone()));
+        let (mut store, notes) = SettingsStore::open(Some(path));
         assert_eq!(notes.len(), 1);
         let backup = store.save().unwrap().expect("backup made");
         assert_eq!(
@@ -3855,7 +3856,7 @@ ae_title = "PACS"
     fn saving_a_healthy_file_makes_no_backup() {
         let dir = TempDir::new();
         let path = dir.path().join("settings.toml");
-        let (mut store, _) = SettingsStore::open(Some(path.clone()));
+        let (mut store, _) = SettingsStore::open(Some(path));
         assert_eq!(store.save().unwrap(), None);
         assert_eq!(store.save().unwrap(), None);
         assert!(!dir.path().join("settings.toml.bak").exists());

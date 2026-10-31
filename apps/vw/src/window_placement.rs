@@ -44,16 +44,20 @@ mod platform {
 
     pub fn get(hwnd: isize) -> Option<Normal> {
         let hwnd = hwnd as HWND;
+        // SAFETY: 整数だけの C の構造体で、0 は正しい値。
         let mut p: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
         p.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        // SAFETY: length を入れた構造体に書くだけ。hwnd が無効なら 0 が返る。
         if unsafe { GetWindowPlacement(hwnd, &mut p) } == 0 {
             return None;
         }
         let r = p.rcNormalPosition;
         // 最小化中は、最小化の前に最大化していたかを OS が覚えている。
+        // SAFETY: どちらも hwnd を読むだけ。
         let maximized = if unsafe { IsIconic(hwnd) } != 0 {
             p.flags & WPF_RESTORETOMAXIMIZED != 0
         } else {
+            // SAFETY: 同上。
             unsafe { IsZoomed(hwnd) != 0 }
         };
         Some(Normal {
@@ -64,6 +68,7 @@ mod platform {
 
     pub fn set(hwnd: isize, [left, top, right, bottom]: [i32; 4], show: bool) -> bool {
         let hwnd = hwnd as HWND;
+        // SAFETY: 整数だけの C の構造体で、0 は正しい値。
         let mut p: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
         p.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
         p.showCmd = if show { SW_SHOWNORMAL } else { SW_HIDE } as u32;
@@ -75,6 +80,7 @@ mod platform {
             right,
             bottom,
         };
+        // SAFETY: length を入れた構造体を読むだけ。hwnd が無効なら 0 が返る。
         unsafe { SetWindowPlacement(hwnd, &p) != 0 }
     }
 }

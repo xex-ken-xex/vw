@@ -89,7 +89,7 @@ impl VwApp {
     }
 
     /// 1 枚の画像に使ってよいメモリの上限を、デコーダに知らせる。
-    pub(super) fn apply_image_size_limit(&mut self) {
+    pub(super) fn apply_image_size_limit(&self) {
         vw_core::limits::set_max_image_bytes(self.settings().viewer.image_size_limit_bytes());
     }
 

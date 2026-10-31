@@ -26,6 +26,7 @@ pub fn global() -> Option<(Pos2, bool)> {
     } else {
         VK_LBUTTON
     };
+    // SAFETY: 引数の値だけを読む。
     let down = unsafe { GetAsyncKeyState(primary.into()) } < 0;
     Some((Pos2::new(p.x as f32, p.y as f32), down))
 }

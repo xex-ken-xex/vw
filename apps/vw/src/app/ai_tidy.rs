@@ -93,7 +93,7 @@ impl VwApp {
 
     /// メタデータ欄のタグの右クリックの操作。`image` は表示中の画像。
     pub(super) fn tag_action(&mut self, ctx: &egui::Context, image: &Path, action: TagAction) {
-        let image = crate::frames::file_of(image).to_path_buf();
+        let image = crate::frames::file_of(image);
         let Some(dir) = image.parent().map(Path::to_path_buf) else {
             return;
         };

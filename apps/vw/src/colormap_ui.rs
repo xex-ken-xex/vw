@@ -134,7 +134,7 @@ pub fn fits(body: Rect, side: GaugeSide) -> bool {
 /// `drag` はドラッグ中の黒と白の値（離すまで読み直さず、目盛りだけ動かす）。
 #[allow(clippy::too_many_arguments)]
 pub fn gauge(
-    ui: &mut egui::Ui,
+    ui: &egui::Ui,
     id: egui::Id,
     body: Rect,
     side: GaugeSide,

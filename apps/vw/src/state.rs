@@ -381,11 +381,14 @@ mod platform {
     ) -> BOOL {
         // SAFETY: data は monitors() が渡した Vec へのポインタで、列挙の間だけ使う。
         let out = unsafe { &mut *(data as *mut Vec<Monitor>) };
+        // SAFETY: 整数だけの C の構造体で、0 は正しい値。
         let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        // SAFETY: cbSize を入れた構造体に書くだけ。
         if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
             let r = info.rcMonitor;
             let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+            // SAFETY: 列挙中のモニタの手がかりと、書き込み先の 2 つの u32 を渡すだけ。
             unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
             out.push(Monitor {
                 x: r.left,
@@ -402,6 +405,7 @@ mod platform {
     /// それより前だと Windows が拡大率で割った座標を返し、保存時の値と比べられない。
     pub fn monitors() -> Vec<Monitor> {
         let mut out: Vec<Monitor> = Vec::new();
+        // SAFETY: collect は列挙の間だけ呼ばれ、渡した Vec はこの呼び出しの間生きている。
         unsafe {
             EnumDisplayMonitors(
                 std::ptr::null_mut(),

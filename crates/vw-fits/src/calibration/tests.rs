@@ -555,7 +555,7 @@ fn a_dark_chosen_by_hand_is_used_for_the_lights_of_that_folder_until_set_back_to
     assert!(candidates[0].ends_with("near.fits"), "{candidates:?}");
     assert_eq!(img.metadata.get(GROUP, CHOSEN), None);
 
-    calibration.choose(&light, Role::Dark, Some(far.clone()));
+    calibration.choose(&light, Role::Dark, Some(far));
     for path in [&light, &other] {
         let img = open(&p, path);
         assert_eq!(values(&img)[0], 480.0);

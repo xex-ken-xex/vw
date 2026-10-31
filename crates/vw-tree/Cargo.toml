@@ -10,3 +10,6 @@ repository.workspace = true
 [dependencies]
 egui = { version = "0.36", default-features = false }
 vw-ui.workspace = true
+
+[lints]
+workspace = true
