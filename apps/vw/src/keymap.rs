@@ -76,6 +76,7 @@ pub enum Action {
     NextColorMap,
     ToggleColorGauge,
     TrashBadImages,
+    ClearFlags,
     CancelSending,
     SendToApp1,
     SendToApp2,
@@ -184,7 +185,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 105] = [
+    pub const ALL: [Action; 106] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -249,6 +250,7 @@ impl Action {
         Action::FilterUnflagged,
         Action::ExportImages,
         Action::TrashBadImages,
+        Action::ClearFlags,
         Action::CancelSending,
         Action::SendToApp1,
         Action::SendToApp2,
@@ -356,6 +358,7 @@ impl Action {
             Action::NextColorMap => "next_color_map",
             Action::ToggleColorGauge => "toggle_color_gauge",
             Action::TrashBadImages => "trash_bad_images",
+            Action::ClearFlags => "clear_flags",
             Action::CancelSending => "cancel_sending",
             Action::SendToApp1 => "send_to_app_1",
             Action::SendToApp2 => "send_to_app_2",
@@ -470,6 +473,7 @@ impl Action {
             Action::FilterUnflagged => "Show only unflagged images",
             Action::ExportImages => "Export images...",
             Action::TrashBadImages => "Move bad images to trash...",
+            Action::ClearFlags => "Clear flags...",
             Action::CancelSending => "Cancel sending",
             Action::SendToApp1 => "Send to app 1",
             Action::SendToApp2 => "Send to app 2",
@@ -581,7 +585,8 @@ impl Action {
             | Action::FilterBad
             | Action::FilterUnflagged
             | Action::ExportImages
-            | Action::TrashBadImages => KeyGroup::Filter,
+            | Action::TrashBadImages
+            | Action::ClearFlags => KeyGroup::Filter,
             Action::SendToApp1
             | Action::SendToApp2
             | Action::SendToApp3
@@ -805,6 +810,7 @@ impl Action {
             Action::ExportImages => vec![KeyCombo::ctrl(E)],
             // 押し間違えで大量に消さないよう、既定ではキーを割り当てない。
             Action::TrashBadImages => vec![],
+            Action::ClearFlags => vec![KeyCombo::ctrl(Backspace).with(true, true, false)],
             Action::CancelSending => vec![],
             Action::SendToApp1 => vec![],
             Action::SendToApp2 => vec![],

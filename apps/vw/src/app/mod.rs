@@ -361,6 +361,8 @@ pub struct VwApp {
     export: Option<ExportDialog>,
     /// ごみ箱へ送るか確かめている悪いフラグの画像。
     pending_trash: Option<discard::Pending>,
+    /// フラグを消してよいか尋ねている画像。
+    pending_clear_flags: Option<discard::Pending>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
     large_archive_prompt: Option<LargeArchivePrompt>,
@@ -808,6 +810,7 @@ impl VwApp {
             filter: Filter::All,
             export: None,
             pending_trash: None,
+            pending_clear_flags: None,
             password_prompt: None,
             large_archive_prompt: None,
             dataset_dialog: None,
@@ -905,6 +908,7 @@ impl VwApp {
             Action::FilterUnflagged => self.set_filter(ctx, Filter::Flag(None)),
             Action::ExportImages => self.open_export(),
             Action::TrashBadImages => self.ask_trash_bad(),
+            Action::ClearFlags => self.ask_clear_flags(),
             Action::CancelSending => self.cancel_send(),
             Action::SendToApp1
             | Action::SendToApp2
@@ -1231,6 +1235,7 @@ impl eframe::App for VwApp {
         self.folder_load_dialog(&ctx);
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
+        self.clear_flags_dialog(&ctx);
         self.password_dialog(&ctx);
         self.large_archive_dialog(&ctx);
         self.meta_new_group_ui(&ctx);

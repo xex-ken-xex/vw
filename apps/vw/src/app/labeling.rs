@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32};
 
-use crate::export::{Filter, Matcher};
-use crate::i18n::tr;
+use crate::discard;
+use crate::export::{self, Filter, Matcher};
+use crate::i18n::{tr, tr1};
 use crate::keymap::Action;
 use crate::labels::Flag;
 use crate::settings::{Language, LoadInto};
@@ -198,6 +199,91 @@ impl VwApp {
             }
             Err(e) => self.log.error(e),
         }
+    }
+
+    /// 今いるフォルダで、今の絞り込みに合うフラグ付きの画像を集め、フラグを消してよいか尋ねる。
+    /// 絞り込みに合わせるのは、悪いフラグだけを見せていれば悪いフラグだけを消せるようにするため。
+    /// サブフォルダまで辿らないのは、ごみ箱へ送るときと同じく、見えていない画像に触れないため。
+    pub(super) fn ask_clear_flags(&mut self) {
+        let lang = self.lang();
+        let Some(dir) = self.current.clone() else {
+            self.log
+                .warn(tr(lang, "Select a folder in the tree first."));
+            return;
+        };
+        let order = self.settings().tree.order();
+        let shown =
+            export::collect(&dir, false, self.loader.registry(), order, &self.matcher()).images;
+        let files: Vec<PathBuf> = shown
+            .into_iter()
+            .filter(|f| self.labels.get(f).flag.is_some())
+            .collect();
+        if files.is_empty() {
+            self.log
+                .info(format!("No flagged images to clear in {}", dir.display()));
+            return;
+        }
+        self.pending_clear_flags = Some(discard::Pending { dir, files });
+    }
+
+    pub(super) fn clear_flags_dialog(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending_clear_flags else {
+            return;
+        };
+        let lang = self.lang();
+        let (names, rest) = pending.preview(10);
+        let filtered = self.filter != Filter::All;
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("clear_flags_question")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.label(tr1(
+                lang,
+                "Clear the flags of {} images?",
+                &pending.files.len().to_string(),
+            ));
+            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+            if filtered {
+                ui.label(tr(lang, "Only the images shown by the current filter."));
+            }
+            ui.add_space(4.0);
+            for name in names {
+                ui.label(name);
+            }
+            if rest > 0 {
+                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, "Clear flags")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr(lang, "Cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        let Some(yes) = answer else {
+            return;
+        };
+        let Some(pending) = self.pending_clear_flags.take().filter(|_| yes) else {
+            return;
+        };
+        let mut cleared = 0;
+        for file in &pending.files {
+            match self.labels.set_flag(file, None) {
+                Ok(()) => cleared += 1,
+                Err(e) => self.log.error(format!("{}: {e}", file.display())),
+            }
+        }
+        self.log.info(format!(
+            "Cleared the flags of {cleared} images in {}",
+            pending.dir.display()
+        ));
+        // フラグで絞り込んでいれば、消した画像はもう条件に合わないので並びから外す。
+        self.apply_filter_to_slots();
     }
 
     /// 設定の `index` 番目のタグを付ける・外す。

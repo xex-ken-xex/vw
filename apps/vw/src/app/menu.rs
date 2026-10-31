@@ -236,6 +236,9 @@ impl VwApp {
         if self.menu_item(ui, Action::ExportImages, None) {
             chosen = Some(Action::ExportImages);
         }
+        if self.menu_item(ui, Action::ClearFlags, None) {
+            chosen = Some(Action::ClearFlags);
+        }
         if self.menu_item(ui, Action::TrashBadImages, None) {
             chosen = Some(Action::TrashBadImages);
         }
