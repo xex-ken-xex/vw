@@ -5,7 +5,7 @@
 
 ![vw の画面](docs/screenshot.png)
 
-紹介ページ: https://xex-ken-xex.github.io/vw/ ・ 詳しい使い方: [使い方のページ](https://xex-ken-xex.github.io/vw/manual/)
+紹介ページ: https://xex-ken-xex.github.io/vw/ ・ 詳しい使い方: [使い方のページ](https://xex-ken-xex.github.io/vw/manual/)（[English](https://xex-ken-xex.github.io/vw/en/manual/)）
 
 - **速い**: 起動してすぐ使えます。読み込みは裏で並行して行い、表示は GPU で描きます。数千枚のフォルダでも待たされません
 - **元の画像を書き換えない**: タグやカタログは別のファイルにしまい、画像には一切手を加えません
@@ -67,7 +67,7 @@ Nikon・Sony・富士フイルムを中心に、Canon や DNG も読めます。
 
 ## 使い方
 
-やりたいことごとに、[使い方のページ](https://xex-ken-xex.github.io/vw/manual/) にまとめてあります。
+やりたいことごとに、[使い方のページ](https://xex-ken-xex.github.io/vw/manual/) にまとめてあります。英語版は [User guide](https://xex-ken-xex.github.io/vw/en/manual/) です。
 
 [はじめる](https://xex-ken-xex.github.io/vw/manual/start.html) ・ [画像を見る](https://xex-ken-xex.github.io/vw/manual/view.html) ・ [写真を選り分ける](https://xex-ken-xex.github.io/vw/manual/sort.html) ・ [RAW で撮った写真](https://xex-ken-xex.github.io/vw/manual/raw.html) ・ [画像を探す・しまう](https://xex-ken-xex.github.io/vw/manual/find.html) ・ [天体写真（FITS）](https://xex-ken-xex.github.io/vw/manual/astro.html) ・ [測る・確かめる](https://xex-ken-xex.github.io/vw/manual/check.html) ・ [設定とキーの一覧](https://xex-ken-xex.github.io/vw/manual/reference.html) ・ [よくある質問](https://xex-ken-xex.github.io/vw/manual/faq.html)
 
