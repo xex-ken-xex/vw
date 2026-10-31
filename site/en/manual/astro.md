@@ -66,3 +66,11 @@ Radio images (FITS) can have values crossing 0 and many planes (one per frequenc
 - **Same black and white for all planes** (on by default): one black and white from all planes of a spectral cube, so planes can be compared. Step planes with the wheel
 - **Beam** (on by default): draws the BMAJ, BMIN and BPA (resolution) of the header as an ellipse at the bottom left of the image
 - Pixels without a value (BLANK or NaN, outside the field, for example) are drawn in the **Color of missing pixels**. They keep that color even with a color map
+
+### Spectra (data with one axis)
+
+FITS files with only one axis (NAXIS=1, or every other axis of length 1) are drawn as a **line graph**. The horizontal axis follows CTYPE1 as **frequency, velocity or wavelength**, in units that fit the values such as GHz, km/s or mm. The vertical unit is BUNIT.
+
+- Hover over the graph to see the axis value, the value and the point number of the nearest point. On a frequency axis with a rest frequency (RESTFRQ), the radio velocity is shown too
+- The line breaks at points without a value (NaN)
+- Turn off **Spectra as graphs** (`fits.spectrum_graph`, on by default) to show them as an image one pixel high

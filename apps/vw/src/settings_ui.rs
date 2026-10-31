@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 123] = [
+const ITEMS: [Item; 124] = [
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -789,6 +789,13 @@ const ITEMS: [Item; 123] = [
         title: "Beam",
         description: "Draw the beam (BMAJ, BMIN and BPA, the resolution of radio images) as an ellipse at the bottom left of the image.",
         widget: fits_beam_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.spectrum_graph",
+        title: "Spectra as graphs",
+        description: "Draw data with only one axis (spectra) as a line graph against frequency, velocity or wavelength. When off, they are shown as an image one pixel high.",
+        widget: fits_spectrum_graph_widget,
     },
     Item {
         section: Section::Fits,
@@ -1902,6 +1909,11 @@ fn fits_missing_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Languag
 
 fn fits_beam_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.beam, tr(lang, "Enabled")).changed()
+}
+
+fn fits_spectrum_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.spectrum_graph, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn calib_apply_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

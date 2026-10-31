@@ -680,3 +680,79 @@ fn the_beam_is_turned_into_pixels_through_the_wcs() {
     m.entries.retain(|(_, k, _)| k != "BMIN");
     assert_eq!(radio::beam(&m), None);
 }
+
+fn spectrum_cards(axes: &[usize]) -> Vec<String> {
+    let mut c = image_cards(-32, axes);
+    c.extend([
+        card("CTYPE1", "'FREQ    '"),
+        card("CUNIT1", "'GHz     '"),
+        card("CRVAL1", "110.0"),
+        card("CRPIX1", "2.0"),
+        card("CDELT1", "-0.5"),
+        card("RESTFRQ", "110.0E9"),
+        card("BUNIT", "'K       '"),
+    ]);
+    c
+}
+
+#[test]
+fn a_one_axis_file_is_read_as_a_spectrum() {
+    let img = decode(&fits(
+        &spectrum_cards(&[4]),
+        &f32_bytes(&[1.0, 2.0, f32::NAN, 4.0]),
+    ));
+    assert_eq!((img.width, img.height), (4, 1));
+    let s = img.spectrum.expect("a spectrum");
+    assert_eq!(s.values.len(), 4);
+    assert!(s.values[2].is_nan());
+    assert_eq!(s.axis.kind, vw_core::spectrum::AxisKind::Frequency);
+    assert_eq!(s.axis.value(1.0), 110e9);
+    assert_eq!(s.axis.value(0.0), 110.5e9);
+    assert_eq!(s.radio_velocity(110e9), Some(0.0));
+    assert_eq!(s.value_unit, "K");
+    assert_eq!(
+        img.metadata.get(GROUP, SPECTRUM),
+        Some("4 points, frequency")
+    );
+}
+
+#[test]
+fn a_spectrum_with_extra_axes_of_length_one_is_a_spectrum_too() {
+    let img = decode(&fits(
+        &spectrum_cards(&[3, 1, 1, 1]),
+        &f32_bytes(&[1.0, 2.0, 3.0]),
+    ));
+    assert!(img.spectrum.is_some());
+}
+
+#[test]
+fn images_are_not_spectra() {
+    let img = decode(&fits(&image_cards(-32, &[2, 2]), &f32_bytes(&[1.0; 4])));
+    assert!(img.spectrum.is_none());
+}
+
+#[test]
+fn velocity_and_wavelength_axes_are_kept_in_base_units() {
+    use vw_core::spectrum::AxisKind;
+    let axis = |ctype: &str, unit: &str| {
+        let mut c = image_cards(-32, &[2]);
+        c.extend([
+            card("CTYPE1", &format!("'{ctype:<8}'")),
+            card("CUNIT1", &format!("'{unit:<8}'")),
+            card("CRVAL1", "3.0"),
+            card("CDELT1", "1.0"),
+        ]);
+        decode(&fits(&c, &f32_bytes(&[0.0, 1.0])))
+            .spectrum
+            .unwrap()
+            .axis
+            .clone()
+    };
+    let v = axis("VRAD", "km/s");
+    assert_eq!((v.kind.clone(), v.reference), (AxisKind::Velocity, 3000.0));
+    let w = axis("WAVE", "nm");
+    assert_eq!(w.kind, AxisKind::Wavelength);
+    assert!((w.reference - 3e-9).abs() < 1e-20);
+    let other = axis("PIXEL", "");
+    assert!(matches!(other.kind, AxisKind::Other { .. }));
+}

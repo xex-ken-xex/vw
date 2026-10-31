@@ -339,6 +339,8 @@ pub struct SlotLook<'a> {
     pub similar: Option<&'a SimilarMark>,
     /// 電波の画像のビームの楕円を描く。
     pub beam: bool,
+    /// スペクトルを画像ではなくグラフで描く。
+    pub spectrum_graph: bool,
 }
 
 /// 似た画像の組の印。同じ組のスロットには同じ番号と色を出す。
@@ -1268,11 +1270,21 @@ impl Slot {
             color_rules,
             similar,
             beam,
+            spectrum_graph,
         } = look;
         self.colors = colors;
         let mut out = SlotResponse::default();
         let visuals = ui.visuals().clone();
-        let derivable = self.shown.as_ref().is_some_and(is_derivable);
+        // グラフには画素がないので、十字・ROI・色導出は当てない。
+        let graph = spectrum_graph
+            && self
+                .shown
+                .as_ref()
+                .is_some_and(|s| s.info.spectrum.is_some());
+        let (probing, roi_tool) = (probing && !graph, roi_tool && !graph);
+        // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
+        let (gauge, beam) = (gauge.filter(|_| !graph), beam && !graph);
+        let derivable = !graph && self.shown.as_ref().is_some_and(is_derivable);
         if !derivable {
             self.derive = None;
         }
@@ -1413,6 +1425,18 @@ impl Slot {
                 .and_then(|d| Some((d, d.ready_for(shown)?)));
             let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
             match ready {
+                _ if graph => {
+                    if let Some(s) = &shown.info.spectrum {
+                        crate::spectrum_view::paint(
+                            &ui.painter_at(body),
+                            body,
+                            s,
+                            lang,
+                            &visuals,
+                            response.hover_pos(),
+                        );
+                    }
+                }
                 Some((d, r)) if d.view == View::Compare => {
                     let split_x = body.left() + body.width() * d.split;
                     let left = body.with_max_x(split_x);
@@ -2333,6 +2357,7 @@ mod tests {
                 sharpness: None,
                 gamut: None,
                 frame_delays: None,
+                spectrum: None,
             },
             full: None,
             developed: false,

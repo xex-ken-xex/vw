@@ -1019,6 +1019,7 @@ impl VwApp {
             };
             let similar = self.similar.mark(self.slots[i].id);
             let beam = self.settings().fits.beam;
+            let spectrum_graph = self.settings().fits.spectrum_graph;
             let resp = self.slots[i].ui(
                 ui,
                 rect,
@@ -1047,6 +1048,7 @@ impl VwApp {
                     color_rules: &self.color_rules,
                     similar,
                     beam,
+                    spectrum_graph,
                 },
             );
             cells.push((rect, i));
@@ -1207,6 +1209,7 @@ impl VwApp {
                         color_rules: &self.color_rules,
                         similar: None,
                         beam: self.settings().fits.beam,
+                        spectrum_graph: self.settings().fits.spectrum_graph,
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));

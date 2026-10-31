@@ -72,6 +72,8 @@ pub struct ImageInfo {
     pub sharpness: Option<f64>,
     /// アニメーションの各フレームの表示時間（ミリ秒）。フレームごとに違う形式だけ。
     pub frame_delays: Option<Arc<[u32]>>,
+    /// 1 次元のスペクトルとして読んだときの値と横軸。設定でグラフにするときは画像の代わりに描く。
+    pub spectrum: Option<Arc<vw_core::spectrum::Spectrum>>,
 }
 
 impl ImageInfo {
@@ -505,6 +507,7 @@ fn finish(
             .as_ref()
             .and_then(|t| vw_compare::pairs::sharpness(t.size[0], t.size[1], t.as_raw())),
         frame_delays: None,
+        spectrum: image.spectrum.clone(),
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),

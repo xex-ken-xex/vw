@@ -16,6 +16,7 @@ pub mod calibration;
 mod header;
 pub mod radio;
 mod sky;
+pub mod spectrum;
 pub mod stretch;
 mod tile;
 
@@ -144,6 +145,8 @@ pub const PLANE: &str = "Plane";
 /// キューブの全部の面に同じ黒と白を使ったことを書く鍵と値。
 pub const PLANES_WINDOW: &str = "Black and white of planes";
 pub const PLANES_WINDOW_SAME: &str = "Same for all planes";
+/// 1 次元のスペクトルとして読んだとき、点の数と横軸の種類を書く鍵（[`spectrum`]）。
+pub const SPECTRUM: &str = "Spectrum";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -239,6 +242,15 @@ impl Image<'_> {
 
 /// データのある最初の画像。
 fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
+    // 軸が 1 本だけのデータは、ほかに画像がないときだけ使う。Primary に 1 次元の付属データを置き、
+    // 本体の画像を拡張に入れるファイルがあるため。
+    find_image_with_axes(hdus, 2).or_else(|_| find_image_with_axes(hdus, 1))
+}
+
+pub(crate) fn find_image_with_axes(
+    hdus: &[Hdu],
+    min_axes: usize,
+) -> Result<Image<'_>, DecodeError> {
     for (index, hdu) in hdus.iter().enumerate() {
         let (compressed, prefix) = match hdu.xtension() {
             None | Some("IMAGE") => (false, ""),
@@ -248,20 +260,20 @@ fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
         let Some(axes) = hdu.axes(prefix) else {
             continue;
         };
-        if axes.len() < 2 || axes.contains(&0) {
+        if axes.len() < min_axes || axes.contains(&0) {
             continue;
         }
+        // 軸が 1 本だけのスペクトルは、高さ 1 画素の画像として読む（グラフで描くのはアプリ）。
+        let (width, height) = (axes[0], axes.get(1).copied().unwrap_or(1));
+        let extra_axes = axes.get(2..).unwrap_or_default();
         let Some(bitpix) = hdu.int(&format!("{prefix}BITPIX")) else {
             continue;
         };
-        let planes = axes[2..]
+        let planes = extra_axes
             .iter()
             .try_fold(1usize, |n, &a| n.checked_mul(a))
             .ok_or_else(|| {
-                DecodeError::Unsupported(format!(
-                    "FITS image {} x {} is too large",
-                    axes[0], axes[1]
-                ))
+                DecodeError::Unsupported(format!("FITS image {width} x {height} is too large"))
             })?;
         // tile 圧縮の整数は i64 に展開するので、1 画素の最大は 8 バイト。
         let bytes_per_pixel = if compressed {
@@ -269,16 +281,16 @@ fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
         } else {
             (bitpix.unsigned_abs() / 8).max(1)
         };
-        vw_core::limits::check_image(axes[0] as u64, axes[1] as u64, bytes_per_pixel)?;
+        vw_core::limits::check_image(width as u64, height as u64, bytes_per_pixel)?;
         return Ok(Image {
             index,
             hdu,
             compressed,
             bitpix,
-            width: axes[0],
-            height: axes[1],
+            width,
+            height,
             planes,
-            extra_axes: axes[2..].to_vec(),
+            extra_axes: extra_axes.to_vec(),
         });
     }
     Err(DecodeError::Unsupported("FITS file has no image".into()))
@@ -363,6 +375,10 @@ fn decode_with(
         }
     }
     img.metadata.entries.extend(calibrated.entries);
+    if let Some(s) = spectrum::of(image.hdu, &img) {
+        img.metadata.push(GROUP, SPECTRUM, spectrum::summary(&s));
+        img.spectrum = Some(Arc::new(s));
+    }
     Ok(img)
 }
 
