@@ -34,6 +34,7 @@ pub enum Action {
     ToggleMaximize,
     FitImage,
     ActualSize,
+    ResetDisplay,
     ZoomIn,
     ZoomOut,
     LayoutAuto,
@@ -186,7 +187,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 107] = [
+    pub const ALL: [Action; 108] = [
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -199,6 +200,7 @@ impl Action {
         Action::FullscreenSlideshow,
         Action::FitImage,
         Action::ActualSize,
+        Action::ResetDisplay,
         Action::ZoomIn,
         Action::ZoomOut,
         Action::DevelopRaw,
@@ -318,6 +320,7 @@ impl Action {
             Action::ToggleMaximize => "toggle_maximize",
             Action::FitImage => "fit_image",
             Action::ActualSize => "actual_size",
+            Action::ResetDisplay => "reset_display",
             Action::ZoomIn => "zoom_in",
             Action::ZoomOut => "zoom_out",
             Action::LayoutAuto => "layout_auto",
@@ -435,6 +438,7 @@ impl Action {
             Action::ToggleMaximize => "Maximize/restore slot, or open folder",
             Action::FitImage => "Fit image to slot",
             Action::ActualSize => "Actual size (100%)",
+            Action::ResetDisplay => "Reset the display to when it was loaded",
             Action::ZoomIn => "Zoom in",
             Action::ZoomOut => "Zoom out",
             Action::DevelopRaw => "Develop RAW from sensor data",
@@ -539,6 +543,7 @@ impl Action {
             Action::ToggleMaximize
             | Action::FitImage
             | Action::ActualSize
+            | Action::ResetDisplay
             | Action::ZoomIn
             | Action::ZoomOut
             | Action::TogglePlay
@@ -773,6 +778,7 @@ impl Action {
             ],
             Action::FitImage => vec![KeyCombo::plain(Num0)],
             Action::ActualSize => vec![KeyCombo::ctrl(Num0)],
+            Action::ResetDisplay => vec![KeyCombo::plain(Home)],
             Action::ZoomIn => vec![KeyCombo::plain(Plus), KeyCombo::plain(Equals)],
             Action::ZoomOut => vec![KeyCombo::plain(Minus)],
             Action::DevelopRaw => vec![KeyCombo::plain(D)],

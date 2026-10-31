@@ -1026,6 +1026,7 @@ impl VwApp {
             Action::ParentFolder => self.parent_folder(ctx),
             Action::FitImage => self.slots[self.active].reset_view(),
             Action::ActualSize => self.slots[self.active].actual_size(),
+            Action::ResetDisplay => self.reset_slot_display(self.active),
             Action::DevelopRaw => self.develop_slot(self.active),
             Action::SwapRawPreview => self.swap_raw_face(self.active),
             Action::ToggleClippingWarning => self.toggle_check_node("clipping"),

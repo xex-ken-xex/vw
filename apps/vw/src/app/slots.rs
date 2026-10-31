@@ -731,6 +731,26 @@ impl VwApp {
         self.reload_slot(index);
     }
 
+    /// スロット `index` の見た目を読み込んだときに戻す。倍率と位置、黒と白と曲線と色の表、
+    /// 足したノード（確かめるための表示も含む）を外す。十字と ROI は測った結果なので残す。
+    pub(super) fn reset_slot_display(&mut self, index: usize) {
+        let Some(slot) = self.slots.get_mut(index) else {
+            return;
+        };
+        if slot.shown.is_none() {
+            return;
+        }
+        slot.reset_view();
+        slot.derive = None;
+        let reload = slot.color != crate::colormap::Choice::default();
+        slot.color = crate::colormap::Choice::default();
+        if reload {
+            self.reload_slot(index);
+        }
+        self.log
+            .info(tr(self.lang(), "Display: back to when it was loaded"));
+    }
+
     /// スロット `index` のライトのフォルダで、`role` のマスターを `file` に替える（`None` は自動）。
     /// 同じフォルダのライトを全部これで見るので、表示中の FITS を読み直す。
     pub(super) fn choose_calibration(
