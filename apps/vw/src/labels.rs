@@ -395,6 +395,19 @@ mod tests {
     }
 
     #[test]
+    fn clearing_a_flag_keeps_the_tags() {
+        let dir = TempDir::new();
+        let img = dir.touch("a.png");
+        let mut store = LabelStore::new(None);
+        store.toggle_flag(&img, Flag::Bad).unwrap();
+        store.toggle_tag(&img, "sky").unwrap();
+        store.set_flag(&img, None).unwrap();
+        let fresh = LabelStore::new(None);
+        assert_eq!(fresh.get(&img).flag, None);
+        assert!(fresh.get(&img).tags.contains("sky"));
+    }
+
+    #[test]
     fn other_flag_replaces_the_current_one() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");

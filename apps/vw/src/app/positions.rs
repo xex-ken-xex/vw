@@ -1,6 +1,6 @@
 //! 地図へのドロップで撮影地点を置く・消す・元に戻す。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use eframe::egui;
 
@@ -9,12 +9,6 @@ use crate::labels::Position;
 use crate::viewer::DraggedFile;
 
 use super::*;
-
-/// 戻せる位置の変更の数。
-const UNDO_LIMIT: usize = 100;
-
-/// 戻すときに使う、変える前の位置。
-pub(super) type PositionUndo = Vec<(PathBuf, Option<Position>)>;
 
 impl VwApp {
     /// ドラッグ中の画像が地図の上にあれば放す所に印を出し、そこで放したら位置を置く。
@@ -52,10 +46,7 @@ impl VwApp {
         match self.labels.set_position(&file, position) {
             Ok(previous) => {
                 if remember {
-                    self.position_undo.push((file.clone(), previous));
-                    if self.position_undo.len() > UNDO_LIMIT {
-                        self.position_undo.remove(0);
-                    }
+                    self.remember_undo(undo::Undo::Position(file.clone(), previous));
                 }
                 self.log.info(match position {
                     Some(p) => format!(
@@ -69,14 +60,6 @@ impl VwApp {
                 self.map.position_changed(&file);
             }
             Err(e) => self.log.error(e),
-        }
-    }
-
-    /// 最後の位置の変更を戻す。
-    pub(super) fn undo_position(&mut self) {
-        match self.position_undo.pop() {
-            Some((path, previous)) => self.set_position(&path, previous, false),
-            None => self.log.info(tr(self.lang(), "Nothing to undo")),
         }
     }
 }
