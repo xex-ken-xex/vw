@@ -60,6 +60,7 @@ What a left drag on the image does depends on the tool column. **Hand** (the def
 | **+** / **-** | Zoom in / out |
 | **0** / ⛶ in the header | Fit to slot |
 | **Ctrl+0** / 1:1 in the header | Actual size (100%) |
+| **Home** | Reset the display of the selected slot to when it was loaded (zoom and position, black and white, color map, added nodes and check views; probe crosses and ROIs stay) |
 | Right-click the image | **Fit image to slot**, **Copy**, **Develop RAW from sensor data** (for camera RAW) |
 | **Ctrl+C** | Copy the image of the selected slot to the clipboard (paste it into other apps) |
 

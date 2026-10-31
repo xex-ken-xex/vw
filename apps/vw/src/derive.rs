@@ -435,6 +435,7 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
         checked,
         error,
         notes,
+        missing,
     } = vw_pipeline::render::render(
         image,
         info,
@@ -457,6 +458,17 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
                 let [r, g, b] = p.colors[c.r() as usize];
                 *c = egui::Color32::from_rgba_premultiplied(r, g, b, c.a());
             }
+        }
+    }
+    if let Some(m) = &missing {
+        let [r, g, b] = m.color;
+        for (c, _) in derived
+            .pixels
+            .iter_mut()
+            .zip(&m.pixels)
+            .filter(|(_, &on)| on)
+        {
+            *c = egui::Color32::from_rgb(r, g, b);
         }
     }
     let (difference, max) = pixel_pipeline::difference(&derived, &standard);

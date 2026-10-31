@@ -1172,6 +1172,14 @@ const JA: &[(&str, &str)] = &[
     ("Up one folder", "1 つ上のフォルダへ"),
     ("Maximize slot", "スロットを最大化"),
     ("Fit image to slot", "スロットに合わせる"),
+    (
+        "Reset the display to when it was loaded",
+        "表示を読み込んだときに戻す",
+    ),
+    (
+        "Display: back to when it was loaded",
+        "表示: 読み込んだときに戻しました",
+    ),
     ("Actual size (100%)", "実寸 (100%)"),
     ("Develop RAW from sensor data", "RAW をセンサーのデータから現像"),
     ("Show clipping warning", "白飛び・黒つぶれの印を出す"),

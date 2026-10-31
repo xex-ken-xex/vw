@@ -118,6 +118,7 @@ impl VwApp {
                         Action::ActualSize,
                         Action::ZoomIn,
                         Action::ZoomOut,
+                        Action::ResetDisplay,
                     ],
                     &[
                         Action::DevelopRaw,

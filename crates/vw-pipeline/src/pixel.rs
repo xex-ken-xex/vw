@@ -518,14 +518,27 @@ pub struct Mismatch {
 /// 色導出は「標準と同じ画像から、変えたところだけが変わる」ことが前提なので、
 /// 食い違うファイル（VOI LUT Function が SIGMOID など、標準が表せない変換）では使わない。
 pub fn check_standard(float: &Float, standard_rgba: &[u8]) -> Result<(), Mismatch> {
+    check_standard_except(float, standard_rgba, None)
+}
+
+/// [`check_standard`] の、`skip` が `true` の画素を比べない版。
+pub fn check_standard_except(
+    float: &Float,
+    standard_rgba: &[u8],
+    skip: Option<&[bool]>,
+) -> Result<(), Mismatch> {
     let rgb = float.to_rgb8();
     let (mut pixels, mut max) = (0usize, 0u8);
-    for (c, s) in rgb
+    for (i, (c, s)) in rgb
         .as_chunks::<3>()
         .0
         .iter()
         .zip(standard_rgba.as_chunks::<4>().0)
+        .enumerate()
     {
+        if skip.is_some_and(|m| m[i]) {
+            continue;
+        }
         let d = (0..3).map(|k| c[k].abs_diff(s[k])).max().unwrap_or(0);
         if d > 0 {
             pixels += 1;
