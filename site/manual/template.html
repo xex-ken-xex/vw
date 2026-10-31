@@ -24,6 +24,7 @@ header img { width: 28px; height: 28px; }
 header .name { font-weight: 700; font-size: 18px; color: var(--text); }
 header nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
 header nav a { color: var(--text); }
+header nav a.lang { color: var(--accent); border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; }
 .layout { max-width: 1240px; margin: 0 auto; padding: 0 20px; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 36px; }
 aside { position: sticky; top: 52px; align-self: start; max-height: calc(100vh - 52px); overflow-y: auto; padding: 24px 0; font-size: 14px; }
 aside ol { list-style: none; padding: 0; margin: 0; }
@@ -68,6 +69,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       <a href="index.html">使い方</a>
       <a class="wide" href="../#download">ダウンロード</a>
       <a href="https://github.com/xex-ken-xex/vw">GitHub</a>
+      <a class="lang" href="../en/manual/$page$.html" lang="en">English</a>
     </nav>
   </div>
 </header>
