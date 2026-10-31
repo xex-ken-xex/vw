@@ -153,7 +153,7 @@ This guide uses the names shown in the English UI.
 
 ## The main window
 
-![Parts of the window](../../images/screenshot.png)
+![Parts of the window](../../images/en/screenshot.png)
 
 vw divides its main window into four windows.
 

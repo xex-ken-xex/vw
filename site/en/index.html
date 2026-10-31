@@ -52,6 +52,7 @@ h3 { font-size: 18px; margin: 22px 0 8px; }
 .card h3 { margin: 6px 0 8px; }
 .card p { margin: 0; color: var(--muted); font-size: 15px; }
 .card img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+.card a + p { margin-top: 8px; }
 ul.plain { padding-left: 1.2em; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
@@ -106,7 +107,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       </div>
       <div class="version" id="version">Latest: see <a href="https://github.com/xex-ken-xex/vw/releases/latest">Releases</a> · Free and open source (MIT / Apache-2.0)</div>
     </div>
-    <a href="../images/screenshot.png"><img src="../images/screenshot.png" alt="The vw window: folder tree on the left, image slots in the middle, metadata on the right, log at the bottom" width="1920" height="1080"></a>
+    <a href="../images/en/screenshot.png"><img src="../images/en/screenshot.png" alt="The vw window: folder tree on the left, image slots in the middle, metadata on the right" width="1600" height="900"></a>
   </div>
 
   <section id="by-format">
@@ -123,6 +124,33 @@ footer a { color: var(--muted); text-decoration: underline; }
       <tr><td>BMP</td><td>Old 1–32 bit BMPs and RLE compression open too</td></tr>
       <tr><td>ZIP / 7z / tar</td><td>Open like a folder without extracting by hand (password-protected too). Images inside go into the search catalog and can be extracted when found</td></tr>
     </table>
+    <h3>RAW and FITS on screen</h3>
+    <div class="three">
+      <div class="card">
+        <a href="../images/en/raw-sensor.png"><img src="../images/en/raw-sensor.png" alt="Histogram of RAW sensor values" loading="lazy"></a>
+        <p>RAW sensor values per color, in stops below the white level. The share of clipped values is clear at a glance</p>
+      </div>
+      <div class="card">
+        <a href="../images/en/astro-nebula.png"><img src="../images/en/astro-nebula.png" alt="A faint nebula FITS made visible with a color map" loading="lazy"></a>
+        <p>Faint FITS images are stretched for viewing automatically, with a color map and gauge</p>
+      </div>
+      <div class="card">
+        <a href="../images/en/astro-skychart.png"><img src="../images/en/astro-skychart.png" alt="Areas captured by FITS files on the sky chart" loading="lazy"></a>
+        <p>The sky chart shows where on the sky the FITS files of a folder were taken</p>
+      </div>
+      <div class="card">
+        <a href="../images/en/astro-subframes.png"><img src="../images/en/astro-subframes.png" alt="Evaluation table of subframes" loading="lazy"></a>
+        <p>A night of subframes is evaluated, and outliers are shown in red with the reason</p>
+      </div>
+      <div class="card">
+        <a href="../images/en/pipeline-compare.png"><img src="../images/en/pipeline-compare.png" alt="A pixel pipeline result next to the original" loading="lazy"></a>
+        <p>Compare the result of a pixel pipeline with the original side by side, with quality values</p>
+      </div>
+      <div class="card">
+        <a href="../images/en/check-probe.png"><img src="../images/en/check-probe.png" alt="Measuring pixel values with the probe and an ROI" loading="lazy"></a>
+        <p>The probe cross reads pixel values; an ROI gives the mean and standard deviation of an area</p>
+      </div>
+    </div>
   </section>
 
   <section id="features">
@@ -134,21 +162,21 @@ footer a { color: var(--muted); text-decoration: underline; }
         <h3>Sort</h3>
         <p>Flag images good or bad and add your own tags with a single key, then filter, copy the matches to another folder or export CSV / JSONL.
           AI adds content tags and names faces, and similar images such as RAW and JPEG pairs are grouped and compared.</p>
-        <img src="../images/tagging.png" alt="Tagging mode" loading="lazy">
+        <img src="../images/en/tagging-grid.png" alt="Photos in tagging mode with flags and tags" loading="lazy">
       </div>
       <div class="card">
         <div class="icon">🔍</div>
         <h3>Find</h3>
         <p>Register a folder as a dataset and vw builds a search catalog of shooting info, text, headers and AI tags, even inside ZIPs.
           Search by content, such as "ISO 800 or more", and extract the hits. Find photos by place on the map and astronomy images on the sky chart.</p>
-        <img src="../images/dataset-search.png" alt="The datasets screen" loading="lazy">
+        <img src="../images/en/dataset-search.png" alt="The datasets screen" loading="lazy">
       </div>
       <div class="card">
         <div class="icon">🖼️</div>
         <h3>View and measure</h3>
         <p>Compare many images side by side, run a slideshow, and see new images as they land in the folder.
           Measure pixel values, ROIs, histograms and quality metrics, inspect and change the pixel pipeline, and apply it to many files at once.</p>
-        <img src="../images/maximize-play.png" alt="A maximized slot with the play bar" loading="lazy">
+        <img src="../images/en/maximize-play.png" alt="A maximized slot with the play bar" loading="lazy">
       </div>
     </div>
     <h3>More</h3>

@@ -6,7 +6,7 @@ See them at once, compare with the camera JPEG and check the exposure.
 
 ## Camera RAW
 
-![Histogram of RAW sensor values per color, in stops below the white level, with the share of clipped and below-black values](../../images/raw-sensor.png)
+![Histogram of RAW sensor values per color, in stops below the white level, with the share of clipped and below-black values](../../images/en/raw-sensor.png)
 
 - When opened, the preview image the camera embedded in the RAW file shows at once
 - vw then develops the sensor data in the background and swaps in the detailed image. While developing, the header shows a film icon

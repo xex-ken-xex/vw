@@ -4,11 +4,11 @@ title: "Astrophotography (FITS)"
 
 Make faint images easy to see, then calibrate, select and finish them.
 
-![A faint nebula FITS made visible with a color map and gauge](../../images/astro-nebula.png)
+![A faint nebula FITS made visible with a color map and gauge](../../images/en/astro-nebula.png)
 
 ## See what you captured on a sky chart
 
-![Areas captured by the FITS files of a folder on the sky chart](../../images/astro-skychart.png)
+![Areas captured by the FITS files of a folder on the sky chart](../../images/en/astro-skychart.png)
 
 **View → Sky chart** opens the sky chart window. It outlines where on the sky each astronomy image (FITS) was taken, over stars (to magnitude 6) and constellation lines, borders and names. No network is used.
 
@@ -35,7 +35,7 @@ When you open an astronomy light frame (FITS), vw looks for matching dark, flat 
 
 ## Finish astrophotos (auto stretch, GHS, adding stars back)
 
-![The pixel pipeline window with black and white, auto stretch and color map nodes](../../images/astro-pipeline.png)
+![The pixel pipeline window with black and white, auto stretch and color map nodes](../../images/en/astro-pipeline.png)
 
 Stretch unstretched (linear) astrophotos so they are easy to see, and finish stars and nebulae separately. All of these are **Astronomy** nodes in the pixel pipeline. Besides FITS, they work on 16-bit and 32-bit TIFF and PNG written by stacking software.
 
@@ -47,7 +47,7 @@ Auto stretch and GHS stretch the values after black and white map them to 0 to 1
 
 ## Select subframes (evaluation table and blink)
 
-![Evaluation table of a night's subframes. Images outside the thresholds are red, with the reason](../../images/astro-subframes.png)
+![Evaluation table of a night's subframes. Images outside the thresholds are red, with the reason](../../images/en/astro-subframes.png)
 
 Open the folder of a night's exposures (subframes) and open the subframes window with **Ctrl+B** or **View → Subframes**; vw evaluates each image of the folder and shows a table. It is for removing blurred, trailed or clouded frames before stacking.
 

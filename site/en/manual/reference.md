@@ -13,7 +13,7 @@ The gear at the bottom left, or **Settings → Settings** (or **Ctrl+,**), switc
 - Changes apply at once and are saved automatically. There is no save button
 - **Open settings file** opens the settings file (TOML) in the default editor. When you save it in the editor, vw rereads it automatically
 
-![Settings narrowed to "slideshow". Each setting shows its description and its key in the settings file](../../images/settings-search.png)
+![Settings narrowed to "slideshow". Each setting shows its description and its key in the settings file](../../images/en/settings-search.png)
 
 ### Main settings
 

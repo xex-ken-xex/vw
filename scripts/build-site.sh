@@ -18,6 +18,9 @@ for item in site/en/*; do
 done
 # スクリーンショットは README と同じ docs/ のものを使い回す（site/ に複製を置くと README と食い違うため）
 cp docs/screenshot.png docs/images/*.png packaging/icons/vw.png "$out/images/"
+# 英語版の使い方と紹介ページは、英語表示で撮った docs/images/en/ の画面を使う
+mkdir -p "$out/images/en"
+cp docs/images/en/*.png "$out/images/en/"
 
 # 使い方は日本語（manual/）と英語（en/manual/）で同じ章立てにし、page で互いの同じ章へリンクする
 for dir in manual en/manual; do
