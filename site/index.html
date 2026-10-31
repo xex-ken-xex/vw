@@ -52,6 +52,7 @@ h3 { font-size: 18px; margin: 22px 0 8px; }
 .card h3 { margin: 6px 0 8px; }
 .card p { margin: 0; color: var(--muted); font-size: 15px; }
 .card img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+.card a + p { margin-top: 8px; }
 ul.plain { padding-left: 1.2em; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
@@ -123,6 +124,33 @@ footer a { color: var(--muted); text-decoration: underline; }
       <tr><td>BMP</td><td>古い 1〜32bit の BMP や RLE 圧縮も開きます</td></tr>
       <tr><td>ZIP / 7z / tar</td><td>展開の手間なくフォルダと同じように開きます（パスワード付きも）。中の画像も検索カタログに入り、見つけたものを取り出せます</td></tr>
     </table>
+    <h3>RAW と FITS の画面</h3>
+    <div class="three">
+      <div class="card">
+        <a href="images/raw-sensor.png"><img src="images/raw-sensor.png" alt="RAW のセンサーの値のヒストグラム" loading="lazy"></a>
+        <p>RAW のセンサーの値を色ごとに、白レベルから何 EV 下かで出します。白飛びの割合もひと目で分かります</p>
+      </div>
+      <div class="card">
+        <a href="images/astro-nebula.png"><img src="images/astro-nebula.png" alt="暗い星雲の FITS を色の表で見やすくしたところ" loading="lazy"></a>
+        <p>暗い FITS を自動で見やすく伸ばし、色の表とゲージを付けます</p>
+      </div>
+      <div class="card">
+        <a href="images/astro-skychart.png"><img src="images/astro-skychart.png" alt="FITS の写した範囲を星図に出したところ" loading="lazy"></a>
+        <p>フォルダの FITS が空のどこを写したかを星図に出します</p>
+      </div>
+      <div class="card">
+        <a href="images/astro-subframes.png"><img src="images/astro-subframes.png" alt="サブフレームの評価表" loading="lazy"></a>
+        <p>一晩のサブフレームを評価し、外れたものを理由と一緒に赤で示します</p>
+      </div>
+      <div class="card">
+        <a href="images/pipeline-compare.png"><img src="images/pipeline-compare.png" alt="画素の変換をかけて元の画像と並べたところ" loading="lazy"></a>
+        <p>画素の変換をかけた結果を元の画像と並べ、画質の値で比べます</p>
+      </div>
+      <div class="card">
+        <a href="images/check-probe.png"><img src="images/check-probe.png" alt="十字と ROI で画素の値を測るところ" loading="lazy"></a>
+        <p>十字で画素の値を、ROI で範囲の平均や標準偏差を測ります</p>
+      </div>
+    </div>
   </section>
 
   <section id="features">
@@ -133,7 +161,7 @@ footer a { color: var(--muted); text-decoration: underline; }
         <div class="icon">🏷️</div>
         <h3>整理する</h3>
         <p>「良い / 悪い」のフラグと自分のタグをキー 1 つで付け、絞り込んで別のフォルダへコピーしたり、CSV / JSONL に書き出したり。AI が写っているもののタグと人の名前を付け、RAW と JPEG のような似た画像を組にして違いを測ります。</p>
-        <img src="images/tagging.png" alt="タグ付けモード" loading="lazy">
+        <img src="images/tagging-grid.png" alt="タグ付けモードで並べた写真にフラグとタグを付けたところ" loading="lazy">
       </div>
       <div class="card">
         <div class="icon">🔍</div>
