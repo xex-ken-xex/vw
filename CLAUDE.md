@@ -24,6 +24,11 @@ GitHub の Issue・PR・コメント・Release など、このセッションの
 書く前に文面を見せて ken の許可を取る。「やって」と言われた作業の途中でも同じ。
 自分の作業ブランチへの commit と push だけは許可なしでよい。
 
+`.github/CODEOWNERS` にある場所（`.github/`、`Cargo.toml`、`Cargo.lock`、`packaging/`、`vendor/`、
+`build.rs`、`crates/vw-dicom/`）に触れる PR は、CI が通っても自分ではマージしない。ken に知らせて、
+ken が中身を見てマージする。ルールセットの Code Owners レビューは、PR を ken のアカウントで作って
+ken の権限でマージすると免除されてしまい、自分の PR は自分で承認できないので、この決まりで代える。
+
 ## コーディングポリシー
 
 情報ごとに書く場所を決める。
