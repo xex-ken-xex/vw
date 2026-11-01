@@ -408,7 +408,16 @@ impl VwApp {
         let active_image = self.active_image().map(|p| frames::file_of(&p));
         let destinations = self.destination_names();
         let apps = self.send_apps().to_vec();
-        let ai_ready = self.ai_ready();
+        let people = self.people.names();
+        let menus = context_menu::MenuContext {
+            lang,
+            keys: &self.settings.settings.keys,
+            ai_ready: self.ai_ready(),
+            apps: &apps,
+            destinations: &destinations,
+            color_rules: &self.color_rules,
+            people: &people,
+        };
         let click_expands = self.settings.settings.tree.click_expands;
         let drawn = egui::ScrollArea::both()
             .auto_shrink(false)
@@ -421,9 +430,7 @@ impl VwApp {
                         current: self.current.as_deref(),
                         active_image: active_image.as_deref(),
                         lang,
-                        destinations: &destinations,
-                        apps: &apps,
-                        ai_ready,
+                        menus: &menus,
                         click_expands,
                     },
                 )
@@ -440,35 +447,16 @@ impl VwApp {
             return;
         };
         match action {
+            TreeAction::Picked(picked) => {
+                self.apply_picked(&ctx, picked);
+                return;
+            }
             TreeAction::Cd(p) => self.open_folder(&ctx, p),
-            TreeAction::Dataset(request) => self.open_dataset_dialog(&ctx, request),
             TreeAction::Send { choice, targets } => self.send_to(choice, targets),
             TreeAction::Mount(zip) => self.mount(&ctx, &zip),
-            TreeAction::Unmount(dir) => self.unmount(&ctx, &dir),
             TreeAction::Series { folder, files } => self.show_series(&ctx, folder, &files),
             TreeAction::Drop { file, dir } => {
                 self.drop_file(&ctx, file, dir);
-                return;
-            }
-            TreeAction::OpenInFileManager(p) => {
-                self.open_in_file_manager(&p);
-                return;
-            }
-            TreeAction::AiTagFolder(p) => {
-                self.ai_tag_folder(&ctx, &p);
-                return;
-            }
-            TreeAction::FindFaces(p) => {
-                self.find_faces_folder(&ctx, &p);
-                return;
-            }
-            TreeAction::RemoveAiTags(p) => {
-                self.ask_remove_ai_tags(&p);
-                return;
-            }
-            TreeAction::Copy(p) => {
-                let what = format!("path {}", p.display());
-                self.copy_text(&ctx, p.display().to_string(), &what);
                 return;
             }
         }

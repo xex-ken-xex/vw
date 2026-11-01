@@ -15,9 +15,7 @@ use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
-use crate::viewer::{
-    Content, FaceAction, Full, Origin, RawFace, Shown, Slot, SlotCommand, SlotLook,
-};
+use crate::viewer::{Content, Full, Origin, RawFace, Shown, Slot, SlotCommand, SlotLook};
 
 use super::*;
 
@@ -976,7 +974,6 @@ impl VwApp {
         let apps = self.send_apps().to_vec();
         let ai_ready = self.ai_ready();
         let people = self.people.names();
-        let mut send = None;
         self.update_similar();
         let mut cells: Vec<(Rect, usize)> = Vec::new();
         let deep_target = self.update_deep(ui.ctx(), &view);
@@ -1018,13 +1015,9 @@ impl VwApp {
                     empty_hint,
                     label: &label,
                     tool: self.tool.in_slot(),
-                    destinations: &destinations,
-                    apps: &apps,
                     presets: self.presets.presets(),
                     texture_options: self.texture_options,
                     faces: &faces,
-                    people: &people,
-                    ai_ready,
                     colors,
                     gauge: self.show_gauge.then_some(crate::viewer::Gauge {
                         side: self.color_settings.gauge_side,
@@ -1037,6 +1030,21 @@ impl VwApp {
                 },
             );
             cells.push((rect, i));
+            if let Some(body) = &resp.body {
+                let cx = context_menu::MenuContext {
+                    lang,
+                    keys: &self.settings.settings.keys,
+                    ai_ready,
+                    apps: &apps,
+                    destinations: &destinations,
+                    color_rules: &self.color_rules,
+                    people: &people,
+                };
+                let picked = context_menu::slot_menu(body, &cx, i, &self.slots[i], &faces);
+                for p in picked {
+                    self.apply_picked(ui.ctx(), p);
+                }
+            }
             if resp.dragging && self.slot_drag.is_none() {
                 self.slot_drag = Some(self.slots[i].id);
             }
@@ -1054,7 +1062,6 @@ impl VwApp {
             {
                 full.last_used = self.frame;
             }
-            let shown_path = self.slots[i].shown().map(|s| s.path.clone());
             for command in resp.commands {
                 match command {
                     SlotCommand::Activate => {
@@ -1069,45 +1076,9 @@ impl VwApp {
                             self.toggle_pipeline();
                         }
                     }
-                    SlotCommand::SetReference => self.set_quality_reference(i),
-                    SlotCommand::Compose => self.open_compose_dialog(i),
-                    SlotCommand::Compare => self.open_compare_dialog(i),
                     SlotCommand::CompareSimilar => self.compare_similar(i),
                     SlotCommand::KeepInGroup => self.keep_in_group(i),
-                    SlotCommand::ReadQr => {
-                        if let Some(path) = shown_path.clone() {
-                            self.read_qr_codes(ui.ctx(), path);
-                        }
-                    }
-                    SlotCommand::AiTag => {
-                        if let Some(path) = shown_path.clone() {
-                            self.ai_tag_paths(ui.ctx(), vec![path]);
-                        }
-                    }
-                    SlotCommand::RemoveAiTags => {
-                        if let Some(path) = shown_path.clone() {
-                            self.remove_ai_tags(vec![frames::file_of(&path).to_path_buf()]);
-                        }
-                    }
-                    SlotCommand::FindFaces => {
-                        if let Some(path) = shown_path.clone() {
-                            self.find_faces_paths(ui.ctx(), vec![path]);
-                        }
-                    }
-                    SlotCommand::Face(path, action) => {
-                        let file = frames::file_of(&path);
-                        match action {
-                            FaceAction::Assign(f, name) => self.assign_face(&file, f, &name),
-                            FaceAction::NewPerson(f) => self.people_window.ask_name(file, f),
-                            FaceAction::Clear(f) => self.clear_face(&file, f),
-                        }
-                    }
-                    SlotCommand::Copy => self.copy_image(ui.ctx(), i),
-                    SlotCommand::CopyText(text) => self.copy_text(ui.ctx(), text, "measurement"),
-                    SlotCommand::Send(choice) => send = Some((choice, self.slot_send_targets(i))),
-                    SlotCommand::Develop => self.develop_slot(i),
                     SlotCommand::SwapRawFace => self.swap_raw_face(i),
-                    SlotCommand::ToggleCalibration => self.toggle_calibration(i),
                     SlotCommand::ColorPick(pick) => self.set_color_pick(i, pick),
                     SlotCommand::Window(window) => self.set_slot_window(i, window),
                     // スロットの並びを変える操作は、描画ループの途中で添字がずれないようループの後で行う。
@@ -1153,13 +1124,9 @@ impl VwApp {
                         empty_hint: hint,
                         label: &Default::default(),
                         tool: crate::viewer::Tool::Select,
-                        destinations: &[],
-                        apps: &[],
                         presets: &[],
                         texture_options: self.texture_options,
                         faces: &[],
-                        people: &[],
-                        ai_ready: false,
                         colors,
                         gauge: None,
                         color_rules: &self.color_rules,
@@ -1194,9 +1161,6 @@ impl VwApp {
                 None if page_step != 0 && self.maximized.is_none() => self.scroll_slots(page_step),
                 None => {}
             }
-        }
-        if let Some((choice, targets)) = send {
-            self.send_to(choice, targets);
         }
         // 描画ループの途中で削除すると添字がずれるので、ループの後で閉じる。
         if let Some((file, dir)) = dropped {

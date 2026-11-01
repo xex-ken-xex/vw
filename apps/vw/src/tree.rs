@@ -18,6 +18,7 @@ use vw_core::Registry;
 use vw_tree::{Hooks, without_toggle};
 pub use vw_tree::{display_name, entry_is_dir, is_hidden_name, is_recycle_bin};
 
+use crate::app::context_menu::{self, FolderKind, MenuContext, Picked};
 use crate::i18n::tr;
 use crate::series::{Scan, Series, SeriesIndex, Study};
 use crate::settings::Language;
@@ -50,12 +51,8 @@ struct View<'a> {
     dicom_extensions: &'a [&'a str],
     /// まだ読んでいないフォルダの下に項目があるか（[`Peeker`]）。
     peeks: &'a HashMap<PathBuf, Peek>,
-    /// 右クリックの「送る ▸」に並べる送信先の名前。
-    destinations: &'a [String],
-    /// 右クリックの「送る ▸」に並べるアプリ。
-    apps: &'a [crate::settings::SendApp],
-    /// AI のモデルが全部揃っているか。
-    ai_ready: bool,
+    /// 右クリックメニューを操作の表から描くのに要るもの。
+    menus: &'a MenuContext<'a>,
     /// ヘッダを読み始めるフォルダと、その中の DICOM らしいファイル。
     scans: Vec<(PathBuf, Vec<PathBuf>)>,
     /// 下に項目があるか先読みしてほしいフォルダ。
@@ -119,22 +116,12 @@ pub fn dicom_extensions(registry: &Registry) -> &[&str] {
 
 /// ツリーの操作の要求。
 pub enum TreeAction {
-    /// フルパスをコピーする（右クリックメニュー）。
-    Copy(PathBuf),
-    /// フォルダを OS のファイラで開く（右クリックメニュー）。
-    OpenInFileManager(PathBuf),
-    /// フォルダの画像に AI タグを付ける（右クリックメニュー）。
-    AiTagFolder(PathBuf),
-    /// フォルダの画像の顔を探す（右クリックメニュー）。
-    FindFaces(PathBuf),
-    /// フォルダの画像の AI タグと顔の記録を消す（確かめてから）。
-    RemoveAiTags(PathBuf),
+    /// 右クリックメニューで選んだこと（操作の表から。`app/context_menu.rs`）。
+    Picked(Picked),
     /// フォルダへ移る（中身をスロットに並べる）。
     Cd(PathBuf),
     /// ZIP を展開して別のルートとして開く。
     Mount(PathBuf),
-    /// 展開した ZIP を閉じる。展開先のフォルダを渡す。
-    Unmount(PathBuf),
     /// スロットからドラッグした画像 `file` をフォルダ `dir` にドロップした。
     Drop { file: PathBuf, dir: PathBuf },
     /// DICOM のシリーズを出す。そのシリーズのあるフォルダへ移り、シリーズのスロットを選ぶ。
@@ -142,9 +129,7 @@ pub enum TreeAction {
         folder: PathBuf,
         files: Vec<PathBuf>,
     },
-    /// データセットの登録・編集・更新。
-    Dataset(crate::dataset_ui::Request),
-    /// ファイルやフォルダを送信先やアプリへ送る（右クリックの「送る ▸」）。
+    /// 検査・シリーズの全ファイルを送信先やアプリへ送る（右クリックの「送る ▸」）。
     Send {
         choice: crate::send_app::Choice,
         targets: Vec<PathBuf>,
@@ -226,7 +211,6 @@ impl Hooks<Mark> for View<'_> {
 
     /// ドロップの受け付けと右クリックメニュー。クリック（cd）とスクロールは基底が扱う。
     fn after_label(&mut self, label: &egui::Response, node: &Node, out: &mut Vec<TreeAction>) {
-        let lang = self.lang;
         // 展開した ZIP の中は書き込めないので、ドロップ先にしない。
         if !node.ext.mounted {
             if label.dnd_hover_payload::<DraggedFile>().is_some() {
@@ -239,25 +223,13 @@ impl Hooks<Mark> for View<'_> {
                 });
             }
         }
-        if node.ext.mounted {
-            vw_ui::menu::context(label, |ui| {
-                if ui.button(tr(lang, "Copy")).clicked() {
-                    out.push(TreeAction::Copy(node.path.clone()));
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Open in file manager")).clicked() {
-                    out.push(TreeAction::OpenInFileManager(node.path.clone()));
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Close ZIP")).clicked() {
-                    out.push(TreeAction::Unmount(node.path.clone()));
-                    ui.close();
-                }
-                send_menu(ui, &node.path, self, out);
-            });
+        let kind = if node.ext.mounted {
+            FolderKind::MountedRoot
         } else {
-            folder_menu(label, &node.path, self, out);
-        }
+            FolderKind::Plain
+        };
+        let picked = context_menu::folder_menu(label, self.menus, &node.path, kind);
+        out.extend(picked.into_iter().map(TreeAction::Picked));
     }
 
     /// ZIP ファイル。クリックで展開する（基底の `clicked` から [`FolderTree::ui`] が Mount にする）。
@@ -267,21 +239,10 @@ impl Hooks<Mark> for View<'_> {
         node: &Node,
         out: &mut Vec<TreeAction>,
     ) -> egui::Response {
-        let lang = self.lang;
         let text = format!("{} {}", egui_phosphor::regular::FILE_ZIP, node.name);
         let r = without_toggle(ui, |ui| ui.selectable_label(false, text));
-        vw_ui::menu::context(&r, |ui| {
-            if ui.button(tr(lang, "Copy")).clicked() {
-                out.push(TreeAction::Copy(node.path.clone()));
-                ui.close();
-            }
-            if ui.button(tr(lang, "Open in file manager")).clicked() {
-                let folder = node.path.parent().unwrap_or(&node.path).to_owned();
-                out.push(TreeAction::OpenInFileManager(folder));
-                ui.close();
-            }
-            send_menu(ui, &node.path, self, out);
-        });
+        let picked = context_menu::folder_menu(&r, self.menus, &node.path, FolderKind::Zip);
+        out.extend(picked.into_iter().map(TreeAction::Picked));
         r
     }
 }
@@ -341,87 +302,14 @@ fn series_ui(
     files_menu(&r, series.files.clone(), view, out);
 }
 
-/// フォルダの右クリックメニュー。パスのコピー、OS のファイラで開く、データセットの登録・編集・更新。
-fn folder_menu(r: &egui::Response, path: &Path, view: &View, out: &mut Vec<TreeAction>) {
-    use crate::dataset_ui::Request;
-    let lang = view.lang;
-    vw_ui::menu::context(r, |ui| {
-        if ui.button(tr(lang, "Copy")).clicked() {
-            out.push(TreeAction::Copy(path.to_owned()));
-            ui.close();
-        }
-        if ui.button(tr(lang, "Open in file manager")).clicked() {
-            out.push(TreeAction::OpenInFileManager(path.to_owned()));
-            ui.close();
-        }
-        let ai = [
-            (
-                "Add AI tags to this folder",
-                TreeAction::AiTagFolder(path.to_owned()),
-            ),
-            (
-                "Find faces in this folder",
-                TreeAction::FindFaces(path.to_owned()),
-            ),
-        ];
-        for (title, action) in ai {
-            if ui
-                .add_enabled(view.ai_ready, egui::Button::new(tr(lang, title)))
-                .on_disabled_hover_text(tr(lang, crate::ai_models::NOT_READY))
-                .clicked()
-            {
-                out.push(action);
-                ui.close();
-            }
-        }
-        if ui
-            .button(tr(lang, "Remove AI tags from this folder..."))
-            .clicked()
-        {
-            out.push(TreeAction::RemoveAiTags(path.to_owned()));
-            ui.close();
-        }
-        ui.separator();
-        // メニューを開いている間だけ確かめる。ツリーを描くたびに全フォルダで調べると、
-        // ネットワークドライブで遅くなるため。
-        let requests = if crate::catalog::exists_in(path) {
-            vec![
-                (Request::Edit(path.to_owned()), "Edit dataset..."),
-                (Request::Update(path.to_owned()), "Update dataset"),
-            ]
-        } else {
-            vec![(Request::Register(path.to_owned()), "Register as dataset...")]
-        };
-        for (request, label) in requests {
-            if ui.button(tr(lang, label)).clicked() {
-                out.push(TreeAction::Dataset(request));
-                ui.close();
-            }
-        }
-        send_menu(ui, path, view, out);
-    });
-}
-
-/// フォルダや ZIP の右クリックメニューの「送る ▸」。ネットワークへは中の DICOM ファイルを送る。
-fn send_menu(ui: &mut egui::Ui, path: &Path, view: &View, out: &mut Vec<TreeAction>) {
-    ui.separator();
-    let folder = !crate::archive::is_archive(path);
-    let offer = crate::send_app::Offer::for_path(view.apps, Some(view.destinations), path, folder);
-    if let Some(choice) = crate::send_app::menu(ui, view.lang, &offer) {
-        out.push(TreeAction::Send {
-            choice,
-            targets: vec![path.to_owned()],
-        });
-    }
-}
-
 /// 検査・シリーズの右クリックメニュー。その全ファイルを送る。
 fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Vec<TreeAction>) {
     vw_ui::menu::context(r, |ui| {
         let first = files.first().map(PathBuf::as_path).unwrap_or(Path::new(""));
+        let menus = view.menus;
         let offer =
-            crate::send_app::Offer::for_path(view.apps, Some(view.destinations), first, false);
-        if let Some(choice) = crate::send_app::menu(ui, view.lang, &offer) {
+            crate::send_app::Offer::for_path(menus.apps, Some(menus.destinations), first, false);
+        if let Some(choice) = crate::send_app::menu(ui, menus.lang, &offer) {
             out.push(TreeAction::Send {
                 choice,
                 targets: files.clone(),
@@ -541,10 +429,7 @@ pub struct Context<'a> {
     pub current: Option<&'a Path>,
     pub active_image: Option<&'a Path>,
     pub lang: Language,
-    pub destinations: &'a [String],
-    pub apps: &'a [crate::settings::SendApp],
-    /// AI のモデルが全部揃っているか。揃うまで AI の項目は押せない。
-    pub ai_ready: bool,
+    pub menus: &'a MenuContext<'a>,
     pub click_expands: bool,
 }
 
@@ -673,9 +558,7 @@ impl FolderTree {
             series: cx.series,
             dicom_extensions: dicom_extensions(cx.registry),
             peeks: &peeker.known,
-            destinations: cx.destinations,
-            apps: cx.apps,
-            ai_ready: cx.ai_ready,
+            menus: cx.menus,
             scans: Vec::new(),
             peeks_wanted: Vec::new(),
         };

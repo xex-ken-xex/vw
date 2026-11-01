@@ -2212,6 +2212,32 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Copy point value", "十字の値をコピー"),
     ("Delete point", "十字を消す"),
+    (
+        "Copy selected probe point value or ROI statistics",
+        "選んでいる十字の値か ROI の統計をコピー",
+    ),
+    ("Copy image", "画像をコピー"),
+    ("Add AI tags to this image", "この画像に AI タグを付ける"),
+    ("Find faces in this image", "この画像の顔を探す"),
+    ("Remove AI tags from this image", "この画像の AI タグを消す"),
+    ("Copy the folder path", "フォルダのパスをコピー"),
+    (
+        "Open the folder in the file manager",
+        "フォルダをファイラで開く",
+    ),
+    ("Close the ZIP", "ZIP を閉じる"),
+    (
+        "Register the folder as a dataset...",
+        "フォルダをデータセットとして登録...",
+    ),
+    (
+        "Edit the folder's dataset...",
+        "フォルダのデータセットを編集...",
+    ),
+    (
+        "Update the folder's dataset",
+        "フォルダのデータセットを更新",
+    ),
     ("In order", "順送り"),
     ("Follow the newest file", "最新ファイルを追う"),
     ("Mode", "モード"),
