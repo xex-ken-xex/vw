@@ -218,6 +218,33 @@ pub fn variables(data: &[u8]) -> Result<Vec<Variable>, DecodeError> {
     Ok(layout::variables(&open(data)?))
 }
 
+/// 地図に描くデータの範囲。外周をたどった `(緯度, 経度)` と、真ん中の画素の位置。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Extent {
+    pub outline: Vec<(f64, f64)>,
+    pub center: (f64, f64),
+}
+
+/// 外周の 1 辺あたりの点の数。曲がった格子や図法の格子の縁を、地図の上で滑らかに見せる程度。
+const EXTENT_POINTS_PER_SIDE: usize = 16;
+
+/// 既定の変数（[`layout::default_variable`]）の範囲。緯度・経度が分からなければ `None`。
+/// 地図は選んだ変数を知らないので既定の変数で測る。同じファイルの変数は、ほとんど同じ格子にある。
+pub fn extent(data: &[u8]) -> Option<Extent> {
+    let file = open(data).ok()?;
+    let variables = layout::variables(&file);
+    let var = layout::default_variable(&variables)?;
+    let grid = geo::grid(&file, var, false, None)?;
+    let center = grid.at(
+        f64::from(grid.width - 1) / 2.0,
+        f64::from(grid.height - 1) / 2.0,
+    )?;
+    Some(Extent {
+        outline: grid.outline(EXTENT_POINTS_PER_SIDE),
+        center,
+    })
+}
+
 impl NetcdfPlugin {
     /// 見せる変数。選んだものがなければ（別のファイルの鍵とぶつかったときも）既定の変数。
     fn chosen<'a>(

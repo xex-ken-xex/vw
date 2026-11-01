@@ -45,6 +45,8 @@ pub struct Place {
     /// 地図で置いた位置か（EXIF の位置でなく）。
     pub placed: bool,
     world: [f64; 2],
+    /// 格子のデータ（NetCDF）の範囲の外周（地図の座標）。写真は空。点はその真ん中に置く。
+    outline: Vec<[f64; 2]>,
 }
 
 impl Place {
@@ -56,8 +58,31 @@ impl Place {
             taken,
             placed: false,
             world,
+            outline: Vec::new(),
         }
     }
+
+    /// 外周 `(緯度, 経度)` を足す。日付変更線をまたぐ所は、隣の点から離れないよう x を何周か
+    /// ずらして続ける（地図は横に繰り返すので、そのまま描ける）。
+    fn with_outline(mut self, outline: &[(f64, f64)]) -> Self {
+        self.outline = ring(outline);
+        self
+    }
+}
+
+fn ring(outline: &[(f64, f64)]) -> Vec<[f64; 2]> {
+    let mut previous: Option<f64> = None;
+    outline
+        .iter()
+        .map(|&(lat, lon)| {
+            let [mut x, y] = geo_map::project(lat, lon);
+            if let Some(p) = previous {
+                x += (p - x).round();
+            }
+            previous = Some(x);
+            [x, y]
+        })
+        .collect()
 }
 
 /// 読んだ画像 1 枚。地図で置いた位置は、出すときにラベルから重ねる（置いたり消したりする
@@ -69,6 +94,8 @@ struct Scanned {
     taken: Option<String>,
     /// 読んだときの位置が、地図で置いたものだったか（データセットのカタログ）。
     placed: bool,
+    /// 格子のデータの範囲の外周 `(緯度, 経度)`。
+    outline: Vec<(f64, f64)>,
 }
 
 /// どの範囲の画像を読んだか。フォルダを移ったら読み直す。
@@ -133,6 +160,8 @@ pub struct Inputs<'a> {
     pub places: Option<&'a Gazetteer>,
     /// 地図で置いた位置。
     pub labels: &'a LabelStore,
+    /// 格子のデータ（NetCDF）の範囲も描く（設定「座標を出す」）。
+    pub extents: bool,
 }
 
 pub struct MapWindow {
@@ -165,6 +194,8 @@ pub struct MapWindow {
     pub drop_hover: Option<(Pos2, Position)>,
     /// 右クリックした点の画像。
     context: Option<PathBuf>,
+    /// 次に描くとき、この範囲（地図の座標）が入るように合わせる。
+    fit_to: Option<Vec<[f64; 2]>>,
 }
 
 impl Default for MapWindow {
@@ -190,6 +221,7 @@ impl Default for MapWindow {
             last_rect: None,
             drop_hover: None,
             context: None,
+            fit_to: None,
         }
     }
 }
@@ -232,6 +264,12 @@ impl MapWindow {
             out.extend(self.map(ui, inputs));
         });
         out
+    }
+
+    /// スロットのデータの範囲 `(緯度, 経度)` が入るように地図を合わせる。
+    pub fn show_extent(&mut self, outline: &[(f64, f64)]) {
+        let points = ring(outline);
+        self.fit_to = (!points.is_empty()).then_some(points);
     }
 
     /// 地図で置いた位置が変わった。読んだ範囲の外の画像なら、それも出すようにする。
@@ -292,6 +330,7 @@ impl MapWindow {
             gps: None,
             taken: None,
             placed: false,
+            outline: Vec::new(),
         });
         self.places = self
             .scanned
@@ -306,7 +345,7 @@ impl MapWindow {
                     None if s.placed => None,
                     None => s.gps,
                 }?;
-                let mut place = Place::new(s.path, gps, s.taken);
+                let mut place = Place::new(s.path, gps, s.taken).with_outline(&s.outline);
                 place.placed = placed.is_some();
                 Some(place)
             })
@@ -335,7 +374,15 @@ impl MapWindow {
         self.dropped.clear();
         self.selected = None;
         self.fit_when_done = true;
-        self.scan = source.map(|s| start_scan(s, inputs.registry.clone(), inputs.order, ctx));
+        self.scan = source.map(|s| {
+            start_scan(
+                s,
+                inputs.registry.clone(),
+                inputs.order,
+                inputs.extents,
+                ctx,
+            )
+        });
     }
 
     fn receive_scan(&mut self) {
@@ -478,6 +525,9 @@ impl MapWindow {
             }
             self.fit_when_done = false;
         }
+        if let Some(points) = self.fit_to.take() {
+            view.fit(rect, &points);
+        }
         navigate(ui, &response, rect, view);
         let view = *view;
 
@@ -491,6 +541,8 @@ impl MapWindow {
             draw_tiles(&painter, ui.visuals(), tiles, &view, rect);
         }
 
+        let hover = response.hover_pos();
+        let area = draw_outlines(&painter, &view, rect, &self.places, &self.selected, hover);
         let points: Vec<[f64; 2]> = self.places.iter().map(|p| p.world).collect();
         let clusters = geo_map::cluster(&points, view.zoom, CLUSTER_CELL);
         let hit = draw_pins(
@@ -509,9 +561,17 @@ impl MapWindow {
                 many => tr1(inputs.lang, "{} photos", &many.len().to_string()),
             };
             response.clone().on_hover_text_at_pointer(tip);
+        } else if let Some(i) = area {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            response
+                .clone()
+                .on_hover_text_at_pointer(file_name(&self.places[i].path));
         }
         if response.clicked() {
-            self.click(hit.map(|i| &clusters[i]), rect);
+            match (hit, area) {
+                (None, Some(i)) => self.selected = Some(Selected::One(i)),
+                _ => self.click(hit.map(|i| &clusters[i]), rect),
+            }
         }
         if response.double_clicked() && hit.is_none() {
             self.selected = None;
@@ -789,6 +849,78 @@ fn draw_drop_marker(painter: &egui::Painter, at: Pos2, label: &str) {
 }
 
 /// 赤い点と、まとめた丸を描く。カーソルの下にあるものの番号を返す。
+/// 格子のデータの範囲を枠で描き、カーソルの下にある範囲（いちばん小さいもの）を返す。
+/// 小さいものを選ぶのは、全球のデータの中に地域のデータが重なっていても、地域のほうを選べるように。
+fn draw_outlines(
+    painter: &egui::Painter,
+    view: &View,
+    rect: Rect,
+    places: &[Place],
+    selected: &Option<Selected>,
+    hover: Option<Pos2>,
+) -> Option<usize> {
+    let width = view.scale() as f32;
+    let at = hover.map(|h| view.to_world(rect, h));
+    let mut hit: Option<(usize, f64)> = None;
+    for (i, p) in places
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.outline.len() > 2)
+    {
+        let chosen = matches!(selected, Some(Selected::One(s)) if *s == i);
+        let stroke = Stroke::new(if chosen { 2.5 } else { 1.5 }, PIN_RED);
+        let ring: Vec<Pos2> = p.outline.iter().map(|&w| view.to_screen(rect, w)).collect();
+        let bounds = Rect::from_points(&ring);
+        let first = ((rect.min.x - bounds.max.x) / width).floor() as i32;
+        let last = ((rect.max.x - bounds.min.x) / width).ceil() as i32;
+        for k in first..=last {
+            let shift = vec2(k as f32 * width, 0.0);
+            if !bounds.translate(shift).intersects(rect) {
+                continue;
+            }
+            let mut closed: Vec<Pos2> = ring.iter().map(|&q| q + shift).collect();
+            closed.push(closed[0]);
+            painter.add(egui::Shape::line(closed, stroke));
+        }
+        let area = polygon_area(&p.outline);
+        if let Some(w) = at
+            && (-2..=2).any(|k| inside(&p.outline, [w[0] + f64::from(k), w[1]]))
+            && hit.is_none_or(|(_, a)| area < a)
+        {
+            hit = Some((i, area));
+        }
+    }
+    hit.map(|(i, _)| i)
+}
+
+/// 点 `p` が多角形 `ring` の中か（偶奇の規則）。
+fn inside(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
+    let mut odd = false;
+    let mut j = ring.len() - 1;
+    for i in 0..ring.len() {
+        let (a, b) = (ring[i], ring[j]);
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
+        {
+            odd = !odd;
+        }
+        j = i;
+    }
+    odd
+}
+
+fn polygon_area(ring: &[[f64; 2]]) -> f64 {
+    let n = ring.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
 fn draw_pins(
     painter: &egui::Painter,
     view: &View,
@@ -839,7 +971,13 @@ fn file_name(path: &Path) -> String {
         .into_owned()
 }
 
-fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::Context) -> Scan {
+fn start_scan(
+    source: Source,
+    registry: Registry,
+    order: SortOrder,
+    extents: bool,
+    ctx: &egui::Context,
+) -> Scan {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
@@ -857,15 +995,24 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    let (gps, taken) = match vw_core::exif::gps_of_file(&path) {
+                    let (mut gps, taken) = match vw_core::exif::gps_of_file(&path) {
                         Some((gps, taken)) => (Some(gps), taken),
                         None => (None, None),
                     };
+                    let mut outline = Vec::new();
+                    if gps.is_none()
+                        && extents
+                        && let Some(e) = netcdf_extent(&path)
+                    {
+                        gps = grid_center(e.center);
+                        outline = e.outline;
+                    }
                     send(Found::Image(Scanned {
                         path,
                         gps,
                         taken,
                         placed: false,
+                        outline,
                     }));
                     send(Found::Step);
                 }
@@ -887,6 +1034,7 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
                             gps: Some(place.gps),
                             taken: place.taken,
                             placed: place.placed,
+                            outline: Vec::new(),
                         }));
                     }
                     send(Found::Step);
@@ -900,6 +1048,25 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
         done: 0,
         total: 0,
     }
+}
+
+/// 範囲の真ん中に置く点。緯度・経度がちょうど 0° の所は、写真の EXIF では「位置なし」の印なので
+/// [`Gps::new`] が受け付けない。全球の格子の真ん中は 0° になりやすいので、見えないほどずらす。
+fn grid_center((lat, lon): (f64, f64)) -> Option<Gps> {
+    Gps::new(lat, lon, None).or_else(|| Gps::new(lat, lon + 1e-6, None))
+}
+
+/// NetCDF のファイルの範囲。先頭のバイトで見分け、それ以外のファイルは中身を読まない。
+fn netcdf_extent(path: &Path) -> Option<vw_netcdf::Extent> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 8];
+    file.read_exact(&mut head).ok()?;
+    let size = file.metadata().ok()?.len();
+    if !vw_netcdf::is_netcdf(&head) || size > vw_core::limits::max_image_bytes() as u64 {
+        return None;
+    }
+    vw_netcdf::extent(&std::fs::read(path).ok()?)
 }
 
 /// 検索カタログに入っている撮影地点。ZIP / 7z の中の画像は、そこから直接開けないので出さない。
@@ -947,6 +1114,7 @@ mod tests {
             gps,
             taken: None,
             placed,
+            outline: Vec::new(),
         }
     }
 
@@ -1061,5 +1229,55 @@ mod tests {
         assert_eq!(places[0].path, Path::new("/d/a/sapporo.jpg"));
         assert_eq!(places[0].taken.as_deref(), Some("2026-01-02 03:04:05"));
         assert!((places[0].gps.longitude - 141.3544).abs() < 1e-9);
+    }
+
+    #[test]
+    fn outlines_across_the_date_line_stay_in_one_piece() {
+        let r = ring(&[
+            (10.0, 170.0),
+            (10.0, -170.0),
+            (-10.0, -170.0),
+            (-10.0, 170.0),
+        ]);
+        assert!(r[1][0] > 1.0, "x continues past the edge: {r:?}");
+        assert!((r[1][0] - r[0][0] - 20.0 / 360.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_point_inside_an_outline_is_found() {
+        let square = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        assert!(inside(&square, [0.5, 0.5]));
+        assert!(!inside(&square, [1.5, 0.5]));
+        assert!((polygon_area(&square) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn grids_centered_on_zero_degrees_still_get_a_point() {
+        let g = grid_center((0.0, 0.0)).expect("point");
+        assert!(g.longitude.abs() < 1e-5);
+        assert!(grid_center((35.0, 139.0)).is_some());
+    }
+
+    #[test]
+    fn netcdf_files_in_the_folder_become_outlined_places() {
+        let dir = crate::test_util::TempDir::new();
+        let file = dir.path().join("geo.nc");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../crates/vw-netcdf/testdata/geo_cases.nc"
+            ),
+            &file,
+        )
+        .unwrap();
+        let e = netcdf_extent(&file).expect("extent");
+        let mut s = scanned(&file, grid_center(e.center), false);
+        s.outline = e.outline;
+        let mut w = MapWindow::default();
+        w.scanned.push(s);
+        w.rebuild(&LabelStore::new(None));
+        assert_eq!(w.places.len(), 1);
+        assert_eq!(w.places[0].outline.len(), 64);
+        assert_eq!(netcdf_extent(&dir.path().join("missing.nc")), None);
     }
 }

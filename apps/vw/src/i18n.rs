@@ -776,6 +776,10 @@ const JA: &[(&str, &str)] = &[
     ("Show/hide histogram", "ヒストグラムの表示/非表示"),
     ("Show/hide zoom map", "ズームマップの表示/非表示"),
     ("Show/hide map", "地図の表示/非表示"),
+    (
+        "Show the slot's data on the map",
+        "スロットのデータの範囲を地図で見る",
+    ),
     ("Show/hide sky chart", "星図の表示/非表示"),
     ("Show/hide subframes", "サブフレームの表示/非表示"),
     ("Subframes", "サブフレーム"),

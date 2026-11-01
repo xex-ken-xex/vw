@@ -451,3 +451,20 @@ fn variables_in_groups_use_the_latitudes_and_longitudes_of_the_parent_group() {
         .unwrap();
     assert!(img.geo.is_some());
 }
+
+#[test]
+fn the_extent_follows_the_edge_of_the_default_variable() {
+    let e = extent(&fixture("geo_cases.nc")).expect("extent");
+    assert_eq!(e.outline.len(), 4 * 16);
+    assert!(
+        e.outline
+            .iter()
+            .all(|&(lat, _)| (-90.0..=90.0).contains(&lat))
+    );
+    assert!((-90.0..=90.0).contains(&e.center.0));
+}
+
+#[test]
+fn files_that_cannot_be_read_have_no_extent() {
+    assert_eq!(extent(b"not a NetCDF file"), None);
+}

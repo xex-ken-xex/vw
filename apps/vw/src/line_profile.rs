@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(earth.places, vec![(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)]);
         assert!((earth.length_km() - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
         let c = chart(
-            &[p.clone()],
+            std::slice::from_ref(&p),
             ColorModel::Gray,
             &v,
             &LABELS,
