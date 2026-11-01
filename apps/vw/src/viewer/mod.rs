@@ -3,6 +3,7 @@
 //! ズームとパンの計算は [`geometry`]、マウス操作をツールごとに解釈する決まりは [`input`] に
 //! 分けてあり、どちらも egui の `Ui` に依らないのでテストはそちらで確かめる。
 
+pub mod chrome;
 pub mod geometry;
 pub mod input;
 
@@ -26,6 +27,7 @@ use crate::probe::{self, Mark};
 use crate::quantity::Quantity;
 use crate::roi::{self, Region, Roi};
 use crate::settings::{ColorFormat, Language};
+pub use chrome::{Chip, SlotBar};
 pub use geometry::{
     KEY_ZOOM_FACTOR, Placed, ViewWindow, drag_zoom_factor, fit_scale, needs_full, pan_to_center,
     split_wheel, visible_part, wheel_delta, wheel_steps, zoom_at,
@@ -324,8 +326,10 @@ pub struct Slot {
     selected_face: Option<(PathBuf, usize)>,
     /// 色導出。`None` は標準の表示。起動をまたいでは残さない。
     pub derive: Option<Derive>,
-    /// 直前のフレームで、色導出の帯を画像に重ねて出したか。
+    /// 直前のフレームで、下の帯を画像に重ねて出したか。
     bar_floating: bool,
+    /// 下の帯を重ねて出したい（マウスが下の 1/4 にある、または帯の一覧が開いている）と最後に分かった時刻。
+    bar_wanted_at: Option<std::time::Instant>,
     /// 色の表とゲージで変えた黒と白。起動をまたいでは残さない。
     pub color: crate::colormap::Choice,
     /// ゲージの端をドラッグしている間の黒と白の値。離したら読み直しを頼む。
@@ -358,6 +362,8 @@ pub struct SlotLook<'a> {
     pub color_rules: &'a crate::colormap::Rules,
     /// 似た画像の組に入っていれば、見出しに出す印。
     pub similar: Option<&'a SimilarMark>,
+    /// 見出しと下の帯に置く部品の並び（設定 `[slot_bar]`）。
+    pub bar: &'a SlotBar,
     /// 電波の画像のビームの楕円を描く。
     pub beam: bool,
     /// スペクトルを画像ではなくグラフで描く。
@@ -440,6 +446,10 @@ pub enum SlotCommand {
     KeepInGroup,
     /// 色導出から知らせること（ログに出す）。
     Derive(derive::Event),
+    /// 見出しや下の帯のボタンから、操作の表の操作（現像、ダーク・フラットの切り替え）を頼む。
+    /// スロットが自分で実行しないのは、右クリックメニューやキーと同じ 1 本の道（`app/mod.rs` の
+    /// `run_on`）を通して、使える条件の判定を 1 か所に保つため。
+    Run(crate::keymap::Action),
 }
 
 /// 1 フレーム分の操作結果。
@@ -463,8 +473,10 @@ impl SlotFrame {
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
 const HEADER: f32 = 20.0;
-/// 色導出を選ぶ下の帯の高さ。
+/// 下の帯の高さ。
 const DERIVE_BAR: f32 = 22.0;
+/// マウスが下の 1/4 から出てから、重ねた下の帯を消すまでの間。
+const BAR_LINGER: std::time::Duration = std::time::Duration::from_millis(300);
 /// 十字の腕の長さ（論理ピクセル）。
 const MARK_ARM: f32 = 8.0;
 
@@ -507,6 +519,33 @@ fn header_button(
         color,
     );
     response
+}
+
+/// 似た画像の印の文字（鎖と組の番号、残す候補なら星）。
+fn similar_text(mark: &SimilarMark) -> String {
+    let keeper = if mark.rank == Some(1) { icon::STAR } else { "" };
+    format!("{}{}{keeper}", icon::LINK_SIMPLE, mark.number)
+}
+
+/// 似た画像の印の説明。
+fn similar_hint(mark: &SimilarMark, lang: Language) -> String {
+    let mut hint = tr1(
+        lang,
+        "Similar to {}. Click to align and compare.",
+        &mark.others,
+    );
+    if let Some(rank) = mark.rank {
+        hint.push('\n');
+        hint.push_str(
+            &tr(
+                lang,
+                "Pick {rank} of {of} by sharpness, then size (the star marks the one to keep)",
+            )
+            .replace("{rank}", &rank.to_string())
+            .replace("{of}", &mark.of.to_string()),
+        );
+    }
+    hint
 }
 
 /// 色導出の対象。画像ならどの形式でも（ノードは標準の表示の後ろに当てる）。
@@ -607,6 +646,40 @@ impl Slot {
         }
     }
 
+    /// 現像できるカメラ RAW を、まだ現像していない。
+    pub fn developable(&self) -> bool {
+        self.shown()
+            .is_some_and(|s| s.info.develop_size.is_some() && !s.developed && s.other.is_none())
+    }
+
+    /// ダーク・フラットを当てられる画像なら、今当てているか。
+    pub fn calibration_on(&self) -> Option<bool> {
+        let state = self
+            .shown()?
+            .info
+            .metadata
+            .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)?;
+        (state != vw_fits::calibration::NOT_APPLIED)
+            .then_some(state == vw_fits::calibration::APPLIED)
+    }
+
+    /// 見出しと下の帯の部品を出す出さないに関わる、今の状態。
+    fn facts(&self, graph: bool, derivable: bool, similar: bool) -> chrome::Facts {
+        let shown = self.shown();
+        chrome::Facts {
+            image: shown.is_some(),
+            folder: self.folder().is_some(),
+            developable: self.developable(),
+            raw_faces: shown.is_some_and(|s| s.other.is_some()),
+            calibration: self.calibration_on(),
+            color_map: !graph && shown.is_some_and(|s| s.info.look.is_some()),
+            derivable,
+            derived: self.derive.is_some(),
+            developing: shown.is_some_and(Shown::developing),
+            similar: similar && shown.is_some(),
+        }
+    }
+
     /// フォルダの読み込みで 1 枚 1 スロットに並べたスロット。
     pub fn is_folder_image(&self) -> bool {
         self.origin == Origin::FolderImage
@@ -644,6 +717,7 @@ impl Slot {
             selected_face: None,
             derive: None,
             bar_floating: false,
+            bar_wanted_at: None,
             color: Default::default(),
             gauge_drag: None,
             deep: None,
@@ -1042,14 +1116,20 @@ impl Slot {
         }
     }
 
-    /// 下の帯: 保存したパイプラインのドロップダウン、編集、比較、差。
-    fn derive_bar(
+    /// 下の帯。設定の並び（[`SlotBar::bottom`]）のうち今出す部品を左から置く。
+    /// `floating` なら画像に重ねているので、暗い面の上で読める文字色にする。
+    #[allow(clippy::too_many_arguments)]
+    fn bottom_bar(
         &mut self,
         ui: &mut egui::Ui,
         bar: Rect,
         lang: Language,
         presets: &[crate::pipelines::Preset],
+        color_rules: &crate::colormap::Rules,
+        similar: Option<&SimilarMark>,
+        chips: &[Chip],
         out: &mut SlotFrame,
+        floating: bool,
     ) {
         let inner = bar.shrink2(vec2(4.0, 1.0));
         let mut child = ui.new_child(
@@ -1057,9 +1137,118 @@ impl Slot {
                 .max_rect(inner)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
+        if floating {
+            child.visuals_mut().override_text_color = Some(Color32::from_gray(230));
+        }
         child.spacing_mut().button_padding = vec2(6.0, 1.0);
         child.spacing_mut().interact_size.y = inner.height() - 2.0;
+        child.spacing_mut().item_spacing.x = 4.0;
         let ui = &mut child;
+        let on = self.derive.is_some();
+        let view = self.derive.as_ref().map(|d| d.view);
+        for &chip in chips {
+            match chip {
+                Chip::DeriveSelect => {
+                    let width = (inner.width() * 0.35).clamp(70.0, 180.0);
+                    self.derive_select(ui, lang, presets, width, out);
+                }
+                Chip::ColorMap => {
+                    let Some(applied) = self.shown().and_then(|s| s.info.look.as_ref()) else {
+                        continue;
+                    };
+                    let mut pick = None;
+                    ui.menu_button(icon::PALETTE, |ui| {
+                        pick = crate::colormap_ui::pick_menu(ui, lang, applied, color_rules);
+                        if pick.is_some() {
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr(lang, "Color map"));
+                    if let Some(pick) = pick {
+                        out.push(SlotCommand::ColorPick(pick));
+                        out.push(SlotCommand::Activate);
+                    }
+                }
+                Chip::DeriveCompare | Chip::DeriveDifference => {
+                    let target = if chip == Chip::DeriveCompare {
+                        View::Compare
+                    } else {
+                        View::Difference
+                    };
+                    let response = ui
+                        .add_enabled(
+                            on,
+                            egui::Button::selectable(view == Some(target), tr(lang, chip.title())),
+                        )
+                        .on_hover_text(self.chip_hint(chip, lang, similar));
+                    if response.clicked() {
+                        self.chip_clicked(chip, out);
+                    }
+                }
+                Chip::ToggleCalibration => {
+                    let applied = self.calibration_on() == Some(true);
+                    if ui
+                        .add(egui::Button::selectable(applied, chip.icon()))
+                        .on_hover_text(self.chip_hint(chip, lang, similar))
+                        .clicked()
+                    {
+                        self.chip_clicked(chip, out);
+                    }
+                }
+                Chip::EditPipeline => {
+                    if ui
+                        .button(tr(lang, chip.title()))
+                        .on_hover_text(tr(lang, "Open the pixel pipeline for this slot"))
+                        .clicked()
+                    {
+                        self.chip_clicked(chip, out);
+                    }
+                }
+                Chip::Similar => {
+                    let Some(mark) = similar else { continue };
+                    let text = egui::RichText::new(similar_text(mark)).color(mark.color);
+                    let response = ui
+                        .add(egui::Button::new(text).frame(false))
+                        .on_hover_text(similar_hint(mark, lang));
+                    self.similar_mark_actions(&response, lang, out);
+                }
+                chip if chip.is_indicator() => {
+                    let color = self.indicator_color(chip, ui.visuals());
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(chip.icon()).color(color),
+                    ))
+                    .on_hover_text(self.chip_hint(chip, lang, similar));
+                }
+                chip => {
+                    if ui
+                        .button(self.chip_icon(chip))
+                        .on_hover_text(self.chip_hint(chip, lang, similar))
+                        .clicked()
+                    {
+                        self.chip_clicked(chip, out);
+                    }
+                }
+            }
+        }
+        if self.derive.as_ref().is_some_and(Derive::busy) {
+            ui.spinner();
+        }
+        if let Some((index, message)) = self.derive.as_ref().and_then(Derive::error) {
+            ui.colored_label(ui.visuals().error_fg_color, icon::WARNING)
+                .on_hover_text(format!("{} {}: {message}", tr(lang, "Node"), index + 1));
+        }
+    }
+
+    /// 色導出の「標準 / 保存したパイプライン」のドロップダウン。
+    fn derive_select(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        presets: &[crate::pipelines::Preset],
+        width: f32,
+        out: &mut SlotFrame,
+    ) {
         let selected = self
             .derive
             .as_ref()
@@ -1067,7 +1256,7 @@ impl Slot {
         let mut choice: Option<Option<&crate::pipelines::Preset>> = None;
         vw_ui::menu::combo(("derive", self.id))
             .selected_text(selected)
-            .width((inner.width() * 0.35).clamp(70.0, 180.0))
+            .width(width)
             .show_ui(ui, |ui| {
                 if ui
                     .selectable_label(self.derive.is_none(), tr(lang, "Standard"))
@@ -1102,51 +1291,194 @@ impl Slot {
             }
             None => {}
         }
-        if ui
-            .button(tr(lang, "Edit"))
-            .on_hover_text(tr(lang, "Open the pixel pipeline for this slot"))
-            .clicked()
-        {
-            out.push(SlotCommand::OpenPipeline);
-        }
-        let on = self.derive.is_some();
-        let view = self.derive.as_ref().map(|d| d.view);
-        for (target, label, hover) in [
-            (
-                View::Compare,
-                "Compare",
-                "Left: standard, right: derived. Drag the line to move it.",
-            ),
-            (
-                View::Difference,
-                "Difference",
-                "Brightness difference from the standard display: black (none) to red, yellow and white (largest).",
-            ),
-        ] {
-            let response = ui
-                .add_enabled(
-                    on,
-                    egui::Button::selectable(view == Some(target), tr(lang, label)),
-                )
-                .on_hover_text(tr(lang, hover));
-            if response.clicked() {
-                if let Some(d) = &mut self.derive {
-                    d.view = if d.view == target {
-                        View::Derived
-                    } else {
-                        target
-                    };
-                }
+    }
+
+    /// 部品のボタンが押されたときにすること。見出しと下の帯で同じ。
+    fn chip_clicked(&mut self, chip: Chip, out: &mut SlotFrame) {
+        match chip {
+            Chip::Close => out.push(SlotCommand::Close),
+            Chip::OpenFolder => out.push(SlotCommand::OpenFolder),
+            Chip::FitImage => {
+                self.reset_view();
                 out.push(SlotCommand::Activate);
             }
+            Chip::ActualSize => {
+                self.actual_size();
+                out.push(SlotCommand::Activate);
+            }
+            Chip::DevelopRaw => out.push(SlotCommand::Run(crate::keymap::Action::DevelopRaw)),
+            Chip::SwapRawPreview => out.push(SlotCommand::SwapRawFace),
+            Chip::ToggleCalibration => {
+                out.push(SlotCommand::Run(crate::keymap::Action::ToggleCalibration))
+            }
+            Chip::EditPipeline => out.push(SlotCommand::OpenPipeline),
+            Chip::DeriveCompare => self.toggle_view(View::Compare, out),
+            Chip::DeriveDifference => self.toggle_view(View::Difference, out),
+            Chip::Similar => {
+                out.push(SlotCommand::CompareSimilar);
+                out.push(SlotCommand::Activate);
+            }
+            Chip::ColorMap
+            | Chip::DeriveSelect
+            | Chip::Developing
+            | Chip::Calibrated
+            | Chip::Derived => {}
         }
-        if self.derive.as_ref().is_some_and(Derive::busy) {
-            ui.spinner();
+    }
+
+    /// 見比べ（左右・差）の切り替え。同じものをもう一度押すと色導出だけの表示に戻る。
+    fn toggle_view(&mut self, target: View, out: &mut SlotFrame) {
+        if let Some(d) = &mut self.derive {
+            d.view = if d.view == target {
+                View::Derived
+            } else {
+                target
+            };
         }
-        if let Some((index, message)) = self.derive.as_ref().and_then(Derive::error) {
-            ui.colored_label(ui.visuals().error_fg_color, icon::WARNING)
-                .on_hover_text(format!("{} {}: {message}", tr(lang, "Node"), index + 1));
+        out.push(SlotCommand::Activate);
+    }
+
+    /// 部品に出す絵。「JPEG / RAW」は今出している方の名前。
+    fn chip_icon(&self, chip: Chip) -> &'static str {
+        match chip {
+            Chip::SwapRawPreview if self.shown().is_some_and(Shown::showing_raw_preview) => "JPEG",
+            chip => chip.icon(),
         }
+    }
+
+    /// 部品にマウスを乗せたときの説明。状態で変わるものはここで組む。
+    fn chip_hint(&self, chip: Chip, lang: Language, similar: Option<&SimilarMark>) -> String {
+        match chip {
+            Chip::SwapRawPreview => tr(
+                lang,
+                if self.shown().is_some_and(Shown::showing_raw_preview) {
+                    "Showing the preview embedded by the camera. Click to show the developed image."
+                } else {
+                    "Showing the image developed from the sensor data. Click to show the camera's embedded preview."
+                },
+            )
+            .to_owned(),
+            Chip::Calibrated => tr(
+                lang,
+                if self.calibration_on() == Some(true) {
+                    "Dark and flat applied"
+                } else {
+                    "Calibration off for this image"
+                },
+            )
+            .to_owned(),
+            Chip::Derived => match &self.derive {
+                Some(d) => format!("{}: {}", tr(lang, "Derived"), derive_name(d, lang)),
+                None => tr(lang, "Derived").to_owned(),
+            },
+            Chip::DeriveCompare => {
+                tr(lang, "Left: standard, right: derived. Drag the line to move it.").to_owned()
+            }
+            Chip::DeriveDifference => tr(
+                lang,
+                "Brightness difference from the standard display: black (none) to red, yellow and white (largest).",
+            )
+            .to_owned(),
+            Chip::Similar => similar.map_or_else(String::new, |m| similar_hint(m, lang)),
+            chip => tr(lang, chip.title()).to_owned(),
+        }
+    }
+
+    /// 印の色。進行中と当てているものは選択色、外しているものは注意の色、ほかは弱い文字色。
+    fn indicator_color(&self, chip: Chip, visuals: &egui::Visuals) -> Color32 {
+        match chip {
+            Chip::Calibrated if self.calibration_on() == Some(true) => {
+                visuals.selection.stroke.color
+            }
+            Chip::Calibrated => visuals.warn_fg_color,
+            Chip::Derived => visuals.selection.stroke.color,
+            _ => visuals.weak_text_color(),
+        }
+    }
+
+    /// 似た画像の印のクリックと右クリック。
+    fn similar_mark_actions(&self, response: &egui::Response, lang: Language, out: &mut SlotFrame) {
+        if response.clicked() {
+            out.push(SlotCommand::CompareSimilar);
+            out.push(SlotCommand::Activate);
+        }
+        response.context_menu(|ui| {
+            if ui.button(tr(lang, "Compare the group")).clicked() {
+                out.push(SlotCommand::CompareSimilar);
+                out.push(SlotCommand::Activate);
+                ui.close();
+            }
+            if ui
+                .button(tr(lang, "Keep this one, flag the rest bad"))
+                .clicked()
+            {
+                out.push(SlotCommand::KeepInGroup);
+                out.push(SlotCommand::Activate);
+                ui.close();
+            }
+        });
+    }
+
+    /// 見出しの印 1 つを `right` から左へ描き、その矩形を返す。`folded` は狭いスロットで
+    /// この印にまとめた、ほかの印（説明に添える）。
+    #[allow(clippy::too_many_arguments)]
+    fn header_indicator(
+        &self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        header: Rect,
+        right: f32,
+        chip: Chip,
+        lang: Language,
+        similar: Option<&SimilarMark>,
+        folded: &[Chip],
+        out: &mut SlotFrame,
+    ) -> Rect {
+        let visuals = ui.visuals().clone();
+        let mut hint = self.chip_hint(chip, lang, similar);
+        for &f in folded {
+            hint.push('\n');
+            hint.push_str(&self.chip_hint(f, lang, similar));
+        }
+        if chip == Chip::Similar
+            && let Some(mark) = similar
+        {
+            let galley = painter.layout_no_wrap(
+                similar_text(mark),
+                egui::FontId::proportional(12.0),
+                mark.color,
+            );
+            let mark_rect = Rect::from_min_max(
+                pos2(right - galley.size().x - 8.0, header.min.y + 2.0),
+                pos2(right, header.max.y - 2.0),
+            );
+            let response = ui.interact(
+                mark_rect,
+                ui.id().with(("similar", self.id)),
+                Sense::click(),
+            );
+            if response.hovered() {
+                painter.rect_filled(mark_rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
+            }
+            painter.galley(mark_rect.center() - galley.size() / 2.0, galley, mark.color);
+            let response = response.on_hover_text(hint);
+            self.similar_mark_actions(&response, lang, out);
+            return mark_rect;
+        }
+        let mark_rect = Rect::from_min_max(
+            pos2(right - (HEADER - 2.0), header.min.y + 2.0),
+            pos2(right, header.max.y - 2.0),
+        );
+        let mark = ui.interact(mark_rect, ui.id().with((chip, self.id)), Sense::hover());
+        painter.text(
+            mark_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            chip.icon(),
+            egui::FontId::proportional(14.0),
+            self.indicator_color(chip, &visuals),
+        );
+        mark.on_hover_text(hint);
+        mark_rect
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, rect: Rect, active: bool, look: SlotLook) -> SlotFrame {
@@ -1163,6 +1495,7 @@ impl Slot {
             gauge,
             color_rules,
             similar,
+            bar,
             beam,
             spectrum_graph,
         } = look;
@@ -1193,18 +1526,38 @@ impl Slot {
         }
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
         let hovering = ui.rect_contains_pointer(rect);
-        let bar_fits = derivable && rect.height() > HEADER + 3.0 * DERIVE_BAR;
-        // 標準の表示のスロットでは、色導出の帯はマウスを乗せたときだけ画像の下端に重ねる。
-        // 常に場所を取ると、並べたスロットのどれにも同じ行が並んで画像が狭くなるため。
+        let facts = self.facts(graph, derivable, similar.is_some());
+        let top_chips = chrome::items(bar, chrome::Edge::Top, &facts);
+        let bottom_chips = chrome::items(bar, chrome::Edge::Bottom, &facts);
+        let bar_fits = !bottom_chips.is_empty() && rect.height() > HEADER + 3.0 * DERIVE_BAR;
+        // 色導出を当てているスロットでは下の帯に場所を取り、ほかではマウスが下の 1/4 に来たときだけ
+        // 画像に重ねる。常に場所を取ると、並べたスロットのどれにも同じ行が並んで画像が狭くなるため。
         // 帯の ▼ で開いた一覧へマウスを動かすとスロットの外に出るので、一覧が開いている間は残す。
+        // 離れてもすぐには消さずに少し残すのは、帯と画像の境でマウスが行き来したときに点滅しないように。
         let bar_height = if bar_fits && self.derive.is_some() {
             DERIVE_BAR
         } else {
             0.0
         };
-        let floating = bar_fits
-            && self.derive.is_none()
-            && (hovering || (self.bar_floating && egui::Popup::is_any_open(ui.ctx())));
+        let lower_quarter = Rect::from_min_max(
+            pos2(rect.min.x, rect.max.y - (rect.height() - HEADER) / 4.0),
+            rect.max,
+        );
+        let now = std::time::Instant::now();
+        let wants_bar = bar_fits
+            && bar_height == 0.0
+            && (ui.rect_contains_pointer(lower_quarter)
+                || (self.bar_floating && egui::Popup::is_any_open(ui.ctx())));
+        if wants_bar {
+            self.bar_wanted_at = Some(now);
+        }
+        let since_wanted = self.bar_wanted_at.map(|t| now.duration_since(t));
+        let floating =
+            bar_fits && bar_height == 0.0 && since_wanted.is_some_and(|d| d < BAR_LINGER);
+        if floating && !wants_bar {
+            ui.ctx()
+                .request_repaint_after(BAR_LINGER.saturating_sub(since_wanted.unwrap_or_default()));
+        }
         self.bar_floating = floating;
         let body = Rect::from_min_max(
             pos2(rect.min.x, rect.min.y + HEADER),
@@ -1578,11 +1931,31 @@ impl Slot {
         }
         if bar_height > 0.0 {
             self.derive_overlay(ui, body, lang);
-            self.derive_bar(ui, bar, lang, presets, &mut out);
+            self.bottom_bar(
+                ui,
+                bar,
+                lang,
+                presets,
+                color_rules,
+                similar,
+                &bottom_chips,
+                &mut out,
+                false,
+            );
         } else if floating {
             let bar = Rect::from_min_max(pos2(body.min.x, body.max.y - DERIVE_BAR), body.max);
-            painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
-            self.derive_bar(ui, bar, lang, presets, &mut out);
+            painter.rect_filled(bar, 0.0, Color32::from_black_alpha(150));
+            self.bottom_bar(
+                ui,
+                bar,
+                lang,
+                presets,
+                color_rules,
+                similar,
+                &bottom_chips,
+                &mut out,
+                true,
+            );
         }
         // ヘッダ: ファイル名、表示倍率、閉じるボタン。
         // ヘッダ全体のクリック判定を閉じるボタンより先に登録する。egui では後から登録した
@@ -1662,238 +2035,48 @@ impl Slot {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
             out.dragging |= header_response.dragged();
         }
-        // ボタンはマウスを乗せたスロットにだけ出す。並んだスロットのすべてに出すと、
-        // 画像のヘッダがボタンで埋まって名前が読みにくくなるため。
-        let close_rect = Rect::from_center_size(
-            header.right_center() - vec2(HEADER / 2.0, 0.0),
-            Vec2::splat(HEADER - 4.0),
-        );
-        let mut labels_right = header.right() - 4.0;
-        if hovering {
-            if header_button(ui, &painter, close_rect, ("close", self.id), "×", 14.0)
-                .on_hover_text(tr(lang, "Close slot"))
-                .clicked()
-            {
-                out.push(SlotCommand::Close);
-            }
-            labels_right = close_rect.left();
-        }
-        let next_rect = |right: f32| close_rect.translate(vec2(right - close_rect.right(), 0.0));
-        if self.folder().is_some() && hovering {
-            let open_rect = next_rect(labels_right);
-            if header_button(
-                ui,
-                &painter,
-                open_rect,
-                ("open", self.id),
-                egui_phosphor::regular::ARROW_SQUARE_IN,
-                14.0,
-            )
-            .on_hover_text(tr(lang, "Open this folder"))
-            .clicked()
-            {
-                out.push(SlotCommand::OpenFolder);
-            }
-            labels_right = open_rect.left();
-        }
-
-        if self.shown().is_some_and(Shown::developing) {
-            let film_rect = next_rect(labels_right);
-            let film = ui.interact(film_rect, ui.id().with(("film", self.id)), Sense::hover());
-            painter.text(
-                film_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::FILM_STRIP,
-                egui::FontId::proportional(14.0),
-                visuals.weak_text_color(),
-            );
-            film.on_hover_text(tr(lang, "Developing RAW..."));
-            labels_right = film_rect.left();
-        }
-
-        if let Some(preview) = self
-            .shown()
-            .filter(|s| s.other.is_some())
-            .map(Shown::showing_raw_preview)
-        {
-            let badge_rect = Rect::from_min_max(
-                pos2(labels_right - 36.0, close_rect.top()),
-                pos2(labels_right, close_rect.bottom()),
-            );
-            let badge = ui.interact(
-                badge_rect,
-                ui.id().with(("raw_face", self.id)),
-                Sense::click(),
-            );
-            let color = if badge.hovered() {
-                visuals.strong_text_color()
-            } else {
-                visuals.weak_text_color()
-            };
-            painter.text(
-                badge_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                if preview { "JPEG" } else { "RAW" },
-                egui::FontId::proportional(11.0),
-                color,
-            );
-            let hint = if preview {
-                "Showing the preview embedded by the camera. Click to show the developed image."
-            } else {
-                "Showing the image developed from the sensor data. Click to show the camera's embedded preview."
-            };
-            if badge.on_hover_text(tr(lang, hint)).clicked() {
-                out.push(SlotCommand::SwapRawFace);
-            }
-            labels_right = badge_rect.left();
-        }
-
-        let calibration = self.shown().and_then(|s| {
-            s.info
-                .metadata
-                .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
-        });
-        if let Some(state) = calibration.filter(|&s| s != vw_fits::calibration::NOT_APPLIED) {
-            let applied = state == vw_fits::calibration::APPLIED;
-            let mark_rect = next_rect(labels_right);
-            let mark = ui.interact(
-                mark_rect,
-                ui.id().with(("calibrated", self.id)),
-                Sense::hover(),
-            );
-            painter.text(
-                mark_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::APERTURE,
-                egui::FontId::proportional(14.0),
-                if applied {
-                    visuals.selection.stroke.color
-                } else {
-                    visuals.weak_text_color()
-                },
-            );
-            mark.on_hover_text(tr(
-                lang,
-                if applied {
-                    "Dark and flat applied"
-                } else {
-                    "Calibration off for this image"
-                },
-            ));
-            labels_right = mark_rect.left();
-        }
-
-        if let Some(mark) = similar.filter(|_| self.shown().is_some()) {
-            let keeper = if mark.rank == Some(1) {
-                egui_phosphor::regular::STAR
-            } else {
-                ""
-            };
-            let text = format!(
-                "{}{}{keeper}",
-                egui_phosphor::regular::LINK_SIMPLE,
-                mark.number
-            );
-            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), mark.color);
-            let mark_rect = Rect::from_min_max(
-                pos2(labels_right - galley.size().x - 8.0, header.min.y + 2.0),
-                pos2(labels_right, header.max.y - 2.0),
-            );
-            let response = ui.interact(
-                mark_rect,
-                ui.id().with(("similar", self.id)),
-                Sense::click(),
-            );
-            if response.hovered() {
-                painter.rect_filled(mark_rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
-            }
-            painter.galley(mark_rect.center() - galley.size() / 2.0, galley, mark.color);
-            let mut hint = tr1(
-                lang,
-                "Similar to {}. Click to align and compare.",
-                &mark.others,
-            );
-            if let Some(rank) = mark.rank {
-                hint.push('\n');
-                hint.push_str(
-                    &tr(
-                        lang,
-                        "Pick {rank} of {of} by sharpness, then size (the star marks the one to keep)",
-                    )
-                    .replace("{rank}", &rank.to_string())
-                    .replace("{of}", &mark.of.to_string()),
-                );
-            }
-            let response = response.on_hover_text(hint);
-            if response.clicked() {
-                out.push(SlotCommand::CompareSimilar);
-                out.push(SlotCommand::Activate);
-            }
-            response.context_menu(|ui| {
-                if ui.button(tr(lang, "Compare the group")).clicked() {
-                    out.push(SlotCommand::CompareSimilar);
-                    out.push(SlotCommand::Activate);
-                    ui.close();
-                }
-                if ui
-                    .button(tr(lang, "Keep this one, flag the rest bad"))
-                    .clicked()
-                {
-                    out.push(SlotCommand::KeepInGroup);
-                    out.push(SlotCommand::Activate);
-                    ui.close();
-                }
-            });
-            labels_right = mark_rect.left();
-        }
-
-        if let Some(d) = &self.derive {
-            let mark_rect = next_rect(labels_right);
-            let mark = ui.interact(
-                mark_rect,
-                ui.id().with(("derived", self.id)),
-                Sense::hover(),
-            );
-            painter.text(
-                mark_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::SWATCHES,
-                egui::FontId::proportional(14.0),
-                visuals.selection.stroke.color,
-            );
-            mark.on_hover_text(format!("{}: {}", tr(lang, "Derived"), derive_name(d, lang)));
-            labels_right = mark_rect.left();
-        }
-
+        // ボタンはマウスを乗せたスロットにだけ描くが、幅は常に空けておく。並んだスロットの
+        // すべてに描くと画像のヘッダがボタンで埋まって名前が読みにくくなり、幅を空けないと
+        // マウスを乗せた瞬間に倍率と印が左へ飛ぶため。
         // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと
         // ボタンを探しにくく、長い名前ではボタンが名前に重なるため。
-        if self.shown().is_some() {
+        let buttons = chrome::header_buttons(&top_chips);
+        let indicators = chrome::header_indicators(&top_chips, rect.width() < chrome::NARROW);
+        let folded: Vec<Chip> = top_chips
+            .iter()
+            .copied()
+            .filter(|c| c.is_indicator() && !indicators.contains(c))
+            .collect();
+        let mut labels_right = header.right() - 2.0;
+        for &chip in buttons.iter().rev() {
+            let (width, size) = match chip {
+                Chip::SwapRawPreview => (36.0, 11.0),
+                Chip::FitImage | Chip::ActualSize => (HEADER - 2.0, 12.0),
+                _ => (HEADER - 2.0, 14.0),
+            };
+            let button_rect = Rect::from_min_max(
+                pos2(labels_right - width, header.min.y + 2.0),
+                pos2(labels_right, header.max.y - 2.0),
+            );
             if hovering {
-                let actual_rect = next_rect(labels_right);
-                if header_button(ui, &painter, actual_rect, ("actual", self.id), "1:1", 12.0)
-                    .on_hover_text(tr(lang, "Actual size (100%)"))
-                    .clicked()
-                {
-                    self.actual_size();
-                    out.push(SlotCommand::Activate);
-                }
-                let fit_rect = actual_rect.translate(vec2(-(HEADER - 2.0), 0.0));
+                let hint = self.chip_hint(chip, lang, similar);
                 if header_button(
                     ui,
                     &painter,
-                    fit_rect,
-                    ("fit", self.id),
-                    egui_phosphor::regular::FRAME_CORNERS,
-                    12.0,
+                    button_rect,
+                    (chip, self.id),
+                    self.chip_icon(chip),
+                    size,
                 )
-                .on_hover_text(tr(lang, "Fit image to slot"))
+                .on_hover_text(hint)
                 .clicked()
                 {
-                    self.reset_view();
-                    out.push(SlotCommand::Activate);
+                    self.chip_clicked(chip, &mut out);
                 }
-                labels_right = fit_rect.left();
             }
+            labels_right = button_rect.left();
+        }
+        if self.shown().is_some() {
             let zoom = painter.text(
                 pos2(labels_right - 2.0, header.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -1902,6 +2085,20 @@ impl Slot {
                 visuals.weak_text_color(),
             );
             labels_right = zoom.left();
+        }
+        for &chip in indicators.iter().rev() {
+            let mark_rect = self.header_indicator(
+                ui,
+                &painter,
+                header,
+                labels_right,
+                chip,
+                lang,
+                similar,
+                &folded,
+                &mut out,
+            );
+            labels_right = mark_rect.left();
         }
 
         // フラグとタグはヘッダの右端に出し、フラグはヘッダの下端の色の線でも示す。

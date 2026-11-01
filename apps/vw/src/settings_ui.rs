@@ -25,6 +25,7 @@ use crate::settings::{
 use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::SortKey;
 use crate::viewer::ScaleFilter;
+use crate::viewer::chrome::{self, Chip, Edge};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -211,6 +212,13 @@ const ITEMS: &[Item] = &[
         title: "Dropped frames period",
         description: "The play bar shows how many frames were skipped (not decoded in time) during this many last seconds.",
         widget: drop_window_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "slot_bar.top",
+        title: "Slot header and bottom bar",
+        description: "Drag a part onto the header or the bottom bar to place it, and drag it within an edge to reorder. Drag it off to hide it. Lists and the compare switches fit only the bottom bar. The bottom bar appears when the mouse is in the lower quarter of a slot; parts that do not apply to the image are not shown.",
+        widget: slot_bar_widget,
     },
     Item {
         section: Section::Viewer,
@@ -1929,6 +1937,241 @@ fn fits_missing_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Languag
     )
 }
 
+/// スロットの見出しと下の帯の模型。部品をドラッグ＆ドロップで並べ替える。
+fn slot_bar_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let bar = &mut s.slot_bar;
+    let mut changed = false;
+    let width = ui.available_width().min(520.0);
+    let id = ui.make_persistent_id("slot_bar.mockup");
+    let visuals = ui.visuals().clone();
+    ui.vertical(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        let header_fill = visuals.selection.bg_fill;
+        let image_fill = Color32::from_gray(40);
+        // 見出し: 名前、印、倍率、ボタン。本物と同じ並びで、幅は本物より広い。
+        changed |= slot_edge(ui, id, bar, Edge::Top, width, header_fill, lang);
+        let (image, _) = ui.allocate_exact_size(egui::vec2(width, 48.0), egui::Sense::hover());
+        ui.painter().rect_filled(image, 0.0, image_fill);
+        ui.painter().text(
+            image.center(),
+            egui::Align2::CENTER_CENTER,
+            tr(lang, "Image"),
+            egui::FontId::proportional(12.0),
+            Color32::from_gray(110),
+        );
+        changed |= slot_edge(
+            ui,
+            id,
+            bar,
+            Edge::Bottom,
+            width,
+            Color32::from_gray(50),
+            lang,
+        );
+    });
+    ui.add_space(6.0);
+    // 置いていない部品。ここへ落としても隠す。
+    let hidden = bar.hidden();
+    let palette = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(6, 4))
+        .stroke(egui::Stroke::new(
+            1.0,
+            visuals.widgets.noninteractive.bg_stroke.color,
+        ))
+        .corner_radius(3)
+        .show(ui, |ui| {
+            ui.set_width(width - 12.0);
+            ui.weak(tr(lang, "Not placed (drag here to hide a part)"));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                for chip in hidden {
+                    ui.dnd_drag_source(id.with(("palette", chip)), chip, |ui| {
+                        chip_mock(ui, chip, lang, true);
+                    });
+                }
+            });
+        })
+        .response;
+    if let Some((chip, released)) = dragged_over(ui, palette.rect) {
+        if released {
+            bar.remove(chip);
+            changed = true;
+        } else {
+            ui.painter().rect_stroke(
+                palette.rect,
+                3.0,
+                egui::Stroke::new(1.0, visuals.selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    // 辺にも一覧にも落とさずに離したら、隠す。
+    if ui.input(|i| i.pointer.any_released())
+        && let Some(chip) = egui::DragAndDrop::take_payload::<Chip>(ui.ctx())
+    {
+        bar.remove(*chip);
+        changed = true;
+    }
+    ui.add_space(4.0);
+    if ui.button(tr(lang, "Reset to default")).clicked() && *bar != chrome::SlotBar::default() {
+        *bar = chrome::SlotBar::default();
+        changed = true;
+    }
+    changed
+}
+
+/// 模型の 1 辺。部品をドラッグ元として並べ、落とされた部品を置く。変わったら true。
+fn slot_edge(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    bar: &mut chrome::SlotBar,
+    edge: Edge,
+    width: f32,
+    fill: Color32,
+    lang: Language,
+) -> bool {
+    let height = if edge == Edge::Top { 26.0 } else { 30.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, fill);
+    let chips: Vec<Chip> = bar.edge(edge).to_vec();
+    // 見出しでは印を倍率の左、ボタンを倍率の右に分けて置く（本物と同じ）。
+    let (left, right): (Vec<Chip>, Vec<Chip>) = match edge {
+        Edge::Top => chips.iter().partition(|c| c.is_indicator()),
+        Edge::Bottom => (chips.clone(), Vec::new()),
+    };
+    let mut placed: Vec<(Chip, egui::Rect)> = Vec::new();
+    let inner = rect.shrink2(egui::vec2(6.0, 2.0));
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    row.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+    if edge == Edge::Top {
+        row.label(
+            RichText::new("image.png")
+                .size(12.0)
+                .color(Color32::from_gray(230)),
+        );
+        row.add_space(8.0);
+    }
+    let mut lay = |row: &mut egui::Ui, list: &[Chip]| {
+        for &chip in list {
+            let r = row.dnd_drag_source(id.with((edge == Edge::Top, chip)), chip, |ui| {
+                chip_mock(ui, chip, lang, false);
+            });
+            placed.push((chip, r.response.rect));
+        }
+    };
+    lay(&mut row, &left);
+    if edge == Edge::Top {
+        row.add_space(6.0);
+        row.label(
+            RichText::new("100%")
+                .size(12.0)
+                .color(Color32::from_gray(180)),
+        );
+        row.add_space(6.0);
+        lay(&mut row, &right);
+    }
+    let pointer_x = ui.ctx().pointer_interact_pos().map(|p| p.x);
+    // 落とす位置: 指した所より左にある最後の部品の次。
+    let index_at = |x: f32| -> usize {
+        placed
+            .iter()
+            .rfind(|(_, r)| r.center().x < x)
+            .and_then(|(c, _)| chips.iter().position(|k| k == c).map(|i| i + 1))
+            .unwrap_or(0)
+    };
+    let Some((chip, released)) = dragged_over(ui, rect) else {
+        return false;
+    };
+    if released {
+        let Some(x) = pointer_x else { return false };
+        let mut index = index_at(x);
+        // 同じ辺の中で右へ動かすときは、外した分だけ先が 1 つ手前にずれる。
+        if let Some(from) = chips.iter().position(|c| *c == chip)
+            && from < index
+        {
+            index -= 1;
+        }
+        return bar.place(chip, edge, index);
+    }
+    if chip.fits(edge) {
+        let x = pointer_x.map_or(inner.left(), |x| {
+            let i = index_at(x);
+            match (i.checked_sub(1).and_then(|i| placed.get(i)), placed.get(i)) {
+                (Some((_, a)), Some((_, b))) => (a.right() + b.left()) / 2.0,
+                (Some((_, a)), None) => a.right() + 2.0,
+                (None, Some((_, b))) => b.left() - 2.0,
+                (None, None) => inner.left() + if edge == Edge::Top { 70.0 } else { 0.0 },
+            }
+        });
+        ui.painter().vline(
+            x,
+            rect.y_range(),
+            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+        );
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.0, ui.visuals().error_fg_color),
+            egui::StrokeKind::Inside,
+        );
+    }
+    false
+}
+
+/// `rect` の上にドラッグ中の部品と、この瞬間に離されたか。離されたら荷を受け取る。
+///
+/// egui の `Response::dnd_release_payload` を使わないのは、ドラッグ中の部品の絵が前のフレームで
+/// マウスの真下にあるため、離した瞬間のヒットテストがその絵の層だけを見て、下の辺を
+/// 「指していない」と判断するから。矩形で直に判定すれば落とし先を取りこぼさない。
+fn dragged_over(ui: &egui::Ui, rect: egui::Rect) -> Option<(Chip, bool)> {
+    let pos = ui.ctx().pointer_interact_pos()?;
+    // 辺のすぐ外で離しても受ける。細い帯の縁を正確に指すのは難しいため。
+    if !rect.expand(4.0).contains(pos) {
+        return None;
+    }
+    let released = ui.input(|i| i.pointer.any_released());
+    let chip = if released {
+        egui::DragAndDrop::take_payload::<Chip>(ui.ctx())?
+    } else {
+        egui::DragAndDrop::payload::<Chip>(ui.ctx())?
+    };
+    Some((*chip, released))
+}
+
+/// 模型の部品 1 つ。`with_title` なら絵の横に名前も出す（置いていない部品の一覧）。
+fn chip_mock(ui: &mut egui::Ui, chip: Chip, lang: Language, with_title: bool) {
+    let text = match chip {
+        Chip::DeriveSelect if !with_title => {
+            format!("{} {}", tr(lang, "Standard"), icon::CARET_DOWN)
+        }
+        Chip::EditPipeline | Chip::DeriveCompare | Chip::DeriveDifference if !with_title => {
+            tr(lang, chip.title()).to_owned()
+        }
+        _ if with_title => format!("{} {}", chip.icon(), tr(lang, chip.title())),
+        _ => chip.icon().to_owned(),
+    };
+    let (fill, color) = if chip.is_indicator() {
+        (Color32::TRANSPARENT, Color32::from_gray(170))
+    } else {
+        (Color32::from_white_alpha(20), Color32::from_gray(230))
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(3)
+        .inner_margin(egui::Margin::symmetric(5, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(12.0).color(color));
+        })
+        .response
+        .on_hover_text(tr(lang, chip.title()));
+}
+
 fn fits_beam_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.beam, tr(lang, "Enabled")).changed()
 }
@@ -3416,6 +3659,7 @@ mod tests {
         const HIDDEN: &[&str] = &["keys", "dicom_send.destinations"];
         // 1 つの項目の widget が、鍵の名前の値と一緒に変えるもの。
         const SHARED: &[(&str, &[&str])] = &[
+            ("slot_bar.top", &["slot_bar.bottom"]),
             ("check.clipping_high", &["check.clipping_low"]),
             ("check.peaking_threshold", &["check.peaking_dim"]),
             (

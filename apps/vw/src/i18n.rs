@@ -2873,6 +2873,19 @@ const JA: &[(&str, &str)] = &[
         "Read uncompressed TIFF files that omit the required StripByteCounts tag (some industrial CT projections), taking the strip size from width x height x bits. These files break the format, so a reader can misbehave on them: turn this on at your own risk. Off: such files fail to open and the log names this setting.",
         "必須の StripByteCounts タグがない無圧縮の TIFF（産業用 CT の投影像など）を、幅 × 高さ × ビット数から大きさを補って読みます。フォーマットとして異常なファイルなので、読む側が誤動作するおそれがあります。自己責任で ON にしてください。OFF のときは開けず、ログにこの設定を案内します。",
     ),
+    // スロットの見出しと下の帯の部品
+    ("JPEG / RAW", "JPEG / RAW の切り替え"),
+    ("Derived display", "色導出の表示"),
+    ("Similar images", "似た画像"),
+    ("Slot header and bottom bar", "スロットの見出しと下の帯"),
+    (
+        "Drag a part onto the header or the bottom bar to place it, and drag it within an edge to reorder. Drag it off to hide it. Lists and the compare switches fit only the bottom bar. The bottom bar appears when the mouse is in the lower quarter of a slot; parts that do not apply to the image are not shown.",
+        "部品を見出しか下の帯へドラッグして置き、同じ辺の中でドラッグして並べ替えます。外へドラッグすると隠します。一覧を開く部品と見比べの切り替えは下の帯だけに置けます。下の帯はマウスがスロットの下 1/4 に来たときに出ます。画像に当てはまらない部品は出ません。",
+    ),
+    (
+        "Not placed (drag here to hide a part)",
+        "置いていない部品（ここへ落とすと隠す）",
+    ),
 ];
 
 #[cfg(test)]

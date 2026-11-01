@@ -198,18 +198,11 @@ fn composable(slot: &Slot) -> bool {
 }
 
 fn developable(slot: &Slot) -> bool {
-    slot.shown()
-        .is_some_and(|s| s.info.develop_size.is_some() && !s.developed && s.other.is_none())
+    slot.developable()
 }
 
-/// ダーク・フラットを当てられる画像なら、今当てているか。
 fn calibration_on(slot: &Slot) -> Option<bool> {
-    let state = slot
-        .shown()?
-        .info
-        .metadata
-        .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)?;
-    (state != vw_fits::calibration::NOT_APPLIED).then_some(state == vw_fits::calibration::APPLIED)
+    slot.calibration_on()
 }
 
 /// 右クリックに出す名前。設定画面の名前（[`Action::title`]）より短く、対象が分かっているので
