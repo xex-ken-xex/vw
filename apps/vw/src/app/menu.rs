@@ -355,10 +355,7 @@ impl VwApp {
     fn color_map_menu(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let index = self.active;
-        let applied = self.slots[index]
-            .shown
-            .as_ref()
-            .and_then(|s| s.info.look.as_ref());
+        let applied = self.slots[index].shown().and_then(|s| s.info.look.as_ref());
         let enabled = applied.is_some();
         let mut pick = None;
         ui.add_enabled_ui(enabled, |ui| {

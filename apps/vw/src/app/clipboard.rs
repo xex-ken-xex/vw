@@ -29,11 +29,11 @@ impl VwApp {
     /// 揃ったときにコピーする（[`Self::copy_pending`]）。
     pub(super) fn copy_image(&mut self, ctx: &egui::Context, index: usize) {
         let s = &mut self.slots[index];
-        if s.shown.is_none() {
+        if s.shown().is_none() {
             return;
         }
         s.copy_when_full = true;
-        if s.shown.as_ref().is_some_and(|sh| sh.full.is_none()) && s.full_request.is_none() {
+        if s.shown().is_some_and(|sh| sh.full.is_none()) && s.full_request.is_none() {
             request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
         }
         self.copy_pending(ctx);
@@ -66,7 +66,7 @@ impl VwApp {
         index: usize,
     ) -> Option<(std::path::PathBuf, egui::ColorImage)> {
         let slot = &self.slots[index];
-        let shown = slot.shown.as_ref()?;
+        let shown = slot.shown()?;
         let full = shown.full.as_ref()?;
         if let Some(d) = &slot.derive {
             if let Some(full) = d.full_for(shown) {

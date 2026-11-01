@@ -12,7 +12,7 @@ use crate::labels::Flag;
 use crate::settings::{Language, LoadInto};
 use crate::theme;
 use crate::tree::{self};
-use crate::viewer::Slot;
+use crate::viewer::{Content, Origin, Slot};
 
 use super::*;
 
@@ -75,7 +75,7 @@ impl VwApp {
                 self.cancel_requests(&self.slots[index]);
                 let slot = &mut self.slots[index];
                 slot.path = None;
-                slot.shown = None;
+                slot.content = Content::Empty;
                 slot.loading = false;
                 slot.full_request = None;
                 continue;
@@ -94,8 +94,9 @@ impl VwApp {
     /// `root` の画像を 1 枚 1 スロットに並べたスロットを、`wanted` の画像に並べ直す。
     /// 残る画像のスロットは読み直さずにそのまま使う。
     pub(super) fn rearrange_folder_slots(&mut self, root: &Path, wanted: Vec<PathBuf>) {
-        let in_root =
-            |s: &Slot| s.from_folder && s.path.as_deref().and_then(Path::parent) == Some(root);
+        let in_root = |s: &Slot| {
+            s.is_folder_image() && s.path.as_deref().and_then(Path::parent) == Some(root)
+        };
         let active_id = self.slots[self.active].id;
         let mut at = self.slots.iter().position(in_root);
         let mut kept = HashMap::new();
@@ -114,7 +115,7 @@ impl VwApp {
                 rest.pop();
             }
             rest.iter()
-                .rposition(|s| s.folder.is_some() || s.sequence.is_some())
+                .rposition(|s| s.folder().is_some() || s.sequence.is_some())
                 .map_or(0, |i| i + 1)
         });
         let mut new = Vec::with_capacity(wanted.len());
@@ -125,7 +126,7 @@ impl VwApp {
                 None => {
                     let mut slot = Slot::new(self.next_id);
                     self.next_id += 1;
-                    slot.from_folder = true;
+                    slot.origin = Origin::FolderImage;
                     loads.push((slot.id, path));
                     new.push(slot);
                 }

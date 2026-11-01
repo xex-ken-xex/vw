@@ -24,7 +24,7 @@ impl VwApp {
             .iter()
             .map(|s| SlotView {
                 id: s.id,
-                shown: s.shown.is_some(),
+                shown: s.shown().is_some(),
                 loading: s.loading,
             })
             .collect();
@@ -37,7 +37,7 @@ impl VwApp {
     fn metadata_found(&mut self) -> Option<Vec<meta_view::Group>> {
         let lang = self.lang();
         let index = self.metadata_slot()?;
-        let shown = self.slots[index].shown.as_ref()?;
+        let shown = self.slots[index].shown()?;
         let info = &shown.info;
         let row =
             |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
@@ -376,7 +376,7 @@ impl VwApp {
         if let Some(action) = tag_action {
             let image = self
                 .metadata_slot()
-                .and_then(|i| self.slots[i].shown.as_ref())
+                .and_then(|i| self.slots[i].shown())
                 .map(|s| s.path.clone());
             if let Some(image) = image {
                 self.tag_action(&ctx, &image, action);

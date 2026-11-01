@@ -12,7 +12,7 @@ use crate::loader::Job;
 use crate::settings_ui::fps_input;
 use crate::slideshow::{self, Clock, EndMode, Frame, Playback};
 use crate::tree::{self};
-use crate::viewer::{SequenceKind, Shown};
+use crate::viewer::{Content, SequenceKind, Shown};
 
 use super::*;
 
@@ -195,13 +195,12 @@ impl VwApp {
         s.path = Some(frame.path.clone());
         s.request = request;
         s.loading = false;
-        s.error = None;
         s.full_request = None;
         s.copy_when_full = false;
         if let Some(seq) = &mut s.sequence {
             seq.index = position;
         }
-        s.shown = Some(Shown {
+        s.content = Content::Image(Shown {
             path: frame.path,
             thumb: frame.texture,
             info: frame.info,

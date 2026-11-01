@@ -37,7 +37,7 @@ impl VwApp {
         let candidates: Vec<Candidate> = order
             .filter_map(|i| {
                 let s = &self.slots[i];
-                let shown = s.shown.as_ref()?;
+                let shown = s.shown()?;
                 Some(Candidate {
                     slot: s.id,
                     name: compare::file_name(&shown.path),
@@ -161,7 +161,7 @@ impl VwApp {
             .map(|c| c.slot)
             .collect();
         for s in self.slots.iter_mut().filter(|s| ids.contains(&s.id)) {
-            if s.shown.as_ref().is_some_and(|sh| sh.full.is_none()) && s.full_request.is_none() {
+            if s.shown().is_some_and(|sh| sh.full.is_none()) && s.full_request.is_none() {
                 request_full(&self.loader, &self.color_rules, &mut self.next_id, s);
             }
         }
@@ -198,7 +198,7 @@ impl VwApp {
                 continue;
             };
             let slot = &self.slots[index];
-            let Some(shown) = &slot.shown else {
+            let Some(shown) = slot.shown() else {
                 continue;
             };
             if let Some((path, image)) = self.slot_copy_image(index) {
@@ -265,7 +265,7 @@ impl VwApp {
                 let s = self.slots.iter().find(|s| s.id == g)?;
                 Some(Candidate {
                     slot: g,
-                    name: compare::file_name(&s.shown.as_ref()?.path),
+                    name: compare::file_name(&s.shown()?.path),
                     chosen: true,
                 })
             })

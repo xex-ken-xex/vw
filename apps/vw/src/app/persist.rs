@@ -117,12 +117,7 @@ impl VwApp {
         self.color_settings = self.settings().pipeline.clone();
         self.color_rules = Arc::new(crate::colormap::Rules::new(&self.color_settings));
         let gray: Vec<usize> = (0..self.slots.len())
-            .filter(|&i| {
-                self.slots[i]
-                    .shown
-                    .as_ref()
-                    .is_some_and(|d| d.info.look.is_some())
-            })
+            .filter(|&i| self.slots[i].shown().is_some_and(|d| d.info.look.is_some()))
             .collect();
         for index in gray {
             self.reload_slot(index);
@@ -131,7 +126,7 @@ impl VwApp {
 
     /// スロットの表示中の画像を、同じ大きさのまま読み直す（色の表や黒と白を変えたとき）。
     pub(super) fn reload_slot(&mut self, index: usize) {
-        let Some(shown) = &self.slots[index].shown else {
+        let Some(shown) = self.slots[index].shown() else {
             return;
         };
         let path = shown.path.clone();
@@ -146,7 +141,7 @@ impl VwApp {
             .slots
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.shown.as_ref().is_some_and(|d| d.info.plugin == "FITS"))
+            .filter(|(_, s)| s.shown().is_some_and(|d| d.info.plugin == "FITS"))
             .filter_map(|(i, s)| Some((i, s.path.clone()?)))
             .collect();
         for (index, path) in fits {
@@ -166,7 +161,7 @@ impl VwApp {
                 crate::viewer::set_texture_options(texture, options);
             }
         }
-        for shown in self.slots.iter_mut().filter_map(|s| s.shown.as_mut()) {
+        for shown in self.slots.iter_mut().filter_map(|s| s.shown_mut()) {
             crate::viewer::set_texture_options(&mut shown.thumb, options);
             if let Some(full) = &mut shown.full {
                 crate::viewer::set_texture_options(&mut full.texture, options);

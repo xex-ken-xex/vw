@@ -39,7 +39,7 @@ impl Default for QrReading {
 impl VwApp {
     /// アクティブなスロットに表示中の画像の QR コードを読む。
     pub(super) fn read_qr_codes_active(&mut self, ctx: &egui::Context) {
-        match self.slots.get(self.active).and_then(|s| s.shown.as_ref()) {
+        match self.slots.get(self.active).and_then(|s| s.shown()) {
             Some(shown) => {
                 let path = shown.path.clone();
                 self.read_qr_codes(ctx, path);

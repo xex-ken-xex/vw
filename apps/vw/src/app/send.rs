@@ -254,8 +254,7 @@ impl VwApp {
         {
             return seq.paths.clone();
         }
-        slot.shown
-            .as_ref()
+        slot.shown()
             .map(|s| vec![frames::file_of(&s.path)])
             .unwrap_or_default()
     }
