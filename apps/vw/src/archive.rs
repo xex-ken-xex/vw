@@ -545,8 +545,8 @@ fn extract(
         total_size(archive, password)
     };
     let free = free_space(dir);
-    if let (Some(size), Some(free)) = (declared, free) {
-        if size > free {
+    if let (Some(size), Some(free)) = (declared, free)
+        && size > free {
             return Err(ArchiveError::Other(format!(
                 "needs {} but only {} is free in {}",
                 gib(size),
@@ -554,12 +554,10 @@ fn extract(
                 dir.display()
             )));
         }
-    }
-    if let (Some(size), Some(limit)) = (declared, budget.limit) {
-        if size > limit {
+    if let (Some(size), Some(limit)) = (declared, budget.limit)
+        && size > limit {
             return Err(budget.refuse(Some(size)));
         }
-    }
     let total = if streamed {
         std::fs::metadata(archive).ok().map(|m| m.len())
     } else {

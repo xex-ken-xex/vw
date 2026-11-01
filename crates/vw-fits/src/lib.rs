@@ -329,12 +329,11 @@ fn decode_with(
         pixels = calibration.calibrate(path, &get, pattern.is_some(), pixels, &mut calibrated);
     }
     let mut color = ColorModel::Gray;
-    if options.demosaic && image.planes == 1 {
-        if let Some(pattern) = pattern {
+    if options.demosaic && image.planes == 1
+        && let Some(pattern) = pattern {
             pixels = demosaic(pixels, w, h, pattern);
             color = ColorModel::Rgb;
         }
-    }
     let mut img = VwImage::new(w as u32, h as u32, color, pixels).map_err(DecodeError::Invalid)?;
     let flipped = bottom_up(image.hdu, options.flip_rows);
     if flipped {

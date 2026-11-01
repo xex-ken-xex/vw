@@ -121,11 +121,10 @@ impl VwApp {
                 .collect();
             meta_view::Group::new(g, shown_name(lang, g, g), rows)
         }));
-        if let Some(row) = self.place_row(&entries) {
-            if let Some(group) = groups.iter_mut().find(|g| g.id == vw_core::exif::LOCATION) {
+        if let Some(row) = self.place_row(&entries)
+            && let Some(group) = groups.iter_mut().find(|g| g.id == vw_core::exif::LOCATION) {
                 group.rows.push(row);
             }
-        }
         Some(groups)
     }
 
@@ -389,12 +388,11 @@ impl VwApp {
         if let Some(edit) = edit {
             self.metadata_edit(&ctx, edit);
         }
-        if let Some(c) = copy {
-            if let Some(text) = copy::metadata_text(&copy_groups(&groups), &c) {
+        if let Some(c) = copy
+            && let Some(text) = copy::metadata_text(&copy_groups(&groups), &c) {
                 let what = selection_name(&c);
                 self.copy_text(&ctx, text, &format!("metadata {what}"));
             }
-        }
     }
 
     /// 右クリックで選んだ、表示の設定の変更を当てて保存する。

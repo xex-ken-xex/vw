@@ -281,12 +281,11 @@ fn toolbar(
             g.remove(&chosen);
             w.selected.clear();
             outcome.save = true;
-        } else if key_delete {
-            if let Some((a, b)) = w.edge.take() {
+        } else if key_delete
+            && let Some((a, b)) = w.edge.take() {
                 g.remove_edge(&a, &b);
                 outcome.save = true;
             }
-        }
     });
     let Some(g) = graphs
         .iter()
@@ -453,11 +452,10 @@ fn canvas(
             painter.galley(rect.min + vec2(4.0, 2.0), galley, color);
         }
     }
-    if let Some(from) = w.connecting.as_ref().and_then(|n| center(n)) {
-        if let Some(h) = hover {
+    if let Some(from) = w.connecting.as_ref().and_then(|n| center(n))
+        && let Some(h) = hover {
             painter.line_segment([from, h], Stroke::new(1.5, visuals.selection.stroke.color));
         }
-    }
 
     let mut clicked_person = false;
     let mut drag_by = None;

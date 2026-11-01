@@ -302,14 +302,13 @@ impl Store {
         {
             return Ok((pc.id, header.transfer_syntax.clone()));
         }
-        if is_native(&header.transfer_syntax) {
-            if let Some(pc) = accepted
+        if is_native(&header.transfer_syntax)
+            && let Some(pc) = accepted
                 .iter()
                 .find(|pc| is_native(trim_uid(&pc.transfer_syntax)))
             {
                 return Ok((pc.id, trim_uid(&pc.transfer_syntax).to_owned()));
             }
-        }
         let name = transfer_syntax(&header.transfer_syntax)
             .map_or(String::new(), |ts| format!("{} ", ts.name()));
         Err(SendError::File(format!(

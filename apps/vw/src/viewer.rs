@@ -1673,8 +1673,8 @@ impl Slot {
         if let (Some(g), Some(applied)) = (
             &gauge,
             self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
-        ) {
-            if (applied.palette.is_some() || g.on_gray) && crate::colormap_ui::fits(body, g.side) {
+        )
+            && (applied.palette.is_some() || g.on_gray) && crate::colormap_ui::fits(body, g.side) {
                 let inverted = self.shown.as_ref().is_some_and(|s| {
                     self.derive
                         .as_ref()
@@ -1705,7 +1705,6 @@ impl Slot {
                     None => {}
                 }
             }
-        }
         if bar_height > 0.0 {
             self.derive_overlay(ui, body, lang);
             self.derive_bar(ui, bar, lang, presets, &mut out);

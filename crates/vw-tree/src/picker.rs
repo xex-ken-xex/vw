@@ -120,11 +120,10 @@ impl Picker {
                     return None;
                 }
                 let mut p = self.folder.clone()?.join(name);
-                if p.extension().is_none() {
-                    if let Some(ext) = extensions.first() {
+                if p.extension().is_none()
+                    && let Some(ext) = extensions.first() {
                         p.set_extension(ext);
                     }
-                }
                 Some(p)
             }
         }
@@ -203,11 +202,10 @@ impl Picker {
                                             }
                                             self.file = Some(f);
                                         }
-                                        if let Some(f) = double {
-                                            if matches!(self.mode, Mode::OpenFile { .. }) {
+                                        if let Some(f) = double
+                                            && matches!(self.mode, Mode::OpenFile { .. }) {
                                                 outcome = Outcome::Chosen(f);
                                             }
-                                        }
                                     });
                             },
                         );
@@ -229,11 +227,9 @@ impl Picker {
                     if ui
                         .add_enabled(choice.is_some(), egui::Button::new(&self.labels.choose))
                         .clicked()
-                    {
-                        if let Some(p) = choice {
+                        && let Some(p) = choice {
                             outcome = Outcome::Chosen(p);
                         }
-                    }
                     if ui.button(&self.labels.cancel).clicked() {
                         outcome = Outcome::Cancelled;
                     }

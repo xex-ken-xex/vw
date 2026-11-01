@@ -832,9 +832,9 @@ impl Dock {
                 });
                 self.note(format!("resize start in {window:?} at {:?}", d.path));
             }
-            if response.dragged() {
-                if let (Some(pointer), Some(r)) = (response.interact_pointer_pos(), &self.resize) {
-                    if r.window == window && r.divider.path == d.path {
+            if response.dragged()
+                && let (Some(pointer), Some(r)) = (response.interact_pointer_pos(), &self.resize)
+                    && r.window == window && r.divider.path == d.path {
                         let ratio = tree::ratio_at(&r.divider, pointer);
                         if let Some(Some(Node::Split { ratio: old, .. })) = self
                             .root_mut(window)
@@ -843,8 +843,6 @@ impl Dock {
                             *old = ratio;
                         }
                     }
-                }
-            }
             if response.drag_stopped() {
                 let ratio = match self
                     .root_mut(window)
@@ -1044,12 +1042,11 @@ impl Dock {
                 "  window #{} shrunk to a chip {CHIP:?} (was {full:?})",
                 f.id
             ));
-        } else if !over_window {
-            if let Some(full) = drag.shrunk.take() {
+        } else if !over_window
+            && let Some(full) = drag.shrunk.take() {
                 ctx.send_viewport_cmd_to(viewport, ViewportCommand::InnerSize(full));
                 line = Some(format!("  window #{} back to {full:?}", f.id));
             }
-        }
         let to = if drag.shrunk.is_some() {
             drag.screen + CHIP_OFFSET * f.ppp - f.frame
         } else {
@@ -1126,14 +1123,13 @@ impl Dock {
             }
             return;
         };
-        if let Some(id) = drag.float {
-            if let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
+        if let Some(id) = drag.float
+            && let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
                 tree::remove(&mut f.root, &drag.pane);
                 if f.root.is_none() {
                     f.close = true;
                 }
             }
-        }
         if let Some(root) = self.root_mut(window) {
             tree::insert(root, &drag.pane, &button.target);
         }
@@ -1152,12 +1148,11 @@ impl Dock {
         };
         match drag.origin {
             Some(back) => {
-                if let Some(id) = drag.float {
-                    if let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
+                if let Some(id) = drag.float
+                    && let Some(f) = self.floats.iter_mut().find(|f| f.id == id) {
                         f.close = true;
                         f.root = None;
                     }
-                }
                 self.event(format!(
                     "drag cancelled (Esc): {} back to {back:?}",
                     drag.pane
@@ -1267,8 +1262,8 @@ impl Dock {
                     i.viewport().monitor_size,
                 )
             });
-            if let Some(inner) = inner {
-                if this.logged_rects.get(&w) != Some(&inner) {
+            if let Some(inner) = inner
+                && this.logged_rects.get(&w) != Some(&inner) {
                     this.logged_rects.insert(w, inner);
                     lines.push(format!(
                         "{w:?} inner rect {:?} size {:?}",
@@ -1276,7 +1271,6 @@ impl Dock {
                         inner.size()
                     ));
                 }
-            }
             if this.logged_ppp.get(&w) != Some(&(ppp, monitor)) {
                 this.logged_ppp.insert(w, (ppp, monitor));
                 lines.push(format!("{w:?} pixels per point {ppp}, monitor {monitor:?}"));

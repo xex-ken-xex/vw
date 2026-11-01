@@ -307,11 +307,10 @@ fn metadata(
         let bits: Vec<String> = bits.iter().map(u16::to_string).collect();
         m.push("TIFF", "Bits per sample", bits.join(", "));
     }
-    if let Ok(Some(formats)) = decoder.find_tag_unsigned_vec::<u16>(Tag::SampleFormat) {
-        if let Some(&f) = formats.first() {
+    if let Ok(Some(formats)) = decoder.find_tag_unsigned_vec::<u16>(Tag::SampleFormat)
+        && let Some(&f) = formats.first() {
             m.push("TIFF", "Sample format", sample_format(f));
         }
-    }
     if let (Some(w), Some(h)) = (
         unsigned(decoder, Tag::TileWidth),
         unsigned(decoder, Tag::TileLength),

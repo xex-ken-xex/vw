@@ -230,11 +230,10 @@ impl DatasetsScreen {
     }
 
     fn finish(&mut self, index: Index) {
-        if let Some(dir) = &self.selected {
-            if !index.entries.iter().any(|e| &e.dir == dir) {
+        if let Some(dir) = &self.selected
+            && !index.entries.iter().any(|e| &e.dir == dir) {
                 self.selected = None;
             }
-        }
         self.index = Some(index);
         self.searched = None;
         self.generation += 1;
@@ -384,11 +383,10 @@ impl DatasetsScreen {
                     action = Some(Action::Update(shown));
                 }
             });
-            if self.advanced {
-                if let Some(a) = self.conditions_ui(ui, lang, &field_names, groups) {
+            if self.advanced
+                && let Some(a) = self.conditions_ui(ui, lang, &field_names, groups) {
                     action = Some(a);
                 }
-            }
             ui.add_space(4.0);
         });
         let mut group_by = self.group_by.clone();
@@ -537,8 +535,7 @@ impl DatasetsScreen {
                             });
                         } else if let (Target::Meta { kind, key }, Some(index)) =
                             (&c.target, &self.index)
-                        {
-                            if !key.trim().is_empty() {
+                            && !key.trim().is_empty() {
                                 ui.push_id(("dataset-values", i), |ui| {
                                     // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
                                     vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
@@ -547,7 +544,6 @@ impl DatasetsScreen {
                                     });
                                 });
                             }
-                        }
                     }
                 }
                 if ui.button(icon::X).clicked() {
@@ -829,8 +825,8 @@ impl DatasetsScreen {
                         action = Some(Action::Send(entry.dir.clone(), hits.clone(), choice));
                     }
                 });
-                if let Some(hits) = &hits {
-                    if ui
+                if let Some(hits) = &hits
+                    && ui
                         .button(tr1(
                             lang,
                             "Show the {} files found",
@@ -844,7 +840,6 @@ impl DatasetsScreen {
                     {
                         action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
                     }
-                }
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, "Edit...")).clicked() {
                         action = Some(Action::Edit(entry.dir.clone()));

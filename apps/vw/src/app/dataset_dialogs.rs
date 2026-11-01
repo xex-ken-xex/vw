@@ -102,13 +102,11 @@ impl VwApp {
         if modal.should_close() && answer.is_none() {
             answer = Some(false);
         }
-        if let Some(update) = answer {
-            if let Some(outer) = self.outer_to_update.take() {
-                if update {
+        if let Some(update) = answer
+            && let Some(outer) = self.outer_to_update.take()
+                && update {
                     self.open_dataset_dialog(ctx, crate::dataset_ui::Request::Update(outer));
                 }
-            }
-        }
     }
 
     /// 開いたフォルダのデータセットの登録が途中で止まっていれば、続きから読むか聞く。
@@ -145,15 +143,14 @@ impl VwApp {
         if modal.should_close() && answer.is_none() {
             answer = Some(false);
         }
-        if let Some(resume) = answer {
-            if let Some((dir, _)) = self.resume_offer.take() {
+        if let Some(resume) = answer
+            && let Some((dir, _)) = self.resume_offer.take() {
                 if resume {
                     self.open_dataset_dialog(ctx, crate::dataset_ui::Request::Resume(dir));
                 } else {
                     self.resume_declined.push(dir);
                 }
             }
-        }
     }
 
     /// Datasets 画面から、データセット `dir` の検索で当たったファイル（カタログのパス）だけを

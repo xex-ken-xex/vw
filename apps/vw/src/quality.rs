@@ -177,12 +177,11 @@ impl Evaluation {
     /// 同時に 2 つは走らせない。求めている間に条件が変わっても、届いた次のフレームに
     /// そのときの条件で求め直すので、ここで覚えておく必要はない。
     pub fn update(&mut self, ctx: &egui::Context, input: Option<&Input<'_>>) {
-        if let Some((key, rx)) = &self.computing {
-            if let Ok(report) = rx.try_recv() {
+        if let Some((key, rx)) = &self.computing
+            && let Ok(report) = rx.try_recv() {
                 self.report = Some((key.clone(), report));
                 self.computing = None;
             }
-        }
         let Some(input) = input else {
             self.clear();
             return;

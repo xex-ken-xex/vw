@@ -316,11 +316,10 @@ struct Plan<'a> {
 
 /// バイアスのマスターか、なければ定数のオフセット。
 fn offset_for<'a>(of: &Frame, frames: &'a [Frame], o: &Options, pick: Option<&Path>) -> Offset<'a> {
-    if o.use_bias {
-        if let Ok(b) = select::biases(of, frames, o) {
+    if o.use_bias
+        && let Ok(b) = select::biases(of, frames, o) {
             return Offset::Frame(Choice::pick(b, pick));
         }
-    }
     o.synthetic_bias.map_or(Offset::None, Offset::Constant)
 }
 
@@ -352,8 +351,8 @@ fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options, picks: &Picks) -> O
         offset: Offset::None,
         flat: None,
     };
-    if o.use_dark {
-        if let Ok(d) = select::dark(light, frames, o, pick(Role::Dark)) {
+    if o.use_dark
+        && let Ok(d) = select::dark(light, frames, o, pick(Role::Dark)) {
             let ratio = match (light.exposure, d.frame.exposure) {
                 (Some(l), Some(e)) if e > 0.0 && o.dark_scaling == DarkScaling::Exposure => l / e,
                 _ => 1.0,
@@ -369,7 +368,6 @@ fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options, picks: &Picks) -> O
                 }
             }
         }
-    }
     if plan.dark.is_none() {
         plan.offset = match offset_for(light, frames, o, pick(Role::Bias)) {
             // ダークもバイアスもなければ、定数だけ引いてもフラットの補正にしかならない。
@@ -380,12 +378,11 @@ fn plan<'a>(light: &Frame, frames: &'a [Frame], o: &Options, picks: &Picks) -> O
     // ライトから何も引けないのにフラットで割ると、センサーの土台（バイアス）まで割られて、
     // 周辺減光が逆向きに付く。フラットはライトから何か引けるときだけ当てる。
     let subtracted = plan.dark.is_some() || plan.offset != Offset::None;
-    if o.use_flat && subtracted {
-        if let Ok(f) = select::flat(light, frames, o, pick(Role::Flat)) {
+    if o.use_flat && subtracted
+        && let Ok(f) = select::flat(light, frames, o, pick(Role::Flat)) {
             let offset = flat_offset(f.frame, frames, o, pick(Role::FlatDark));
             plan.flat = Some((f, offset));
         }
-    }
     let nothing = plan.dark.is_none() && plan.flat.is_none() && plan.offset == Offset::None;
     (!nothing).then_some(plan)
 }
@@ -399,11 +396,10 @@ fn can_subtract(light: &Frame, frames: &[Frame], o: &Options) -> bool {
 /// 当てられなかったわけ（種類ごと）。
 fn reasons(light: &Frame, frames: &[Frame], o: &Options) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
-    if o.use_dark {
-        if let Err(e) = select::dark(light, frames, o, None) {
+    if o.use_dark
+        && let Err(e) = select::dark(light, frames, o, None) {
             out.push(("Dark", e));
         }
-    }
     if o.use_flat {
         match select::flat(light, frames, o, None) {
             Err(e) => out.push(("Flat", e)),

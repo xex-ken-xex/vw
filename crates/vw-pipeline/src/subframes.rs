@@ -199,12 +199,11 @@ fn matches(r: &[[f64; 2]], o: &[[f64; 2]], m: &Map) -> Vec<(usize, usize)> {
             .filter(|(k, _)| !used[*k])
             .map(|(k, s)| (distance(q, *s), k))
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((d, k)) = nearest {
-            if d <= MATCH_PIXELS {
+        if let Some((d, k)) = nearest
+            && d <= MATCH_PIXELS {
                 used[k] = true;
                 out.push((i, k));
             }
-        }
     }
     out
 }
@@ -288,24 +287,21 @@ pub fn reasons(evaluations: &[Evaluation], limits: Limits) -> Vec<Vec<Reason>> {
             if e.stars == 0 {
                 out.push(Reason::NoStars);
             }
-            if let (Some(f), Some(m)) = (e.fwhm, fwhm) {
-                if f > m * limits.fwhm_ratio {
+            if let (Some(f), Some(m)) = (e.fwhm, fwhm)
+                && f > m * limits.fwhm_ratio {
                     out.push(Reason::Blurred);
                 }
-            }
             if e.eccentricity.is_some_and(|x| x > limits.eccentricity) {
                 out.push(Reason::Elongated);
             }
-            if let Some(m) = stars {
-                if e.stars > 0 && (e.stars as f32) < m * limits.stars_ratio {
+            if let Some(m) = stars
+                && e.stars > 0 && (e.stars as f32) < m * limits.stars_ratio {
                     out.push(Reason::FewStars);
                 }
-            }
-            if let (Some(b), Some(n)) = (background, noise) {
-                if e.background > b + limits.background_sigmas * n.max(f32::EPSILON) {
+            if let (Some(b), Some(n)) = (background, noise)
+                && e.background > b + limits.background_sigmas * n.max(f32::EPSILON) {
                     out.push(Reason::BrightSky);
                 }
-            }
             out
         })
         .collect()

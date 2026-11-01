@@ -129,7 +129,8 @@ impl VwApp {
         let step = pb.clock.advance(now);
         let mut show = None;
         if !pb.clock.shown() {
-            if let Some(frame) = pb.cache.get(&step.index).cloned() {
+            let cached = pb.cache.get(&step.index).cloned();
+            if let Some(frame) = cached {
                 pb.clock.mark_shown();
                 show = Some(frame);
             } else if pb.failed.contains(&step.index) {

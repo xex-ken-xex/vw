@@ -45,8 +45,8 @@ impl Index {
     /// `light` の近くとライブラリにある FITS の、ヘッダから読んだ情報。
     pub fn frames_near(&mut self, light: &Path, places: &Places) -> Vec<Frame> {
         let mut roots: Vec<(PathBuf, usize)> = Vec::new();
-        if places.nearby {
-            if let Some(dir) = light.parent() {
+        if places.nearby
+            && let Some(dir) = light.parent() {
                 // ライトと同じフォルダと、その親に直に置いたマスターも見る。
                 roots.push((dir.to_path_buf(), 0));
                 if let Some(parent) = dir.parent() {
@@ -61,7 +61,6 @@ impl Index {
                     }
                 }
             }
-        }
         for lib in places.library {
             roots.push((lib.clone(), LIBRARY_DEPTH));
         }
@@ -135,11 +134,10 @@ impl Index {
         let meta = std::fs::metadata(path).ok()?;
         let modified = meta.modified().ok();
         let len = meta.len();
-        if let Some(c) = self.files.get(path) {
-            if c.modified.is_some() && c.modified == modified && c.len == len {
+        if let Some(c) = self.files.get(path)
+            && c.modified.is_some() && c.modified == modified && c.len == len {
                 return c.frame.clone();
             }
-        }
         let frame = crate::header_of_file(path)
             .ok()
             .flatten()

@@ -433,8 +433,8 @@ impl Session {
             Err(std::sync::mpsc::TryRecvError::Empty) => true,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
         });
-        if let Some(rx) = &self.reanalysis {
-            if let Ok(results) = rx.try_recv() {
+        if let Some(rx) = &self.reanalysis
+            && let Ok(results) = rx.try_recv() {
                 self.reanalysis = None;
                 let grid = self.grid_size();
                 for (i, a) in results {
@@ -452,7 +452,6 @@ impl Session {
                     }));
                 }
             }
-        }
     }
 
     fn grid_size(&self) -> [usize; 2] {
@@ -678,24 +677,20 @@ impl Session {
                 .add_enabled(ready, egui::Button::new(tr(lang, "Copy view")))
                 .on_hover_text(tr(lang, "Copy the whole picture of the current view as an image."))
                 .clicked()
-            {
-                if let Some(img) = self.view_image() {
+                && let Some(img) = self.view_image() {
                     let what = format!("comparison view ({}x{})", img.size[0], img.size[1]);
                     out.push(Command::CopyImage(img, what));
                 }
-            }
             if ui
                 .add_enabled(ready, egui::Button::new(tr(lang, "Copy values")))
                 .on_hover_text(tr(lang, "Copy the values as a table to paste into a spreadsheet."))
                 .clicked()
-            {
-                if let Some(r) = self.report() {
+                && let Some(r) = self.report() {
                     out.push(Command::CopyText(
                         r.tsv(labels(lang)),
                         "comparison values".to_owned(),
                     ));
                 }
-            }
             if ui
                 .add_enabled(ready, egui::Button::new(tr(lang, "Write report...")))
                 .on_hover_text(tr(lang, "Write an HTML report with the images, and a CSV of the values beside it."))
@@ -739,7 +734,7 @@ impl Session {
     }
 
     /// 基準の画素 → 画面の写し方（`tile` の中、今の拡大とパン）。
-    fn to_screen(&self, tile: Rect) -> impl Fn([f64; 2]) -> Pos2 + Copy {
+    fn to_screen(&self, tile: Rect) -> impl Fn([f64; 2]) -> Pos2 + Copy + use<> {
         let [w, h] = self.entries[0].size;
         let fit = crate::viewer::fit_scale(tile.size(), vec2(w as f32, h as f32));
         let scale = f64::from(fit * self.zoom);
@@ -807,12 +802,11 @@ impl Session {
                     .interact_pointer_pos()
                     .is_some_and(|p| (p.x - x).abs() < 8.0);
             }
-            if self.dragging_swipe {
-                if let Some(p) = response.interact_pointer_pos() {
+            if self.dragging_swipe
+                && let Some(p) = response.interact_pointer_pos() {
                     self.swipe =
                         ((p.x - hovered_tile.min.x) / hovered_tile.width()).clamp(0.0, 1.0);
                 }
-            }
             if response.drag_stopped() {
                 self.dragging_swipe = false;
             }

@@ -1197,11 +1197,10 @@ impl eframe::App for VwApp {
                     self.log.error(line);
                 }
             }
-            if r.open_file {
-                if let Err(e) = self.settings.open_in_editor() {
+            if r.open_file
+                && let Err(e) = self.settings.open_in_editor() {
                     self.log.error(format!("Settings: cannot open file: {e}"));
                 }
-            }
             if r.open_log_folder {
                 self.open_log_folder();
             }

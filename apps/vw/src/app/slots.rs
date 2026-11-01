@@ -455,11 +455,10 @@ impl VwApp {
         if self.settings().viewer.develop_raw {
             self.develop_slot(index);
         }
-        if let Some((dir, note)) = calibration_note {
-            if self.calibration_logged.insert(dir) {
+        if let Some((dir, note)) = calibration_note
+            && self.calibration_logged.insert(dir) {
                 self.log.info(note);
             }
-        }
     }
 
     /// フル解像度の画像をスロットに持たせる。上限を超えるときは持たずに縮小画像のままにする
@@ -1073,26 +1072,22 @@ impl VwApp {
             if resp.keep_in_group {
                 self.keep_in_group(i);
             }
-            if resp.read_qr {
-                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+            if resp.read_qr
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.read_qr_codes(ui.ctx(), path);
                 }
-            }
-            if resp.ai_tag {
-                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+            if resp.ai_tag
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.ai_tag_paths(ui.ctx(), vec![path]);
                 }
-            }
-            if resp.remove_ai_tags {
-                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+            if resp.remove_ai_tags
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.remove_ai_tags(vec![crate::frames::file_of(&path).to_path_buf()]);
                 }
-            }
-            if resp.find_faces {
-                if let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
+            if resp.find_faces
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
                     self.find_faces_paths(ui.ctx(), vec![path]);
                 }
-            }
             if let Some((path, action)) = resp.face {
                 let file = crate::frames::file_of(&path);
                 match action {
@@ -1110,11 +1105,10 @@ impl VwApp {
                 analysis_open && (i == self.active || is_reference) || deep_target == Some(i);
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
-            if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut()) {
-                if resp.wants_full || pipeline_wants {
+            if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut())
+                && (resp.wants_full || pipeline_wants) {
                     full.last_used = self.frame;
                 }
-            }
             if resp.clicked {
                 self.active = i;
                 self.set_focus(ui.ctx(), Focus::Images);
