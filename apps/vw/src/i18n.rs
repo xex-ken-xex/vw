@@ -2834,6 +2834,19 @@ const JA: &[(&str, &str)] = &[
     ("Bright part", "明るい所"),
     ("Drawn", "描き方"),
     ("Left/Right: change, Esc: close", "← →: 変える、Esc: 閉じる"),
+    // フォーマット異常のファイルの補修
+    (
+        "Read files with format errors",
+        "フォーマット異常のファイルを無理やり読む",
+    ),
+    (
+        "TIFF: missing StripByteCounts",
+        "TIFF: StripByteCounts なし",
+    ),
+    (
+        "Read uncompressed TIFF files that omit the required StripByteCounts tag (some industrial CT projections), taking the strip size from width x height x bits. These files break the format, so a reader can misbehave on them: turn this on at your own risk. Off: such files fail to open and the log names this setting.",
+        "必須の StripByteCounts タグがない無圧縮の TIFF（産業用 CT の投影像など）を、幅 × 高さ × ビット数から大きさを補って読みます。フォーマットとして異常なファイルなので、読む側が誤動作するおそれがあります。自己責任で ON にしてください。OFF のときは開けず、ログにこの設定を案内します。",
+    ),
 ];
 
 #[cfg(test)]

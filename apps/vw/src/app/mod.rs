@@ -669,6 +669,7 @@ impl VwApp {
         fits.set(settings.settings.fits.options());
         calibration.set_options(settings.settings.fits.calibration.options());
         vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
+        vw_tiff::set_repair_strip_byte_counts(settings.settings.repair.tiff_strip_byte_counts);
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
         tree.restore_open(&saved.open_folders, &registry);
 

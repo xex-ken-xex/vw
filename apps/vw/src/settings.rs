@@ -2474,6 +2474,27 @@ impl SubframesSettings {
     }
 }
 
+/// 形式に反したファイルを、分かる範囲で補って読む。既定はすべて OFF。
+/// 読めないときはログに、どの項目を ON にすれば読めるかを出す。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Repair {
+    /// 無圧縮なのに StripByteCounts のない TIFF（産業用 CT の投影像など）を、
+    /// 幅 × 高さ × ビット数から大きさを補って読む。
+    pub tiff_strip_byte_counts: bool,
+}
+
+impl Repair {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("repair");
+        Self {
+            tiff_strip_byte_counts: r
+                .get("tiff_strip_byte_counts")
+                .unwrap_or(d.tiff_strip_byte_counts),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Settings {
     pub appearance: Appearance,
@@ -2499,6 +2520,7 @@ pub struct Settings {
     pub map: MapSettings,
     pub sky: SkySettings,
     pub subframes: SubframesSettings,
+    pub repair: Repair,
     pub keys: Keymap,
 }
 
@@ -2533,6 +2555,7 @@ impl Settings {
         let map = MapSettings::read(&mut r);
         let sky = SkySettings::read(&mut r);
         let subframes = SubframesSettings::read(&mut r);
+        let repair = Repair::read(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -2568,6 +2591,7 @@ impl Settings {
                 map,
                 sky,
                 subframes,
+                repair,
                 keys,
             },
             problems,

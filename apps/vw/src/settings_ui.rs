@@ -47,11 +47,12 @@ enum Section {
     Ai,
     Map,
     Sky,
+    Repair,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 20] = [
+    const ALL: [Section; 21] = [
         Section::Appearance,
         Section::Viewer,
         Section::Display,
@@ -71,6 +72,7 @@ impl Section {
         Section::Ai,
         Section::Map,
         Section::Sky,
+        Section::Repair,
         Section::Keys,
     ];
 
@@ -95,6 +97,7 @@ impl Section {
             Section::Ai => "AI tags",
             Section::Map => "Map",
             Section::Sky => "Sky chart",
+            Section::Repair => "Read files with format errors",
             Section::Keys => "Keyboard shortcuts",
         }
     }
@@ -986,6 +989,13 @@ const ITEMS: &[Item] = &[
         description: "Dotted frame of images with only the mount position (RA and DEC), sized from FOCALLEN and XPIXSZ with north up, and the cross of images without them (#RRGGBB).",
         widget: sky_approximate_color_widget,
     },
+    Item {
+        section: Section::Repair,
+        key: "repair.tiff_strip_byte_counts",
+        title: "TIFF: missing StripByteCounts",
+        description: "Read uncompressed TIFF files that omit the required StripByteCounts tag (some industrial CT projections), taking the strip size from width x height x bits. These files break the format, so a reader can misbehave on them: turn this on at your own risk. Off: such files fail to open and the log names this setting.",
+        widget: repair_tiff_widget,
+    },
 ];
 
 /// AE タイトルの入力欄。正しくない間は赤枠にして設定に入れない（保存もしない）。
@@ -1161,6 +1171,11 @@ fn face_known_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language)
 
 fn face_unknown_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     hex_color_widget(&mut s.ai.face_unknown_color, Color32::YELLOW, ui)
+}
+
+fn repair_tiff_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.repair.tiff_strip_byte_counts, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn sky_enabled_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
