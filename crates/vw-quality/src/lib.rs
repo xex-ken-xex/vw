@@ -312,11 +312,7 @@ pub fn cnr(img: &Image<'_>, target: Region, background: Region) -> Option<f64> {
 }
 
 fn ratio(num: f64, den: f64) -> f64 {
-    if den == 0.0 {
-        f64::INFINITY
-    } else {
-        num / den
-    }
+    if den == 0.0 { f64::INFINITY } else { num / den }
 }
 
 /// 鮮鋭度 = ラプラシアン（4 近傍）の分散。縁の 1 画素は除く。ぼけるほど小さい。
@@ -666,11 +662,13 @@ mod tests {
         assert_eq!(t.verdict(29.9), Verdict::Caution);
         assert_eq!(t.verdict(19.9), Verdict::Degraded);
         assert_eq!(t.verdict(f64::INFINITY), Verdict::Good);
-        assert!(!Thresholds {
-            good: 1.0,
-            caution: 2.0
-        }
-        .valid());
+        assert!(
+            !Thresholds {
+                good: 1.0,
+                caution: 2.0
+            }
+            .valid()
+        );
         assert_eq!(t.bar(45.0), 1.0);
         assert_eq!(t.bar(0.0), 0.0);
         assert!((t.bar(30.0) - 2.0 / 3.0).abs() < 1e-6);

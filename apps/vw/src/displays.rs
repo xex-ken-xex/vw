@@ -165,20 +165,20 @@ pub fn edid_bits(edid: &[u8]) -> Option<u32> {
 mod platform {
     use super::{Display, System};
     use std::collections::HashMap;
-    use windows_sys::core::BOOL;
     use windows_sys::Win32::Devices::Display::{
-        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
         DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
         DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
         DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO,
         DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
-        DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+        DISPLAYCONFIG_TARGET_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+        QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
     };
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
     };
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows_sys::core::BOOL;
 
     const MONITORINFOF_PRIMARY: u32 = 1;
 
@@ -379,7 +379,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use super::{edid_bits, edid_name, Display, System};
+    use super::{Display, System, edid_bits, edid_name};
     use x11rb::connection::Connection;
     use x11rb::protocol::randr::{ConnectionExt as _, Output};
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};

@@ -15,8 +15,8 @@ use std::time::SystemTime;
 
 use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
+use vw_tree::{Hooks, without_toggle};
 pub use vw_tree::{display_name, entry_is_dir, is_hidden_name, is_recycle_bin};
-use vw_tree::{without_toggle, Hooks};
 
 use crate::i18n::tr;
 use crate::series::{Scan, Series, SeriesIndex, Study};
@@ -804,7 +804,7 @@ pub fn sibling_images(path: &Path, registry: &Registry, order: SortOrder) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{all_registry, png_registry, TempDir};
+    use crate::test_util::{TempDir, all_registry, png_registry};
 
     fn names(nodes: &[Node]) -> Vec<&str> {
         nodes.iter().map(|n| n.name.as_str()).collect()

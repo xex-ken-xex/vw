@@ -63,7 +63,7 @@ fn default_app(ext: &str) -> Option<AssociatedApp> {
 
 #[cfg(windows)]
 fn query(ext: &str, what: windows_sys::Win32::UI::Shell::ASSOCSTR) -> Option<String> {
-    use windows_sys::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_INIT_IGNOREUNKNOWN};
+    use windows_sys::Win32::UI::Shell::{ASSOCF_INIT_IGNOREUNKNOWN, AssocQueryStringW};
     let assoc: Vec<u16> = format!(".{ext}").encode_utf16().chain([0]).collect();
     let mut buf = vec![0u16; 2048];
     let mut len = buf.len() as u32;

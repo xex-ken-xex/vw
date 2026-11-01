@@ -31,9 +31,9 @@ pub use vw_core::Curve;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
 pub use calibration::Calibration;
-pub use header::is_fits;
 use header::Hdu;
-pub use sky::{header_of_file, pixel_map, sky, ImageHeader, Sky};
+pub use header::is_fits;
+pub use sky::{ImageHeader, Sky, header_of_file, pixel_map, sky};
 pub use stretch::Stretch;
 
 /// 表示の決め方。設定画面で変える。
@@ -329,11 +329,13 @@ fn decode_with(
         pixels = calibration.calibrate(path, &get, pattern.is_some(), pixels, &mut calibrated);
     }
     let mut color = ColorModel::Gray;
-    if options.demosaic && image.planes == 1
-        && let Some(pattern) = pattern {
-            pixels = demosaic(pixels, w, h, pattern);
-            color = ColorModel::Rgb;
-        }
+    if options.demosaic
+        && image.planes == 1
+        && let Some(pattern) = pattern
+    {
+        pixels = demosaic(pixels, w, h, pattern);
+        color = ColorModel::Rgb;
+    }
     let mut img = VwImage::new(w as u32, h as u32, color, pixels).map_err(DecodeError::Invalid)?;
     let flipped = bottom_up(image.hdu, options.flip_rows);
     if flipped {

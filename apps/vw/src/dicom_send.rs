@@ -6,9 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use eframe::egui;
 use vw_dicom::net::{self, Endpoint, Header, SendError, Store, Stored};
@@ -391,7 +391,7 @@ fn send_all(endpoint: &Endpoint, items: &[Item], shared: &Shared, events: &Sende
                 failed: 0,
                 cancelled: false,
                 stopped: Some(e),
-            }
+            };
         }
     };
     let (mut sent, mut failed) = (0, 0);

@@ -289,11 +289,12 @@ fn single_frames_without_a_master_are_not_used() {
     let (p, _) = plugin(Options::default());
     let img = open(&p, &light);
     assert_eq!(state(&img), Some(NOT_APPLIED));
-    assert!(img
-        .metadata
-        .get(GROUP, "Dark")
-        .unwrap()
-        .contains("no master"));
+    assert!(
+        img.metadata
+            .get(GROUP, "Dark")
+            .unwrap()
+            .contains("no master")
+    );
 }
 
 #[test]
@@ -506,11 +507,12 @@ fn a_flat_is_not_used_when_nothing_can_be_subtracted_from_the_light_first() {
     let img = open(&p, &light);
     assert_eq!(state(&img), Some(NOT_APPLIED));
     assert_eq!(values(&img)[0], 1100.0);
-    assert!(img
-        .metadata
-        .get(GROUP, "Flat")
-        .unwrap()
-        .contains("subtract"));
+    assert!(
+        img.metadata
+            .get(GROUP, "Flat")
+            .unwrap()
+            .contains("subtract")
+    );
     let (p, _) = plugin(Options {
         synthetic_bias: Some(100.0),
         ..Options::default()

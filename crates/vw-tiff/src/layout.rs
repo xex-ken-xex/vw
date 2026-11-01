@@ -163,28 +163,16 @@ impl Header {
     }
 
     fn count_size(&self) -> usize {
-        if self.big {
-            8
-        } else {
-            2
-        }
+        if self.big { 8 } else { 2 }
     }
 
     fn entry_size(&self) -> usize {
-        if self.big {
-            20
-        } else {
-            12
-        }
+        if self.big { 20 } else { 12 }
     }
 
     /// エントリの先頭から値（4 バイトか 8 バイトに収まる値はそこに直接入る）までの距離。
     fn value_offset(&self) -> usize {
-        if self.big {
-            12
-        } else {
-            8
-        }
+        if self.big { 12 } else { 8 }
     }
 
     fn bytes<const N: usize>(data: &[u8], at: usize) -> Option<[u8; N]> {

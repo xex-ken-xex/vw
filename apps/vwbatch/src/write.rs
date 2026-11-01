@@ -90,7 +90,7 @@ fn png(p: &Picture, depth: png::BitDepth) -> Result<Vec<u8>, String> {
 }
 
 fn tiff(p: &Picture) -> Result<Vec<u8>, String> {
-    use tiff::encoder::{colortype, Compression, TiffEncoder};
+    use tiff::encoder::{Compression, TiffEncoder, colortype};
     // TIFF の書き手には灰色 + アルファの型がないので、そのときは RGBA にする。
     let rgba;
     let p = match p.channels {

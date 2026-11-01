@@ -3,7 +3,7 @@
 //!
 //! ピクセルパイプラインで値を変えているときは、変更前と変更後の縮小図を並べ、同じ枠を両方に出す。
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke, TextureHandle};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, pos2, vec2};
 
 use crate::i18n::tr;
 use crate::settings::Language;

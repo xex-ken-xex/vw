@@ -9,8 +9,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use vw_fits::calibration;
 
 /// 設定ファイルの場所。Windows は `%APPDATA%\vw`、それ以外は XDG の規約に従う。

@@ -1153,11 +1153,12 @@ pub fn apply_keeping(
         }
         let note = node.apply(img).map_err(|e| (i, e))?;
         if let Some((with, without)) = kept.stars.as_mut()
-            && node.tone_only() {
-                for layer in [with, without] {
-                    node.replay(layer, note.as_ref()).map_err(|e| (i, e))?;
-                }
+            && node.tone_only()
+        {
+            for layer in [with, without] {
+                node.replay(layer, note.as_ref()).map_err(|e| (i, e))?;
             }
+        }
         if let Some(note) = note {
             notes.push((i, note));
         }

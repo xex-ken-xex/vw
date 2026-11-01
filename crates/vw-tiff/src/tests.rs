@@ -300,7 +300,7 @@ fn metadata_lists_the_layout_and_the_text_tags_but_not_strip_offsets() {
 
 #[test]
 fn decodes_lzw_compressed_rgb() {
-    use tiff::encoder::{colortype, Compression, TiffEncoder};
+    use tiff::encoder::{Compression, TiffEncoder, colortype};
     let pixels: Vec<u8> = (0..4 * 3 * 3).map(|i| i as u8).collect();
     let mut out = Cursor::new(Vec::new());
     TiffEncoder::new(&mut out)

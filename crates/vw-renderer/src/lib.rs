@@ -10,8 +10,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui_wgpu;
 use eframe::Renderer;
+use eframe::egui_wgpu;
 
 /// 使う描画の方法（`glow` か `wgpu`）。起動し直した子プロセスに伝えるほか、手で `wgpu` を指定して試せる。
 pub const RENDERER_ENV: &str = "VW_RENDERER";
@@ -275,7 +275,7 @@ pub fn failure_message(app_name: &str, reason: &str, check: Option<PathBuf>) -> 
 
 #[cfg(windows)]
 fn show_failure(app_name: &str, message: &str) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let (text, caption) = (wide(message), wide(app_name));
     // SAFETY: どちらも NUL で終わる UTF-16 で、呼び出しの間は生きている

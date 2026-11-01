@@ -2,9 +2,9 @@
 //! `.vw-ai-tags.json`（タグ・顔の枠・人物名）と設定フォルダ（顔の特徴）に書く。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui;
 use vw_core::Registry;

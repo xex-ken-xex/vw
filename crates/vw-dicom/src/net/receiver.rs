@@ -10,8 +10,8 @@ use dicom_ul::association::server::{ServerAssociation, ServerAssociationOptions}
 use dicom_ul::pdu::{PDataValueType, Pdu};
 
 use super::{
-    command, transfer_syntax, trim_uid, uid_element, us_element, C_ECHO_RQ, C_STORE_RQ,
-    EXPLICIT_VR_LE, IMPLICIT_VR_LE, NO_DATA_SET,
+    C_ECHO_RQ, C_STORE_RQ, EXPLICIT_VR_LE, IMPLICIT_VR_LE, NO_DATA_SET, command, transfer_syntax,
+    trim_uid, uid_element, us_element,
 };
 
 const C_STORE_RSP: u16 = 0x8001;

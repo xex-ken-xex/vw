@@ -223,9 +223,10 @@ fn ifd_ranges(t: &Tiff, at: usize) -> Vec<Range<usize>> {
         } * n as usize;
         if size > 4
             && let Some(o) = t.u32(e + 8).map(|o| o as usize)
-                && o + size <= t.data.len() {
-                    out.push(o..o + size);
-                }
+            && o + size <= t.data.len()
+        {
+            out.push(o..o + size);
+        }
     }
     out
 }

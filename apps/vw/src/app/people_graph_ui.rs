@@ -2,13 +2,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use eframe::egui::{self, emath::TSTransform, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, emath::TSTransform, pos2, vec2};
 use egui_phosphor::regular as icon;
 
 use super::VwApp;
 use crate::i18n::{tr, tr1};
 use crate::people::Person;
-use crate::people_graph::{self, pair, Clip, Graph};
+use crate::people_graph::{self, Clip, Graph, pair};
 use crate::settings::Language;
 
 const CARD: egui::Vec2 = vec2(88.0, 96.0);
@@ -281,11 +281,10 @@ fn toolbar(
             g.remove(&chosen);
             w.selected.clear();
             outcome.save = true;
-        } else if key_delete
-            && let Some((a, b)) = w.edge.take() {
-                g.remove_edge(&a, &b);
-                outcome.save = true;
-            }
+        } else if key_delete && let Some((a, b)) = w.edge.take() {
+            g.remove_edge(&a, &b);
+            outcome.save = true;
+        }
     });
     let Some(g) = graphs
         .iter()
@@ -453,9 +452,10 @@ fn canvas(
         }
     }
     if let Some(from) = w.connecting.as_ref().and_then(|n| center(n))
-        && let Some(h) = hover {
-            painter.line_segment([from, h], Stroke::new(1.5, visuals.selection.stroke.color));
-        }
+        && let Some(h) = hover
+    {
+        painter.line_segment([from, h], Stroke::new(1.5, visuals.selection.stroke.color));
+    }
 
     let mut clicked_person = false;
     let mut drag_by = None;

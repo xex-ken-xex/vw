@@ -52,7 +52,7 @@ impl DecoderPlugin for PngPlugin {
             ColorType::Rgb => ColorModel::Rgb,
             ColorType::Rgba => ColorModel::Rgba,
             ColorType::Indexed => {
-                return Err(DecodeError::Invalid("palette was not expanded".into()))
+                return Err(DecodeError::Invalid("palette was not expanded".into()));
             }
         };
         let pixels = match frame.bit_depth {
@@ -70,9 +70,10 @@ impl DecoderPlugin for PngPlugin {
         // sBIT があれば有効ビット数として使う（12bit 医用画像を 16bit PNG に入れた場合など）。
         // チャンネルごとに値が違うこともあるが、表示の上限は 1 つなので最大値を採る。
         if let (PixelData::U16(_), Some(sbit)) = (&img.data, &reader.info().sbit)
-            && let Some(&bits) = sbit.iter().max() {
-                img.significant_bits = (bits as u32).clamp(1, 16);
-            }
+            && let Some(&bits) = sbit.iter().max()
+        {
+            img.significant_bits = (bits as u32).clamp(1, 16);
+        }
         img.metadata = metadata(reader.info());
         img.gamut = gamut(reader.info());
         Ok(img)

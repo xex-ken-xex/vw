@@ -118,11 +118,7 @@ pub fn launch_count(template: &[String], paths: usize) -> usize {
         .iter()
         .any(|p| template.iter().any(|t| t.contains(p)))
         && !template.iter().any(|t| t.contains(PATHS));
-    if one_by_one {
-        paths
-    } else {
-        paths.min(1)
-    }
+    if one_by_one { paths } else { paths.min(1) }
 }
 
 /// `token` の差し込み文字を埋める。`each` は `{paths}` に入れる 1 件。

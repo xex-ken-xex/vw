@@ -5,11 +5,11 @@
 //! 名前を出し、そこから画像を開ける。アクティブなスロットの画像の枠は太く描く。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use egui_phosphor::regular as icon;
 use vw_core::Registry;
 use vw_fits::Sky;

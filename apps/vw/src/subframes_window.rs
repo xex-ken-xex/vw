@@ -7,11 +7,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-use eframe::egui::{self, vec2, Color32, Sense};
+use eframe::egui::{self, Color32, Sense, vec2};
 use egui_phosphor::regular as icon;
 use vw_core::Registry;
 use vw_pipeline::nodes::Float;

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use vw_core::{Metadata, Registry};
 
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn index_reads_dicom_headers_in_the_background() {
-        use crate::test_util::{all_registry, TempDir};
+        use crate::test_util::{TempDir, all_registry};
         use vw_dicom::synth::Synth;
         let dir = TempDir::new();
         let files: Vec<PathBuf> = (1..=2)

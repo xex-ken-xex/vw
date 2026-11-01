@@ -17,8 +17,8 @@ pub mod report;
 mod test_util;
 
 pub use affine::{Affine, Parts};
-pub use align::{align, warp, Alignment, Warped};
-pub use analysis::{analyse, Analysis, Options, Rect};
+pub use align::{Alignment, Warped, align, warp};
+pub use analysis::{Analysis, Options, Rect, analyse};
 pub use plane::{Plane, Rgb};
 
 /// 違いを測る格子の長辺。元の大きさで測らないのは、2400 万画素の画像を何枚も

@@ -4,7 +4,7 @@
 //! 半球より広く見渡せ、寄ったときはほぼ接平面（写真の TAN 投影）と同じ形になるので、
 //! 全天用と拡大用の 2 つの投影を切り替えなくても済むため。
 
-use eframe::egui::{pos2, Pos2, Rect, Vec2};
+use eframe::egui::{Pos2, Rect, Vec2, pos2};
 
 /// 赤経・赤緯（度）。
 pub type Radec = [f64; 2];

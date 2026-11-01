@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use crate::header::{self, Hdu, BLOCK};
+use crate::header::{self, BLOCK, Hdu};
 
 /// 写った範囲。座標は赤経・赤緯（度）。
 #[derive(Debug, Clone, PartialEq)]

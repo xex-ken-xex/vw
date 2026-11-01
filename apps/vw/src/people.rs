@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::faces::{cosine, normalized, FaceMark};
+use crate::faces::{FaceMark, cosine, normalized};
 use crate::people_graph::{self, Graph};
 
 pub const FILE_NAME: &str = "people.json";
@@ -273,9 +273,10 @@ impl People {
 
     pub fn set_cover(&mut self, name: &str, index: usize) {
         if let Some(p) = self.list.iter_mut().find(|p| p.name == name)
-            && index < p.faces.len() {
-                p.cover = index;
-            }
+            && index < p.faces.len()
+        {
+            p.cover = index;
+        }
     }
 
     /// 前に見つけた顔の枠を、今の登録に合わせ直したものと、新しく名前が付いた数。
@@ -292,9 +293,10 @@ impl People {
         let mut out = marks.to_vec();
         for (i, mark) in out.iter_mut().enumerate() {
             if let (Some((from, to)), Some(person)) = (renamed, &mark.person)
-                && person == from {
-                    mark.person = Some(to.to_owned());
-                }
+                && person == from
+            {
+                mark.person = Some(to.to_owned());
+            }
             if mark.person.as_ref().is_some_and(|p| !names.contains(p)) {
                 mark.person = None;
                 mark.similarity = 0.0;
@@ -343,9 +345,11 @@ mod tests {
             .unwrap();
         assert_eq!(name, "A");
         assert!(s > 0.9);
-        assert!(people
-            .best_match(&normalized(vec![-1.0, -1.0]), 0.36)
-            .is_none());
+        assert!(
+            people
+                .best_match(&normalized(vec![-1.0, -1.0]), 0.36)
+                .is_none()
+        );
     }
 
     #[test]

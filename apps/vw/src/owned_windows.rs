@@ -33,13 +33,13 @@ impl KeepInFront {
 #[cfg(windows)]
 mod platform {
     use super::RawWindowHandle;
-    use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumThreadWindows, GetClassNameW, GetWindow, SetWindowLongPtrW, SetWindowPos,
-        GWLP_HWNDPARENT, GW_OWNER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        EnumThreadWindows, GW_OWNER, GWLP_HWNDPARENT, GetClassNameW, GetWindow, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SetWindowLongPtrW, SetWindowPos,
     };
+    use windows_sys::core::BOOL;
 
     /// winit が作るウインドウのクラス名。winit が裏で作るメッセージ用のウインドウと見分けるのに使う。
     const WINIT_CLASS: &str = "Window Class";

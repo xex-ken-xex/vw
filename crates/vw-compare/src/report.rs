@@ -4,7 +4,7 @@ use base64::Engine;
 
 use crate::align::{Alignment, Warped};
 use crate::analysis::{Analysis, Rect};
-use crate::plane::{fit_long_side, Rgb};
+use crate::plane::{Rgb, fit_long_side};
 use crate::render::{self, Rgba};
 
 /// HTML に入れる画像の長辺。
@@ -546,7 +546,7 @@ fn histogram_svg(h: &[Vec<u32>; 2], reference: &str, image: &str) -> String {
 mod tests {
     use super::*;
     use crate::affine::Affine;
-    use crate::analysis::{analyse, Options};
+    use crate::analysis::{Options, analyse};
     use crate::test_util::color_texture;
 
     fn sample() -> (Rgb, Alignment, Warped, Analysis) {

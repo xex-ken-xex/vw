@@ -38,7 +38,7 @@ mod platform {
     use super::Normal;
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowPlacement, IsIconic, IsZoomed, SetWindowPlacement, SW_HIDE, SW_SHOWNORMAL,
+        GetWindowPlacement, IsIconic, IsZoomed, SW_HIDE, SW_SHOWNORMAL, SetWindowPlacement,
         WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
     };
 

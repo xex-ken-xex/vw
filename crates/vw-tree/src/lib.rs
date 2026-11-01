@@ -615,9 +615,11 @@ mod tests {
             FolderTree::with_roots(vec![Node::<()>::dir(dir.path().to_path_buf(), None, false)]);
         tree.reveal(&sub, &list);
         assert!(tree.roots[0].open);
-        assert!(tree.roots[0]
-            .find(&dir.path().join("a"))
-            .is_some_and(|n| n.open));
+        assert!(
+            tree.roots[0]
+                .find(&dir.path().join("a"))
+                .is_some_and(|n| n.open)
+        );
         assert!(tree.roots[0].find(&sub).is_some_and(|n| !n.open));
     }
 

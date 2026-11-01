@@ -8,7 +8,7 @@ use eframe::egui;
 
 use super::VwApp;
 use crate::i18n::{tr, tr1};
-use crate::people::{arrange, image_counts, Order, Person, Sample};
+use crate::people::{Order, Person, Sample, arrange, image_counts};
 
 /// 画像と、その中の顔の番号。
 type FaceRef = (PathBuf, usize);
@@ -169,10 +169,11 @@ impl VwApp {
             registered.push((image, *index));
         }
         if !registered.is_empty()
-            && let Err(e) = self.people.save() {
-                self.log.error(format!("Cannot save people: {e}"));
-                return;
-            }
+            && let Err(e) = self.people.save()
+        {
+            self.log.error(format!("Cannot save people: {e}"));
+            return;
+        }
         for (image, index) in &registered {
             let saved = self.ai_tags.update(image, |e| {
                 if let Some(f) = e.faces.get_mut(*index) {
@@ -268,9 +269,10 @@ impl VwApp {
             let (changed, n) = self.people.rematch(&marks, &samples, threshold, renamed);
             matched += n;
             if changed != marks
-                && let Err(e) = self.ai_tags.update(&image, |e| e.faces = changed) {
-                    problems.push(e);
-                }
+                && let Err(e) = self.ai_tags.update(&image, |e| e.faces = changed)
+            {
+                problems.push(e);
+            }
         }
         if matched > 0 {
             self.log.info(format!(

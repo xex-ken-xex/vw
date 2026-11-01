@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use vw_core::VwImage;
@@ -212,17 +212,18 @@ impl Derive {
     fn read_header(&mut self, ctx: &egui::Context, shown: &Shown) -> Option<Event> {
         let path = &shown.path;
         if let Some((reading, rx)) = &self.reading
-            && let Ok(result) = rx.try_recv() {
-                let reading = reading.clone();
-                self.reading = None;
-                let (header, event) = match result {
-                    Ok(Pipeline::Gray(g)) => (Header::Gray(g), None),
-                    Ok(Pipeline::Color(_)) => (Header::Plain, None),
-                    Err(e) => (Header::Failed, Some(Event::Failed(reading.clone(), e))),
-                };
-                self.headers.insert(reading, header);
-                return event;
-            }
+            && let Ok(result) = rx.try_recv()
+        {
+            let reading = reading.clone();
+            self.reading = None;
+            let (header, event) = match result {
+                Ok(Pipeline::Gray(g)) => (Header::Gray(g), None),
+                Ok(Pipeline::Color(_)) => (Header::Plain, None),
+                Err(e) => (Header::Failed, Some(Event::Failed(reading.clone(), e))),
+            };
+            self.headers.insert(reading, header);
+            return event;
+        }
         if self.headers.contains_key(path) {
             return None;
         }

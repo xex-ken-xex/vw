@@ -2,9 +2,9 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use crate::labels::{Label, LabelStore};
 

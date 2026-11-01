@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::frame::{is_calibration_folder, Frame};
+use super::frame::{Frame, is_calibration_folder};
 
 /// ライブラリのフォルダを下へたどる深さ。
 const LIBRARY_DEPTH: usize = 6;
@@ -46,21 +46,22 @@ impl Index {
     pub fn frames_near(&mut self, light: &Path, places: &Places) -> Vec<Frame> {
         let mut roots: Vec<(PathBuf, usize)> = Vec::new();
         if places.nearby
-            && let Some(dir) = light.parent() {
-                // ライトと同じフォルダと、その親に直に置いたマスターも見る。
-                roots.push((dir.to_path_buf(), 0));
-                if let Some(parent) = dir.parent() {
-                    roots.push((parent.to_path_buf(), 0));
-                }
-                for up in dir.ancestors().take(NEARBY_UP + 1) {
-                    for sub in self.listing(up).dirs.clone() {
-                        let name = sub.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        if is_calibration_folder(name) {
-                            roots.push((sub, NEARBY_DEPTH));
-                        }
+            && let Some(dir) = light.parent()
+        {
+            // ライトと同じフォルダと、その親に直に置いたマスターも見る。
+            roots.push((dir.to_path_buf(), 0));
+            if let Some(parent) = dir.parent() {
+                roots.push((parent.to_path_buf(), 0));
+            }
+            for up in dir.ancestors().take(NEARBY_UP + 1) {
+                for sub in self.listing(up).dirs.clone() {
+                    let name = sub.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if is_calibration_folder(name) {
+                        roots.push((sub, NEARBY_DEPTH));
                     }
                 }
             }
+        }
         for lib in places.library {
             roots.push((lib.clone(), LIBRARY_DEPTH));
         }
@@ -135,9 +136,12 @@ impl Index {
         let modified = meta.modified().ok();
         let len = meta.len();
         if let Some(c) = self.files.get(path)
-            && c.modified.is_some() && c.modified == modified && c.len == len {
-                return c.frame.clone();
-            }
+            && c.modified.is_some()
+            && c.modified == modified
+            && c.len == len
+        {
+            return c.frame.clone();
+        }
         let frame = crate::header_of_file(path)
             .ok()
             .flatten()

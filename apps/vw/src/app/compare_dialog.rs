@@ -3,7 +3,7 @@
 
 use eframe::egui;
 
-use super::{request_full, VwApp};
+use super::{VwApp, request_full};
 use crate::compare::{self, Input};
 use crate::i18n::{tr, tr1};
 

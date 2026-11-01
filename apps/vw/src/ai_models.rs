@@ -10,9 +10,9 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 
 use eframe::egui;
 
@@ -265,11 +265,7 @@ fn runtime_url() -> String {
         ("linux", "tgz")
     };
     let arch = if cfg!(target_arch = "aarch64") {
-        if cfg!(windows) {
-            "arm64"
-        } else {
-            "aarch64"
-        }
+        if cfg!(windows) { "arm64" } else { "aarch64" }
     } else {
         "x64"
     };

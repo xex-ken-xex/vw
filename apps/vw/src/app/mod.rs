@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, vec2, Color32, TextureOptions};
+use eframe::egui::{self, Color32, TextureOptions, vec2};
 use egui_phosphor::regular as icon;
 use vw_core::{ColorModel, Registry};
 
@@ -25,14 +25,14 @@ use crate::labels::{Flag, LabelStore};
 use crate::loader::{Job, Loader};
 use crate::log::{self, Log, LogFile};
 use crate::series::SeriesIndex;
-use crate::settings::{parse_hex_color, BaseTool, Language, LoadInto, LogStyle, SettingsStore};
+use crate::settings::{BaseTool, Language, LoadInto, LogStyle, SettingsStore, parse_hex_color};
 use crate::settings_ui::SettingsUi;
 use crate::slideshow::{Clock, EndMode, Playback};
 use crate::state::{self, AppState, Placement, WindowState};
 use crate::theme;
 use crate::transfer::Transfer;
 use crate::tree::{FolderTree, TreeAction};
-use crate::viewer::{Slot, KEY_ZOOM_FACTOR};
+use crate::viewer::{KEY_ZOOM_FACTOR, Slot};
 use crate::watch::FolderWatcher;
 
 mod activity;
@@ -1198,9 +1198,10 @@ impl eframe::App for VwApp {
                 }
             }
             if r.open_file
-                && let Err(e) = self.settings.open_in_editor() {
-                    self.log.error(format!("Settings: cannot open file: {e}"));
-                }
+                && let Err(e) = self.settings.open_in_editor()
+            {
+                self.log.error(format!("Settings: cannot open file: {e}"));
+            }
             if r.open_log_folder {
                 self.open_log_folder();
             }

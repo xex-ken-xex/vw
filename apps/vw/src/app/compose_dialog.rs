@@ -6,7 +6,7 @@ use eframe::egui;
 use vw_core::ColorModel;
 
 use super::VwApp;
-use crate::compose::{self, Files, CHANNELS};
+use crate::compose::{self, CHANNELS, Files};
 use crate::i18n::tr;
 
 /// 選べる画像。

@@ -1,9 +1,9 @@
 //! Datasets の欄。データセットを探して一覧する。ほかの欄と同じく本体に並べるか別ウインドウに出す。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 
 use eframe::egui;
 use egui_phosphor::regular as icon;
@@ -231,9 +231,10 @@ impl DatasetsScreen {
 
     fn finish(&mut self, index: Index) {
         if let Some(dir) = &self.selected
-            && !index.entries.iter().any(|e| &e.dir == dir) {
-                self.selected = None;
-            }
+            && !index.entries.iter().any(|e| &e.dir == dir)
+        {
+            self.selected = None;
+        }
         self.index = Some(index);
         self.searched = None;
         self.generation += 1;
@@ -535,15 +536,16 @@ impl DatasetsScreen {
                             });
                         } else if let (Target::Meta { kind, key }, Some(index)) =
                             (&c.target, &self.index)
-                            && !key.trim().is_empty() {
-                                ui.push_id(("dataset-values", i), |ui| {
-                                    // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
-                                    vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
-                                        let values = index.meta_values(kind, key);
-                                        value_list(ui, lang, &values, &mut c.value);
-                                    });
+                            && !key.trim().is_empty()
+                        {
+                            ui.push_id(("dataset-values", i), |ui| {
+                                // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
+                                vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
+                                    let values = index.meta_values(kind, key);
+                                    value_list(ui, lang, &values, &mut c.value);
                                 });
-                            }
+                            });
+                        }
                     }
                 }
                 if ui.button(icon::X).clicked() {
@@ -837,9 +839,9 @@ impl DatasetsScreen {
                             "Show only the files that meet the search conditions, one slot each.",
                         ))
                         .clicked()
-                    {
-                        action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
-                    }
+                {
+                    action = Some(Action::ShowFiles(entry.dir.clone(), hits.clone()));
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, "Edit...")).clicked() {
                         action = Some(Action::Edit(entry.dir.clone()));

@@ -3,7 +3,7 @@
 //! egui は入力がないと描き直さないので、結果を送るだけでは画面に出ない。
 //! 送った直後に `request_repaint` を呼ぶ組を毎回書かずに済むようにする。
 
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui;
 

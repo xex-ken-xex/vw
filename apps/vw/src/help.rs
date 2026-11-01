@@ -52,9 +52,11 @@ mod tests {
         let ja = write_page(tmp.path(), Page::Quality, Language::Japanese).unwrap();
         let en = write_page(tmp.path(), Page::Quality, Language::English).unwrap();
         assert!(std::fs::read_to_string(ja).unwrap().contains("画質の評価"));
-        assert!(std::fs::read_to_string(en)
-            .unwrap()
-            .contains("Image quality metrics"));
+        assert!(
+            std::fs::read_to_string(en)
+                .unwrap()
+                .contains("Image quality metrics")
+        );
     }
 
     #[test]

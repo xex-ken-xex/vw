@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use eframe::egui::{self, pos2, vec2, Rect};
+use eframe::egui::{self, Rect, pos2, vec2};
 
 use crate::copy::{self, Focus};
 use crate::frames;
@@ -456,9 +456,10 @@ impl VwApp {
             self.develop_slot(index);
         }
         if let Some((dir, note)) = calibration_note
-            && self.calibration_logged.insert(dir) {
-                self.log.info(note);
-            }
+            && self.calibration_logged.insert(dir)
+        {
+            self.log.info(note);
+        }
     }
 
     /// フル解像度の画像をスロットに持たせる。上限を超えるときは持たずに縮小画像のままにする
@@ -619,7 +620,7 @@ impl VwApp {
     /// 設定で決まっている値（FITS の黒と白の決め方、既定の色の表）も、そのときの値として書き込む
     /// （ほかの PC やまとめてかけるツールでも、同じ見た目になるように）。
     pub(super) fn slot_look(&self, index: usize) -> Option<crate::pipelines::Look> {
-        use vw_pipeline::look::{BlackWhite, CurveName, COLOR_MAP_OFF};
+        use vw_pipeline::look::{BlackWhite, COLOR_MAP_OFF, CurveName};
         let slot = self.slots.get(index)?;
         let shown = slot.shown.as_ref()?;
         let applied = shown.info.look.as_ref()?;
@@ -1073,21 +1074,25 @@ impl VwApp {
                 self.keep_in_group(i);
             }
             if resp.read_qr
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
-                    self.read_qr_codes(ui.ctx(), path);
-                }
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
+            {
+                self.read_qr_codes(ui.ctx(), path);
+            }
             if resp.ai_tag
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
-                    self.ai_tag_paths(ui.ctx(), vec![path]);
-                }
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
+            {
+                self.ai_tag_paths(ui.ctx(), vec![path]);
+            }
             if resp.remove_ai_tags
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
-                    self.remove_ai_tags(vec![crate::frames::file_of(&path).to_path_buf()]);
-                }
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
+            {
+                self.remove_ai_tags(vec![crate::frames::file_of(&path).to_path_buf()]);
+            }
             if resp.find_faces
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone()) {
-                    self.find_faces_paths(ui.ctx(), vec![path]);
-                }
+                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
+            {
+                self.find_faces_paths(ui.ctx(), vec![path]);
+            }
             if let Some((path, action)) = resp.face {
                 let file = crate::frames::file_of(&path);
                 match action {
@@ -1106,9 +1111,10 @@ impl VwApp {
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut())
-                && (resp.wants_full || pipeline_wants) {
-                    full.last_used = self.frame;
-                }
+                && (resp.wants_full || pipeline_wants)
+            {
+                full.last_used = self.frame;
+            }
             if resp.clicked {
                 self.active = i;
                 self.set_focus(ui.ctx(), Focus::Images);
@@ -1466,7 +1472,7 @@ fn file_label(path: &Path) -> String {
 /// ダーク・フラットを当てた（当てられなかった）ことの、フォルダごとに 1 回出すログ。
 /// 切ってあるときは、自分で切ったので出さない。
 fn calibration_note(path: &Path, metadata: &vw_core::Metadata) -> Option<(PathBuf, String)> {
-    use vw_fits::calibration::{Role, APPLIED, GROUP, NOT_APPLIED, STATE};
+    use vw_fits::calibration::{APPLIED, GROUP, NOT_APPLIED, Role, STATE};
     let state = metadata.get(GROUP, STATE)?;
     // 候補の一覧はメタデータ欄と図で見られるので、ログを長くしないよう出さない。
     let candidate = |k: &str| Role::ALL.iter().any(|r| r.candidate_key() == k);

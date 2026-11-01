@@ -3,14 +3,14 @@
 //! ピクセルパイプラインで値を変えているときは、変更前（グレーの塗り）と変更後（線）を重ねる。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
-use eframe::egui::{self, pos2, Color32, Pos2, Rect, Sense, Stroke};
-use vw_core::{display, ColorModel, DisplayParams, PixelData, VwImage};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2};
+use vw_core::{ColorModel, DisplayParams, PixelData, VwImage, display};
 use vw_dicom::pipeline::Pipeline;
 
-use crate::histogram::{self, Channel, Levels, Physical, Stats, LEVELS};
+use crate::histogram::{self, Channel, LEVELS, Levels, Physical, Stats};
 use crate::i18n::tr;
 use crate::pixel_pipeline::{self, Decoded, Params};
 use crate::quality::Report;
@@ -266,16 +266,17 @@ impl HistogramView {
             });
         }
         if let Some(Gray::Reading(rx)) = &self.gray
-            && let Ok(result) = rx.try_recv() {
-                self.gray = Some(match result {
-                    Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
-                        decoded: Decoded::of(&info),
-                        unit: pixel_pipeline::unit_of(&info),
-                        info,
-                    }),
-                    _ => Gray::None,
-                });
-            }
+            && let Ok(result) = rx.try_recv()
+        {
+            self.gray = Some(match result {
+                Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
+                    decoded: Decoded::of(&info),
+                    unit: pixel_pipeline::unit_of(&info),
+                    info,
+                }),
+                _ => Gray::None,
+            });
+        }
         let available = self.axis_beyond_brightness(target.and_then(|t| t.image));
         if available != Some(self.axis) {
             self.axis = Axis::Brightness;
@@ -298,10 +299,11 @@ impl HistogramView {
     /// 条件が変わっていたら裏で数え直す。数えている間は前の結果を出しておく。
     fn count(&mut self, ctx: &egui::Context, t: &Target<'_>) {
         if let Some((key, rx)) = &self.counting
-            && let Ok(counted) = rx.try_recv() {
-                self.counted = Some((key.clone(), counted));
-                self.counting = None;
-            }
+            && let Ok(counted) = rx.try_recv()
+        {
+            self.counted = Some((key.clone(), counted));
+            self.counting = None;
+        }
         let Some(image) = t.image else { return };
         let gray = match &self.gray {
             Some(Gray::Loaded(g)) => Some(g),

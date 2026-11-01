@@ -114,8 +114,8 @@ pub fn tag_name(key: &str) -> Option<&'static str> {
 
 /// シーケンスの中も同じように辿る。入れ子の位置は持たない（検索では値が見つかれば足りるため）。
 fn all_tags(obj: &dicom_object::InMemDicomObject, charset: &Charset, m: &mut Metadata) {
-    use dicom_core::value::Value;
     use dicom_core::VR;
+    use dicom_core::value::Value;
     for e in obj.iter() {
         match e.value() {
             Value::Sequence(seq) => {
@@ -347,7 +347,7 @@ fn color_image(px: &DecodedPixelData, raw: &[u8], pixels: usize) -> Result<VwIma
         other => {
             return Err(DecodeError::Unsupported(format!(
                 "photometric interpretation {other}"
-            )))
+            )));
         }
     }
     VwImage::new(px.columns(), px.rows(), ColorModel::Rgb, PixelData::U8(rgb))
@@ -482,8 +482,8 @@ fn list_elements(
     depth: usize,
     m: &mut Metadata,
 ) {
-    use dicom_core::value::Value;
     use dicom_core::VR;
+    use dicom_core::value::Value;
     for e in obj.iter() {
         let tag = e.header().tag;
         let key = listed_key(tag, depth);
@@ -563,7 +563,7 @@ mod tests {
     use super::*;
     use dicom_core::VR;
     use synth::{
-        Synth, CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, XA_IMAGE,
+        CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, Synth, XA_IMAGE,
     };
 
     #[test]

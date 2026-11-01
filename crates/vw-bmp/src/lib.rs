@@ -8,7 +8,7 @@ mod header;
 mod rgb16;
 mod rle4;
 
-use header::{Header, BI_ALPHABITFIELDS, BI_BITFIELDS, BI_RGB, BI_RLE4};
+use header::{BI_ALPHABITFIELDS, BI_BITFIELDS, BI_RGB, BI_RLE4, Header};
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 use zune_bmp::BmpDecoder;
 use zune_core::bytestream::ZCursor;
@@ -104,7 +104,7 @@ fn decode_with_zune(data: &[u8]) -> Result<(usize, usize, ColorModel, Vec<u8>), 
         other => {
             return Err(DecodeError::Unsupported(format!(
                 "BMP colour space {other:?}"
-            )))
+            )));
         }
     };
     Ok((width, height, color, pixels))

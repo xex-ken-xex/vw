@@ -1418,10 +1418,12 @@ mod tests {
 
     #[test]
     fn invalid_combo_text_is_rejected_with_reason() {
-        assert!("Ctrl+NoSuchKey"
-            .parse::<KeyCombo>()
-            .unwrap_err()
-            .contains("NoSuchKey"));
+        assert!(
+            "Ctrl+NoSuchKey"
+                .parse::<KeyCombo>()
+                .unwrap_err()
+                .contains("NoSuchKey")
+        );
         assert!("Hyper+A".parse::<KeyCombo>().unwrap_err().contains("Hyper"));
         assert!("".parse::<KeyCombo>().is_err());
     }

@@ -4,12 +4,12 @@
 //! 採らないのは、裾は背景の雑音に埋もれて測りにくく、切り出しは雑音ごと戻してしまうため。
 //! ガウスなら畳み込みを横と縦に分けて速くでき（[`crate::nodes::blur`]）、Wiener も式で書ける。
 
-use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
+use rustfft::num_complex::Complex32;
 use serde::{Deserialize, Serialize};
 
-use crate::astro::{fill_nan, for_each_plane, noise_sigma, starlet, NOISE};
-use crate::nodes::{blur, Float};
+use crate::astro::{NOISE, fill_nan, for_each_plane, noise_sigma, starlet};
+use crate::nodes::{Float, blur};
 
 /// ガウスの σ に対する FWHM の比（2√(2 ln 2)）。
 pub const FWHM_PER_SIGMA: f32 = 2.354_82;

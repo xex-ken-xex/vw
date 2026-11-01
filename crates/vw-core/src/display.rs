@@ -414,7 +414,9 @@ mod tests {
         let d = to_display16(&gray8(&[0, 128, 255]), &DisplayParams::default());
         assert_eq!(
             d.rgba,
-            vec![0, 0, 0, 65535, 32896, 32896, 32896, 65535, 65535, 65535, 65535, 65535]
+            vec![
+                0, 0, 0, 65535, 32896, 32896, 32896, 65535, 65535, 65535, 65535, 65535
+            ]
         );
     }
 
@@ -495,13 +497,14 @@ mod tests {
         let data: Vec<u8> = (0..w * h).map(|i| (i % 251) as u8).collect();
         let img = VwImage::new(w, h, ColorModel::Gray, PixelData::U8(data.clone())).unwrap();
         let d = to_display(&img, &DisplayParams::default());
-        assert!(d
-            .rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(&data)
-            .all(|(px, &g)| *px == [g, g, g, 255]));
+        assert!(
+            d.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(&data)
+                .all(|(px, &g)| *px == [g, g, g, 255])
+        );
     }
 
     #[test]

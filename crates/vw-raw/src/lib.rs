@@ -18,7 +18,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 mod sensor;
 mod tiff_guard;
 
-pub use sensor::{sensor_histogram, SensorChannel, SensorColor, SensorHistogram, DARKEST_EV};
+pub use sensor::{DARKEST_EV, SensorChannel, SensorColor, SensorHistogram, sensor_histogram};
 
 /// 富士フイルムの RAF の先頭。
 const RAF_SIGNATURE: &[u8] = b"FUJIFILMCCD-RAW";
@@ -396,13 +396,11 @@ fn gps(g: &rawler::exif::ExifGPS) -> Option<vw_core::exif::Gps> {
         };
         Some(d * sign)
     };
-    let altitude = g.gps_altitude.as_ref().and_then(ratio).map(|a| {
-        if g.gps_altitude_ref == Some(1) {
-            -a
-        } else {
-            a
-        }
-    });
+    let altitude = g
+        .gps_altitude
+        .as_ref()
+        .and_then(ratio)
+        .map(|a| if g.gps_altitude_ref == Some(1) { -a } else { a });
     vw_core::exif::Gps::new(
         degrees(g.gps_latitude.as_ref()?, &g.gps_latitude_ref, "S")?,
         degrees(g.gps_longitude.as_ref()?, &g.gps_longitude_ref, "W")?,

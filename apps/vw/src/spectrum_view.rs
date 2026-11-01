@@ -1,6 +1,6 @@
 //! 1 次元のスペクトルを、スロットに折れ線のグラフで描く。
 
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
+use eframe::egui::{self, Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2, vec2};
 use vw_core::spectrum::{AxisKind, Spectrum};
 
 use crate::i18n::tr;
@@ -260,9 +260,11 @@ pub fn paint(
         Stroke::new(1.0, faint),
     );
     let v = s.values[index];
-    let mut lines = vec![format!("{} {}", short(at / unit.divide), unit.name)
-        .trim_end()
-        .to_owned()];
+    let mut lines = vec![
+        format!("{} {}", short(at / unit.divide), unit.name)
+            .trim_end()
+            .to_owned(),
+    ];
     if let Some(vel) = s.radio_velocity(at) {
         lines.push(format!("{} km/s", short(vel / 1e3)));
     }

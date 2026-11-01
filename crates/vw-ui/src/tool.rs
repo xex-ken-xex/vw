@@ -1,6 +1,6 @@
 //! 左端の道具の列のボタン。
 
-use egui::{vec2, CornerRadius, Rect, Response, Sense, Ui, WidgetText};
+use egui::{CornerRadius, Rect, Response, Sense, Ui, WidgetText, vec2};
 
 /// 道具の列の 1 ボタン。選んでいる道具は、面をアクセントの淡い色で塗り、左端にアクセントの線を引き、
 /// アイコンをアクセントの色にする。押せない道具は、押せるものよりはっきり薄くする。

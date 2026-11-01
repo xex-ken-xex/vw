@@ -250,11 +250,7 @@ pub fn stored_value(image: &VwImage, decoded: &Decoded, i: usize) -> f64 {
 /// 物理量 `modality` を `p` の窓で 0〜1 に写した表示の値。
 fn unit_brightness(modality: f64, p: &Params) -> f64 {
     let y = p.function.apply(modality, p.center, p.width);
-    if p.invert {
-        1.0 - y
-    } else {
-        y
-    }
+    if p.invert { 1.0 - y } else { y }
 }
 
 fn brightness(modality: f64, p: &Params) -> u8 {
@@ -422,11 +418,7 @@ pub fn float_of_display(image: &VwImage) -> Float {
                 let (lo, scale) = shades[i % samples % 3];
                 // NaN（合成で重ならない所など）は標準の表示と同じく黒。
                 let x = ((v[i] - lo) * scale).clamp(0.0, 255.0);
-                if x.is_nan() {
-                    0.0
-                } else {
-                    x / 255.0
-                }
+                if x.is_nan() { 0.0 } else { x / 255.0 }
             });
         }
     }
@@ -703,7 +695,7 @@ mod tests {
 
     #[test]
     fn file_values_reproduce_the_standard_display_pixel_by_pixel() {
-        use vw_dicom::synth::{Synth, CT_IMAGE};
+        use vw_dicom::synth::{CT_IMAGE, Synth};
         let ct = || {
             Synth::ct(16, 16)
                 .pixels_i16(&ramp_i16(256, -100, 9))
@@ -749,7 +741,7 @@ mod tests {
 
     #[test]
     fn black_and_white_changed_in_the_slot_reproduce_the_slot_display() {
-        use vw_dicom::synth::{Synth, CT_IMAGE};
+        use vw_dicom::synth::{CT_IMAGE, Synth};
         let ct = || {
             Synth::ct(16, 16)
                 .pixels_i16(&ramp_i16(256, -100, 9))

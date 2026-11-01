@@ -18,7 +18,7 @@ pub fn sample(chain: &[Node]) -> Result<Vec<[f32; 3]>, String> {
             return Err(
                 "Nodes before the stretch node work on linear values and cannot go into a LUT."
                     .into(),
-            )
+            );
         }
     };
     if after.iter().any(Node::spatial) {

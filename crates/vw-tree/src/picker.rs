@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{by_name, entry_is_dir, is_hidden_name, FolderTree, Node, Plain};
+use crate::{FolderTree, Node, Plain, by_name, entry_is_dir, is_hidden_name};
 
 /// 何を選ぶか。
 pub enum Mode {
@@ -121,9 +121,10 @@ impl Picker {
                 }
                 let mut p = self.folder.clone()?.join(name);
                 if p.extension().is_none()
-                    && let Some(ext) = extensions.first() {
-                        p.set_extension(ext);
-                    }
+                    && let Some(ext) = extensions.first()
+                {
+                    p.set_extension(ext);
+                }
                 Some(p)
             }
         }
@@ -203,9 +204,10 @@ impl Picker {
                                             self.file = Some(f);
                                         }
                                         if let Some(f) = double
-                                            && matches!(self.mode, Mode::OpenFile { .. }) {
-                                                outcome = Outcome::Chosen(f);
-                                            }
+                                            && matches!(self.mode, Mode::OpenFile { .. })
+                                        {
+                                            outcome = Outcome::Chosen(f);
+                                        }
                                     });
                             },
                         );
@@ -227,9 +229,10 @@ impl Picker {
                     if ui
                         .add_enabled(choice.is_some(), egui::Button::new(&self.labels.choose))
                         .clicked()
-                        && let Some(p) = choice {
-                            outcome = Outcome::Chosen(p);
-                        }
+                        && let Some(p) = choice
+                    {
+                        outcome = Outcome::Chosen(p);
+                    }
                     if ui.button(&self.labels.cancel).clicked() {
                         outcome = Outcome::Cancelled;
                     }

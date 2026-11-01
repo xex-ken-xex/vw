@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, pos2, vec2, Color32, ColorImage, MouseWheelUnit, PointerButton, Pos2, Rect, Sense,
-    TextureFilter, TextureHandle, TextureOptions, Vec2,
+    self, Color32, ColorImage, MouseWheelUnit, PointerButton, Pos2, Rect, Sense, TextureFilter,
+    TextureHandle, TextureOptions, Vec2, pos2, vec2,
 };
 use egui_phosphor::regular as icon;
 use serde::{Deserialize, Serialize};
@@ -1224,11 +1224,18 @@ impl Slot {
             ),
         ] {
             let response = ui
-                .add_enabled(on, egui::Button::selectable(view == Some(target), tr(lang, label)))
+                .add_enabled(
+                    on,
+                    egui::Button::selectable(view == Some(target), tr(lang, label)),
+                )
                 .on_hover_text(tr(lang, hover));
             if response.clicked() {
                 if let Some(d) = &mut self.derive {
-                    d.view = if d.view == target { View::Derived } else { target };
+                    d.view = if d.view == target {
+                        View::Derived
+                    } else {
+                        target
+                    };
                 }
                 out.clicked = true;
             }
@@ -1673,38 +1680,39 @@ impl Slot {
         if let (Some(g), Some(applied)) = (
             &gauge,
             self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
-        )
-            && (applied.palette.is_some() || g.on_gray) && crate::colormap_ui::fits(body, g.side) {
-                let inverted = self.shown.as_ref().is_some_and(|s| {
-                    self.derive
-                        .as_ref()
-                        .is_some_and(|d| d.ready_for(s).is_some() && d.inverted(&s.path))
-                });
-                // 色導出で明るさを反転しているときは、ゲージの色もそれに合わせて逆に並べる。
-                let flipped;
-                let applied = if inverted {
-                    flipped = crate::colormap::flipped(applied);
-                    &flipped
-                } else {
-                    applied
-                };
-                let id = ui.id().with(("gauge", self.id));
-                let event = crate::colormap_ui::gauge(
-                    ui,
-                    id,
-                    body,
-                    g.side,
-                    lang,
-                    applied,
-                    color_rules,
-                    &mut self.gauge_drag,
-                );
-                match event {
-                    Some(crate::colormap_ui::GaugeEvent::Window(w)) => out.window = Some(w),
-                    Some(crate::colormap_ui::GaugeEvent::Pick(p)) => out.color_pick = Some(p),
-                    None => {}
-                }
+        ) && (applied.palette.is_some() || g.on_gray)
+            && crate::colormap_ui::fits(body, g.side)
+        {
+            let inverted = self.shown.as_ref().is_some_and(|s| {
+                self.derive
+                    .as_ref()
+                    .is_some_and(|d| d.ready_for(s).is_some() && d.inverted(&s.path))
+            });
+            // 色導出で明るさを反転しているときは、ゲージの色もそれに合わせて逆に並べる。
+            let flipped;
+            let applied = if inverted {
+                flipped = crate::colormap::flipped(applied);
+                &flipped
+            } else {
+                applied
+            };
+            let id = ui.id().with(("gauge", self.id));
+            let event = crate::colormap_ui::gauge(
+                ui,
+                id,
+                body,
+                g.side,
+                lang,
+                applied,
+                color_rules,
+                &mut self.gauge_drag,
+            );
+            match event {
+                Some(crate::colormap_ui::GaugeEvent::Window(w)) => out.window = Some(w),
+                Some(crate::colormap_ui::GaugeEvent::Pick(p)) => out.color_pick = Some(p),
+                None => {}
             }
+        }
         if bar_height > 0.0 {
             self.derive_overlay(ui, body, lang);
             self.derive_bar(ui, bar, lang, presets, &mut out);

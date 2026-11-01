@@ -298,7 +298,7 @@ fn gray_levels(bits_per_sample: u32, significant_bits: u32) -> Stage {
 /// 当てていなければ、当てられなかったわけを 1 つの段に出す。
 /// 校正用の画像そのもの（ダークなど）には段を出さない。
 fn calibration(m: &vw_core::Metadata) -> Vec<Stage> {
-    use vw_fits::calibration::{Role, APPLIED, CHOSEN, GROUP, NOT_APPLIED, STATE};
+    use vw_fits::calibration::{APPLIED, CHOSEN, GROUP, NOT_APPLIED, Role, STATE};
     let Some(state) = m.get(GROUP, STATE) else {
         return Vec::new();
     };
@@ -632,12 +632,13 @@ mod tests {
             s.last().unwrap().lines,
             [("Orientation".to_owned(), "8".to_owned())]
         );
-        assert!(s
-            .last()
-            .unwrap()
-            .note
-            .unwrap()
-            .contains("counter-clockwise"));
+        assert!(
+            s.last()
+                .unwrap()
+                .note
+                .unwrap()
+                .contains("counter-clockwise")
+        );
     }
 
     #[test]
@@ -725,9 +726,11 @@ mod tests {
         let levels = stages(&sixteen).pop().unwrap();
         assert_eq!(levels.title, BLACK_AND_WHITE);
         assert!(levels.levels);
-        assert!(levels
-            .lines
-            .contains(&("Range".to_owned(), "0 – 4095".to_owned())));
+        assert!(
+            levels
+                .lines
+                .contains(&("Range".to_owned(), "0 – 4095".to_owned()))
+        );
         let mut float = info("TIFF", &[]);
         float.color = vw_core::ColorModel::Gray;
         float.bits_per_sample = 32;

@@ -1,8 +1,8 @@
 //! テスト用の補助。一時フォルダとテスト画像の作成。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use vw_core::Registry;
 

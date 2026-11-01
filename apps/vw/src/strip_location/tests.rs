@@ -1,6 +1,6 @@
 use super::*;
-use vw_core::exif::{push_exif, sample, Gps};
 use vw_core::Metadata;
+use vw_core::exif::{Gps, push_exif, sample};
 
 const XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description xmp:Rating="3" exif:GPSLatitude="43,3.7N" exif:GPSLongitude = '141,21.2E'><photoshop:City>Sapporo</photoshop:City><Iptc4xmpCore:Location/><dc:subject><rdf:Bag><rdf:li>trip</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF></x:xmpmeta>"#;
 
