@@ -258,6 +258,8 @@ fn attach_console() {
 fn attach_console() {}
 
 fn main() -> Result<()> {
+    #[cfg(feature = "gui")]
+    vw_renderer::restrict_dll_search();
     if std::env::args().len() > 1 {
         attach_console();
     }
