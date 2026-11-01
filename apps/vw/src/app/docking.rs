@@ -29,10 +29,11 @@ pub(super) const SKY: &str = "sky_chart";
 pub(super) const COMPARE: &str = "compare_images";
 pub(super) const SUBFRAMES: &str = "subframes";
 pub(super) const LINE_PROFILE: &str = "line_profile";
+pub(super) const ROI_GRAPH: &str = "roi_graph";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 10] = [
+pub(super) const TOOLS: [&str; 11] = [
     ANALYSIS,
     ZOOM_MAP,
     PIPELINE,
@@ -43,6 +44,7 @@ pub(super) const TOOLS: [&str; 10] = [
     COMPARE,
     SUBFRAMES,
     LINE_PROFILE,
+    ROI_GRAPH,
 ];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
@@ -56,7 +58,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         SKY => ([900.0, 640.0], None),
         COMPARE => ([1280.0, 800.0], None),
         SUBFRAMES => ([1000.0, 700.0], None),
-        LINE_PROFILE => ([820.0, 700.0], None),
+        LINE_PROFILE | ROI_GRAPH => ([820.0, 700.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -141,6 +143,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         COMPARE => "Compare images",
         SUBFRAMES => "Subframes",
         LINE_PROFILE => "Line profile",
+        ROI_GRAPH => "ROI graph",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -174,6 +177,9 @@ impl Panes for AppPanes<'_> {
             }
             LINE_PROFILE => {
                 crate::sub_window::title(lang, "Line profile", self.app.active_image().as_deref())
+            }
+            ROI_GRAPH => {
+                crate::sub_window::title(lang, "ROI graph", self.app.active_image().as_deref())
             }
             // 絞り込み中は、ファイルが隠れていることに気づけるよう名前に条件を添える。
             // 別ウインドウでは OS のウインドウバーにも出る。
@@ -262,6 +268,9 @@ impl Panes for AppPanes<'_> {
             LINE_PROFILE => {
                 content_frame().show(ui, |ui| self.app.line_profile_pane(ui));
             }
+            ROI_GRAPH => {
+                content_frame().show(ui, |ui| self.app.roi_graph_pane(ui));
+            }
             DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
@@ -334,6 +343,7 @@ impl VwApp {
             COMPARE => &mut self.compare.open,
             SUBFRAMES => &mut self.subframes.open,
             LINE_PROFILE => &mut self.line_profile.open,
+            ROI_GRAPH => &mut self.roi_graph.open,
             _ => &mut self.map.open,
         }
     }

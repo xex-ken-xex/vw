@@ -60,7 +60,7 @@ fn labels(lang: Language) -> line_profile::Labels<'static> {
 }
 
 /// egui の字で測る（欄に描くときに、凡例や表の幅を描く字に合わせる）。
-struct PainterMeasure(egui::Painter);
+pub(super) struct PainterMeasure(egui::Painter);
 
 impl Measure for PainterMeasure {
     fn width(&self, text: &str, size: f32, face: Face) -> f32 {
@@ -255,7 +255,12 @@ impl VwApp {
         self.line_export_picker(&ctx, lang, theme);
     }
 
-    fn sheet_image(&self, sheet: &Sheet, lang: Language, theme: Theme) -> egui::ColorImage {
+    pub(super) fn sheet_image(
+        &self,
+        sheet: &Sheet,
+        lang: Language,
+        theme: Theme,
+    ) -> egui::ColorImage {
         let words = crate::report_fonts::words(lang);
         let img = sheet.image(theme, &words, crate::report_fonts::fonts(theme));
         egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.data)
@@ -427,7 +432,7 @@ impl VwApp {
 }
 
 /// 新しいファイルにだけ書く（上書きしない）。
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
@@ -439,7 +444,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// 図を欄の幅に合わせて描く。狭い欄では縮める。
-fn paint_sheet(ui: &mut egui::Ui, sheet: &Sheet, theme: Theme, lang: Language) {
+pub(super) fn paint_sheet(ui: &mut egui::Ui, sheet: &Sheet, theme: Theme, lang: Language) {
     const MIN_WIDTH: f32 = 520.0;
     let available = ui.available_width().max(100.0);
     let logical = available.max(MIN_WIDTH);

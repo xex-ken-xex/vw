@@ -3011,6 +3011,82 @@ const JA: &[(&str, &str)] = &[
         "The value of every point is in the CSV file:",
         "点ごとの値は CSV のファイルにある:",
     ),
+    // ROI のグラフ
+    ("Band profile", "帯のプロファイル"),
+    ("Band profile of the ROI", "ROI の帯のプロファイル"),
+    ("Bins of the ROI histogram", "ROI のヒストグラムの区間の数"),
+    (
+        "Choose the ROI tool (R) and drag on an image to draw a target or background ROI.",
+        "ROI ツール（R）を選び、画像の上をドラッグして対象か背景の ROI を描いてください。",
+    ),
+    ("Frames", "フレーム数"),
+    ("Frames that could not be read", "読めなかったフレーム"),
+    ("Histogram of the ROI", "ROI のヒストグラム"),
+    (
+        "How many bins the histogram of the ROI graph splits the values into. Integer values whose range is this or less get one bin per value.",
+        "ROI のグラフのヒストグラムで、値をいくつの区間に分けるか。値の幅がこれ以下の整数なら、1 つの値に 1 区間にします。",
+    ),
+    ("Left to right", "左から右"),
+    ("Mean measured value", "計測の値の平均"),
+    (
+        "Mean of each ROI in every frame of the sequence, at the same place in every frame.",
+        "並びの各フレームでの、各 ROI の平均。どのフレームでも同じ場所で測る。",
+    ),
+    ("Mean of the ROI per frame", "フレームごとの ROI の平均"),
+    ("Mean per frame", "フレームごとの平均"),
+    ("Mean pixel value", "画素の値の平均"),
+    (
+        "Number of pixels of each value in each ROI. All ROIs share the same bins.",
+        "各 ROI の、値ごとの画素の数。どの ROI も同じ区間で数える。",
+    ),
+    ("Place (x, y  w×h)", "場所（x, y  幅×高さ）"),
+    (
+        "Place and statistics of the pixels in each ROI",
+        "各 ROI の場所と、中の画素の統計",
+    ),
+    ("Position x", "位置 x"),
+    ("Position y", "位置 y"),
+    ("ROI graph", "ROI のグラフ"),
+    ("Reading frames", "フレームを読んでいます"),
+    ("Show/hide ROI graph", "ROI のグラフの表示/非表示"),
+    (
+        "Statistics of the means of all frames",
+        "全フレームの平均の統計",
+    ),
+    (
+        "The ROIs on the image. The names match the graph and the table.",
+        "画像の上の ROI。名前はグラフと表に対応する。",
+    ),
+    (
+        "The values are in the CSV file:",
+        "値は CSV のファイルにある:",
+    ),
+    (
+        "The values are those of the file, before the conversion for display (black and white, color map).",
+        "値はファイルの値で、表示のための変換（黒と白、色の表）の前のもの。",
+    ),
+    (
+        "This slot shows one image. Open a file with frames, a DICOM series or a folder slot to see the mean per frame.",
+        "このスロットは 1 枚だけです。フレームのあるファイル、DICOM のシリーズ、フォルダのスロットを開くと、フレームごとの平均を出せます。",
+    ),
+    ("Top to bottom", "上から下"),
+    (
+        "Values from the left of each ROI to its right; each point is the mean of one column of the ROI.",
+        "各 ROI の左から右への値。1 点は ROI の 1 列の平均。",
+    ),
+    (
+        "Values from the top of each ROI to its bottom; each point is the mean of one row of the ROI.",
+        "各 ROI の上から下への値。1 点は ROI の 1 行の平均。",
+    ),
+    (
+        "Write an HTML report with the image, the ROIs, the graph and the values, and a CSV beside it.",
+        "画像・ROI・グラフ・値の表の HTML と、横に CSV を書き出します。",
+    ),
+    (
+        "Write the ROI graph report",
+        "ROI のグラフのレポートを書き出す",
+    ),
+    ("frames", "フレーム"),
 ];
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
         Act(Action::CopyMeasurement),
         Act(Action::DeleteProbePoint),
         Act(Action::ToggleLineProfile),
+        Act(Action::ToggleRoiGraph),
     ],
     &[
         Act(Action::FitImage),
@@ -164,6 +165,13 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
             Some(s) => shown_if(!s.shown_lines().is_empty()),
             None => Yes,
         },
+        Action::ToggleRoiGraph => match slot {
+            Some(s) => shown_if(
+                s.roi_of(crate::roi::Kind::Target).is_some()
+                    || s.roi_of(crate::roi::Kind::Background).is_some(),
+            ),
+            None => Yes,
+        },
         Action::ComposeColors => shown_if(slot.is_some_and(composable)),
         Action::DevelopRaw => shown_if(slot.is_some_and(developable)),
         Action::ToggleCalibration => shown_if(slot.and_then(calibration_on).is_some()),
@@ -235,6 +243,7 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         Action::DeleteProbePoint if roi => "Delete ROI",
         Action::DeleteProbePoint => "Delete line",
         Action::ToggleLineProfile => "Line profile",
+        Action::ToggleRoiGraph => "ROI graph",
         Action::TogglePixelPipeline => "Pixel pipeline...",
         Action::OpenInFileManager => "Open in file manager",
         Action::CloseZip => "Close ZIP",

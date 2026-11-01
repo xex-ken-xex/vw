@@ -106,6 +106,7 @@ pub enum Action {
     ToggleHistogram,
     ToggleZoomMap,
     ToggleLineProfile,
+    ToggleRoiGraph,
     ToggleMap,
     ToggleSkyChart,
     ToggleSubframes,
@@ -266,6 +267,7 @@ impl Action {
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
         Action::ToggleLineProfile,
+        Action::ToggleRoiGraph,
         Action::ToggleMap,
         Action::ToggleSkyChart,
         Action::ToggleSubframes,
@@ -418,6 +420,7 @@ impl Action {
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleLineProfile => "toggle_line_profile",
+            Action::ToggleRoiGraph => "toggle_roi_graph",
             Action::ToggleMap => "toggle_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::ToggleSubframes => "toggle_subframes",
@@ -551,6 +554,7 @@ impl Action {
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleLineProfile => "Show/hide line profile",
+            Action::ToggleRoiGraph => "Show/hide ROI graph",
             Action::ToggleMap => "Show/hide map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
@@ -712,6 +716,7 @@ impl Action {
             | Action::ToggleHistogram
             | Action::ToggleZoomMap
             | Action::ToggleLineProfile
+            | Action::ToggleRoiGraph
             | Action::ToggleMap
             | Action::ToggleSkyChart
             | Action::ToggleSubframes => KeyGroup::Windows,
@@ -925,6 +930,7 @@ impl Action {
             Action::ToggleHistogram => vec![KeyCombo::ctrl(H)],
             Action::ToggleZoomMap => vec![],
             Action::ToggleLineProfile => vec![KeyCombo::ctrl(L)],
+            Action::ToggleRoiGraph => vec![KeyCombo::ctrl(L).with(true, true, false)],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ToggleSkyChart => vec![],
             Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],

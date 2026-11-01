@@ -59,6 +59,7 @@ mod persist;
 mod playback;
 mod positions;
 mod qr_reading;
+mod roi_graph_pane;
 mod screens;
 mod send;
 mod similar;
@@ -220,6 +221,7 @@ pub struct VwApp {
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
     line_profile: line_profile_pane::LineProfilePane,
+    roi_graph: roi_graph_pane::RoiGraphPane,
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
     subframes: crate::subframes_window::SubframesWindow,
@@ -767,6 +769,7 @@ impl VwApp {
             presets,
             zoom_map: Default::default(),
             line_profile: Default::default(),
+            roi_graph: Default::default(),
             place_names: None,
             place_names_load: None,
             map: Default::default(),
@@ -1045,6 +1048,7 @@ impl VwApp {
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleLineProfile => self.line_profile.open = !self.line_profile.open,
+            Action::ToggleRoiGraph => self.roi_graph.open = !self.roi_graph.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
             Action::ToggleSkyChart => {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
@@ -1458,6 +1462,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleLineProfile => "Line profile",
+        Action::ToggleRoiGraph => "ROI graph",
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
         Action::ToggleSubframes => "Subframes",
