@@ -385,67 +385,82 @@ pub enum FaceAction {
 /// スロットのヘッダからドラッグしている画像のファイル（egui のドラッグ＆ドロップの中身）。
 pub struct DraggedFile(pub PathBuf);
 
+/// 1 フレームの操作で起きたこと。スロットは「何が起きたか」だけを返し、実行はアプリ側
+/// （`app/slots.rs`）がする。真偽値の旗の束ではなく列にしてあるのは、操作を足すときに
+/// 旗と受け取り側の `if` を対で足し忘れないようにするため（`match` が網羅を強いる）。
+pub enum SlotCommand {
+    /// クリックやメニューの操作で、このスロットをアクティブにする。
+    Activate,
+    Close,
+    /// ダブルクリック（最大化の切り替え。閉じたフォルダなら中を開く）。
+    ToggleMaximize,
+    /// ホイールで送る枚数。負なら前へ。
+    Step(isize),
+    /// Shift+ホイールで送るページ数。負なら前へ。
+    PageStep(isize),
+    /// フォルダのスロットの「このフォルダへ移動」が押された。
+    OpenFolder,
+    /// フォルダのスロットに画像がドロップされた。
+    Drop(PathBuf),
+    /// 右クリックメニューで「コピー」が選ばれた。
+    Copy,
+    /// 十字や ROI の値のコピーが選ばれた。コピーする文字。
+    CopyText(String),
+    /// 右クリックメニューで送り先が選ばれた。
+    Send(crate::send_app::Choice),
+    /// 右クリックメニューで「現像」が選ばれた。
+    Develop,
+    /// 見出しの「JPEG」「RAW」を押した（埋め込みのプレビューと現像した画像の切り替え）。
+    SwapRawFace,
+    /// ダーク・フラットを当てるかの切り替えが選ばれた。
+    ToggleCalibration,
+    /// 色の表を選んだ。
+    ColorPick(crate::colormap::Pick),
+    /// ゲージで黒と白の値を変えた（`None` はファイルの値に戻す）。
+    Window(Option<(f32, f32)>),
+    /// 見た目の入った保存したパイプラインを選んだ。スロットの黒と白・曲線・色の表に当てる。
+    ApplyLook(crate::pipelines::Look),
+    /// 「画素の変換」を開く。
+    OpenPipeline,
+    /// 「評価の基準にする」が選ばれた。
+    SetReference,
+    /// 「QR コードを読む」が選ばれた。
+    ReadQr,
+    /// 「色を合成」が選ばれた。
+    Compose,
+    /// 「位置合わせして比べる」が選ばれた。
+    Compare,
+    /// 見出しの似た画像の印がクリックされた（組を比べる）。
+    CompareSimilar,
+    /// 似た画像の印のメニューで「これを残し、ほかを Bad にする」が選ばれた。
+    KeepInGroup,
+    /// 「AI タグを付ける」が選ばれた。
+    AiTag,
+    /// 「顔を探す」が選ばれた。
+    FindFaces,
+    /// 「AI タグを消す」が選ばれた。
+    RemoveAiTags,
+    /// 顔の枠の右クリックで選ばれた操作（表示中の画像に対して）。
+    Face(PathBuf, FaceAction),
+    /// 色導出から知らせること（ログに出す）。
+    Derive(derive::Event),
+}
+
 /// 1 フレーム分の操作結果。
 #[derive(Default)]
-pub struct SlotResponse {
-    pub clicked: bool,
-    pub close: bool,
-    /// 右クリックメニューで「コピー」が選ばれた。
-    pub copy: bool,
+pub struct SlotFrame {
+    /// 起きたことの列。起きた順。
+    pub commands: Vec<SlotCommand>,
     /// 縮小画像では足りない大きさで表示している。
     pub wants_full: bool,
-    /// 右クリックメニューで「現像」が選ばれた。
-    pub develop: bool,
-    /// 見出しの「JPEG」「RAW」を押した（埋め込みのプレビューと現像した画像の切り替え）。
-    pub swap_raw_face: bool,
-    /// 右クリックメニューで、ダーク・フラットを当てるかの切り替えが選ばれた。
-    pub toggle_calibration: bool,
-    /// ダブルクリックされた（最大化の切り替え）。
-    pub toggle_maximize: bool,
-    /// ホイールで送る枚数。負なら前へ。
-    pub step: isize,
-    /// Shift+ホイールで送るページ数。負なら前へ。
-    pub page_step: isize,
-    /// フォルダのスロットの「このフォルダへ移動」が押された。
-    pub open_folder: bool,
-    /// フォルダのスロットに画像がドロップされた。
-    pub dropped: Option<PathBuf>,
-    /// 右クリックメニューで十字の値のコピーが選ばれた。コピーする文字。
-    pub copy_text: Option<String>,
-    /// 右クリックメニューで送り先が選ばれた。
-    pub send: Option<crate::send_app::Choice>,
-    /// 右クリックメニューで「画素の変換」が選ばれた。
-    pub pipeline: bool,
-    /// 見た目の入った保存したパイプラインを選んだ。スロットの黒と白・曲線・色の表に当てる。
-    pub look: Option<crate::pipelines::Look>,
-    /// 右クリックメニューで「評価の基準にする」が選ばれた。
-    pub reference: bool,
-    /// 右クリックメニューで「QR コードを読む」が選ばれた。
-    pub read_qr: bool,
-    /// 右クリックメニューで「色を合成」が選ばれた。
-    pub compose: bool,
-    /// 右クリックの「位置合わせして比べる」。
-    pub compare: bool,
-    /// 見出しの似た画像の印がクリックされた（組を比べる）。
-    pub compare_similar: bool,
-    /// 似た画像の印の右クリックメニューで「これを残し、ほかを Bad にする」が選ばれた。
-    pub keep_in_group: bool,
-    /// 右クリックメニューで「AI タグを付ける」が選ばれた。
-    pub ai_tag: bool,
-    /// 右クリックメニューで「顔を探す」が選ばれた。
-    pub find_faces: bool,
-    /// 右クリックメニューで「AI タグを消す」が選ばれた。
-    pub remove_ai_tags: bool,
-    /// 顔の枠の右クリックで選ばれた操作（表示中の画像に対して）。
-    pub face: Option<(PathBuf, FaceAction)>,
-    /// 色導出から知らせること（ログに出す）。
-    pub derive: Option<derive::Event>,
-    /// 色の表を選んだ。
-    pub color_pick: Option<crate::colormap::Pick>,
-    /// ゲージで黒と白の値を変えた（`Some(None)` はファイルの値に戻す）。
-    pub window: Option<Option<(f32, f32)>>,
     /// 画像をドラッグしている（並べ替えやフォルダへの移動の元）。
     pub dragging: bool,
+}
+
+impl SlotFrame {
+    fn push(&mut self, command: SlotCommand) {
+        self.commands.push(command);
+    }
 }
 
 /// ヘッダ（ファイル名とズーム率の帯）の高さ。
@@ -1151,7 +1166,7 @@ impl Slot {
         bar: Rect,
         lang: Language,
         presets: &[crate::pipelines::Preset],
-        out: &mut SlotResponse,
+        out: &mut SlotFrame,
     ) {
         let inner = bar.shrink2(vec2(4.0, 1.0));
         let mut child = ui.new_child(
@@ -1198,7 +1213,9 @@ impl Slot {
                 d.view = view;
                 d.split = split;
                 self.derive = Some(d);
-                out.look = p.look.clone();
+                if let Some(look) = p.look.clone() {
+                    out.push(SlotCommand::ApplyLook(look));
+                }
             }
             None => {}
         }
@@ -1207,7 +1224,7 @@ impl Slot {
             .on_hover_text(tr(lang, "Open the pixel pipeline for this slot"))
             .clicked()
         {
-            out.pipeline = true;
+            out.push(SlotCommand::OpenPipeline);
         }
         let on = self.derive.is_some();
         let view = self.derive.as_ref().map(|d| d.view);
@@ -1237,7 +1254,7 @@ impl Slot {
                         target
                     };
                 }
-                out.clicked = true;
+                out.push(SlotCommand::Activate);
             }
         }
         if self.derive.as_ref().is_some_and(Derive::busy) {
@@ -1249,13 +1266,7 @@ impl Slot {
         }
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        rect: Rect,
-        active: bool,
-        look: SlotLook,
-    ) -> SlotResponse {
+    pub fn ui(&mut self, ui: &mut egui::Ui, rect: Rect, active: bool, look: SlotLook) -> SlotFrame {
         let SlotLook {
             background,
             lang,
@@ -1280,7 +1291,7 @@ impl Slot {
             spectrum_graph,
         } = look;
         self.colors = colors;
-        let mut out = SlotResponse::default();
+        let mut out = SlotFrame::default();
         let visuals = ui.visuals().clone();
         // グラフには画素がないので、十字・ROI・色導出は当てない。
         let graph = spectrum_graph
@@ -1295,11 +1306,15 @@ impl Slot {
         if !derivable {
             self.derive = None;
         }
-        if let (Some(d), Some(shown)) = (&mut self.derive, &self.shown) {
-            out.derive = d.update(ui.ctx(), shown, texture_options);
-        }
-        if let Some(derive::Event::Refused { left: true, .. }) = &out.derive {
-            self.derive = None;
+        let derive_event = match (&mut self.derive, &self.shown) {
+            (Some(d), Some(shown)) => d.update(ui.ctx(), shown, texture_options),
+            _ => None,
+        };
+        if let Some(event) = derive_event {
+            if matches!(event, derive::Event::Refused { left: true, .. }) {
+                self.derive = None;
+            }
+            out.push(SlotCommand::Derive(event));
         }
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
         let hovering = ui.rect_contains_pointer(rect);
@@ -1340,7 +1355,7 @@ impl Slot {
             Sense::click_and_drag(),
         );
         if response.clicked() || response.drag_started() || response.secondary_clicked() {
-            out.clicked = true;
+            out.push(SlotCommand::Activate);
         }
         let drop_target = self
             .folder
@@ -1356,16 +1371,24 @@ impl Slot {
                     egui::StrokeKind::Inside,
                 );
             }
-            out.dropped = response
-                .dnd_release_payload::<DraggedFile>()
-                .map(|f| f.0.clone());
+            if let Some(file) = response.dnd_release_payload::<DraggedFile>() {
+                out.push(SlotCommand::Drop(file.0.clone()));
+            }
         }
         // ズームのツールでは続けてクリックして拡大するので、ダブルクリックを最大化にしない。
-        out.toggle_maximize = response.double_clicked() && !zoom_tool;
+        if response.double_clicked() && !zoom_tool {
+            out.push(SlotCommand::ToggleMaximize);
+        }
         if response.hovered() {
             let (wheel, shifted) = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
-            out.step = wheel_steps(&mut self.wheel, wheel);
-            out.page_step = wheel_steps(&mut self.page_wheel, shifted);
+            let step = wheel_steps(&mut self.wheel, wheel);
+            if step != 0 {
+                out.push(SlotCommand::Step(step));
+            }
+            let page_step = wheel_steps(&mut self.page_wheel, shifted);
+            if page_step != 0 {
+                out.push(SlotCommand::PageStep(page_step));
+            }
         }
 
         self.last_body = Some(body.size());
@@ -1708,8 +1731,10 @@ impl Slot {
                 &mut self.gauge_drag,
             );
             match event {
-                Some(crate::colormap_ui::GaugeEvent::Window(w)) => out.window = Some(w),
-                Some(crate::colormap_ui::GaugeEvent::Pick(p)) => out.color_pick = Some(p),
+                Some(crate::colormap_ui::GaugeEvent::Window(w)) => out.push(SlotCommand::Window(w)),
+                Some(crate::colormap_ui::GaugeEvent::Pick(p)) => {
+                    out.push(SlotCommand::ColorPick(p))
+                }
                 None => {}
             }
         }
@@ -1744,26 +1769,28 @@ impl Slot {
                         ui.menu_button(tr(lang, "Register as"), |ui| {
                             for name in people {
                                 if ui.button(name).clicked() {
-                                    out.face =
-                                        Some((path.clone(), FaceAction::Assign(*i, name.clone())));
+                                    out.push(SlotCommand::Face(
+                                        path.clone(),
+                                        FaceAction::Assign(*i, name.clone()),
+                                    ));
                                     ui.close();
                                 }
                             }
                         });
                     }
                     if ui.button(tr(lang, "Register as a new person...")).clicked() {
-                        out.face = Some((path.clone(), FaceAction::NewPerson(*i)));
+                        out.push(SlotCommand::Face(path.clone(), FaceAction::NewPerson(*i)));
                         ui.close();
                     }
                     if person.is_some() && ui.button(tr(lang, "Unlink person")).clicked() {
-                        out.face = Some((path.clone(), FaceAction::Clear(*i)));
+                        out.push(SlotCommand::Face(path.clone(), FaceAction::Clear(*i)));
                         ui.close();
                     }
                     ui.separator();
                 }
                 if let Some(text) = &mark_text {
                     if ui.button(tr(lang, "Copy point value")).clicked() {
-                        out.copy_text = Some(text.clone());
+                        out.push(SlotCommand::CopyText(text.clone()));
                         ui.close();
                     }
                     if ui.button(tr(lang, "Delete point")).clicked() {
@@ -1774,7 +1801,7 @@ impl Slot {
                 }
                 if let Some(text) = &roi_text {
                     if ui.button(tr(lang, "Copy ROI statistics")).clicked() {
-                        out.copy_text = Some(text.clone());
+                        out.push(SlotCommand::CopyText(text.clone()));
                         ui.close();
                     }
                     if ui.button(tr(lang, "Delete ROI")).clicked() {
@@ -1788,7 +1815,7 @@ impl Slot {
                     ui.close();
                 }
                 if ui.button(tr(lang, "Copy")).clicked() {
-                    out.copy = true;
+                    out.push(SlotCommand::Copy);
                     ui.close();
                 }
                 let composable = self.shown.as_ref().is_some_and(|s| {
@@ -1803,7 +1830,7 @@ impl Slot {
                         ))
                         .clicked()
                 {
-                    out.compose = true;
+                    out.push(SlotCommand::Compose);
                     ui.close();
                 }
                 if ui
@@ -1814,7 +1841,7 @@ impl Slot {
                     ))
                     .clicked()
                 {
-                    out.compare = true;
+                    out.push(SlotCommand::Compare);
                     ui.close();
                 }
                 ui.separator();
@@ -1826,11 +1853,11 @@ impl Slot {
                     ))
                     .clicked()
                 {
-                    out.reference = true;
+                    out.push(SlotCommand::SetReference);
                     ui.close();
                 }
                 if ui.button(tr(lang, "Read QR codes")).clicked() {
-                    out.read_qr = true;
+                    out.push(SlotCommand::ReadQr);
                     ui.close();
                 }
                 ui.separator();
@@ -1840,7 +1867,7 @@ impl Slot {
                     .on_disabled_hover_text(not_ready)
                     .clicked()
                 {
-                    out.ai_tag = true;
+                    out.push(SlotCommand::AiTag);
                     ui.close();
                 }
                 if ui
@@ -1848,11 +1875,11 @@ impl Slot {
                     .on_disabled_hover_text(not_ready)
                     .clicked()
                 {
-                    out.find_faces = true;
+                    out.push(SlotCommand::FindFaces);
                     ui.close();
                 }
                 if ui.button(tr(lang, "Remove AI tags")).clicked() {
-                    out.remove_ai_tags = true;
+                    out.push(SlotCommand::RemoveAiTags);
                     ui.close();
                 }
                 if self.shown.is_some() {
@@ -1866,7 +1893,7 @@ impl Slot {
                         .button(tr(lang, "Develop RAW from sensor data"))
                         .clicked()
                 {
-                    out.develop = true;
+                    out.push(SlotCommand::Develop);
                     ui.close();
                 }
                 let calibration = self.shown.as_ref().and_then(|s| {
@@ -1881,7 +1908,7 @@ impl Slot {
                         .checkbox(&mut on.clone(), tr(lang, "Apply dark and flat"))
                         .clicked()
                     {
-                        out.toggle_calibration = true;
+                        out.push(SlotCommand::ToggleCalibration);
                         ui.close();
                     }
                 }
@@ -1891,19 +1918,24 @@ impl Slot {
                     .is_some_and(|s| s.info.plugin == "DICOM");
                 if let Some(applied) = self.shown.as_ref().and_then(|s| s.info.look.as_ref()) {
                     vw_ui::menu::button(ui, tr(lang, "Color map"), |ui| {
-                        out.color_pick =
-                            crate::colormap_ui::pick_menu(ui, lang, applied, color_rules);
+                        if let Some(pick) =
+                            crate::colormap_ui::pick_menu(ui, lang, applied, color_rules)
+                        {
+                            out.push(SlotCommand::ColorPick(pick));
+                        }
                     });
                 }
                 if self.shown.is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
-                    out.pipeline = true;
+                    out.push(SlotCommand::OpenPipeline);
                     ui.close();
                 }
                 if let Some(shown) = &self.shown {
                     let file = crate::frames::file_of(&shown.path);
                     let destinations = dicom.then_some(destinations);
                     let offer = crate::send_app::Offer::for_path(apps, destinations, &file, false);
-                    out.send = crate::send_app::menu(ui, lang, &offer);
+                    if let Some(choice) = crate::send_app::menu(ui, lang, &offer) {
+                        out.push(SlotCommand::Send(choice));
+                    }
                 }
             });
             if delete_mark {
@@ -1983,7 +2015,7 @@ impl Slot {
             Sense::click_and_drag(),
         );
         if header_response.clicked() {
-            out.clicked = true;
+            out.push(SlotCommand::Activate);
         }
         if let Some(shown) = self.shown.as_ref().filter(|_| self.folder.is_none()) {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
@@ -2001,14 +2033,14 @@ impl Slot {
                 .on_hover_text(tr(lang, "Close slot"))
                 .clicked()
             {
-                out.close = true;
+                out.push(SlotCommand::Close);
             }
             labels_right = close_rect.left();
         }
         let next_rect = |right: f32| close_rect.translate(vec2(right - close_rect.right(), 0.0));
         if self.folder.is_some() && hovering {
             let open_rect = next_rect(labels_right);
-            out.open_folder = header_button(
+            if header_button(
                 ui,
                 &painter,
                 open_rect,
@@ -2017,7 +2049,10 @@ impl Slot {
                 14.0,
             )
             .on_hover_text(tr(lang, "Open this folder"))
-            .clicked();
+            .clicked()
+            {
+                out.push(SlotCommand::OpenFolder);
+            }
             labels_right = open_rect.left();
         }
 
@@ -2068,7 +2103,7 @@ impl Slot {
                 "Showing the image developed from the sensor data. Click to show the camera's embedded preview."
             };
             if badge.on_hover_text(tr(lang, hint)).clicked() {
-                out.swap_raw_face = true;
+                out.push(SlotCommand::SwapRawFace);
             }
             labels_right = badge_rect.left();
         }
@@ -2151,21 +2186,21 @@ impl Slot {
             }
             let response = response.on_hover_text(hint);
             if response.clicked() {
-                out.compare_similar = true;
-                out.clicked = true;
+                out.push(SlotCommand::CompareSimilar);
+                out.push(SlotCommand::Activate);
             }
             response.context_menu(|ui| {
                 if ui.button(tr(lang, "Compare the group")).clicked() {
-                    out.compare_similar = true;
-                    out.clicked = true;
+                    out.push(SlotCommand::CompareSimilar);
+                    out.push(SlotCommand::Activate);
                     ui.close();
                 }
                 if ui
                     .button(tr(lang, "Keep this one, flag the rest bad"))
                     .clicked()
                 {
-                    out.keep_in_group = true;
-                    out.clicked = true;
+                    out.push(SlotCommand::KeepInGroup);
+                    out.push(SlotCommand::Activate);
                     ui.close();
                 }
             });
@@ -2200,7 +2235,7 @@ impl Slot {
                     .clicked()
                 {
                     self.actual_size();
-                    out.clicked = true;
+                    out.push(SlotCommand::Activate);
                 }
                 let fit_rect = actual_rect.translate(vec2(-(HEADER - 2.0), 0.0));
                 if header_button(
@@ -2215,7 +2250,7 @@ impl Slot {
                 .clicked()
                 {
                     self.reset_view();
-                    out.clicked = true;
+                    out.push(SlotCommand::Activate);
                 }
                 labels_right = fit_rect.left();
             }

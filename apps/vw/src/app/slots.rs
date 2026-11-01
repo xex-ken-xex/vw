@@ -15,7 +15,7 @@ use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
-use crate::viewer::{Full, RawFace, Shown, Slot, SlotLook};
+use crate::viewer::{FaceAction, Full, RawFace, Shown, Slot, SlotCommand, SlotLook};
 
 use super::*;
 
@@ -1046,61 +1046,6 @@ impl VwApp {
             if resp.dragging && self.slot_drag.is_none() {
                 self.slot_drag = Some(self.slots[i].id);
             }
-            if let Some(event) = resp.derive {
-                self.log_derive(event);
-            }
-            if let Some(look) = &resp.look {
-                self.apply_look(i, look);
-            }
-            if resp.pipeline {
-                self.active = i;
-                if !self.pipeline.open {
-                    self.toggle_pipeline();
-                }
-            }
-            if resp.reference {
-                self.set_quality_reference(i);
-            }
-            if resp.compose {
-                self.open_compose_dialog(i);
-            }
-            if resp.compare {
-                self.open_compare_dialog(i);
-            }
-            if resp.compare_similar {
-                self.compare_similar(i);
-            }
-            if resp.keep_in_group {
-                self.keep_in_group(i);
-            }
-            if resp.read_qr
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
-            {
-                self.read_qr_codes(ui.ctx(), path);
-            }
-            if resp.ai_tag
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
-            {
-                self.ai_tag_paths(ui.ctx(), vec![path]);
-            }
-            if resp.remove_ai_tags
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
-            {
-                self.remove_ai_tags(vec![crate::frames::file_of(&path).to_path_buf()]);
-            }
-            if resp.find_faces
-                && let Some(path) = self.slots[i].shown.as_ref().map(|s| s.path.clone())
-            {
-                self.find_faces_paths(ui.ctx(), vec![path]);
-            }
-            if let Some((path, action)) = resp.face {
-                let file = crate::frames::file_of(&path);
-                match action {
-                    crate::viewer::FaceAction::Assign(f, name) => self.assign_face(&file, f, &name),
-                    crate::viewer::FaceAction::NewPerson(f) => self.people_window.ask_name(file, f),
-                    crate::viewer::FaceAction::Clear(f) => self.clear_face(&file, f),
-                }
-            }
             // 変換の図と解析は画素を読むので、開いている間はアクティブなスロットと
             // 評価の基準のスロットにフル解像度の画像を持たせる。
             let analysis_open = self.pipeline.open || self.histogram.open;
@@ -1115,54 +1060,81 @@ impl VwApp {
             {
                 full.last_used = self.frame;
             }
-            if resp.clicked {
-                self.active = i;
-                self.set_focus(ui.ctx(), Focus::Images);
-            }
-            if resp.copy {
-                self.copy_image(ui.ctx(), i);
-            }
-            if let Some(text) = resp.copy_text {
-                self.copy_text(ui.ctx(), text, "measurement");
-            }
-            if let Some(choice) = resp.send {
-                send = Some((choice, self.slot_send_targets(i)));
-            }
-            if resp.develop {
-                self.develop_slot(i);
-            }
-            if resp.swap_raw_face {
-                self.swap_raw_face(i);
-            }
-            if resp.toggle_calibration {
-                self.toggle_calibration(i);
-            }
-            if let Some(pick) = resp.color_pick {
-                self.set_color_pick(i, pick);
-            }
-            if let Some(window) = resp.window {
-                self.set_slot_window(i, window);
-            }
-            if resp.close {
-                close = Some(i);
-            }
-            if resp.toggle_maximize {
-                if self.slots[i].is_closed_folder() {
-                    explore = Some(i);
-                } else {
-                    maximize = Some(i);
+            let shown_path = self.slots[i].shown.as_ref().map(|s| s.path.clone());
+            for command in resp.commands {
+                match command {
+                    SlotCommand::Activate => {
+                        self.active = i;
+                        self.set_focus(ui.ctx(), Focus::Images);
+                    }
+                    SlotCommand::Derive(event) => self.log_derive(event),
+                    SlotCommand::ApplyLook(look) => self.apply_look(i, &look),
+                    SlotCommand::OpenPipeline => {
+                        self.active = i;
+                        if !self.pipeline.open {
+                            self.toggle_pipeline();
+                        }
+                    }
+                    SlotCommand::SetReference => self.set_quality_reference(i),
+                    SlotCommand::Compose => self.open_compose_dialog(i),
+                    SlotCommand::Compare => self.open_compare_dialog(i),
+                    SlotCommand::CompareSimilar => self.compare_similar(i),
+                    SlotCommand::KeepInGroup => self.keep_in_group(i),
+                    SlotCommand::ReadQr => {
+                        if let Some(path) = shown_path.clone() {
+                            self.read_qr_codes(ui.ctx(), path);
+                        }
+                    }
+                    SlotCommand::AiTag => {
+                        if let Some(path) = shown_path.clone() {
+                            self.ai_tag_paths(ui.ctx(), vec![path]);
+                        }
+                    }
+                    SlotCommand::RemoveAiTags => {
+                        if let Some(path) = shown_path.clone() {
+                            self.remove_ai_tags(vec![frames::file_of(&path).to_path_buf()]);
+                        }
+                    }
+                    SlotCommand::FindFaces => {
+                        if let Some(path) = shown_path.clone() {
+                            self.find_faces_paths(ui.ctx(), vec![path]);
+                        }
+                    }
+                    SlotCommand::Face(path, action) => {
+                        let file = frames::file_of(&path);
+                        match action {
+                            FaceAction::Assign(f, name) => self.assign_face(&file, f, &name),
+                            FaceAction::NewPerson(f) => self.people_window.ask_name(file, f),
+                            FaceAction::Clear(f) => self.clear_face(&file, f),
+                        }
+                    }
+                    SlotCommand::Copy => self.copy_image(ui.ctx(), i),
+                    SlotCommand::CopyText(text) => self.copy_text(ui.ctx(), text, "measurement"),
+                    SlotCommand::Send(choice) => send = Some((choice, self.slot_send_targets(i))),
+                    SlotCommand::Develop => self.develop_slot(i),
+                    SlotCommand::SwapRawFace => self.swap_raw_face(i),
+                    SlotCommand::ToggleCalibration => self.toggle_calibration(i),
+                    SlotCommand::ColorPick(pick) => self.set_color_pick(i, pick),
+                    SlotCommand::Window(window) => self.set_slot_window(i, window),
+                    // スロットの並びを変える操作は、描画ループの途中で添字がずれないようループの後で行う。
+                    SlotCommand::Close => close = Some(i),
+                    SlotCommand::ToggleMaximize => {
+                        if self.slots[i].is_closed_folder() {
+                            explore = Some(i);
+                        } else {
+                            maximize = Some(i);
+                        }
+                    }
+                    SlotCommand::OpenFolder => open_folder = self.slots[i].folder.clone(),
+                    SlotCommand::Drop(file) => {
+                        if let Some(dir) = self.slots[i].folder.clone() {
+                            dropped = Some((file, dir));
+                        }
+                    }
+                    SlotCommand::Step(delta) => step = Some((i, delta)),
+                    SlotCommand::PageStep(delta) => page_step += delta,
                 }
             }
-            if resp.open_folder {
-                open_folder = self.slots[i].folder.clone();
-            }
-            if let (Some(file), Some(dir)) = (resp.dropped, self.slots[i].folder.clone()) {
-                dropped = Some((file, dir));
-            }
-            if resp.step != 0 {
-                step = Some((i, resp.step));
-            }
-            page_step += resp.page_step;
         }
         let mut filler_clicked = None;
         if !maximized && self.settings().viewer.layout != SlotLayout::Auto {
@@ -1204,7 +1176,11 @@ impl VwApp {
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));
-                if resp.clicked {
+                if resp
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, SlotCommand::Activate))
+                {
                     filler_clicked = Some(view.range.start + cell_index);
                 }
             }
