@@ -40,6 +40,7 @@ enum Section {
     Fullscreen,
     Pipeline,
     Fits,
+    Netcdf,
     Dicom,
     SendApps,
     DicomSend,
@@ -54,7 +55,7 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 22] = [
+    const ALL: [Section; 23] = [
         Section::Appearance,
         Section::Viewer,
         Section::Display,
@@ -66,6 +67,7 @@ impl Section {
         Section::Fullscreen,
         Section::Pipeline,
         Section::Fits,
+        Section::Netcdf,
         Section::Dicom,
         Section::SendApps,
         Section::DicomSend,
@@ -92,6 +94,7 @@ impl Section {
             Section::Fullscreen => "Fullscreen slideshow",
             Section::Pipeline => "Pixel pipeline",
             Section::Fits => "Astronomy images (FITS)",
+            Section::Netcdf => "Earth science grids (NetCDF)",
             Section::Dicom => "Medical images (DICOM)",
             Section::SendApps => "Send to apps",
             Section::DicomSend => "DICOM sending",
@@ -701,6 +704,13 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Pipeline,
+        key: "pipeline.netcdf",
+        title: "NetCDF data",
+        description: "Grids of earth science data (weather, climate, ocean): insert the color map stage from the start, and its color map.",
+        widget: pipeline_netcdf_widget,
+    },
+    Item {
+        section: Section::Pipeline,
         key: "pipeline.dicom",
         title: "DICOM images",
         description: "Gray DICOM images other than the subtypes below (CT, MR, X-ray and so on): insert the color map stage from the start, and its color map.",
@@ -838,6 +848,48 @@ const ITEMS: &[Item] = &[
         title: "Spectra as graphs",
         description: "Draw data with only one axis (spectra) as a line graph against frequency, velocity or wavelength. When off, they are shown as an image one pixel high.",
         widget: fits_spectrum_graph_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.stretch",
+        title: "First black and white",
+        description: "How the black and white points are chosen when a variable opens, from its values after scale_factor and add_offset. Percentiles uses the percentiles below; Symmetric around zero puts zero in the middle, for anomalies and winds.",
+        widget: netcdf_stretch_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.low_percent",
+        title: "Black percentile",
+        description: "With Percentiles, this percent of the pixels are drawn black (%).",
+        widget: netcdf_low_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.high_percent",
+        title: "White percentile",
+        description: "With Percentiles, pixels above this percent are drawn white (%). With Symmetric around zero, the same percent of the absolute values.",
+        widget: netcdf_high_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.same_window_for_planes",
+        title: "Same black and white for all planes",
+        description: "Choose black and white once from all times and levels of a variable, so that they can be compared. When off, each plane gets its own. Each variable has its own.",
+        widget: netcdf_same_window_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.north_up",
+        title: "North up",
+        description: "Turn data whose latitudes go from south to north upside down, so that north is at the top. Data without coordinates are shown in the order of the file.",
+        widget: netcdf_north_up_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.missing_color",
+        title: "Color of missing pixels",
+        description: "Pixels without a value (_FillValue, missing_value or outside valid_range, such as land in sea data) are drawn in this color, which is kept when a color map is applied.",
+        widget: netcdf_missing_color_widget,
     },
     Item {
         section: Section::Fits,
@@ -1822,6 +1874,11 @@ fn pipeline_fits_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
     color_node_widget(&mut p.fits, &p.palettes, "pipeline.fits", ui, lang)
 }
 
+fn pipeline_netcdf_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let p = &mut s.pipeline;
+    color_node_widget(&mut p.netcdf, &p.palettes, "pipeline.netcdf", ui, lang)
+}
+
 fn pipeline_dicom_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let p = &mut s.pipeline;
     let mut node = ColorNode {
@@ -1956,6 +2013,48 @@ fn fits_same_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) 
 fn fits_missing_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     hex_color_widget(
         &mut s.fits.missing_color,
+        Color32::from_rgb(112, 120, 136),
+        ui,
+    )
+}
+
+fn netcdf_stretch_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.netcdf.stretch;
+    ui.horizontal(|ui| {
+        for stretch in FitsStretch::ALL {
+            ui.radio_value(&mut s.netcdf.stretch, stretch, tr(lang, stretch.title()));
+        }
+    });
+    s.netcdf.stretch != before
+}
+
+fn netcdf_low_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let high = s.netcdf.high_percent;
+    percent_widget(&mut s.netcdf.low_percent, 0.0..=(high - 0.1).max(0.0), ui)
+}
+
+fn netcdf_high_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let low = s.netcdf.low_percent;
+    percent_widget(
+        &mut s.netcdf.high_percent,
+        (low + 0.1).min(100.0)..=100.0,
+        ui,
+    )
+}
+
+fn netcdf_same_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.netcdf.same_window_for_planes, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn netcdf_north_up_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.netcdf.north_up, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn netcdf_missing_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(
+        &mut s.netcdf.missing_color,
         Color32::from_rgb(112, 120, 136),
         ui,
     )

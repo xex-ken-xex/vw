@@ -2172,10 +2172,11 @@ impl Slot {
         };
         if let Some(mut text) = self.sequence.as_ref().and_then(page_text) {
             // キューブの面なら、その面の周波数・速度・偏光も並べる。
-            if let Some(plane) = self
-                .shown()
-                .and_then(|s| s.info.metadata.get(vw_fits::GROUP, vw_fits::PLANE))
-            {
+            if let Some(plane) = self.shown().and_then(|s| {
+                let m = &s.info.metadata;
+                m.get(vw_fits::GROUP, vw_fits::PLANE)
+                    .or_else(|| m.get(vw_netcdf::GROUP, vw_fits::PLANE))
+            }) {
                 text = format!("{text}  {plane}");
             }
             // ヘッダの名前の後ろに出すと、長い名前やフラグ・タグに隠れて読めなくなるので、画像の上に重ねる。

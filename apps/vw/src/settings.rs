@@ -1295,6 +1295,7 @@ pub struct PipelineSettings {
     pub gauge_on_gray: bool,
     /// TOML では表になるので、値の項目より後に置く。
     pub fits: ColorNode,
+    pub netcdf: ColorNode,
     pub dicom: DicomColorNodes,
     /// ほかの形式の灰色の画像（16bit の PNG や TIFF など）。
     pub gray: ColorNode,
@@ -1308,6 +1309,7 @@ impl Default for PipelineSettings {
             gauge_side: GaugeSide::Right,
             gauge_on_gray: false,
             fits: ColorNode::new(true, "inferno"),
+            netcdf: ColorNode::new(true, "viridis"),
             dicom: DicomColorNodes {
                 color_node: false,
                 palette: vw_core::palette::GRAY.to_owned(),
@@ -1362,6 +1364,7 @@ impl PipelineSettings {
             gauge_side,
             gauge_on_gray,
             fits: ColorNode::read(r, "pipeline.fits", &d.fits, &palettes),
+            netcdf: ColorNode::read(r, "pipeline.netcdf", &d.netcdf, &palettes),
             dicom: DicomColorNodes {
                 color_node: dicom.color_node,
                 palette: dicom.palette,
@@ -1465,27 +1468,116 @@ impl Fits {
 
     pub fn options(&self) -> vw_fits::Options {
         vw_fits::Options {
-            stretch: match self.stretch {
-                FitsStretch::MinMax => vw_fits::Stretch::MinMax,
-                FitsStretch::Percentile => vw_fits::Stretch::Percentile,
-                FitsStretch::Zscale => vw_fits::Stretch::ZScale,
-                FitsStretch::Symmetric => vw_fits::Stretch::Symmetric,
-            },
+            stretch: self.stretch.stretch(),
             low_percent: self.low_percent,
             high_percent: self.high_percent,
             curve: self.curve.curve(),
             flip_rows: self.flip_rows,
             demosaic: self.demosaic,
             same_window_for_planes: self.same_window_for_planes,
-            missing: parse_hex_color(&self.missing_color).map(|c| {
-                let [r, g, mut b] = [c.r(), c.g(), c.b()];
-                // 灰色（赤・緑・青が同じ）だと色の表を引いたときに表の色に変わってしまうので、
-                // 見分けのつかない 1 段だけ青をずらす。
-                if r == g && g == b {
-                    b = if b == 255 { 254 } else { b + 1 };
-                }
-                [r, g, b]
-            }),
+            missing: missing_color(&self.missing_color),
+        }
+    }
+}
+
+impl FitsStretch {
+    pub fn stretch(self) -> vw_fits::Stretch {
+        match self {
+            FitsStretch::MinMax => vw_fits::Stretch::MinMax,
+            FitsStretch::Percentile => vw_fits::Stretch::Percentile,
+            FitsStretch::Zscale => vw_fits::Stretch::ZScale,
+            FitsStretch::Symmetric => vw_fits::Stretch::Symmetric,
+        }
+    }
+}
+
+/// 欠損の色（#rrggbb）。
+fn missing_color(text: &str) -> Option<[u8; 3]> {
+    parse_hex_color(text).map(|c| {
+        let [r, g, mut b] = [c.r(), c.g(), c.b()];
+        // 灰色（赤・緑・青が同じ）だと色の表を引いたときに表の色に変わってしまうので、
+        // 見分けのつかない 1 段だけ青をずらす。
+        if r == g && g == b {
+            b = if b == 255 { 254 } else { b + 1 };
+        }
+        [r, g, b]
+    })
+}
+
+/// 地球の格子のデータ（NetCDF）の表示。黒と白の決め方は天体の画像と同じ仕組みで、設定は別に持つ。
+/// 気象のデータと天体の画像では、好む決め方が違うため。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Netcdf {
+    pub stretch: FitsStretch,
+    pub low_percent: f32,
+    pub high_percent: f32,
+    /// 変数の全部の面（時刻・高さ）に同じ黒と白を使う。
+    pub same_window_for_planes: bool,
+    /// 緯度が南から北へ並ぶデータの上下を返し、北を上にする。
+    pub north_up: bool,
+    /// 欠損（_FillValue など）を描く色（#rrggbb）。
+    pub missing_color: String,
+}
+
+impl Default for Netcdf {
+    fn default() -> Self {
+        let d = vw_netcdf::Options::default();
+        let [r, g, b] = vw_fits::MISSING_COLOR;
+        Self {
+            stretch: FitsStretch::Percentile,
+            low_percent: d.low_percent,
+            high_percent: d.high_percent,
+            same_window_for_planes: d.same_window_for_planes,
+            north_up: d.north_up,
+            missing_color: format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+impl Netcdf {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("netcdf");
+        let percent = |v: &f32| Fits::PERCENT_RANGE.contains(v);
+        let mut low_percent = r
+            .get_valid("low_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.low_percent);
+        let mut high_percent = r
+            .get_valid("high_percent", percent, "must be 0 to 100")
+            .unwrap_or(d.high_percent);
+        if low_percent >= high_percent {
+            r.problem(
+                "high_percent",
+                "must be larger than low_percent (both reset)".to_owned(),
+            );
+            (low_percent, high_percent) = (d.low_percent, d.high_percent);
+        }
+        Self {
+            stretch: r.get("stretch").unwrap_or(d.stretch),
+            low_percent,
+            high_percent,
+            same_window_for_planes: r
+                .get("same_window_for_planes")
+                .unwrap_or(d.same_window_for_planes),
+            north_up: r.get("north_up").unwrap_or(d.north_up),
+            missing_color: r
+                .get_valid(
+                    "missing_color",
+                    |v: &String| parse_hex_color(v).is_some(),
+                    "must be #RRGGBB",
+                )
+                .unwrap_or_else(|| d.missing_color.clone()),
+        }
+    }
+
+    pub fn options(&self) -> vw_netcdf::Options {
+        vw_netcdf::Options {
+            stretch: self.stretch.stretch(),
+            low_percent: self.low_percent,
+            high_percent: self.high_percent,
+            same_window_for_planes: self.same_window_for_planes,
+            north_up: self.north_up,
+            missing: missing_color(&self.missing_color),
         }
     }
 }
@@ -2590,6 +2682,7 @@ pub struct Settings {
     pub labels: Labels,
     pub dicom: Dicom,
     pub fits: Fits,
+    pub netcdf: Netcdf,
     pub pipeline: PipelineSettings,
     pub check: CheckSettings,
     pub similar: SimilarSettings,
@@ -2662,6 +2755,7 @@ impl Settings {
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
         let fits = Fits::read(&mut r);
+        let netcdf = Netcdf::read(&mut r);
         let pipeline = PipelineSettings::read(&mut r);
         let check = CheckSettings::read(&mut r);
         let similar = SimilarSettings::read(&mut r);
@@ -2701,6 +2795,7 @@ impl Settings {
                 labels,
                 dicom,
                 fits,
+                netcdf,
                 pipeline,
                 check,
                 similar,
@@ -4137,6 +4232,35 @@ mod fits_tests {
         assert_eq!(o.stretch, vw_fits::Stretch::ZScale);
         assert_eq!(o.curve, vw_core::Curve::Asinh);
         assert!(o.flip_rows && !o.demosaic);
+    }
+
+    #[test]
+    fn netcdf_settings_become_decoder_options() {
+        let text =
+            "[netcdf]\nstretch = \"symmetric\"\nnorth_up = false\nmissing_color = \"#808080\"\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let o = s.netcdf.options();
+        assert_eq!(o.stretch, vw_fits::Stretch::Symmetric);
+        assert!(!o.north_up);
+        // 灰色は色の表で塗り替えられないよう、青を 1 足す。
+        assert_eq!(o.missing, Some([128, 128, 129]));
+    }
+
+    #[test]
+    fn netcdf_defaults_match_the_decoder_defaults() {
+        assert_eq!(Netcdf::default().options(), vw_netcdf::Options::default());
+    }
+
+    #[test]
+    fn netcdf_percentiles_in_the_wrong_order_fall_back() {
+        let text = "[netcdf]\nlow_percent = 90.0\nhigh_percent = 10.0\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.netcdf.low_percent, Netcdf::default().low_percent);
+        assert!(
+            problems[0].starts_with("netcdf.high_percent:"),
+            "{problems:?}"
+        );
     }
 
     #[test]

@@ -1658,6 +1658,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdf5-core"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a63dbc099be18254ce9e517e1c126a2bc3ccba869ac71cf9b1fc0660a074877"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "hdf5-reader"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a31a2bcdb170e66e25cd009b4c9241bd41844ab54102ea521d0dfd769614503"
+dependencies = [
+ "flate2",
+ "hdf5-core",
+ "libc",
+ "lru 0.16.4",
+ "lz4_flex",
+ "memmap2",
+ "ndarray",
+ "parking_lot",
+ "rayon",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2298,11 +2326,29 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lru"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "lru"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 dependencies = [
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+dependencies = [
+ "twox-hash",
 ]
 
 [[package]]
@@ -2508,6 +2554,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "netcdf-core"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "859c40cef308f775ba5442ee93a6c1bd0504c2fd5151bd1ae2b4c544b4f49949"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "netcdf-reader"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a44d971ff734a75233b68148a145bd1103ec9d699351db82e48f50e4e400f3e4"
+dependencies = [
+ "chrono",
+ "hdf5-reader",
+ "memmap2",
+ "ndarray",
+ "netcdf-core",
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3465,7 +3535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d084c50c5cfa397a081850da329566c8667b0b6c4e81da16abff1fef27de93b"
 dependencies = [
  "g2p",
- "lru",
+ "lru 0.18.5",
 ]
 
 [[package]]
@@ -4426,6 +4496,7 @@ dependencies = [
  "vw-jpeg",
  "vw-launch",
  "vw-log",
+ "vw-netcdf",
  "vw-pipeline",
  "vw-png",
  "vw-quality",
@@ -4540,6 +4611,16 @@ version = "0.8.6"
 dependencies = [
  "chrono",
  "egui",
+]
+
+[[package]]
+name = "vw-netcdf"
+version = "0.8.6"
+dependencies = [
+ "hdf5-reader",
+ "netcdf-reader",
+ "vw-core",
+ "vw-fits",
 ]
 
 [[package]]

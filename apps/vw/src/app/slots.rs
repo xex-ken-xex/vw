@@ -572,6 +572,98 @@ impl VwApp {
         self.start_load(index, path, full);
     }
 
+    /// スロット `index` の NetCDF の変数を、`step` 個先（負なら前、端は反対の端へ回る）にする。
+    pub(super) fn step_variable(&mut self, index: usize, step: isize) {
+        self.choose_variable(index, |variables| {
+            let current = variables.iter().position(|v| v.current).unwrap_or(0);
+            let next = (current as isize + step).rem_euclid(variables.len() as isize) as usize;
+            Some(variables[next].path.clone())
+        });
+    }
+
+    /// スロット `index` の NetCDF の変数を、`pick` が選んだもの（[`Variable::path`]）にして読み直す。
+    /// 時刻や高さの面は、同じ番号の面を出す（同じ次元の変数なら同じ時刻）。
+    ///
+    /// [`Variable::path`]: vw_netcdf::Variable::path
+    pub(super) fn choose_variable(
+        &mut self,
+        index: usize,
+        pick: impl FnOnce(&[VariableChoice]) -> Option<String>,
+    ) {
+        let Some(shown) = self.slots.get(index).and_then(|s| s.shown()) else {
+            return;
+        };
+        if shown.info.plugin != vw_netcdf::NAME {
+            return;
+        }
+        let current = shown
+            .info
+            .metadata
+            .get(vw_netcdf::GROUP, vw_netcdf::VARIABLE)
+            .map(str::to_owned);
+        let file = frames::file_of(&shown.path);
+        let frame = frames::split(&shown.path).map_or(0, |(_, i)| i);
+        let bytes = match std::fs::read(&file) {
+            Ok(b) => b,
+            Err(e) => {
+                self.log.error(format!("{}: {e}", file.display()));
+                return;
+            }
+        };
+        let variables = match vw_netcdf::variables(&bytes) {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => return,
+            Err(e) => {
+                self.log.error(format!("{}: {e}", file.display()));
+                return;
+            }
+        };
+        let choices: Vec<VariableChoice> = variables
+            .iter()
+            .map(|v| VariableChoice {
+                path: v.path.clone(),
+                current: current.as_deref() == Some(v.path.as_str()),
+            })
+            .collect();
+        let Some(name) = pick(&choices) else {
+            return;
+        };
+        let Some(variable) = variables.iter().find(|v| v.path == name) else {
+            return;
+        };
+        self.netcdf_choices.set(&bytes, &variable.path);
+        self.log.info(format!(
+            "NetCDF variable {} in {}",
+            variable.path,
+            file.display()
+        ));
+        let planes = variable.planes();
+        let slot = &mut self.slots[index];
+        if current.as_deref() != Some(variable.path.as_str()) {
+            // 手で変えた黒と白は前の変数の単位の値なので、次の変数には持ち越さない。
+            slot.color.window = None;
+        }
+        let in_frames = slot
+            .sequence
+            .as_ref()
+            .is_none_or(|s| s.kind == crate::viewer::SequenceKind::Frames && s.folder == file);
+        let path = if !in_frames {
+            // フォルダの並びの中のファイルは、フレームに広げずにファイルのまま読み直す。
+            file
+        } else if planes > 1 {
+            let mut seq = crate::viewer::Sequence::frames(file, planes, None);
+            seq.index = frame.min(planes - 1);
+            let path = seq.paths[seq.index].clone();
+            slot.sequence = Some(seq);
+            path
+        } else {
+            slot.sequence = None;
+            file
+        };
+        let full = self.cell_needs_full();
+        self.start_load(index, path, full);
+    }
+
     /// スロット `index` の色の表を `pick` にする。
     pub(super) fn set_color_pick(&mut self, index: usize, pick: crate::colormap::Pick) {
         let slot = &mut self.slots[index];
@@ -624,17 +716,11 @@ impl VwApp {
         let black_white = match (choice.window, choice.black_white) {
             (Some((black, white)), _) => BlackWhite::Values { black, white },
             (None, BlackWhite::File) if applied.kind == crate::colormap::Kind::Fits => {
-                match fits.stretch {
-                    crate::settings::FitsStretch::Percentile => BlackWhite::Percentile {
-                        black: fits.low_percent,
-                        white: fits.high_percent,
-                    },
-                    crate::settings::FitsStretch::Zscale => BlackWhite::Zscale,
-                    crate::settings::FitsStretch::MinMax => BlackWhite::MinMax,
-                    crate::settings::FitsStretch::Symmetric => BlackWhite::Symmetric {
-                        white: fits.high_percent,
-                    },
-                }
+                stretch_look(fits.stretch, fits.low_percent, fits.high_percent)
+            }
+            (None, BlackWhite::File) if applied.kind == crate::colormap::Kind::Netcdf => {
+                let n = &self.settings().netcdf;
+                stretch_look(n.stretch, n.low_percent, n.high_percent)
             }
             (None, method) => method,
         };
@@ -1452,4 +1538,30 @@ fn resident_bytes(shown: &Shown) -> Option<usize> {
         (None, None) => None,
         (a, b) => Some(a.map_or(0, |f| f.bytes) + b.map_or(0, |f| f.bytes)),
     }
+}
+
+/// 設定の黒と白の決め方を、保存するパイプラインの書き方にする。
+fn stretch_look(
+    stretch: crate::settings::FitsStretch,
+    low: f32,
+    high: f32,
+) -> vw_pipeline::look::BlackWhite {
+    use crate::settings::FitsStretch;
+    use vw_pipeline::look::BlackWhite;
+    match stretch {
+        FitsStretch::Percentile => BlackWhite::Percentile {
+            black: low,
+            white: high,
+        },
+        FitsStretch::Zscale => BlackWhite::Zscale,
+        FitsStretch::MinMax => BlackWhite::MinMax,
+        FitsStretch::Symmetric => BlackWhite::Symmetric { white: high },
+    }
+}
+
+/// 変数を選ぶときの 1 つの候補。
+pub(super) struct VariableChoice {
+    pub path: String,
+    /// 表示中の変数。
+    pub current: bool,
 }

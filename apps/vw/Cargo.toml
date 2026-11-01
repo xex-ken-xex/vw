@@ -17,6 +17,7 @@ vw-webp.workspace = true
 vw-gif.workspace = true
 vw-tiff.workspace = true
 vw-fits.workspace = true
+vw-netcdf.workspace = true
 vw-pipeline.workspace = true
 vw-raw.workspace = true
 vw-dicom.workspace = true

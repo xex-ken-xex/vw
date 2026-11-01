@@ -74,6 +74,8 @@ pub enum Action {
     ToggleGamutWarning,
     ReadQrCodes,
     ToggleCalibration,
+    NextVariable,
+    PreviousVariable,
     NextColorMap,
     ToggleColorGauge,
     TrashBadImages,
@@ -242,6 +244,8 @@ impl Action {
         Action::ToggleGamutWarning,
         Action::ReadQrCodes,
         Action::ToggleCalibration,
+        Action::NextVariable,
+        Action::PreviousVariable,
         Action::NextColorMap,
         Action::ToggleColorGauge,
         Action::CopyImage,
@@ -401,6 +405,8 @@ impl Action {
             Action::ToggleGamutWarning => "toggle_gamut_warning",
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
+            Action::NextVariable => "next_variable",
+            Action::PreviousVariable => "previous_variable",
             Action::NextColorMap => "next_color_map",
             Action::ToggleColorGauge => "toggle_color_gauge",
             Action::TrashBadImages => "trash_bad_images",
@@ -508,6 +514,8 @@ impl Action {
             Action::ToggleGamutWarning => "Show colors outside sRGB",
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
+            Action::NextVariable => "Next variable",
+            Action::PreviousVariable => "Previous variable",
             Action::NextColorMap => "Next color map",
             Action::ToggleColorGauge => "Color scale gauge",
             Action::LayoutAuto => "Layout: auto",
@@ -643,6 +651,8 @@ impl Action {
             | Action::ToggleGamutWarning
             | Action::ReadQrCodes
             | Action::ToggleCalibration
+            | Action::NextVariable
+            | Action::PreviousVariable
             | Action::NextColorMap
             | Action::ToggleColorGauge
             | Action::CopyImage
@@ -882,6 +892,8 @@ impl Action {
             Action::ToggleGamutWarning => vec![KeyCombo::plain(O).with(false, true, false)],
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],
+            Action::NextVariable => vec![KeyCombo::plain(N)],
+            Action::PreviousVariable => vec![KeyCombo::plain(N).with(false, true, false)],
             Action::NextColorMap => vec![KeyCombo::plain(C)],
             Action::ToggleColorGauge => vec![KeyCombo::plain(G)],
             Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
@@ -1638,7 +1650,11 @@ mod tests {
     fn modifiers_must_match_exactly() {
         let map = Keymap::default();
         assert_eq!(map.action_for(Scope::Main, combo("Shift+Right")), None);
-        assert_eq!(map.action_for(Scope::Main, combo("N")), None);
+        assert_ne!(
+            map.action_for(Scope::Main, combo("N")),
+            Some(Action::NewSlot)
+        );
+        assert_eq!(map.action_for(Scope::Main, combo("Alt+N")), None);
     }
 
     #[test]

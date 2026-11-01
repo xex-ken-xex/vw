@@ -69,7 +69,7 @@ Nikon・Sony・富士フイルムを中心に、Canon や DNG も読めます。
 
 やりたいことごとに、[使い方のページ](https://xex-ken-xex.github.io/vw/manual/) にまとめてあります。英語版は [User guide](https://xex-ken-xex.github.io/vw/en/manual/) です。
 
-[はじめる](https://xex-ken-xex.github.io/vw/manual/start.html) ・ [画像を見る](https://xex-ken-xex.github.io/vw/manual/view.html) ・ [写真を選り分ける](https://xex-ken-xex.github.io/vw/manual/sort.html) ・ [RAW で撮った写真](https://xex-ken-xex.github.io/vw/manual/raw.html) ・ [画像を探す・しまう](https://xex-ken-xex.github.io/vw/manual/find.html) ・ [天体写真（FITS）](https://xex-ken-xex.github.io/vw/manual/astro.html) ・ [測る・確かめる](https://xex-ken-xex.github.io/vw/manual/check.html) ・ [設定とキーの一覧](https://xex-ken-xex.github.io/vw/manual/reference.html) ・ [よくある質問](https://xex-ken-xex.github.io/vw/manual/faq.html)
+[はじめる](https://xex-ken-xex.github.io/vw/manual/start.html) ・ [画像を見る](https://xex-ken-xex.github.io/vw/manual/view.html) ・ [写真を選り分ける](https://xex-ken-xex.github.io/vw/manual/sort.html) ・ [RAW で撮った写真](https://xex-ken-xex.github.io/vw/manual/raw.html) ・ [画像を探す・しまう](https://xex-ken-xex.github.io/vw/manual/find.html) ・ [天体写真（FITS）](https://xex-ken-xex.github.io/vw/manual/astro.html) ・ [気象・海洋のデータ（NetCDF）](https://xex-ken-xex.github.io/vw/manual/earth.html) ・ [測る・確かめる](https://xex-ken-xex.github.io/vw/manual/check.html) ・ [設定とキーの一覧](https://xex-ken-xex.github.io/vw/manual/reference.html) ・ [よくある質問](https://xex-ken-xex.github.io/vw/manual/faq.html)
 
 不具合は [Issue](https://github.com/xex-ken-xex/vw/issues/new/choose) で知らせてください。修正の提案は [CONTRIBUTING.md](CONTRIBUTING.md)、脆弱性は [SECURITY.md](SECURITY.md) の方法でお願いします。
 

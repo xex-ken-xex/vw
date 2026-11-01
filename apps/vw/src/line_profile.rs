@@ -118,7 +118,9 @@ impl Values {
             Quantity::Pet(Err(_)) => "Bq/ml".to_owned(),
         };
         Self {
-            stored: dicom_rescale(meta).or_else(|| fits_scale(meta)),
+            stored: dicom_rescale(meta)
+                .or_else(|| fits_scale(meta))
+                .or_else(|| netcdf_packing(meta)),
             suv,
             unit,
         }
@@ -175,6 +177,17 @@ fn fits_scale(meta: &Metadata) -> Option<(f64, f64)> {
     let zero = number_of(meta, vw_fits::GROUP, "BZERO").unwrap_or(0.0);
     let plain = scale == 1.0 && (zero == 0.0 || zero == 32768.0);
     (scale != 0.0 && !plain).then_some((scale, zero))
+}
+
+/// NetCDF の `scale_factor`・`add_offset`（[`vw_netcdf::Packing`]）。画像は戻した後の値で持つ。
+fn netcdf_packing(meta: &Metadata) -> Option<(f64, f64)> {
+    let number = |key| {
+        meta.get(vw_netcdf::GROUP, key)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+    };
+    let scale = number(vw_netcdf::SCALE_FACTOR)?;
+    let offset = number(vw_netcdf::ADD_OFFSET).unwrap_or(0.0);
+    (scale != 0.0 && (scale, offset) != (1.0, 0.0)).then_some((scale, offset))
 }
 
 /// 1 本の線に沿った値。
@@ -621,6 +634,29 @@ mod tests {
         assert_eq!(v.pixel(150.0), 100.0);
         assert_eq!(v.measured(150.0), 150.0);
         assert_eq!(v.unit, "Jy/beam");
+    }
+
+    #[test]
+    fn netcdf_scale_factor_and_add_offset_give_two_kinds() {
+        let m = meta(
+            vw_netcdf::GROUP,
+            &[
+                (vw_netcdf::SCALE_FACTOR, "0.0016"),
+                (vw_netcdf::ADD_OFFSET, "270"),
+                (vw_netcdf::UNITS, "K"),
+            ],
+        );
+        let v = Values::of(&m);
+        assert!(v.two_kinds());
+        assert!((v.pixel(270.16) - 100.0).abs() < 1e-9);
+        assert_eq!(v.measured(270.16), 270.16);
+        assert_eq!(v.unit, "K");
+    }
+
+    #[test]
+    fn netcdf_without_packing_is_one_kind() {
+        let m = meta(vw_netcdf::GROUP, &[(vw_netcdf::UNITS, "m")]);
+        assert!(!Values::of(&m).two_kinds());
     }
 
     #[test]

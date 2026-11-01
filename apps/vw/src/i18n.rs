@@ -3049,6 +3049,35 @@ const JA: &[(&str, &str)] = &[
     ("ROI graph", "ROI のグラフ"),
     ("Reading frames", "フレームを読んでいます"),
     ("Show/hide ROI graph", "ROI のグラフの表示/非表示"),
+    ("Next variable", "次の変数"),
+    ("Previous variable", "前の変数"),
+    ("Variable", "変数"),
+    (
+        "Earth science grids (NetCDF)",
+        "地球科学の格子のデータ (NetCDF)",
+    ),
+    ("NetCDF data", "NetCDF のデータ"),
+    (
+        "Grids of earth science data (weather, climate, ocean): insert the color map stage from the start, and its color map.",
+        "地球科学の格子のデータ（気象・気候・海洋）: 色の表の段を初めから入れるかと、その色の表。",
+    ),
+    (
+        "How the black and white points are chosen when a variable opens, from its values after scale_factor and add_offset. Percentiles uses the percentiles below; Symmetric around zero puts zero in the middle, for anomalies and winds.",
+        "変数を開いたときに、黒と白にする値の決め方。scale_factor と add_offset を当てた後の値で決めます。パーセンタイルは下の割合を使います。0 から対称は 0 を真ん中にします。平年との差や風に向きます。",
+    ),
+    (
+        "Choose black and white once from all times and levels of a variable, so that they can be compared. When off, each plane gets its own. Each variable has its own.",
+        "変数の全部の時刻・高さから黒と白を 1 つ決めて、比べられるようにします。切ると、面ごとに決めます。黒と白は変数ごとに決めます。",
+    ),
+    ("North up", "北を上にする"),
+    (
+        "Turn data whose latitudes go from south to north upside down, so that north is at the top. Data without coordinates are shown in the order of the file.",
+        "緯度が南から北へ並ぶデータの上下を返し、北を上にします。座標のないデータは、ファイルの並びのまま表示します。",
+    ),
+    (
+        "Pixels without a value (_FillValue, missing_value or outside valid_range, such as land in sea data) are drawn in this color, which is kept when a color map is applied.",
+        "値のない画素（_FillValue、missing_value、valid_range の外。海のデータの陸など）を、この色で描きます。色の表を当てても、この色のままです。",
+    ),
     (
         "Statistics of the means of all frames",
         "全フレームの平均の統計",

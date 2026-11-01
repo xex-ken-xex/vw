@@ -14,6 +14,7 @@ use crate::settings::PipelineSettings;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Fits,
+    Netcdf,
     /// DICOM の PT（PET）。
     DicomPt,
     Dicom,
@@ -25,6 +26,7 @@ impl Kind {
     pub fn of(plugin: &str, meta: &Metadata) -> Self {
         match plugin {
             "FITS" => Kind::Fits,
+            vw_netcdf::NAME => Kind::Netcdf,
             "DICOM" if meta.get("DICOM", "Modality").map(str::trim) == Some("PT") => Kind::DicomPt,
             "DICOM" => Kind::Dicom,
             _ => Kind::Gray,
@@ -35,6 +37,7 @@ impl Kind {
     pub fn title(self) -> &'static str {
         match self {
             Kind::Fits => "FITS",
+            Kind::Netcdf => "NetCDF",
             Kind::DicomPt => "DICOM PT",
             Kind::Dicom => "DICOM",
             Kind::Gray => "Other gray images",
@@ -47,7 +50,7 @@ impl Kind {
 pub struct Rules {
     palettes: Vec<Arc<Palette>>,
     /// 種類ごとに初めから入れる表。`None` は入れない。
-    defaults: [(Kind, Option<String>); 4],
+    defaults: [(Kind, Option<String>); 5],
 }
 
 impl Rules {
@@ -63,6 +66,7 @@ impl Rules {
             palettes,
             defaults: [
                 (Kind::Fits, node(s.fits.color_node, &s.fits.palette)),
+                (Kind::Netcdf, node(s.netcdf.color_node, &s.netcdf.palette)),
                 (
                     Kind::DicomPt,
                     node(s.dicom.pt.color_node, &s.dicom.pt.palette),
