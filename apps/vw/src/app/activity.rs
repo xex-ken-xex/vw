@@ -52,20 +52,18 @@ impl VwApp {
         for (name, done, total) in self.ai_models.progress() {
             tasks.push(task("Downloading", name.to_owned(), (done, total), true));
         }
-        if let Some(d) = &self.dataset_dialog {
-            if let Some(p) = d.progress() {
+        if let Some(d) = &self.dataset_dialog
+            && let Some(p) = d.progress() {
                 tasks.push(task("Dataset job", file_name(d.dir()), p, false));
             }
-        }
         if let Some(job) = self.export.as_ref().and_then(|d| d.job.as_ref()) {
             let done = job.done.load(std::sync::atomic::Ordering::Relaxed);
             tasks.push(task("Exporting", String::new(), (done, job.total), false));
         }
-        if let Some(job) = &self.send_job {
-            if let Some(p) = job.progress() {
+        if let Some(job) = &self.send_job
+            && let Some(p) = job.progress() {
                 tasks.push(task("Sending", job.destination.name.clone(), p, false));
             }
-        }
         if let Some(job) = &self.ai_job {
             tasks.push(task(
                 self.ai_job_name(),

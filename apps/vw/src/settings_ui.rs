@@ -3174,12 +3174,11 @@ impl SettingsUi {
                     changed = true;
                 }
             });
-            if let Some((a, notice)) = self.notice {
-                if a == action {
+            if let Some((a, notice)) = self.notice
+                && a == action {
                     let (color, text) = notice_text(ui, notice, lang);
                     ui.colored_label(color, text);
                 }
-            }
         });
         changed
     }
@@ -3616,11 +3615,10 @@ impl Destinations {
             self.echoes.clear();
         }
         for echo in self.echoes.values_mut() {
-            if let Echo::Running(rx) = echo {
-                if let Ok(result) = rx.try_recv() {
+            if let Echo::Running(rx) = echo
+                && let Ok(result) = rx.try_recv() {
                     *echo = Echo::Done(result);
                 }
-            }
         }
         if self.echoes.values().any(|e| matches!(e, Echo::Running(_))) {
             ui.ctx()

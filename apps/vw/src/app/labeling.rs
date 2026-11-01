@@ -145,11 +145,10 @@ impl VwApp {
         self.active = find(active_id)
             .or_else(|| first_id.and_then(find))
             .unwrap_or(at.min(self.slots.len() - 1));
-        if let Some(id) = self.maximized {
-            if find(id).is_none() {
+        if let Some(id) = self.maximized
+            && find(id).is_none() {
                 self.maximized = Some(self.slots[self.active].id);
             }
-        }
         let full = self.cell_needs_full();
         for (id, path) in loads {
             if let Some(index) = self.slots.iter().position(|s| s.id == id) {

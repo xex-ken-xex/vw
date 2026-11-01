@@ -66,8 +66,8 @@ impl PopupThumb {
             });
             self.0 = Some(State::Loading(path.to_path_buf(), rx));
         }
-        if let Some(State::Loading(p, rx)) = &self.0 {
-            if let Ok(image) = rx.try_recv() {
+        if let Some(State::Loading(p, rx)) = &self.0
+            && let Ok(image) = rx.try_recv() {
                 let p = p.clone();
                 self.0 = Some(match image {
                     Some(image) => State::Ready(
@@ -77,6 +77,5 @@ impl PopupThumb {
                     None => State::Failed(p),
                 });
             }
-        }
     }
 }

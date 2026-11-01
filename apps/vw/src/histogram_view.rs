@@ -265,8 +265,8 @@ impl HistogramView {
                 }
             });
         }
-        if let Some(Gray::Reading(rx)) = &self.gray {
-            if let Ok(result) = rx.try_recv() {
+        if let Some(Gray::Reading(rx)) = &self.gray
+            && let Ok(result) = rx.try_recv() {
                 self.gray = Some(match result {
                     Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
                         decoded: Decoded::of(&info),
@@ -276,7 +276,6 @@ impl HistogramView {
                     _ => Gray::None,
                 });
             }
-        }
         let available = self.axis_beyond_brightness(target.and_then(|t| t.image));
         if available != Some(self.axis) {
             self.axis = Axis::Brightness;
@@ -298,12 +297,11 @@ impl HistogramView {
 
     /// 条件が変わっていたら裏で数え直す。数えている間は前の結果を出しておく。
     fn count(&mut self, ctx: &egui::Context, t: &Target<'_>) {
-        if let Some((key, rx)) = &self.counting {
-            if let Ok(counted) = rx.try_recv() {
+        if let Some((key, rx)) = &self.counting
+            && let Ok(counted) = rx.try_recv() {
                 self.counted = Some((key.clone(), counted));
                 self.counting = None;
             }
-        }
         let Some(image) = t.image else { return };
         let gray = match &self.gray {
             Some(Gray::Loaded(g)) => Some(g),

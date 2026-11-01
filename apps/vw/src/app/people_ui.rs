@@ -168,12 +168,11 @@ impl VwApp {
             self.people.add(name, sample);
             registered.push((image, *index));
         }
-        if !registered.is_empty() {
-            if let Err(e) = self.people.save() {
+        if !registered.is_empty()
+            && let Err(e) = self.people.save() {
                 self.log.error(format!("Cannot save people: {e}"));
                 return;
             }
-        }
         for (image, index) in &registered {
             let saved = self.ai_tags.update(image, |e| {
                 if let Some(f) = e.faces.get_mut(*index) {
@@ -268,11 +267,10 @@ impl VwApp {
             }
             let (changed, n) = self.people.rematch(&marks, &samples, threshold, renamed);
             matched += n;
-            if changed != marks {
-                if let Err(e) = self.ai_tags.update(&image, |e| e.faces = changed) {
+            if changed != marks
+                && let Err(e) = self.ai_tags.update(&image, |e| e.faces = changed) {
                     problems.push(e);
                 }
-            }
         }
         if matched > 0 {
             self.log.info(format!(

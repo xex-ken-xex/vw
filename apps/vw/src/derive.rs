@@ -211,8 +211,8 @@ impl Derive {
 
     fn read_header(&mut self, ctx: &egui::Context, shown: &Shown) -> Option<Event> {
         let path = &shown.path;
-        if let Some((reading, rx)) = &self.reading {
-            if let Ok(result) = rx.try_recv() {
+        if let Some((reading, rx)) = &self.reading
+            && let Ok(result) = rx.try_recv() {
                 let reading = reading.clone();
                 self.reading = None;
                 let (header, event) = match result {
@@ -223,7 +223,6 @@ impl Derive {
                 self.headers.insert(reading, header);
                 return event;
             }
-        }
         if self.headers.contains_key(path) {
             return None;
         }
@@ -466,7 +465,7 @@ fn render(image: &VwImage, info: Option<&Gray>, key: &Key) -> Rendered {
             .pixels
             .iter_mut()
             .zip(&m.pixels)
-            .filter(|(_, &on)| on)
+            .filter(|&(_, &on)| on)
         {
             *c = egui::Color32::from_rgb(r, g, b);
         }

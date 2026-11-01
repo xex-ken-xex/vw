@@ -103,11 +103,10 @@ fn load_cached(dir: &Path, force: bool) -> Result<Entry, String> {
     };
     {
         let cache = LOADED.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(l) = cache.as_ref().and_then(|c| c.get(dir)).filter(|_| !force) {
-            if Some(l.modified) == modified && l.len == len {
+        if let Some(l) = cache.as_ref().and_then(|c| c.get(dir)).filter(|_| !force)
+            && Some(l.modified) == modified && l.len == len {
                 return Ok(entry(l));
             }
-        }
     }
     let fresh = Entry::new(dir.to_path_buf(), catalog::load(dir)?);
     if let Some(modified) = modified {

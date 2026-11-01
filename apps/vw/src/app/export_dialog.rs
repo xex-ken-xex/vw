@@ -166,11 +166,10 @@ impl VwApp {
                     }
                 }
             });
-        if cancel_job {
-            if let Some(job) = &dialog.job {
+        if cancel_job
+            && let Some(job) = &dialog.job {
                 job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-        }
         if !open {
             if let Some(job) = &dialog.job {
                 job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);

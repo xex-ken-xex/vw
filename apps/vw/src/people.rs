@@ -272,11 +272,10 @@ impl People {
     }
 
     pub fn set_cover(&mut self, name: &str, index: usize) {
-        if let Some(p) = self.list.iter_mut().find(|p| p.name == name) {
-            if index < p.faces.len() {
+        if let Some(p) = self.list.iter_mut().find(|p| p.name == name)
+            && index < p.faces.len() {
                 p.cover = index;
             }
-        }
     }
 
     /// 前に見つけた顔の枠を、今の登録に合わせ直したものと、新しく名前が付いた数。
@@ -292,11 +291,10 @@ impl People {
         let mut matched = 0;
         let mut out = marks.to_vec();
         for (i, mark) in out.iter_mut().enumerate() {
-            if let (Some((from, to)), Some(person)) = (renamed, &mark.person) {
-                if person == from {
+            if let (Some((from, to)), Some(person)) = (renamed, &mark.person)
+                && person == from {
                     mark.person = Some(to.to_owned());
                 }
-            }
             if mark.person.as_ref().is_some_and(|p| !names.contains(p)) {
                 mark.person = None;
                 mark.similarity = 0.0;

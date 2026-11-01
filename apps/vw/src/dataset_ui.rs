@@ -162,11 +162,10 @@ impl DatasetDialog {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             dialog.error = catalog::check_can_register(&dialog.dir).err();
-            if let Some(info) = dialog.unfinished.as_ref().and_then(|u| u.info.clone()) {
-                if !info.name.is_empty() {
+            if let Some(info) = dialog.unfinished.as_ref().and_then(|u| u.info.clone())
+                && !info.name.is_empty() {
                     dialog.fill_info(info);
                 }
-            }
         } else {
             match catalog::load(&dialog.dir) {
                 Ok(c) => dialog.fill(c),
@@ -253,12 +252,11 @@ impl DatasetDialog {
 
     fn start(&mut self, registry: &Registry, ctx: &egui::Context, lang: Language) {
         let dest = PathBuf::from(self.dest.trim());
-        if self.kind == Kind::Extract {
-            if let Err(e) = dataset_extract::check_destination(&self.dir, &dest) {
+        if self.kind == Kind::Extract
+            && let Err(e) = dataset_extract::check_destination(&self.dir, &dest) {
                 self.error = Some(tr_text(lang, &e));
                 return;
             }
-        }
         let kind = self.kind;
         let register = self.register_extracted;
         let progress = Arc::new(Progress::default());
@@ -609,15 +607,14 @@ impl DatasetDialog {
     /// 調べ終わったら結果をログに出す。`Some(true)` ならダイアログを閉じる。
     fn poll(&mut self, log: &mut Log, lang: Language) -> Option<bool> {
         let job = self.job.as_ref()?;
-        if self.password.is_none() {
-            if let Ok(request) = job.asks.try_recv() {
+        if self.password.is_none()
+            && let Ok(request) = job.asks.try_recv() {
                 self.password = Some(PasswordAsk {
                     request,
                     input: String::new(),
                     focused: false,
                 });
             }
-        }
         let result = match job.result.try_recv() {
             Ok(r) => r,
             Err(TryRecvError::Empty) => return None,
@@ -762,11 +759,10 @@ impl DatasetDialog {
         if modal.should_close() && answer.is_none() {
             answer = Some(None);
         }
-        if let Some(a) = answer {
-            if let Some(ask) = self.password.take() {
+        if let Some(a) = answer
+            && let Some(ask) = self.password.take() {
                 let _ = ask.request.reply.send(a);
             }
-        }
     }
 }
 

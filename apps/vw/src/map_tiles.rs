@@ -274,11 +274,10 @@ impl Worker {
                 .and_then(|t| SystemTime::now().duration_since(t).ok())?;
             Some((std::fs::read(p).ok()?, age))
         });
-        if let Some((bytes, age)) = &stored {
-            if *age < FRESH {
+        if let Some((bytes, age)) = &stored
+            && *age < FRESH {
                 return Ok(bytes.clone());
             }
-        }
         match fetch(agent, &tile_url(&self.template, id)) {
             Ok(bytes) => {
                 if let Some(p) = &path {

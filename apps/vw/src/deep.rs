@@ -256,12 +256,11 @@ impl Layer {
                 Err(TryRecvError::Disconnected) => State::Failed,
             };
         }
-        if let State::Dither(texture, current) = &mut self.state {
-            if *current != options {
+        if let State::Dither(texture, current) = &mut self.state
+            && *current != options {
                 crate::viewer::set_texture_options(texture, options);
                 *current = options;
             }
-        }
         matches!(self.state, State::Gpu { .. } | State::Dither(..))
     }
 

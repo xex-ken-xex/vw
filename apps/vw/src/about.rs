@@ -81,13 +81,11 @@ impl About {
                         lang,
                         "THIRD-PARTY-LICENSES.txt is not next to vw (it comes with the release zip).",
                     ));
-                if button.clicked() {
-                    if let Some(path) = path {
-                        if let Err(e) = vw_launch::open_file(&path) {
+                if button.clicked()
+                    && let Some(path) = path
+                        && let Err(e) = vw_launch::open_file(&path) {
                             error = Some(format!("{}: {e}", path.display()));
                         }
-                    }
-                }
             });
         self.open = open;
         error

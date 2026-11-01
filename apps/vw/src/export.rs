@@ -166,11 +166,10 @@ pub fn copy_target(
     keep_structure: bool,
     taken: &mut HashSet<PathBuf>,
 ) -> PathBuf {
-    if keep_structure {
-        if let Ok(rel) = file.strip_prefix(root) {
+    if keep_structure
+        && let Ok(rel) = file.strip_prefix(root) {
             return dest.join(rel);
         }
-    }
     let name = file.file_name().unwrap_or_default();
     let mut target = dest.join(name);
     let stem = Path::new(name)
@@ -350,8 +349,8 @@ fn unpack_images(
         } else {
             dir.join(inner)
         };
-        if let Some(located) = strip {
-            if let Err(e) = strip_bytes(&mut bytes, located) {
+        if let Some(located) = strip
+            && let Err(e) = strip_bytes(&mut bytes, located) {
                 out.failed.push(format!(
                     "{}{}{}: {e}",
                     archive.display(),
@@ -360,7 +359,6 @@ fn unpack_images(
                 ));
                 return Ok(());
             }
-        }
         match write_new(&target, &bytes) {
             Ok(()) => out.copied += 1,
             Err(e) => out.failed.push(format!("{}: {e}", target.display())),
