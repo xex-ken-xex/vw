@@ -10,11 +10,12 @@ use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::layout::{self, SlotLayout};
 use crate::loader::{FullImage, Loaded};
+use crate::loading;
 use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
-use crate::viewer::{Full, RawFace, Sequence, Shown, Slot, SlotLook};
+use crate::viewer::{Full, RawFace, Shown, Slot, SlotLook};
 
 use super::*;
 
@@ -80,22 +81,10 @@ impl VwApp {
         self.start_load(self.active, path, full);
     }
 
-    /// 今のスロット数で並べたとき、1 枠が縮小画像より大きいか。
-    ///
-    /// 大きければ、最初の読み込みでフル解像度も一緒に作る。縮小画像だけ先に読んで
-    /// 後からフル解像度を読み直すと、1 枚を大きく見る普段の使い方でデコードが 2 回になるため。
-    /// 画像の大きさは読むまで分からないので、枠の大きさだけで決める。
-    ///
-    /// 最初のフレームの前（枠の大きさがまだ分からない）は縮小画像だけにする。起動時の
-    /// フォルダの復元や引数で大きなフォルダに入ると、見えない枠まで全部フル解像度で頼み、
-    /// 数千枚で何 GB も使っていたため。画面が出てから、要る枠だけが後から頼む。
+    /// 今のスロット数で並べたとき、1 枠が縮小画像より大きいか（[`loading::cell_needs_full`]）。
     pub(super) fn cell_needs_full(&self) -> bool {
-        let Some(area) = self.images_area else {
-            return false;
-        };
         let view = self.view();
-        let cell = (area.x / view.cols as f32).max(area.y / view.rows as f32);
-        cell > memory::THUMB_SIDE as f32
+        loading::cell_needs_full(self.images_area, view.cols, view.rows)
     }
 
     /// 画面に出すスロットとマス目。
@@ -290,14 +279,19 @@ impl VwApp {
                 continue;
             }
             // 読み込み中にスロットが閉じられた、または別の画像に切り替えられた場合は捨てる。
-            let Some(index) = self.slots.iter().position(|s| {
-                s.id == r.slot
-                    && (s.request == r.request
-                        || s.full_request.is_some_and(|(q, _)| q == r.request))
-            }) else {
+            let waiting: Vec<loading::Waiting> = self
+                .slots
+                .iter()
+                .map(|s| loading::Waiting {
+                    id: s.id,
+                    request: s.request,
+                    full_request: s.full_request.map(|(q, _)| q),
+                })
+                .collect();
+            let Some((index, delivery)) = loading::deliver(&waiting, r.slot, r.request) else {
                 continue;
             };
-            if self.slots[index].request == r.request {
+            if delivery == loading::Delivery::First {
                 self.receive_image(ctx, index, r.path, r.result);
             } else {
                 self.slots[index].full_request = None;
@@ -392,7 +386,6 @@ impl VwApp {
         let options = self.texture_options;
         let s = &mut self.slots[index];
         s.loading = false;
-        let reloaded = s.shown.as_ref().is_some_and(|shown| shown.path == path);
         let loaded = match result {
             Ok(loaded) => loaded,
             Err(e) => {
@@ -426,27 +419,26 @@ impl VwApp {
             ),
         );
         let calibration_note = calibration_note(&path, &loaded.info.metadata);
-        // 1 枚のスロットで開いたマルチフレームのファイルは、フレームの並びのスロットにする。
-        // フォルダスロットの中では並べ替えない。フォルダの中を送れなくなるため。
-        let mut path = path;
-        let multiframe = loaded.info.frames > 1 && frames::split(&path).is_none();
-        if multiframe && s.sequence.is_none() {
-            let fps = frame_rate(&loaded.info.metadata);
-            let mut seq = Sequence::frames(path.clone(), loaded.info.frames, fps);
-            seq.delays = loaded.info.frame_delays.clone();
-            path = seq.paths[0].clone();
-            s.path = Some(path.clone());
+        let incoming = loading::Incoming {
+            frames: loaded.info.frames,
+            fps: frame_rate(&loaded.info.metadata),
+            delays: loaded.info.frame_delays.clone(),
+            keeps_view: loaded.info.plugin == "DICOM",
+        };
+        let arrival = loading::arrival(
+            s.shown.as_ref().map(|shown| shown.path.as_path()),
+            path,
+            s.sequence.as_ref(),
+            &incoming,
+            keep_view_setting,
+        );
+        if let Some(seq) = arrival.sequence {
+            s.path = Some(arrival.path.clone());
             s.sequence = Some(seq);
             s.from_folder = false;
         }
-        let stepped = keeps_view(
-            s.shown.as_ref().map(|shown| shown.path.as_path()),
-            &path,
-            s.sequence.as_ref(),
-            keep_view_setting || loaded.info.plugin == "DICOM",
-        );
         s.shown = Some(Shown {
-            path,
+            path: arrival.path,
             thumb,
             info: loaded.info,
             full: None,
@@ -454,8 +446,7 @@ impl VwApp {
             other: None,
         });
         s.error = None;
-        // 同じ画像の読み直し（上書きされたとき）は、拡大している場所を見続けられるよう倍率と位置を保つ。
-        if !reloaded && !stepped {
+        if arrival.reset_view {
             s.reset_view();
         }
         if let Some(full) = loaded.full {

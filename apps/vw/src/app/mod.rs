@@ -32,7 +32,7 @@ use crate::state::{self, AppState, Placement, WindowState};
 use crate::theme;
 use crate::transfer::Transfer;
 use crate::tree::{FolderTree, TreeAction};
-use crate::viewer::{Sequence, Slot, KEY_ZOOM_FACTOR};
+use crate::viewer::{Slot, KEY_ZOOM_FACTOR};
 use crate::watch::FolderWatcher;
 
 mod activity;
@@ -1257,20 +1257,6 @@ impl eframe::App for VwApp {
     }
 }
 
-/// 複数枚のスロットの中で `previous` から `next` に送ったときに、倍率と位置を引き継ぐか。
-/// スライスやフレームを送って同じ場所を見比べるため。別の並びに入れ替えたときは引き継がない。
-fn keeps_view(
-    previous: Option<&Path>,
-    next: &Path,
-    sequence: Option<&Sequence>,
-    enabled: bool,
-) -> bool {
-    let (Some(previous), Some(seq)) = (previous, sequence) else {
-        return false;
-    };
-    enabled && seq.paths.iter().any(|p| p == previous) && seq.paths.iter().any(|p| p == next)
-}
-
 /// シネやアニメーションのフレームの速さ（毎秒のフレーム数）。DICOM の Frame Time（ミリ秒）を
 /// 優先し、なければ推奨の表示速度か Cine Rate を使う。DICOM でなければアニメーションの
 /// 1 フレームの平均の表示時間を使う。
@@ -1545,18 +1531,6 @@ mod tests {
     #[test]
     fn metadata_key_column_is_capped_to_a_share_of_the_panel() {
         assert_eq!(key_column_width(500.0, 200.0), 200.0 * KEY_COLUMN_SHARE);
-    }
-
-    #[test]
-    fn view_is_kept_only_when_stepping_inside_the_same_sequence() {
-        let p = |n: &str| PathBuf::from(n);
-        let seq = Sequence::series(p("dir"), "s".into(), vec![p("a"), p("b")]);
-        assert!(keeps_view(Some(&p("a")), &p("b"), Some(&seq), true));
-        assert!(!keeps_view(Some(&p("a")), &p("b"), Some(&seq), false));
-        // 別の並びから来た、初めて出した、並びのないスロットでは全体表示に戻す。
-        assert!(!keeps_view(Some(&p("x")), &p("b"), Some(&seq), true));
-        assert!(!keeps_view(None, &p("b"), Some(&seq), true));
-        assert!(!keeps_view(Some(&p("a")), &p("b"), None, true));
     }
 
     #[test]
