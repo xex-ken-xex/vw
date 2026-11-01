@@ -3,6 +3,7 @@ name = "vw-dock"
 description = "vw's docking: panes split side by side or stacked, moved with Visual Studio-like guides, and pulled out into their own windows"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

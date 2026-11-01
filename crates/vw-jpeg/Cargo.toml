@@ -3,6 +3,7 @@ name = "vw-jpeg"
 description = "JPEG decoder plugin for vw"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

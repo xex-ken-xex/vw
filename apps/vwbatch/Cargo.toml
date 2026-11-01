@@ -3,6 +3,7 @@ name = "vwbatch"
 description = "vw で保存した画素の変換（パイプライン）を、たくさんの画像にまとめてかけて書き出す"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

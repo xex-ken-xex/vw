@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/*", "apps/*"]
 # DicoAmplio はビルドと配布から外している。直す必要が出たらここから消して戻す。
 # ソースごと消さないのは、戻すときに作り直さずに済むようにするため。
@@ -8,6 +8,8 @@ exclude = ["apps/dicoamplio"]
 [workspace.package]
 version = "0.8.5"
 edition = "2021"
+# 依存（egui 0.36）が求める最低の版。cargo update は、この版で使える範囲に解決する（resolver 3）。
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["xex (xex-ken-xex)"]
 repository = "https://github.com/xex-ken-xex/vw"

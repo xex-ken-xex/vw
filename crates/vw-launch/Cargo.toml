@@ -3,6 +3,7 @@ name = "vw-launch"
 description = "Open a file or folder with the OS default application"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
