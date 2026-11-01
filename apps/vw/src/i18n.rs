@@ -1485,6 +1485,12 @@ const JA: &[(&str, &str)] = &[
         "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
         "開いている ZIP や 7z を展開するフォルダ（中に vw-archives フォルダを作ります）。空なら OS の一時フォルダです。すでに開いているものは、閉じるまで今の場所に置きます。",
     ),
+    ("Archive extraction threads", "展開のスレッド数"),
+    (
+        "How many files of a ZIP or 7z are extracted at the same time. 0 uses the number of CPU cores (up to 8). Solid 7z and tar files are extracted one file at a time whatever this says.",
+        "ZIP や 7z の中のファイルをいくつ同時に展開するか。0 なら CPU のコア数（上限 8）です。ソリッドな 7z と tar は、この値に関わらず 1 つずつ展開します。",
+    ),
+    ("0 = {} (CPU cores)", "0 = {}（CPU のコア数）"),
     ("Archive size limit", "展開の大きさの上限"),
     (
         "Archives larger than this when extracted (GB) are extracted only after you confirm. Archives that do not fit in the free space of the extraction folder are not extracted.",

@@ -352,6 +352,11 @@ pub struct VwApp {
     archives: Archives,
     /// 読めない形式だとログで知らせたアーカイブ。フォルダを開き直すたびに同じことを出さないため。
     warned_archives: std::collections::HashSet<PathBuf>,
+    /// 展開しながら中を見せている ZIP（ZIP のパス → 展開先と、アクティブにしたスロットの id）。
+    /// 展開が失敗したら、そこから出てツリーのルートを消すため。
+    entered_archives: HashMap<PathBuf, (PathBuf, u64)>,
+    /// フォルダの読み込み中に来た変化と、監視から来たものか。読み終えてから反映する。
+    deferred_changes: Vec<(crate::watch::Change, bool)>,
     labels: LabelStore,
     /// 地図で置いた位置の変更。Ctrl+Z で戻す。
     /// 元に戻せる操作。新しいものが後ろ。
@@ -676,6 +681,7 @@ impl VwApp {
         let ai_store = crate::ai_models::Store::new(settings.path.as_deref());
         let mut archives = Archives::in_dir(settings.settings.behavior.archive_parent().as_deref());
         archives.set_size_limit(settings.settings.behavior.archive_size_limit_bytes());
+        archives.set_threads(settings.settings.behavior.archive_threads);
         let settings_dir = settings
             .path
             .as_deref()
@@ -806,6 +812,8 @@ impl VwApp {
             loaded_folders: Vec::new(),
             archives,
             warned_archives: Default::default(),
+            entered_archives: HashMap::new(),
+            deferred_changes: Vec::new(),
             labels: LabelStore::new(label_fallback),
             undo: Vec::new(),
             tagging: false,
@@ -1117,7 +1125,7 @@ impl eframe::App for VwApp {
         self.track_window(&ctx, frame);
         self.receive(&ctx);
         self.receive_archives(&ctx);
-        self.pump_folder_load();
+        self.pump_folder_load(&ctx);
         self.pump_explores();
         if self.series.poll() {
             self.group_series();

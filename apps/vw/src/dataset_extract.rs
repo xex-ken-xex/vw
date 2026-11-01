@@ -204,7 +204,7 @@ fn unpack(
     loop {
         let mut written: Vec<PathBuf> = Vec::new();
         let mut out = Unpacked::default();
-        let result = archive::for_each_entry(&path, password.as_deref(), |inner, data| {
+        let result = archive::for_each_entry(&path, password.as_deref(), |inner, data, _| {
             if progress.cancelled() {
                 return Err(EntryError::Other("Cancelled".into()));
             }

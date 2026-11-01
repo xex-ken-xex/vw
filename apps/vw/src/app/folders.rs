@@ -51,6 +51,7 @@ impl VwApp {
         let tree = self.settings().tree.clone();
         let registry = self.loader.registry().clone();
         self.finish_folder_load();
+        self.deferred_changes.clear();
         self.close_all_slots();
         self.tree.reveal(&path, &registry);
         self.current = Some(path.clone());
@@ -247,7 +248,7 @@ impl VwApp {
     }
 
     /// 読み込み中のフォルダで見つかった画像を、末尾のスロットに足していく。
-    pub(super) fn pump_folder_load(&mut self) {
+    pub(super) fn pump_folder_load(&mut self, ctx: &egui::Context) {
         let Some(load) = &mut self.folder_load else {
             return;
         };
@@ -307,6 +308,7 @@ impl VwApp {
         }
         if finished {
             self.finish_folder_load();
+            self.apply_deferred_changes(ctx);
         }
     }
 
@@ -519,19 +521,47 @@ impl VwApp {
             ctx.request_repaint_after(watch::QUIET);
         }
         if !changes.is_empty() {
-            self.apply_changes(ctx, changes);
+            self.apply_changes(ctx, changes, true);
         }
     }
 
-    pub(super) fn apply_changes(&mut self, ctx: &egui::Context, changes: Vec<watch::Change>) {
+    /// フォルダの読み込み中にためた変化を反映する。
+    pub(super) fn apply_deferred_changes(&mut self, ctx: &egui::Context) {
+        let deferred = std::mem::take(&mut self.deferred_changes);
+        let (watched, own): (Vec<_>, Vec<_>) = deferred.into_iter().partition(|(_, w)| *w);
+        for (changes, from_watcher) in [(watched, true), (own, false)] {
+            if !changes.is_empty() {
+                self.apply_changes(
+                    ctx,
+                    changes.into_iter().map(|(c, _)| c).collect(),
+                    from_watcher,
+                );
+            }
+        }
+    }
+
+    pub(super) fn apply_changes(
+        &mut self,
+        ctx: &egui::Context,
+        changes: Vec<watch::Change>,
+        from_watcher: bool,
+    ) {
+        // フォルダを読み込み中は、スロットの並びを読み込みのほうに任せる。並びを読み直すと、
+        // まだ読み込みが足していない画像と重なるため。読み終えてから反映する。
+        if self.folder_load.is_some() {
+            self.deferred_changes
+                .extend(changes.into_iter().map(|c| (c, from_watcher)));
+            return;
+        }
         let registry = self.loader.registry().clone();
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut created = HashSet::new();
         let mut modified = HashSet::new();
         let mut removed = HashSet::new();
         for c in changes {
-            // 閉じた ZIP の展開先を消したときの変化。画像が消えたとログに出さない。
-            if self.archives.is_closed(&c.path) {
+            // vw が展開したところの変化は、展開している自分が [`Self::receive_archives`] で
+            // 知らせ、閉じるときは自分で消す。監視からの知らせはその二重になるので捨てる。
+            if from_watcher && self.archives.extracted_here(&c.path) {
                 continue;
             }
             if let Some(dir) = c.path.parent().filter(|d| !dirs.iter().any(|x| x == d)) {
@@ -579,7 +609,7 @@ impl VwApp {
             let count =
                 |set: &HashSet<PathBuf>| set.iter().filter(|p| p.parent() == Some(dir)).count();
             let (new, gone) = (count(&created), count(&removed));
-            if new + gone > 0 {
+            if new + gone > 0 && !self.archives.extracted_here(dir) {
                 self.log.info(format!(
                     "Auto reload: {new} new / {gone} removed image(s) in {}",
                     dir.display()
@@ -594,9 +624,6 @@ impl VwApp {
         }
         // フォルダを読み込み中は、スロットの並びを読み込みのほうに任せる。並びを読み直すと、
         // まだ読み込みが足していない画像と重なるため。
-        if self.folder_load.is_some() {
-            return;
-        }
         let matcher = self.matcher();
         created.retain(|p| matcher.matches(p));
         let order = self.settings().tree.order();
@@ -792,12 +819,19 @@ impl VwApp {
             return;
         }
         let order = self.settings().tree.order();
-        let new: Vec<PathBuf> = tree::list_folder(dir, registry, order)
-            .images
-            .into_iter()
-            .filter(|p| created.contains(p))
-            .collect();
-        if new.is_empty() {
+        let listing = tree::list_folder(dir, registry, order).images;
+        // ZIP の展開は、移った時点のフォルダの一覧にあった画像も「書き終えた」と知らせてくる。
+        // すでにスロットにある画像は足さない。
+        let slot_of = |slots: &[Slot], p: &Path| {
+            slots
+                .iter()
+                .position(|s| in_dir(s) && s.path.as_deref() == Some(p))
+        };
+        let new = listing
+            .iter()
+            .filter(|p| created.contains(*p) && slot_of(&self.slots, p).is_none())
+            .count();
+        if new == 0 {
             return;
         }
         if last.is_none() && root == Some(LoadInto::Folders) {
@@ -816,23 +850,39 @@ impl VwApp {
             None => is_blank(&self.slots[self.active]),
         };
         let followed_id = self.slots[self.active].id;
-        let mut index = last.map_or(self.slots.len(), |l| l + 1);
         // 読み込みで使い回すのと同じく、末尾の空のスロットは新しい画像に使う。
-        if last.is_none() && is_blank(&self.slots[self.slots.len() - 1]) {
-            index -= 1;
-            self.slots[index].from_folder = true;
-        } else {
-            self.insert_folder_slot(index);
-        }
+        let mut reuse_blank = last.is_none() && is_blank(&self.slots[self.slots.len() - 1]);
+        // フォルダの並び順の一覧を頭から見て、すでにあるスロットの次に新しい画像を挟む。
+        // 末尾に足すだけだと、ZIP の展開のように並列に（名前の順でなく）来る画像が
+        // 並び順どおりにならないため。
+        let mut at = self
+            .slots
+            .iter()
+            .position(in_dir)
+            .unwrap_or(self.slots.len());
         let full = self.cell_needs_full();
-        for (i, path) in new.into_iter().enumerate() {
-            if i > 0 {
-                index += 1;
-                self.insert_folder_slot(index);
+        let mut inserted = None;
+        for path in listing {
+            if let Some(pos) = slot_of(&self.slots, &path) {
+                at = pos + 1;
+                continue;
             }
-            self.start_load(index, path, full);
+            if !created.contains(&path) {
+                continue;
+            }
+            if std::mem::take(&mut reuse_blank) {
+                at = self.slots.len() - 1;
+                self.slots[at].from_folder = true;
+            } else {
+                self.insert_folder_slot(at);
+            }
+            self.start_load(at, path, full);
+            inserted = Some(at);
+            at += 1;
         }
-        if follow {
+        if let Some(index) = inserted
+            && follow
+        {
             self.active = index;
             if self.maximized == Some(followed_id) {
                 self.maximized = Some(self.slots[index].id);
@@ -893,24 +943,41 @@ impl VwApp {
         }
     }
 
-    /// 展開し終えた ZIP をツリーのルートに足し、その中へ移る。
+    /// 展開中の ZIP の中へ、最初のファイルが書き終わったところで移り、書き終わるたびに画像を足す。
+    /// 展開し終えたら「Extracted」をログに出す。失敗したら、その中にいれば ZIP のあるフォルダへ戻る。
     pub(super) fn receive_archives(&mut self, ctx: &egui::Context) {
         for event in self.archives.poll() {
             match event {
+                archive::Event::Extracting { mount, paths } => {
+                    if !self.entered_archives.contains_key(&mount.zip) {
+                        self.enter_archive(ctx, &mount);
+                    }
+                    let changes = paths
+                        .into_iter()
+                        .map(|path| watch::Change {
+                            path,
+                            kind: ChangeKind::Created,
+                        })
+                        .collect();
+                    self.apply_changes(ctx, changes, false);
+                    self.keep_first_slot_active(&mount);
+                }
                 archive::Event::Mounted { mount, files } => {
                     self.log.done(
                         "Extracted",
                         format!("{} ({files} files)", mount.zip.display()),
                     );
-                    self.tree.add_mounted_root(mount.dir.clone(), mount.name());
-                    let into = self.settings().tree.load_into;
-                    self.cd(ctx, mount.dir, into);
+                    if self.entered_archives.remove(&mount.zip).is_none() {
+                        self.enter_archive(ctx, &mount);
+                    }
                 }
                 archive::Event::Failed { zip, error } => {
+                    self.leave_failed_archive(ctx, &zip);
                     self.log
                         .error(format!("Cannot open {}: {error}", zip.display()));
                 }
                 archive::Event::NeedsPassword { zip, wrong } => {
+                    self.leave_failed_archive(ctx, &zip);
                     if wrong {
                         self.log
                             .warn(format!("Wrong password for {}", zip.display()));
@@ -928,6 +995,7 @@ impl VwApp {
                     limit,
                     password,
                 } => {
+                    self.leave_failed_archive(ctx, &zip);
                     self.log.warn(format!(
                         "{} is larger than the archive size limit",
                         zip.display()
@@ -943,15 +1011,43 @@ impl VwApp {
         }
     }
 
-    /// 展開した ZIP を閉じる。中の画像を出しているスロットも閉じる。展開したファイルを消すので、
-    /// スロットに残しておいても読み直せなくなるため。ZIP の中にいたら、ZIP のあるフォルダへ戻る。
-    pub(super) fn unmount(&mut self, ctx: &egui::Context, dir: &Path) {
+    /// 展開先をツリーのルートに足し、その中へ移る。
+    fn enter_archive(&mut self, ctx: &egui::Context, mount: &archive::Mount) {
+        self.tree.add_mounted_root(mount.dir.clone(), mount.name());
+        let into = self.settings().tree.load_into;
+        self.cd(ctx, mount.dir.clone(), into);
+        let active = self.slots[self.active].id;
+        self.entered_archives
+            .insert(mount.zip.clone(), (mount.dir.clone(), active));
+    }
+
+    /// 展開で画像が前に挟まっても、利用者がスロットを選び直していなければ、最初のスロットを
+    /// アクティブのままにする。アクティブなスロットに付いていくと、画像が足されるたびに
+    /// 見ているページが後ろへずれていくため。
+    fn keep_first_slot_active(&mut self, mount: &archive::Mount) {
+        let Some((_, placed)) = self.entered_archives.get_mut(&mount.zip) else {
+            return;
+        };
+        if self.current.as_deref() != Some(mount.dir.as_path())
+            || self.slots[self.active].id != *placed
+        {
+            return;
+        }
+        self.active = 0;
+        *placed = self.slots[0].id;
+    }
+
+    /// 展開の途中で失敗した ZIP の中にいたら、ZIP のあるフォルダへ戻り、ツリーのルートを消す。
+    fn leave_failed_archive(&mut self, ctx: &egui::Context, zip: &Path) {
+        if let Some((dir, _)) = self.entered_archives.remove(zip) {
+            let back = zip.parent().map(Path::to_path_buf);
+            self.leave_extracted(ctx, &dir, back);
+        }
+    }
+
+    /// 展開先 `dir` の中にいれば `back` へ戻り、中の画像を出しているスロットを閉じ、ツリーのルートを消す。
+    fn leave_extracted(&mut self, ctx: &egui::Context, dir: &Path, back: Option<PathBuf>) {
         if self.current.as_deref().is_some_and(|c| c.starts_with(dir)) {
-            let back = self
-                .archives
-                .mount_of(dir)
-                .and_then(|m| m.zip.parent())
-                .map(Path::to_path_buf);
             self.finish_folder_load();
             self.close_all_slots();
             self.current = None;
@@ -973,6 +1069,17 @@ impl VwApp {
         }
         self.loaded_folders.retain(|(p, _)| !p.starts_with(dir));
         self.tree.remove_root(dir);
+    }
+
+    /// 展開した ZIP を閉じる。中の画像を出しているスロットも閉じる。展開したファイルを消すので、
+    /// スロットに残しておいても読み直せなくなるため。ZIP の中にいたら、ZIP のあるフォルダへ戻る。
+    pub(super) fn unmount(&mut self, ctx: &egui::Context, dir: &Path) {
+        let back = self
+            .archives
+            .mount_of(dir)
+            .and_then(|m| m.zip.parent())
+            .map(Path::to_path_buf);
+        self.leave_extracted(ctx, dir, back);
         if let Some(mount) = self.archives.unmount(dir) {
             self.log.info(format!("Closed {}", mount.zip.display()));
         }
