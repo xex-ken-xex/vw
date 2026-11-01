@@ -273,6 +273,31 @@ pub fn failure_message(app_name: &str, reason: &str, check: Option<PathBuf>) -> 
     text
 }
 
+/// Windows で、DLL を名前だけで読み込むときに exe のあるフォルダを探さないようにする。起動の最初に 1 回呼ぶ。
+///
+/// 描画のライブラリは d3d12.dll・dxgi.dll・opengl32.dll を名前だけで読み込む。Windows の既定の探し順は
+/// exe のフォルダが最初なので、ダウンロードのフォルダなどに同じ名前の DLL を置かれるとそれを実行してしまう。
+/// `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` にすると、以後の名前だけの読み込みは System32 などに限られる。
+///
+/// windows-sys に `Win32_System_LibraryLoader` を足さず自分で宣言しているのは、関数 1 つのために
+/// Cargo.toml（持ち主のレビューが要る）を触らないため。
+#[cfg(windows)]
+pub fn restrict_dll_search() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetDefaultDllDirectories(flags: u32) -> i32;
+    }
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
+    // SAFETY: 引数はフラグ 1 つで、ポインタもバッファも渡さない。
+    // 失敗（Windows 7 の古い版）しても起動は続ける。探し順が既定のままになるだけ。
+    unsafe {
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn restrict_dll_search() {}
+
 #[cfg(windows)]
 fn show_failure(app_name: &str, message: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
