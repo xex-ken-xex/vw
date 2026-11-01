@@ -1,5 +1,6 @@
 //! tiff クレートが返す並びを、vw の画素の並びに直す処理と、IFD の書き換え。
 
+use tiff::decoder::DecodingResult;
 use vw_core::{DecodeError, PixelData};
 
 /// 1 サンプル `bits`（1/2/4）ビットで詰めた行（行末は 1 バイトに切り上げ）を、1 サンプル 1 バイトに広げる。
@@ -450,5 +451,25 @@ impl Header {
             u64::from_be_bytes(b)
         };
         usize::try_from(v).ok()
+    }
+}
+
+/// `like` と同じ数の型で、`len` 個の並び。中身は後で上書きする前提で、`like` の先頭の値で埋める。
+pub fn same_type(like: &DecodingResult, len: usize) -> DecodingResult {
+    fn filled<T: Copy>(v: &[T], len: usize) -> Vec<T> {
+        v.first().map_or_else(Vec::new, |&x| vec![x; len])
+    }
+    match like {
+        DecodingResult::U8(v) => DecodingResult::U8(filled(v, len)),
+        DecodingResult::U16(v) => DecodingResult::U16(filled(v, len)),
+        DecodingResult::U32(v) => DecodingResult::U32(filled(v, len)),
+        DecodingResult::U64(v) => DecodingResult::U64(filled(v, len)),
+        DecodingResult::F16(v) => DecodingResult::F16(filled(v, len)),
+        DecodingResult::F32(v) => DecodingResult::F32(filled(v, len)),
+        DecodingResult::F64(v) => DecodingResult::F64(filled(v, len)),
+        DecodingResult::I8(v) => DecodingResult::I8(filled(v, len)),
+        DecodingResult::I16(v) => DecodingResult::I16(filled(v, len)),
+        DecodingResult::I32(v) => DecodingResult::I32(filled(v, len)),
+        DecodingResult::I64(v) => DecodingResult::I64(filled(v, len)),
     }
 }

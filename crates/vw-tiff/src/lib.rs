@@ -218,7 +218,7 @@ fn check_size(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<(), DecodeError> {
 fn pixels(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<VwImage, DecodeError> {
     let (width, height) = decoder.dimensions().map_err(invalid)?;
     let color = decoder.colortype().map_err(invalid)?;
-    let result = decoder.read_image().map_err(invalid)?;
+    let result = all_planes(decoder)?;
     let (model, channels) = match color {
         ColorType::Gray(_) => (ColorModel::Gray, 1),
         ColorType::GrayA(_) => (ColorModel::GrayAlpha, 2),
@@ -256,6 +256,73 @@ fn pixels(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<VwImage, DecodeError> 
         _ => {}
     }
     VwImage::new(width, height, model, data).map_err(DecodeError::Invalid)
+}
+
+/// 画素を、面を分けて持つ形（PlanarConfiguration = 2）でも、交互の並び（RGBRGB…）で読む。
+fn all_planes(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<DecodingResult, DecodeError> {
+    let planar = decoder.find_tag_unsigned::<u16>(Tag::PlanarConfiguration);
+    let samples = decoder.find_tag_unsigned::<u16>(Tag::SamplesPerPixel);
+    match (planar, samples) {
+        (Ok(Some(2)), Ok(Some(planes))) if planes > 1 => chunk_by_chunk(decoder, planes.into()),
+        _ => decoder.read_image().map_err(invalid),
+    }
+}
+
+/// 面を分けて持つ形を、ストリップかタイルを 1 つずつ読んで組み立てる。
+/// tiff クレート 0.11 の `read_image` は 1 面目しか読まない。全部の面を読む `read_image_to_buffer` は、
+/// 高さがタイルで割り切れないと 2 面目以降の最下段で余白を切らず、クレートの中で panic する
+/// （`get_padding` が面をまたいだ番号で段を数える）。そのため番号を面の中の位置に直し、余白はこちらで切る。
+fn chunk_by_chunk(
+    decoder: &mut Decoder<Cursor<&[u8]>>,
+    planes: usize,
+) -> Result<DecodingResult, DecodeError> {
+    let (width, height) = decoder.dimensions().map_err(invalid)?;
+    let bits = decoder.colortype().map_err(invalid)?.bit_depth();
+    if bits % 8 != 0 {
+        return Err(DecodeError::Unsupported(format!(
+            "TIFF with {bits}-bit samples in separate planes"
+        )));
+    }
+    let sample = usize::from(bits / 8);
+    let (chunk_w, chunk_h) = decoder.chunk_dimensions();
+    if chunk_w == 0 || chunk_h == 0 {
+        return Err(DecodeError::Invalid("TIFF chunk size is zero".into()));
+    }
+    let across = width.div_ceil(chunk_w);
+    let per_plane = across * height.div_ceil(chunk_h);
+    let (width, height) = (width as usize, height as usize);
+    let mut out: Option<DecodingResult> = None;
+    for plane in 0..planes {
+        for local in 0..per_plane {
+            let mut chunk = decoder
+                .read_chunk(plane as u32 * per_plane + local)
+                .map_err(invalid)?;
+            let out = out.get_or_insert_with(|| layout::same_type(&chunk, width * height * planes));
+            let x0 = (local % across * chunk_w) as usize;
+            let y0 = (local / across * chunk_h) as usize;
+            let w = (chunk_w as usize).min(width - x0);
+            let h = (chunk_h as usize).min(height - y0);
+            let bytes = chunk.as_buffer(0);
+            let bytes = bytes.as_bytes();
+            let mut dst = out.as_buffer(0);
+            let dst = dst.as_bytes_mut();
+            for row in 0..h {
+                for col in 0..w {
+                    let from = (row * w + col) * sample;
+                    let to = (((y0 + row) * width + x0 + col) * planes + plane) * sample;
+                    let (Some(src), Some(to)) =
+                        (bytes.get(from..from + sample), dst.get_mut(to..to + sample))
+                    else {
+                        return Err(DecodeError::Invalid(
+                            "TIFF chunk is shorter than its size".into(),
+                        ));
+                    };
+                    to.copy_from_slice(src);
+                }
+            }
+        }
+    }
+    out.ok_or_else(|| DecodeError::Invalid("TIFF has no image data".into()))
 }
 
 /// 8/16bit 以外の数は実数にする。表示は最小値〜最大値で階調を合わせるので、

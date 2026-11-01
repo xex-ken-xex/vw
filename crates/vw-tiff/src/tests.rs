@@ -24,7 +24,21 @@ fn page(width: u32, height: u32, tags: Vec<(u16, V)>, pixels: Vec<u8>) -> Page {
     }
 }
 
-/// 無圧縮、1 ページ 1 ストリップの、リトルエンディアンの TIFF を作る。
+/// `tags` の PlanarConfiguration が 2 なら、面の数（SamplesPerPixel）。そうでなければ 1。
+fn plane_count(tags: &[(u16, V)]) -> u32 {
+    let short = |tag: u16| {
+        tags.iter().find_map(|(t, v)| match v {
+            V::Short(s) if *t == tag => s.first().copied(),
+            _ => None,
+        })
+    };
+    match short(284) {
+        Some(2) => u32::from(short(277).unwrap_or(1)),
+        _ => 1,
+    }
+}
+
+/// 無圧縮、1 ページ 1 ストリップ（面を分けて持つ形は 1 面 1 ストリップ）の、リトルエンディアンの TIFF を作る。
 fn build(pages: &[Page]) -> Vec<u8> {
     let mut out = b"II*\0".to_vec();
     out.extend(0u32.to_le_bytes());
@@ -32,12 +46,17 @@ fn build(pages: &[Page]) -> Vec<u8> {
     for p in pages {
         let strip = out.len() as u32;
         out.extend(&p.pixels);
+        let planes = plane_count(&p.tags);
+        let plane_len = p.pixels.len() as u32 / planes;
         let mut tags: Vec<(u16, V)> = vec![
             (256, V::Long(vec![p.width])),
             (257, V::Long(vec![p.height])),
-            (273, V::Long(vec![strip])),
+            (
+                273,
+                V::Long((0..planes).map(|k| strip + k * plane_len).collect()),
+            ),
             (278, V::Long(vec![p.height])),
-            (279, V::Long(vec![p.pixels.len() as u32])),
+            (279, V::Long(vec![plane_len; planes as usize])),
         ];
         for (tag, v) in &p.tags {
             let v = match v {
@@ -296,6 +315,97 @@ fn metadata_lists_the_layout_and_the_text_tags_but_not_strip_offsets() {
     assert_eq!(m.get("EXIF", "Make"), Some("VW Camera Co."));
     assert_eq!(m.get("EXIF", "Software"), Some("vw test"));
     assert_eq!(m.get("EXIF", "StripOffsets"), None);
+}
+
+#[test]
+fn planar_rgb8_is_interleaved() {
+    let mut tags = basic(&[8, 8, 8], 2);
+    tags.push((284, V::Short(vec![2])));
+    // R の面、G の面、B の面の順。
+    let img = decode(&build(&[page(2, 1, tags, vec![1, 4, 2, 5, 3, 6])]));
+    assert_eq!((img.width, img.height, img.color), (2, 1, ColorModel::Rgb));
+    assert!(matches!(&img.data, PixelData::U8(v) if v == &[1, 2, 3, 4, 5, 6]));
+}
+
+#[test]
+fn planar_rgba16_is_interleaved() {
+    let px: Vec<u8> = [1u16, 5, 2, 6, 3, 7, 4, 8]
+        .iter()
+        .flat_map(|x| x.to_le_bytes())
+        .collect();
+    let mut tags = basic(&[16, 16, 16, 16], 2);
+    tags.push((284, V::Short(vec![2])));
+    tags.push((338, V::Short(vec![2])));
+    let img = decode(&build(&[page(2, 1, tags, px)]));
+    assert_eq!(img.color, ColorModel::Rgba);
+    assert!(matches!(&img.data, PixelData::U16(v) if v == &[1, 2, 3, 4, 5, 6, 7, 8]));
+}
+
+/// 3×3 画素の RGB を、16×16 のタイル 1 枚ずつの 3 面に分けて持つ TIFF。画素 i の値は R=i、G=10+i、B=20+i。
+fn tiled_planar_3x3() -> Vec<u8> {
+    let tile = 16 * 16;
+    let mut out = b"II*\0".to_vec();
+    out.extend(0u32.to_le_bytes());
+    let first_tile = out.len() as u32;
+    for plane in 0..3u8 {
+        let mut t = vec![0u8; tile];
+        for i in 0..9u8 {
+            t[usize::from(i / 3) * 16 + usize::from(i % 3)] = plane * 10 + i;
+        }
+        out.extend(t);
+    }
+    let offsets_at = out.len() as u32;
+    for k in 0..3u32 {
+        out.extend((first_tile + k * tile as u32).to_le_bytes());
+    }
+    let counts_at = out.len() as u32;
+    for _ in 0..3 {
+        out.extend((tile as u32).to_le_bytes());
+    }
+    let bits_at = out.len() as u32;
+    for _ in 0..3 {
+        out.extend(8u16.to_le_bytes());
+    }
+    let ifd = out.len() as u32;
+    out[4..8].copy_from_slice(&ifd.to_le_bytes());
+    let entries: [(u16, u16, u32, u32); 11] = [
+        (256, 3, 1, 3),
+        (257, 3, 1, 3),
+        (258, 3, 3, bits_at),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (277, 3, 1, 3),
+        (284, 3, 1, 2),
+        (322, 3, 1, 16),
+        (323, 3, 1, 16),
+        (324, 4, 3, offsets_at),
+        (325, 4, 3, counts_at),
+    ];
+    out.extend((entries.len() as u16).to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        out.extend(tag.to_le_bytes());
+        out.extend(kind.to_le_bytes());
+        out.extend(count.to_le_bytes());
+        out.extend(value.to_le_bytes());
+    }
+    out.extend(0u32.to_le_bytes());
+    out
+}
+
+#[test]
+fn planar_tiles_taller_than_the_image_are_cropped_in_every_plane() {
+    let img = decode(&tiled_planar_3x3());
+    assert_eq!((img.width, img.height, img.color), (3, 3, ColorModel::Rgb));
+    let expected: Vec<u8> = (0..9u8).flat_map(|i| [i, 10 + i, 20 + i]).collect();
+    assert!(matches!(&img.data, PixelData::U8(v) if *v == expected));
+}
+
+#[test]
+fn planar_gray_reads_the_single_plane() {
+    let mut tags = basic(&[8], 1);
+    tags.push((284, V::Short(vec![2])));
+    let img = decode(&build(&[page(3, 1, tags, vec![7, 8, 9])]));
+    assert!(matches!(&img.data, PixelData::U8(v) if v == &[7, 8, 9]));
 }
 
 #[test]
