@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::viewer::Origin;
+
 use eframe::egui;
 use vw_core::ColorModel;
 
@@ -34,8 +36,7 @@ impl VwApp {
             }
         };
         let current = self.slots[index]
-            .shown
-            .as_ref()
+            .shown()
             .and_then(|s| s.info.compose.clone());
         if let Some(c) = &current {
             for ch in c.channels.iter().flatten() {
@@ -45,7 +46,7 @@ impl VwApp {
         // 右クリックしたスロットを先に、残りは並んでいる順に。
         let order = std::iter::once(index).chain((0..self.slots.len()).filter(|&i| i != index));
         for i in order {
-            let Some(shown) = &self.slots[i].shown else {
+            let Some(shown) = self.slots[i].shown() else {
                 continue;
             };
             if shown.info.compose.is_none() && shown.info.color == ColorModel::Gray {
@@ -189,8 +190,7 @@ impl VwApp {
             return;
         };
         let before = self.slots[index]
-            .shown
-            .as_ref()
+            .shown()
             .and_then(|s| s.info.compose.as_ref().map(|c| c.files()));
         let slot = &mut self.slots[index];
         let kept = slot.color.channels;
@@ -207,7 +207,7 @@ impl VwApp {
             }
         });
         slot.sequence = None;
-        slot.from_folder = false;
+        slot.origin = Origin::Free;
         let full = self.cell_needs_full();
         self.start_load(index, path, full);
     }

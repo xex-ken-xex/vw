@@ -15,7 +15,7 @@ use crate::loader::Job;
 use crate::series::Scan;
 use crate::settings::LoadInto;
 use crate::tree::{self};
-use crate::viewer::{Sequence, SequenceKind, Slot};
+use crate::viewer::{Content, Origin, Sequence, SequenceKind, Slot};
 use crate::watch::{self, ChangeKind, FolderWatcher};
 
 use super::*;
@@ -30,7 +30,9 @@ impl VwApp {
         slot.path = Some(path.clone());
         slot.request = request;
         slot.loading = true;
-        slot.error = None;
+        if matches!(slot.content, Content::Failed(_)) {
+            slot.content = Content::Empty;
+        }
         slot.full_request = None;
         slot.copy_when_full = false;
         self.loader.request(Job {
@@ -61,7 +63,7 @@ impl VwApp {
         self.warn_unsupported_archives(&path);
         for folder in listing.folders.into_iter().chain(listing.archives) {
             let index = self.push_slot();
-            self.slots[index].folder = Some(folder);
+            self.slots[index].set_subfolder(folder);
         }
         self.scan_series(ctx, &path, &listing.images);
         self.group_series();
@@ -157,7 +159,8 @@ impl VwApp {
             }
             for index in (0..self.slots.len()).rev() {
                 let slot = &self.slots[index];
-                if slot.from_folder && slot.path.as_ref().is_some_and(|p| series.files.contains(p))
+                if slot.is_folder_image()
+                    && slot.path.as_ref().is_some_and(|p| series.files.contains(p))
                 {
                     self.close_slot(index);
                 }
@@ -166,13 +169,13 @@ impl VwApp {
             let at = self
                 .slots
                 .iter()
-                .rposition(|s| s.folder.is_some() || s.sequence.is_some())
+                .rposition(|s| s.folder().is_some() || s.sequence.is_some())
                 .map_or(0, |i| i + 1);
             if !self.slots.get(at).is_some_and(is_blank) {
                 self.insert_folder_slot(at);
             }
             let slot = &mut self.slots[at];
-            slot.from_folder = false;
+            slot.origin = Origin::Free;
             let first = series.files[0].clone();
             slot.sequence = Some(Sequence::series(dir.clone(), series.title(), series.files));
             let full = self.cell_needs_full();
@@ -191,7 +194,7 @@ impl VwApp {
     /// フォルダのスロットを開く。サブフォルダまで含めた画像をそのスロットに読み込む
     /// （サブフォルダがあれば先に確認する）。ZIP はその中へ移る。
     pub(super) fn explore(&mut self, ctx: &egui::Context, index: usize) {
-        let Some(folder) = self.slots[index].folder.clone() else {
+        let Some(folder) = self.slots[index].folder().map(Path::to_path_buf) else {
             return;
         };
         if archive::is_archive(&folder) {
@@ -295,7 +298,11 @@ impl VwApp {
                     self.next_id += 1;
                 }
                 let index = self.slots.len() - 1;
-                self.slots[index].from_folder = !chunk;
+                self.slots[index].origin = if chunk {
+                    Origin::Free
+                } else {
+                    Origin::FolderImage
+                };
                 if chunk {
                     self.slots[index].sequence = Some(Sequence::new(folder, path.clone()));
                 }
@@ -636,7 +643,7 @@ impl VwApp {
         let mut siblings: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         let mut loads = Vec::new();
         for (index, slot) in self.slots.iter_mut().enumerate() {
-            if playing == Some(slot.id) || slot.from_folder {
+            if playing == Some(slot.id) || slot.is_folder_image() {
                 continue;
             }
             let Some(current) = slot.path.clone() else {
@@ -759,33 +766,27 @@ impl VwApp {
             .collect();
         for index in (0..self.slots.len()).rev() {
             let gone = self.slots[index]
-                .folder
-                .as_ref()
-                .is_some_and(|f| !wanted.contains(f));
+                .folder()
+                .is_some_and(|f| !wanted.iter().any(|w| w == f));
             if gone {
                 self.close_slot(index);
             }
         }
         for folder in wanted {
-            if self
-                .slots
-                .iter()
-                .any(|s| s.folder.as_ref() == Some(&folder))
-            {
+            if self.slots.iter().any(|s| s.folder() == Some(&folder)) {
                 continue;
             }
             let at = self
                 .slots
                 .iter()
-                .rposition(|s| s.folder.is_some())
+                .rposition(|s| s.folder().is_some())
                 .map_or(0, |i| i + 1);
             if self.slots.get(at).is_some_and(is_blank) {
-                self.slots[at].folder = Some(folder);
+                self.slots[at].set_subfolder(folder);
             } else {
                 self.insert_folder_slot(at);
                 let slot = &mut self.slots[at];
-                slot.from_folder = false;
-                slot.folder = Some(folder);
+                slot.set_subfolder(folder);
             }
         }
     }
@@ -801,7 +802,7 @@ impl VwApp {
         registry: &Registry,
     ) {
         let in_dir =
-            |s: &Slot| s.from_folder && s.path.as_deref().and_then(Path::parent) == Some(dir);
+            |s: &Slot| s.is_folder_image() && s.path.as_deref().and_then(Path::parent) == Some(dir);
         for index in (0..self.slots.len()).rev() {
             let slot = &self.slots[index];
             if in_dir(slot) && slot.path.as_ref().is_some_and(|p| removed.contains(p)) {
@@ -872,7 +873,7 @@ impl VwApp {
             }
             if std::mem::take(&mut reuse_blank) {
                 at = self.slots.len() - 1;
-                self.slots[at].from_folder = true;
+                self.slots[at].origin = Origin::FolderImage;
             } else {
                 self.insert_folder_slot(at);
             }
@@ -894,7 +895,7 @@ impl VwApp {
     pub(super) fn insert_folder_slot(&mut self, index: usize) {
         let mut slot = Slot::new(self.next_id);
         self.next_id += 1;
-        slot.from_folder = true;
+        slot.origin = Origin::FolderImage;
         self.slots.insert(index, slot);
         if self.active >= index && self.active + 1 < self.slots.len() {
             self.active += 1;

@@ -3,7 +3,7 @@
 //! ズームとパンの計算は egui に依存しない関数（[`fit_scale`], [`zoom_at`]）に分けてあり、
 //! テストではそちらを確かめる。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eframe::egui::{
@@ -23,6 +23,34 @@ use crate::probe::{self, Mark};
 use crate::quantity::Quantity;
 use crate::roi::{self, Region, Roi};
 use crate::settings::{ColorFormat, Language};
+
+/// スロットに出しているもの。描き方と右クリックの中身はこれで分かれる。
+// `Image` だけ大きいが、スロット 1 つに 1 つしか持たず、画像を読むたびに作るものなので、
+// Box に入れて間接参照を増やす意味がない。
+#[allow(clippy::large_enum_variant)]
+pub enum Content {
+    /// 何も出していない。案内の文を出す。
+    Empty,
+    /// 読めなかった。理由をスロットに出す（ログ欄には失敗の数だけを出すため）。
+    Failed(String),
+    /// まだ開いていないフォルダ（ZIP も）。アイコンと名前だけを出す。
+    Folder(PathBuf),
+    Image(Shown),
+}
+
+/// スロットがある理由。中身の種類とは別の軸で、閉じたりフォルダの画像が増減したりしたときに
+/// どのスロットを動かすかを決める。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// 利用者が開いた（ドロップ、ツリーの選択、合成など）。
+    Free,
+    /// フォルダの読み込みで 1 枚 1 スロットに並べた。フォルダの画像が増減したら、
+    /// 中身を差し替えずにスロットを足したり閉じたりする。
+    FolderImage,
+    /// cd したフォルダの中のサブフォルダ（または ZIP）をエクスプローラのように並べたもの。
+    /// 開いたあとも、このフォルダへ画像を運べる。
+    Subfolder(PathBuf),
+}
 
 /// 表示中の画像。縮小画像のテクスチャと、ログ・メタデータ表示用の情報を持つ。
 pub struct Shown {
@@ -238,21 +266,20 @@ pub struct Slot {
     /// 配列の添字ではなくこれを使う。
     pub id: u64,
     pub path: Option<PathBuf>,
-    /// フォルダのスロットなら、そのフォルダ（または ZIP）。cd したフォルダの中のサブフォルダを
-    /// エクスプローラのように並べるためのもので、中身を開くまではアイコンと名前だけを出す。
-    pub folder: Option<PathBuf>,
+    /// 出しているもの。
+    pub content: Content,
+    /// スロットがある理由。
+    pub origin: Origin,
     /// フォルダスロットなら、そのフォルダの画像の並び。普通のスロットは `None` で、
     /// 前後の画像はその都度同じフォルダから探す。
     pub sequence: Option<Sequence>,
-    /// フォルダの読み込みで 1 枚 1 スロットに並べたスロット。フォルダの画像が増減したら、
-    /// 中身を差し替えずにスロットを足したり閉じたりする。
-    pub from_folder: bool,
     /// 最後に出した読み込み要求の番号。これと違う番号の結果は古いので捨てる。
     /// 前後の画像へ素早く送ったとき、遅れて届いた前の画像で上書きされるのを防ぐ。
     pub request: u64,
+    /// 読み込みの要求が届いていない。`content` とは別の軸。次の画像を読んでいる間も
+    /// 前の画像を出したままにするので（画像を送るたびに空にならないように）、
+    /// 「読み込み中」を中身の種類にはしない。
     pub loading: bool,
-    pub shown: Option<Shown>,
-    pub error: Option<String>,
     /// 読み込み中のフル解像度の画像の要求番号と、見込みバイト数。
     pub full_request: Option<(u64, usize)>,
     /// フル解像度の画像が届いたらコピーする（コピーしようとしたときに捨ててあった）。
@@ -729,22 +756,54 @@ pub fn split_wheel(events: &[egui::Event], page_height: f32) -> (f32, f32) {
 }
 
 impl Slot {
-    /// 中身をまだ開いていないフォルダのスロット。
+    /// 中身をまだ開いていないフォルダのスロット。開き始めたら（読み込み中）は違う。
     pub fn is_closed_folder(&self) -> bool {
-        self.folder.is_some() && self.sequence.is_none() && self.path.is_none() && !self.loading
+        matches!(self.content, Content::Folder(_)) && !self.loading
+    }
+
+    /// 表示中の画像。
+    pub fn shown(&self) -> Option<&Shown> {
+        match &self.content {
+            Content::Image(shown) => Some(shown),
+            _ => None,
+        }
+    }
+
+    pub fn shown_mut(&mut self) -> Option<&mut Shown> {
+        match &mut self.content {
+            Content::Image(shown) => Some(shown),
+            _ => None,
+        }
+    }
+
+    /// サブフォルダのスロットなら、そのフォルダ（または ZIP）。
+    pub fn folder(&self) -> Option<&Path> {
+        match &self.origin {
+            Origin::Subfolder(folder) => Some(folder),
+            _ => None,
+        }
+    }
+
+    /// フォルダの読み込みで 1 枚 1 スロットに並べたスロット。
+    pub fn is_folder_image(&self) -> bool {
+        self.origin == Origin::FolderImage
+    }
+
+    /// サブフォルダのスロットにする。中身はまだ開いていないフォルダの姿。
+    pub fn set_subfolder(&mut self, folder: PathBuf) {
+        self.content = Content::Folder(folder.clone());
+        self.origin = Origin::Subfolder(folder);
     }
 
     pub fn new(id: u64) -> Self {
         Self {
             id,
             path: None,
-            folder: None,
+            content: Content::Empty,
+            origin: Origin::Free,
             sequence: None,
-            from_folder: false,
             request: 0,
             loading: false,
-            shown: None,
-            error: None,
             full_request: None,
             copy_when_full: false,
             wants_full_now: false,
@@ -770,7 +829,7 @@ impl Slot {
 
     /// 表示中の画像の ROI のうち、`kind` のもの。種類ごとに 1 つだけ持つ。
     pub fn roi_of(&self, kind: roi::Kind) -> Option<Region> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown()?;
         self.rois
             .iter()
             .find(|r| r.path == shown.path && r.kind == kind)
@@ -778,7 +837,7 @@ impl Slot {
     }
 
     fn selected_shown_roi(&self) -> Option<&Roi> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown()?;
         self.selected_roi
             .and_then(|i| self.rois.get(i))
             .filter(|r| r.path == shown.path)
@@ -786,14 +845,14 @@ impl Slot {
 
     /// ROI の中の統計。元の画像を読み込み中なら `None`。
     fn roi_stats(&self, region: Region) -> Option<crate::histogram::Stats> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown()?;
         let full = shown.full.as_ref()?;
         Some(roi::stats(&full.image, &shown.info.metadata, region))
     }
 
     /// カラー画像の ROI の中の色の平均。元の画像を読み込み中やモノクロなら `None`。
     fn roi_color_means(&self, region: Region) -> Option<[f64; 3]> {
-        let full = self.shown.as_ref()?.full.as_ref()?;
+        let full = self.shown()?.full.as_ref()?;
         roi::color_means(&full.image, region)
     }
 
@@ -828,7 +887,7 @@ impl Slot {
         region_rect: &dyn Fn(Region) -> Rect,
         drawing: Option<(roi::Kind, Region)>,
     ) {
-        let Some(shown) = &self.shown else { return };
+        let Some(shown) = self.shown() else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_roi();
         let quantity = Quantity::of(&shown.info.metadata);
@@ -895,7 +954,7 @@ impl Slot {
 
     /// 表示中の画像に置いた十字のうち、選んでいるもの。
     fn selected_shown_mark(&self) -> Option<&Mark> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown()?;
         self.selected_mark
             .and_then(|i| self.marks.get(i))
             .filter(|m| m.path == shown.path)
@@ -908,7 +967,7 @@ impl Slot {
 
     /// 十字の位置の値と、カラーならその色の見本。
     fn mark_sample(&self, mark: &Mark) -> Option<(String, Option<[u8; 3]>)> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown()?;
         let full = shown.full.as_ref()?;
         let values = probe::sample(&full.image, &shown.info.metadata, mark.x, mark.y)?;
         let bits = shown.info.bits_per_sample;
@@ -965,7 +1024,7 @@ impl Slot {
 
     /// 今の表示（まだ一度も描いていなければ `None`）。
     pub fn view_window(&self) -> Option<ViewWindow> {
-        let (shown, body) = (self.shown.as_ref()?, self.last_body?);
+        let (shown, body) = (self.shown()?, self.last_body?);
         let base = self.last_base();
         let image = vec2(shown.info.width as f32, shown.info.height as f32);
         let scale = base * self.zoom;
@@ -979,7 +1038,7 @@ impl Slot {
 
     /// 画像の `at`（[`visible_part`] と同じ割合）を枠の中心に持ってくる。倍率は変えない。
     pub fn center_at(&mut self, at: Pos2) {
-        let Some(shown) = &self.shown else { return };
+        let Some(shown) = self.shown() else { return };
         let image = vec2(shown.info.width as f32, shown.info.height as f32);
         self.pan = pan_to_center(at, image, self.last_base() * self.zoom);
     }
@@ -999,7 +1058,7 @@ impl Slot {
     }
 
     fn base_scale(&self, body: Rect) -> f32 {
-        let Some(s) = &self.shown else { return 1.0 };
+        let Some(s) = self.shown() else { return 1.0 };
         // テクスチャの大きさではなく元画像の大きさを使う。テクスチャは上限に合わせて
         // 縮小されていることがあり、それで計算すると表示倍率が実寸とずれるため。
         fit_scale(body.size(), vec2(s.info.width as f32, s.info.height as f32))
@@ -1013,7 +1072,7 @@ impl Slot {
         lang: Language,
         mark_pos: &dyn Fn(&Mark) -> Pos2,
     ) {
-        let Some(shown) = &self.shown else { return };
+        let Some(shown) = self.shown() else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_mark();
         let missing = Quantity::of(&shown.info.metadata).missing().map(|m| {
@@ -1082,7 +1141,7 @@ impl Slot {
     /// `rect` の範囲にスロットを描き、操作を処理する。
     /// 比べるときの仕切りと左右の名前、差の最大。
     fn derive_overlay(&mut self, ui: &egui::Ui, body: Rect, lang: Language) {
-        let (Some(d), Some(shown)) = (&mut self.derive, &self.shown) else {
+        let (Some(d), Content::Image(shown)) = (&mut self.derive, &self.content) else {
             return;
         };
         let painter = ui.painter_at(body);
@@ -1294,20 +1353,16 @@ impl Slot {
         let mut out = SlotFrame::default();
         let visuals = ui.visuals().clone();
         // グラフには画素がないので、十字・ROI・色導出は当てない。
-        let graph = spectrum_graph
-            && self
-                .shown
-                .as_ref()
-                .is_some_and(|s| s.info.spectrum.is_some());
+        let graph = spectrum_graph && self.shown().is_some_and(|s| s.info.spectrum.is_some());
         let (probing, roi_tool) = (probing && !graph, roi_tool && !graph);
         // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
         let (gauge, beam) = (gauge.filter(|_| !graph), beam && !graph);
-        let derivable = !graph && self.shown.as_ref().is_some_and(is_derivable);
+        let derivable = !graph && self.shown().is_some_and(is_derivable);
         if !derivable {
             self.derive = None;
         }
-        let derive_event = match (&mut self.derive, &self.shown) {
-            (Some(d), Some(shown)) => d.update(ui.ctx(), shown, texture_options),
+        let derive_event = match (&mut self.derive, &self.content) {
+            (Some(d), Content::Image(shown)) => d.update(ui.ctx(), shown, texture_options),
             _ => None,
         };
         if let Some(event) = derive_event {
@@ -1358,8 +1413,7 @@ impl Slot {
             out.push(SlotCommand::Activate);
         }
         let drop_target = self
-            .folder
-            .as_ref()
+            .folder()
             .filter(|f| !crate::archive::is_archive(f))
             .is_some();
         if drop_target {
@@ -1393,7 +1447,8 @@ impl Slot {
 
         self.last_body = Some(body.size());
         let base = self.base_scale(body);
-        if let Some(shown) = &self.shown {
+        // `content` だけを借りて、パンや ROI の描きかけなどほかの欄を変えられるようにする。
+        if let Content::Image(shown) = &self.content {
             if pan_tool && !roi_tool {
                 if response.dragged_by(PAN_BUTTON) {
                     self.pan += response.drag_delta();
@@ -1401,7 +1456,7 @@ impl Slot {
                 } else if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
-            } else if !roi_tool && !zoom_tool && self.folder.is_none() {
+            } else if !roi_tool && !zoom_tool && self.folder().is_none() {
                 response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
                 out.dragging |= response.dragged_by(egui::PointerButton::Primary);
             }
@@ -1653,7 +1708,7 @@ impl Slot {
                     painter.galley(pill.min + pad, galley, Color32::from_gray(230));
                 }
             }
-        } else if let Some(folder) = self.folder.as_ref().filter(|_| self.is_closed_folder()) {
+        } else if let (Content::Folder(folder), false) = (&self.content, self.loading) {
             let zip = crate::archive::is_archive(folder);
             let icon = if zip {
                 egui_phosphor::regular::FILE_ZIP
@@ -1679,13 +1734,11 @@ impl Slot {
                 );
             }
         } else {
-            let msg = if self.loading {
-                tr(lang, "Loading...").to_owned()
-            } else if let Some(e) = &self.error {
+            let msg = match (&self.content, self.loading) {
+                (_, true) => tr(lang, "Loading...").to_owned(),
                 // 理由もスロットに出す。ログ欄には失敗の数だけを出し、理由はログファイルにしか書かないため。
-                format!("{}\n{e}", tr(lang, "Failed to load"))
-            } else {
-                tr(lang, empty_hint).to_owned()
+                (Content::Failed(e), false) => format!("{}\n{e}", tr(lang, "Failed to load")),
+                _ => tr(lang, empty_hint).to_owned(),
             };
             let mut job = egui::text::LayoutJob::simple(
                 msg,
@@ -1700,13 +1753,15 @@ impl Slot {
             painter.galley(pos2(body.center().x, top), galley, Color32::GRAY);
         }
 
-        if let (Some(g), Some(applied)) = (
-            &gauge,
-            self.shown.as_ref().and_then(|s| s.info.look.as_ref()),
-        ) && (applied.palette.is_some() || g.on_gray)
+        let applied_look = match &self.content {
+            Content::Image(shown) => shown.info.look.as_ref(),
+            _ => None,
+        };
+        if let (Some(g), Some(applied)) = (&gauge, applied_look)
+            && (applied.palette.is_some() || g.on_gray)
             && crate::colormap_ui::fits(body, g.side)
         {
-            let inverted = self.shown.as_ref().is_some_and(|s| {
+            let inverted = self.shown().is_some_and(|s| {
                 self.derive
                     .as_ref()
                     .is_some_and(|d| d.ready_for(s).is_some() && d.inverted(&s.path))
@@ -1746,7 +1801,7 @@ impl Slot {
             painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
             self.derive_bar(ui, bar, lang, presets, &mut out);
         }
-        if self.shown.is_some() {
+        if self.shown().is_some() {
             let mark_text = self.selected_mark_text();
             let roi_text = self.selected_roi_text();
             let mut delete_mark = false;
@@ -1754,9 +1809,7 @@ impl Slot {
             let face_menu = self
                 .selected_face
                 .as_ref()
-                .filter(|(p, i)| {
-                    Some(p) == self.shown.as_ref().map(|s| &s.path) && *i < faces.len()
-                })
+                .filter(|(p, i)| Some(p) == self.shown().map(|s| &s.path) && *i < faces.len())
                 .map(|(p, i)| (p.clone(), *i, faces[*i].person.clone()));
             vw_ui::menu::context(&response, |ui| {
                 if let Some((path, i, person)) = &face_menu {
@@ -1818,7 +1871,7 @@ impl Slot {
                     out.push(SlotCommand::Copy);
                     ui.close();
                 }
-                let composable = self.shown.as_ref().is_some_and(|s| {
+                let composable = self.shown().is_some_and(|s| {
                     s.info.compose.is_some() || s.info.color == vw_core::ColorModel::Gray
                 });
                 if composable
@@ -1882,10 +1935,10 @@ impl Slot {
                     out.push(SlotCommand::RemoveAiTags);
                     ui.close();
                 }
-                if self.shown.is_some() {
+                if self.shown().is_some() {
                     ui.separator();
                 }
-                let developable = self.shown.as_ref().is_some_and(|s| {
+                let developable = self.shown().is_some_and(|s| {
                     s.info.develop_size.is_some() && !s.developed && s.other.is_none()
                 });
                 if developable
@@ -1896,7 +1949,7 @@ impl Slot {
                     out.push(SlotCommand::Develop);
                     ui.close();
                 }
-                let calibration = self.shown.as_ref().and_then(|s| {
+                let calibration = self.shown().and_then(|s| {
                     s.info
                         .metadata
                         .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
@@ -1912,11 +1965,8 @@ impl Slot {
                         ui.close();
                     }
                 }
-                let dicom = self
-                    .shown
-                    .as_ref()
-                    .is_some_and(|s| s.info.plugin == "DICOM");
-                if let Some(applied) = self.shown.as_ref().and_then(|s| s.info.look.as_ref()) {
+                let dicom = self.shown().is_some_and(|s| s.info.plugin == "DICOM");
+                if let Some(applied) = self.shown().and_then(|s| s.info.look.as_ref()) {
                     vw_ui::menu::button(ui, tr(lang, "Color map"), |ui| {
                         if let Some(pick) =
                             crate::colormap_ui::pick_menu(ui, lang, applied, color_rules)
@@ -1925,11 +1975,11 @@ impl Slot {
                         }
                     });
                 }
-                if self.shown.is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
+                if self.shown().is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
                     out.push(SlotCommand::OpenPipeline);
                     ui.close();
                 }
-                if let Some(shown) = &self.shown {
+                if let Some(shown) = self.shown() {
                     let file = crate::frames::file_of(&shown.path);
                     let destinations = dicom.then_some(destinations);
                     let offer = crate::send_app::Offer::for_path(apps, destinations, &file, false);
@@ -1951,7 +2001,10 @@ impl Slot {
         let name = self
             .path
             .as_ref()
-            .or(self.folder.as_ref().filter(|_| self.is_closed_folder()))
+            .or(match (&self.content, self.loading) {
+                (Content::Folder(folder), false) => Some(folder),
+                _ => None,
+            })
             .and_then(|p| {
                 crate::compose::title(p)
                     .or_else(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -1979,8 +2032,7 @@ impl Slot {
         if let Some(mut text) = self.sequence.as_ref().and_then(page_text) {
             // キューブの面なら、その面の周波数・速度・偏光も並べる。
             if let Some(plane) = self
-                .shown
-                .as_ref()
+                .shown()
                 .and_then(|s| s.info.metadata.get(vw_fits::GROUP, vw_fits::PLANE))
             {
                 text = format!("{text}  {plane}");
@@ -2017,7 +2069,7 @@ impl Slot {
         if header_response.clicked() {
             out.push(SlotCommand::Activate);
         }
-        if let Some(shown) = self.shown.as_ref().filter(|_| self.folder.is_none()) {
+        if let Some(shown) = self.shown().filter(|_| self.folder().is_none()) {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
             out.dragging |= header_response.dragged();
         }
@@ -2038,7 +2090,7 @@ impl Slot {
             labels_right = close_rect.left();
         }
         let next_rect = |right: f32| close_rect.translate(vec2(right - close_rect.right(), 0.0));
-        if self.folder.is_some() && hovering {
+        if self.folder().is_some() && hovering {
             let open_rect = next_rect(labels_right);
             if header_button(
                 ui,
@@ -2056,7 +2108,7 @@ impl Slot {
             labels_right = open_rect.left();
         }
 
-        if self.shown.as_ref().is_some_and(Shown::developing) {
+        if self.shown().is_some_and(Shown::developing) {
             let film_rect = next_rect(labels_right);
             let film = ui.interact(film_rect, ui.id().with(("film", self.id)), Sense::hover());
             painter.text(
@@ -2071,8 +2123,7 @@ impl Slot {
         }
 
         if let Some(preview) = self
-            .shown
-            .as_ref()
+            .shown()
             .filter(|s| s.other.is_some())
             .map(Shown::showing_raw_preview)
         {
@@ -2108,7 +2159,7 @@ impl Slot {
             labels_right = badge_rect.left();
         }
 
-        let calibration = self.shown.as_ref().and_then(|s| {
+        let calibration = self.shown().and_then(|s| {
             s.info
                 .metadata
                 .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
@@ -2143,7 +2194,7 @@ impl Slot {
             labels_right = mark_rect.left();
         }
 
-        if let Some(mark) = similar.filter(|_| self.shown.is_some()) {
+        if let Some(mark) = similar.filter(|_| self.shown().is_some()) {
             let keeper = if mark.rank == Some(1) {
                 egui_phosphor::regular::STAR
             } else {
@@ -2227,7 +2278,7 @@ impl Slot {
 
         // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと
         // ボタンを探しにくく、長い名前ではボタンが名前に重なるため。
-        if self.shown.is_some() {
+        if self.shown().is_some() {
             if hovering {
                 let actual_rect = next_rect(labels_right);
                 if header_button(ui, &painter, actual_rect, ("actual", self.id), "1:1", 12.0)
@@ -2650,9 +2701,10 @@ mod tests {
     #[test]
     fn folder_slot_stays_closed_until_its_images_are_loaded() {
         let mut slot = Slot::new(1);
-        slot.folder = Some(PathBuf::from("/photos/2026"));
+        slot.set_subfolder(PathBuf::from("/photos/2026"));
         assert!(slot.is_closed_folder());
         slot.sequence = Some(Sequence::subtree(PathBuf::from("/photos/2026")));
+        slot.loading = true;
         assert!(!slot.is_closed_folder());
     }
 
@@ -2673,7 +2725,7 @@ mod tests {
     fn new_slot_is_empty_and_fitted() {
         let slot = Slot::new(7);
         assert_eq!(slot.id, 7);
-        assert!(slot.path.is_none() && slot.shown.is_none() && !slot.loading);
+        assert!(slot.path.is_none() && slot.shown().is_none() && !slot.loading);
         assert_eq!((slot.zoom, slot.pan), (1.0, Vec2::ZERO));
     }
 }

@@ -15,7 +15,9 @@ use crate::log::Level;
 use crate::memory;
 use crate::slideshow::Frame;
 use crate::tree::{self};
-use crate::viewer::{FaceAction, Full, RawFace, Shown, Slot, SlotCommand, SlotLook};
+use crate::viewer::{
+    Content, FaceAction, Full, Origin, RawFace, Shown, Slot, SlotCommand, SlotLook,
+};
 
 use super::*;
 
@@ -70,7 +72,7 @@ impl VwApp {
         // フォルダスロットに並びの外の画像を開いたら、普通のスロットに戻す。
         let slot = &mut self.slots[self.active];
         // 読み込みで並べたスロットも、別の画像を開いたらそのフォルダの 1 枚ではなくなる。
-        slot.from_folder = false;
+        slot.origin = Origin::Free;
         if let Some(seq) = &mut slot.sequence {
             match seq.paths.iter().position(|p| *p == path) {
                 Some(i) => seq.index = i,
@@ -162,7 +164,7 @@ impl VwApp {
         let images: Vec<bool> = self
             .slots
             .iter()
-            .map(|s| s.folder.is_none() && s.path.is_some())
+            .map(|s| s.folder().is_none() && s.path.is_some())
             .collect();
         let Some(next) = image_slot_step(&images, self.active, delta, wrap) else {
             return false;
@@ -304,7 +306,7 @@ impl VwApp {
                     }
                     Err(e) => {
                         self.load_failed(&r.path, &e);
-                        let shown = self.slots[index].shown.as_mut();
+                        let shown = self.slots[index].shown_mut();
                         if shown.is_some_and(|s| s.give_up_developing()) {
                             self.log.warn(format!(
                                 "{}: could not develop the RAW; showing the embedded preview",
@@ -336,7 +338,7 @@ impl VwApp {
     ) {
         let options = self.texture_options;
         let keep_preview = self.settings().viewer.keep_raw_preview;
-        let Some(shown) = &mut self.slots[index].shown else {
+        let Some(shown) = self.slots[index].shown_mut() else {
             return;
         };
         if !shown.developing() {
@@ -389,8 +391,7 @@ impl VwApp {
         let loaded = match result {
             Ok(loaded) => loaded,
             Err(e) => {
-                s.shown = None;
-                s.error = Some(e.clone());
+                s.content = Content::Failed(e.clone());
                 self.load_failed(&path, &e);
                 return;
             }
@@ -426,7 +427,7 @@ impl VwApp {
             keeps_view: loaded.info.plugin == "DICOM",
         };
         let arrival = loading::arrival(
-            s.shown.as_ref().map(|shown| shown.path.as_path()),
+            s.shown().map(|shown| shown.path.as_path()),
             path,
             s.sequence.as_ref(),
             &incoming,
@@ -435,9 +436,9 @@ impl VwApp {
         if let Some(seq) = arrival.sequence {
             s.path = Some(arrival.path.clone());
             s.sequence = Some(seq);
-            s.from_folder = false;
+            s.origin = Origin::Free;
         }
-        s.shown = Some(Shown {
+        s.content = Content::Image(Shown {
             path: arrival.path,
             thumb,
             info: loaded.info,
@@ -445,7 +446,6 @@ impl VwApp {
             developed: false,
             other: None,
         });
-        s.error = None;
         if arrival.reset_view {
             s.reset_view();
         }
@@ -465,7 +465,7 @@ impl VwApp {
     /// フル解像度の画像をスロットに持たせる。上限を超えるときは持たずに縮小画像のままにする
     /// （コピー待ちならコピーだけ済ませる）。
     pub(super) fn attach_full(&mut self, ctx: &egui::Context, index: usize, full: FullImage) {
-        if self.slots[index].shown.is_none() {
+        if self.slots[index].shown().is_none() {
             return;
         }
         let bytes = full.bytes();
@@ -473,7 +473,7 @@ impl VwApp {
         if !memory::fits(&self.full_states(), bytes, limit) {
             // 持てないときは、コピー待ちなら標準の表示（と色の表）だけ写しておく。
             let s = &mut self.slots[index];
-            if let (true, Some(shown)) = (std::mem::take(&mut s.copy_when_full), &s.shown) {
+            if let (true, Some(shown)) = (std::mem::take(&mut s.copy_when_full), s.shown()) {
                 let palette = shown.info.look.as_ref().and_then(|a| a.palette.as_deref());
                 let image = copy::full_resolution(&full.image, palette);
                 let what = format!(
@@ -488,7 +488,7 @@ impl VwApp {
             return;
         }
         let s = &mut self.slots[index];
-        let Some(shown) = &mut s.shown else {
+        let Some(shown) = s.shown_mut() else {
             return;
         };
         let path = &shown.path;
@@ -514,7 +514,7 @@ impl VwApp {
         self.slots
             .iter()
             .filter_map(|s| {
-                let shown = s.shown.as_ref()?;
+                let shown = s.shown()?;
                 Some(memory::FullState {
                     id: s.id,
                     wanted: s.wants_full_now,
@@ -532,7 +532,8 @@ impl VwApp {
         let limit = self.settings().viewer.full_image_limit_bytes();
         let plan = memory::plan(&self.full_states(), limit);
         for s in &mut self.slots {
-            let Some(shown) = &mut s.shown else {
+            // `content` だけを借りて、`id` と要求番号はそのまま触れるようにする。
+            let Content::Image(shown) = &mut s.content else {
                 continue;
             };
             if plan.evict.contains(&s.id) {
@@ -551,7 +552,7 @@ impl VwApp {
     /// 現像できない画像と、現像を頼んだあとの画像では何もしない。
     /// スロットの FITS の、ダーク・フラットを当てるかを切り替えて読み直す。
     pub(super) fn toggle_calibration(&mut self, index: usize) {
-        let Some(shown) = &self.slots[index].shown else {
+        let Some(shown) = self.slots[index].shown() else {
             return;
         };
         if shown
@@ -585,11 +586,7 @@ impl VwApp {
 
     /// スロット `index` の色の表を、メニューの並びで次のものにする。
     pub(super) fn next_color_map(&mut self, index: usize) {
-        let Some(applied) = self.slots[index]
-            .shown
-            .as_ref()
-            .and_then(|s| s.info.look.as_ref())
-        else {
+        let Some(applied) = self.slots[index].shown().and_then(|s| s.info.look.as_ref()) else {
             return;
         };
         let next = self.color_rules.next_after(applied.palette_name());
@@ -622,7 +619,7 @@ impl VwApp {
     pub(super) fn slot_look(&self, index: usize) -> Option<crate::pipelines::Look> {
         use vw_pipeline::look::{BlackWhite, COLOR_MAP_OFF, CurveName};
         let slot = self.slots.get(index)?;
-        let shown = slot.shown.as_ref()?;
+        let shown = slot.shown()?;
         let applied = shown.info.look.as_ref()?;
         let choice = &slot.color;
         let fits = &self.settings().fits;
@@ -728,7 +725,7 @@ impl VwApp {
         let Some(slot) = self.slots.get_mut(index) else {
             return;
         };
-        if slot.shown.is_none() {
+        if slot.shown().is_none() {
             return;
         }
         slot.reset_view();
@@ -750,7 +747,7 @@ impl VwApp {
         role: vw_fits::calibration::Role,
         file: Option<PathBuf>,
     ) {
-        let Some(shown) = &self.slots[index].shown else {
+        let Some(shown) = self.slots[index].shown() else {
             return;
         };
         let light = frames::file_of(&shown.path);
@@ -767,7 +764,7 @@ impl VwApp {
 
     pub(super) fn develop_slot(&mut self, index: usize) {
         let s = &mut self.slots[index];
-        let Some(shown) = &mut s.shown else {
+        let Some(shown) = s.shown_mut() else {
             return;
         };
         if shown.showing_raw_preview() {
@@ -789,7 +786,7 @@ impl VwApp {
     /// 読み込み中のフル解像度の画像は、入れ替える前の方のものなので取り消す。
     pub(super) fn swap_raw_face(&mut self, index: usize) {
         let s = &mut self.slots[index];
-        let Some(shown) = &mut s.shown else {
+        let Content::Image(shown) = &mut s.content else {
             return;
         };
         if !shown.swap_raw_face() {
@@ -821,7 +818,7 @@ impl VwApp {
         let Some(slot) = self.slots.get(self.active) else {
             return;
         };
-        let Some(shown) = &slot.shown else {
+        let Some(shown) = slot.shown() else {
             return;
         };
         let on = slot
@@ -874,7 +871,7 @@ impl VwApp {
         let Some(slot) = self.slots.get_mut(self.active) else {
             return;
         };
-        if slot.shown.is_none() {
+        if slot.shown().is_none() {
             return;
         }
         let mut values = slot
@@ -1004,7 +1001,7 @@ impl VwApp {
                 .as_deref()
                 .map(|p| self.labels.get(p))
                 .unwrap_or_default();
-            let faces = match (&self.slots[i].shown, self.show_faces) {
+            let faces = match (self.slots[i].shown(), self.show_faces) {
                 (Some(s), true) => self.ai_tags.faces(&crate::frames::file_of(&s.path)),
                 _ => Vec::new(),
             };
@@ -1050,17 +1047,17 @@ impl VwApp {
             // 評価の基準のスロットにフル解像度の画像を持たせる。
             let analysis_open = self.pipeline.open || self.histogram.open;
             let is_reference = self.quality_reference.is_some()
-                && self.slots[i].shown.as_ref().map(|s| &s.path) == self.quality_reference.as_ref();
+                && self.slots[i].shown().map(|s| &s.path) == self.quality_reference.as_ref();
             let pipeline_wants =
                 analysis_open && (i == self.active || is_reference) || deep_target == Some(i);
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
-            if let Some(full) = slot.shown.as_mut().and_then(|s| s.full.as_mut())
+            if let Some(full) = slot.shown_mut().and_then(|s| s.full.as_mut())
                 && (resp.wants_full || pipeline_wants)
             {
                 full.last_used = self.frame;
             }
-            let shown_path = self.slots[i].shown.as_ref().map(|s| s.path.clone());
+            let shown_path = self.slots[i].shown().map(|s| s.path.clone());
             for command in resp.commands {
                 match command {
                     SlotCommand::Activate => {
@@ -1125,9 +1122,11 @@ impl VwApp {
                             maximize = Some(i);
                         }
                     }
-                    SlotCommand::OpenFolder => open_folder = self.slots[i].folder.clone(),
+                    SlotCommand::OpenFolder => {
+                        open_folder = self.slots[i].folder().map(Path::to_path_buf)
+                    }
                     SlotCommand::Drop(file) => {
-                        if let Some(dir) = self.slots[i].folder.clone() {
+                        if let Some(dir) = self.slots[i].folder().map(Path::to_path_buf) {
                             dropped = Some((file, dir));
                         }
                     }
@@ -1265,7 +1264,7 @@ impl VwApp {
         let target = pos
             .and_then(|p| cells.iter().find(|(rect, _)| rect.contains(p)))
             .filter(|(_, to)| {
-                *to != from && self.slots.get(*to).is_none_or(|s| s.folder.is_none())
+                *to != from && self.slots.get(*to).is_none_or(|s| s.folder().is_none())
             });
         if let Some((rect, to)) = target {
             self.reorder_hover = true;

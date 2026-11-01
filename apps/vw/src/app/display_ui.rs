@@ -83,7 +83,7 @@ impl VwApp {
         let mut drawn = None;
         for (i, s) in self.slots.iter_mut().enumerate() {
             let wanted = mode.filter(|_| Some(i) == target).and_then(|mode| {
-                let shown = s.shown.as_ref()?;
+                let shown = s.shown()?;
                 if s.derive.is_some() || !deep::is_deep(shown.info.bits_per_sample) {
                     return None;
                 }

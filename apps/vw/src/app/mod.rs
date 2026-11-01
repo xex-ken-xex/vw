@@ -32,7 +32,7 @@ use crate::state::{self, AppState, Placement, WindowState};
 use crate::theme;
 use crate::transfer::Transfer;
 use crate::tree::{FolderTree, TreeAction};
-use crate::viewer::{KEY_ZOOM_FACTOR, Slot};
+use crate::viewer::{Content, KEY_ZOOM_FACTOR, Slot};
 use crate::watch::FolderWatcher;
 
 mod activity;
@@ -1027,7 +1027,8 @@ impl VwApp {
             }
             // フォルダのスロットで Enter を押したらその中へ移る。別の操作にしないのは、キーの
             // 割り当てが操作ごとに重ならない決まりで、同じ Enter を両方に割り当てられないため。
-            Action::ToggleMaximize => match self.slots[self.active].folder.clone() {
+            Action::ToggleMaximize => match self.slots[self.active].folder().map(Path::to_path_buf)
+            {
                 Some(folder) => self.open_folder(ctx, folder),
                 None => self.toggle_maximize(self.active),
             },
@@ -1357,7 +1358,7 @@ fn empty_slot_hint(in_folder: bool) -> &'static str {
 
 /// 何も出しておらず、何の役目もないスロット。フォルダの中身を並べるときに使い回す。
 fn is_blank(slot: &Slot) -> bool {
-    slot.path.is_none() && !slot.loading && slot.folder.is_none() && slot.sequence.is_none()
+    slot.path.is_none() && !slot.loading && slot.folder().is_none() && slot.sequence.is_none()
 }
 
 /// パネルの見出し。本文と区別できる小さな大文字にして、縦の領域を取りすぎないようにする。
@@ -1429,7 +1430,7 @@ fn request_full(
     next_id: &mut u64,
     s: &mut Slot,
 ) {
-    let Some(shown) = &s.shown else {
+    let Content::Image(shown) = &s.content else {
         return;
     };
     let request = *next_id;

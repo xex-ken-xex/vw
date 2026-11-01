@@ -74,7 +74,7 @@ impl VwApp {
                 false,
             ));
         }
-        for shown in self.slots.iter().filter_map(|s| s.shown.as_ref()) {
+        for shown in self.slots.iter().filter_map(|s| s.shown()) {
             if shown.developing() {
                 tasks.push(task(
                     "Developing RAW",

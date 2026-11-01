@@ -21,7 +21,7 @@ impl VwApp {
     pub(super) fn pipeline_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown.as_ref()?;
+            let shown = slot.shown()?;
             Some(crate::pipeline_view::Target {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
@@ -296,7 +296,7 @@ impl VwApp {
             let shown = self
                 .slots
                 .iter()
-                .filter_map(|s| s.shown.as_ref())
+                .filter_map(|s| s.shown())
                 .find(|s| s.path == path)?;
             Some(crate::quality::Reference {
                 path,
@@ -305,7 +305,7 @@ impl VwApp {
             })
         });
         let input = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown.as_ref()?;
+            let shown = slot.shown()?;
             Some(crate::quality::Input {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
@@ -322,7 +322,7 @@ impl VwApp {
 
     /// スロット `index` の画像を PSNR・SSIM の基準にする。
     pub(super) fn set_quality_reference(&mut self, index: usize) {
-        let Some(shown) = self.slots.get(index).and_then(|s| s.shown.as_ref()) else {
+        let Some(shown) = self.slots.get(index).and_then(|s| s.shown()) else {
             return;
         };
         self.quality_reference = Some(shown.path.clone());
@@ -345,7 +345,7 @@ impl VwApp {
     pub(super) fn histogram_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown.as_ref()?;
+            let shown = slot.shown()?;
             Some(crate::histogram_view::Target {
                 path: &shown.path,
                 image: shown.full.as_ref().map(|f| &f.image),
@@ -385,7 +385,7 @@ impl VwApp {
         use crate::zoom_map::Command;
         let lang = self.lang();
         let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown.as_ref()?;
+            let shown = slot.shown()?;
             let after = slot
                 .derive
                 .as_ref()
@@ -476,7 +476,7 @@ impl VwApp {
         let active = self
             .slots
             .get(self.active)
-            .and_then(|s| s.shown.as_ref())
+            .and_then(|s| s.shown())
             .map(|s| s.path.clone());
         let inputs = crate::sky_window::Inputs {
             lang: self.lang(),

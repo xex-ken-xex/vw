@@ -84,8 +84,8 @@ impl VwApp {
         let candidates: Vec<(&Slot, &Path)> = self
             .slots
             .iter()
-            .filter(|s| s.folder.is_none())
-            .filter_map(|s| Some((s, s.shown.as_ref()?.path.as_path())))
+            .filter(|s| s.folder().is_none())
+            .filter_map(|s| Some((s, s.shown()?.path.as_path())))
             .collect();
         let rules = self.settings().similar.rules();
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -94,8 +94,7 @@ impl VwApp {
         for (slot, path) in &candidates {
             slot.id.hash(&mut h);
             path.hash(&mut h);
-            slot.shown
-                .as_ref()
+            slot.shown()
                 .map(|s| (s.info.fingerprint, s.info.sharpness.map(f64::to_bits)))
                 .hash(&mut h);
         }
@@ -138,7 +137,7 @@ impl VwApp {
 /// 組を探すための、スロットに出ている画像の名前・撮影日時・カメラ・指紋。
 fn item(slot: &Slot, path: &Path) -> Item {
     let file = crate::frames::file_of(path);
-    let meta = slot.shown.as_ref().map(|s| &s.info.metadata);
+    let meta = slot.shown().map(|s| &s.info.metadata);
     let get = |group: &str, key: &str| {
         meta.and_then(|m| m.get(group, key))
             .map(str::to_owned)
@@ -162,11 +161,10 @@ fn item(slot: &Slot, path: &Path) -> Item {
         stem,
         taken: get("EXIF", "DateTimeOriginal").or_else(|| get("RAW", "Date taken")),
         camera: get("EXIF", "Model").or_else(|| get("RAW", "Model")),
-        fingerprint: slot.shown.as_ref().and_then(|s| s.info.fingerprint),
-        sharpness: slot.shown.as_ref().and_then(|s| s.info.sharpness),
+        fingerprint: slot.shown().and_then(|s| s.info.fingerprint),
+        sharpness: slot.shown().and_then(|s| s.info.sharpness),
         pixels: slot
-            .shown
-            .as_ref()
+            .shown()
             .map_or(0, |s| u64::from(s.info.width) * u64::from(s.info.height)),
     }
 }
