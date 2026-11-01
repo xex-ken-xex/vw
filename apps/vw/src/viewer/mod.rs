@@ -346,20 +346,12 @@ pub struct SlotLook<'a> {
     pub label: &'a Label,
     /// 画像の上のマウス操作の意味を決めるツール。
     pub tool: Tool,
-    /// 右クリックの「送る ▸」に並べる送信先の名前。
-    pub destinations: &'a [String],
-    /// 右クリックの「送る ▸」に並べるアプリ。
-    pub apps: &'a [crate::settings::SendApp],
     /// 下の帯のドロップダウンに並べる、保存したパイプライン。
     pub presets: &'a [crate::pipelines::Preset],
     /// 色導出で描いた画像のテクスチャの補間。
     pub texture_options: TextureOptions,
     /// 表示中の画像で見つけた顔の枠。空なら描かない。
     pub faces: &'a [FaceMark],
-    /// 顔の枠の右クリックの「この人物として登録 ▸」に並べる人物。
-    pub people: &'a [String],
-    /// AI のモデルが全部揃っているか。揃うまで「AI タグを付ける」「顔を探す」は押せない。
-    pub ai_ready: bool,
     pub colors: Colors,
     /// 色の表のゲージ。`None` はゲージを出さない。
     pub gauge: Option<Gauge>,
@@ -415,7 +407,8 @@ pub enum FaceAction {
 pub struct DraggedFile(pub PathBuf);
 
 /// 1 フレームの操作で起きたこと。スロットは「何が起きたか」だけを返し、実行はアプリ側
-/// （`app/slots.rs`）がする。真偽値の旗の束ではなく列にしてあるのは、操作を足すときに
+/// （`app/slots.rs`）がする。右クリックメニューはスロットでは描かず、アプリが操作の表から
+/// 描く（`app/context_menu.rs`）ので、ここには見出し・本体・帯の操作だけがある。真偽値の旗の束ではなく列にしてあるのは、操作を足すときに
 /// 旗と受け取り側の `if` を対で足し忘れないようにするため（`match` が網羅を強いる）。
 pub enum SlotCommand {
     /// クリックやメニューの操作で、このスロットをアクティブにする。
@@ -431,46 +424,20 @@ pub enum SlotCommand {
     OpenFolder,
     /// フォルダのスロットに画像がドロップされた。
     Drop(PathBuf),
-    /// 右クリックメニューで「コピー」が選ばれた。
-    Copy,
-    /// 十字や ROI の値のコピーが選ばれた。コピーする文字。
-    CopyText(String),
-    /// 右クリックメニューで送り先が選ばれた。
-    Send(crate::send_app::Choice),
-    /// 右クリックメニューで「現像」が選ばれた。
-    Develop,
     /// 見出しの「JPEG」「RAW」を押した（埋め込みのプレビューと現像した画像の切り替え）。
     SwapRawFace,
-    /// ダーク・フラットを当てるかの切り替えが選ばれた。
-    ToggleCalibration,
-    /// 色の表を選んだ。
+    /// ゲージで色の表を選んだ。
     ColorPick(crate::colormap::Pick),
     /// ゲージで黒と白の値を変えた（`None` はファイルの値に戻す）。
     Window(Option<(f32, f32)>),
     /// 見た目の入った保存したパイプラインを選んだ。スロットの黒と白・曲線・色の表に当てる。
     ApplyLook(crate::pipelines::Look),
-    /// 「画素の変換」を開く。
+    /// 下の帯の「Edit」で「画素の変換」を開く。
     OpenPipeline,
-    /// 「評価の基準にする」が選ばれた。
-    SetReference,
-    /// 「QR コードを読む」が選ばれた。
-    ReadQr,
-    /// 「色を合成」が選ばれた。
-    Compose,
-    /// 「位置合わせして比べる」が選ばれた。
-    Compare,
     /// 見出しの似た画像の印がクリックされた（組を比べる）。
     CompareSimilar,
     /// 似た画像の印のメニューで「これを残し、ほかを Bad にする」が選ばれた。
     KeepInGroup,
-    /// 「AI タグを付ける」が選ばれた。
-    AiTag,
-    /// 「顔を探す」が選ばれた。
-    FindFaces,
-    /// 「AI タグを消す」が選ばれた。
-    RemoveAiTags,
-    /// 顔の枠の右クリックで選ばれた操作（表示中の画像に対して）。
-    Face(PathBuf, FaceAction),
     /// 色導出から知らせること（ログに出す）。
     Derive(derive::Event),
 }
@@ -484,6 +451,8 @@ pub struct SlotFrame {
     pub wants_full: bool,
     /// 画像をドラッグしている（並べ替えやフォルダへの移動の元）。
     pub dragging: bool,
+    /// 本体の応答。アプリが右クリックメニューを付ける。
+    pub body: Option<egui::Response>,
 }
 
 impl SlotFrame {
@@ -722,6 +691,13 @@ impl Slot {
     }
 
     /// 選んでいる ROI を消す。消したら `true`。
+    /// 右クリックした顔の枠（画像と、その画像の枠の番号）。
+    pub fn selected_face(&self) -> Option<(&Path, usize)> {
+        self.selected_face
+            .as_ref()
+            .map(|(path, i)| (path.as_path(), *i))
+    }
+
     pub fn delete_selected_roi(&mut self) -> bool {
         if self.selected_shown_roi().is_none() {
             return false;
@@ -1180,13 +1156,9 @@ impl Slot {
             empty_hint,
             label: image_label,
             tool,
-            destinations,
-            apps,
             presets,
             texture_options,
             faces,
-            people,
-            ai_ready,
             colors,
             gauge,
             color_rules,
@@ -1612,200 +1584,6 @@ impl Slot {
             painter.rect_filled(bar, 0.0, visuals.faint_bg_color);
             self.derive_bar(ui, bar, lang, presets, &mut out);
         }
-        if self.shown().is_some() {
-            let mark_text = self.selected_mark_text();
-            let roi_text = self.selected_roi_text();
-            let mut delete_mark = false;
-            let mut delete_roi = false;
-            let face_menu = self
-                .selected_face
-                .as_ref()
-                .filter(|(p, i)| Some(p) == self.shown().map(|s| &s.path) && *i < faces.len())
-                .map(|(p, i)| (p.clone(), *i, faces[*i].person.clone()));
-            vw_ui::menu::context(&response, |ui| {
-                if let Some((path, i, person)) = &face_menu {
-                    let title = match person {
-                        Some(name) => tr1(lang, "Face {}", &format!("{}: {name}", i + 1)),
-                        None => tr1(lang, "Face {}", &format!("{}", i + 1)),
-                    };
-                    ui.weak(title);
-                    if !people.is_empty() {
-                        ui.menu_button(tr(lang, "Register as"), |ui| {
-                            for name in people {
-                                if ui.button(name).clicked() {
-                                    out.push(SlotCommand::Face(
-                                        path.clone(),
-                                        FaceAction::Assign(*i, name.clone()),
-                                    ));
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
-                    if ui.button(tr(lang, "Register as a new person...")).clicked() {
-                        out.push(SlotCommand::Face(path.clone(), FaceAction::NewPerson(*i)));
-                        ui.close();
-                    }
-                    if person.is_some() && ui.button(tr(lang, "Unlink person")).clicked() {
-                        out.push(SlotCommand::Face(path.clone(), FaceAction::Clear(*i)));
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-                if let Some(text) = &mark_text {
-                    if ui.button(tr(lang, "Copy point value")).clicked() {
-                        out.push(SlotCommand::CopyText(text.clone()));
-                        ui.close();
-                    }
-                    if ui.button(tr(lang, "Delete point")).clicked() {
-                        delete_mark = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-                if let Some(text) = &roi_text {
-                    if ui.button(tr(lang, "Copy ROI statistics")).clicked() {
-                        out.push(SlotCommand::CopyText(text.clone()));
-                        ui.close();
-                    }
-                    if ui.button(tr(lang, "Delete ROI")).clicked() {
-                        delete_roi = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-                if ui.button(tr(lang, "Fit image to slot")).clicked() {
-                    self.reset_view();
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Copy")).clicked() {
-                    out.push(SlotCommand::Copy);
-                    ui.close();
-                }
-                let composable = self.shown().is_some_and(|s| {
-                    s.info.compose.is_some() || s.info.color == vw_core::ColorModel::Gray
-                });
-                if composable
-                    && ui
-                        .button(tr(lang, "Compose colors..."))
-                        .on_hover_text(tr(
-                            lang,
-                            "Put two or three gray images on red, green and blue.",
-                        ))
-                        .clicked()
-                {
-                    out.push(SlotCommand::Compose);
-                    ui.close();
-                }
-                if ui
-                    .button(tr(lang, "Align and compare..."))
-                    .on_hover_text(tr(
-                        lang,
-                        "Line up similar images with this one and measure how they differ.",
-                    ))
-                    .clicked()
-                {
-                    out.push(SlotCommand::Compare);
-                    ui.close();
-                }
-                ui.separator();
-                if ui
-                    .button(tr(lang, "Use as evaluation reference"))
-                    .on_hover_text(tr(
-                        lang,
-                        "PSNR and SSIM in the analysis window compare the active image with this one.",
-                    ))
-                    .clicked()
-                {
-                    out.push(SlotCommand::SetReference);
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Read QR codes")).clicked() {
-                    out.push(SlotCommand::ReadQr);
-                    ui.close();
-                }
-                ui.separator();
-                let not_ready = tr(lang, crate::ai_models::NOT_READY);
-                if ui
-                    .add_enabled(ai_ready, egui::Button::new(tr(lang, "Add AI tags")))
-                    .on_disabled_hover_text(not_ready)
-                    .clicked()
-                {
-                    out.push(SlotCommand::AiTag);
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(ai_ready, egui::Button::new(tr(lang, "Find faces")))
-                    .on_disabled_hover_text(not_ready)
-                    .clicked()
-                {
-                    out.push(SlotCommand::FindFaces);
-                    ui.close();
-                }
-                if ui.button(tr(lang, "Remove AI tags")).clicked() {
-                    out.push(SlotCommand::RemoveAiTags);
-                    ui.close();
-                }
-                if self.shown().is_some() {
-                    ui.separator();
-                }
-                let developable = self.shown().is_some_and(|s| {
-                    s.info.develop_size.is_some() && !s.developed && s.other.is_none()
-                });
-                if developable
-                    && ui
-                        .button(tr(lang, "Develop RAW from sensor data"))
-                        .clicked()
-                {
-                    out.push(SlotCommand::Develop);
-                    ui.close();
-                }
-                let calibration = self.shown().and_then(|s| {
-                    s.info
-                        .metadata
-                        .get(vw_fits::calibration::GROUP, vw_fits::calibration::STATE)
-                });
-                if let Some(state) = calibration.filter(|&s| s != vw_fits::calibration::NOT_APPLIED)
-                {
-                    let on = state == vw_fits::calibration::APPLIED;
-                    if ui
-                        .checkbox(&mut on.clone(), tr(lang, "Apply dark and flat"))
-                        .clicked()
-                    {
-                        out.push(SlotCommand::ToggleCalibration);
-                        ui.close();
-                    }
-                }
-                let dicom = self.shown().is_some_and(|s| s.info.plugin == "DICOM");
-                if let Some(applied) = self.shown().and_then(|s| s.info.look.as_ref()) {
-                    vw_ui::menu::button(ui, tr(lang, "Color map"), |ui| {
-                        if let Some(pick) =
-                            crate::colormap_ui::pick_menu(ui, lang, applied, color_rules)
-                        {
-                            out.push(SlotCommand::ColorPick(pick));
-                        }
-                    });
-                }
-                if self.shown().is_some() && ui.button(tr(lang, "Pixel pipeline...")).clicked() {
-                    out.push(SlotCommand::OpenPipeline);
-                    ui.close();
-                }
-                if let Some(shown) = self.shown() {
-                    let file = crate::frames::file_of(&shown.path);
-                    let destinations = dicom.then_some(destinations);
-                    let offer = crate::send_app::Offer::for_path(apps, destinations, &file, false);
-                    if let Some(choice) = crate::send_app::menu(ui, lang, &offer) {
-                        out.push(SlotCommand::Send(choice));
-                    }
-                }
-            });
-            if delete_mark {
-                self.delete_selected_mark();
-            }
-            if delete_roi {
-                self.delete_selected_roi();
-            }
-        }
         // ヘッダ: ファイル名、表示倍率、閉じるボタン。
         // ヘッダ全体のクリック判定を閉じるボタンより先に登録する。egui では後から登録した
         // 判定が上に来るので、逆にすると閉じるボタンが押せなくなる。
@@ -2175,6 +1953,7 @@ impl Slot {
                 egui::StrokeKind::Inside,
             );
         }
+        out.body = Some(response);
         out
     }
 }
@@ -2230,44 +2009,73 @@ fn draw_swatch(painter: &egui::Painter, at: Pos2, line: f32, swatch: Option<[u8;
     at + vec2(line + 4.0, 0.0)
 }
 
+/// テストで使う、表示中の画像の作り方。
 #[cfg(test)]
-mod tests {
+pub mod test_support {
     use super::*;
 
+    fn info(width: u32, height: u32, color: ColorModel) -> ImageInfo {
+        ImageInfo {
+            width,
+            height,
+            color,
+            bits_per_sample: 8,
+            significant_bits: 8,
+            metadata: Default::default(),
+            develop_size: None,
+            plugin: "PNG".into(),
+            frames: 1,
+            file_size: 0,
+            read: Default::default(),
+            decode: Default::default(),
+            convert: Default::default(),
+            look: None,
+            compose: None,
+            fingerprint: None,
+            sharpness: None,
+            gamut: None,
+            frame_delays: None,
+            spectrum: None,
+        }
+    }
+
+    fn thumb() -> TextureHandle {
+        let ctx = egui::Context::default();
+        ctx.load_texture("t", ColorImage::example(), Default::default())
+    }
+
     /// 埋め込みのプレビューを出している、現像できる RAW。
-    fn raw_preview() -> Shown {
-        let ctx = eframe::egui::Context::default();
-        let thumb = ctx.load_texture("t", eframe::egui::ColorImage::example(), Default::default());
+    pub fn raw_preview() -> Shown {
+        let mut info = info(160, 120, ColorModel::Rgb);
+        info.develop_size = Some((6000, 4000));
+        info.plugin = "RAW".into();
         Shown {
             path: PathBuf::from("/a.ARW"),
-            thumb,
-            info: crate::loader::ImageInfo {
-                width: 160,
-                height: 120,
-                color: vw_core::ColorModel::Rgb,
-                bits_per_sample: 8,
-                significant_bits: 8,
-                metadata: Default::default(),
-                develop_size: Some((6000, 4000)),
-                plugin: "RAW".into(),
-                frames: 1,
-                file_size: 0,
-                read: Default::default(),
-                decode: Default::default(),
-                convert: Default::default(),
-                look: None,
-                compose: None,
-                fingerprint: None,
-                sharpness: None,
-                gamut: None,
-                frame_delays: None,
-                spectrum: None,
-            },
+            thumb: thumb(),
+            info,
             full: None,
             developed: false,
             other: None,
         }
     }
+
+    /// 普通の灰色の画像。
+    pub fn gray_image() -> Shown {
+        Shown {
+            path: PathBuf::from("/g.png"),
+            thumb: thumb(),
+            info: info(160, 120, ColorModel::Gray),
+            full: None,
+            developed: false,
+            other: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_support::raw_preview;
 
     #[test]
     fn a_failed_develop_stops_the_developing_mark_for_good() {

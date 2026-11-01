@@ -123,6 +123,23 @@ pub enum Action {
     OpenSettingsFolder,
     OpenModelsFolder,
     ToggleFaceFrames,
+    /// 選んでいる十字の値か ROI の統計をコピーする。
+    CopyMeasurement,
+    /// 画像をクリップボードへコピーする。
+    CopyImage,
+    ComposeColors,
+    AlignAndCompare,
+    SetQualityReference,
+    AiTagImage,
+    FindFacesImage,
+    RemoveAiTagsImage,
+    /// ここから下はフォルダの操作。キーからは cd しているフォルダに、右クリックからはそのフォルダに効く。
+    CopyFolderPath,
+    OpenInFileManager,
+    CloseZip,
+    RegisterDataset,
+    EditDataset,
+    UpdateDataset,
 }
 
 /// 操作が働く画面。キーの重なりは同じ画面の中でだけ問う。全画面スライドショーの間は
@@ -148,12 +165,15 @@ pub enum KeyGroup {
     Windows,
     App,
     Fullscreen,
+    /// 開いているフォルダへの操作（ツリーの右クリックと同じ）。
+    Folder,
 }
 
 impl KeyGroup {
     /// 設定画面に並べる順。
-    pub const ALL: [KeyGroup; 12] = [
+    pub const ALL: [KeyGroup; 13] = [
         KeyGroup::Navigate,
+        KeyGroup::Folder,
         KeyGroup::View,
         KeyGroup::Layout,
         KeyGroup::Image,
@@ -181,6 +201,7 @@ impl KeyGroup {
             KeyGroup::Windows => "Show and hide windows",
             KeyGroup::App => "Help and settings",
             KeyGroup::Fullscreen => "Fullscreen slideshow",
+            KeyGroup::Folder => "Current folder",
         }
     }
 }
@@ -196,6 +217,12 @@ impl Action {
         Action::NextPage,
         Action::ToggleMaximize,
         Action::ParentFolder,
+        Action::CopyFolderPath,
+        Action::OpenInFileManager,
+        Action::CloseZip,
+        Action::RegisterDataset,
+        Action::EditDataset,
+        Action::UpdateDataset,
         Action::TogglePlay,
         Action::FullscreenSlideshow,
         Action::FitImage,
@@ -214,6 +241,10 @@ impl Action {
         Action::ToggleCalibration,
         Action::NextColorMap,
         Action::ToggleColorGauge,
+        Action::CopyImage,
+        Action::ComposeColors,
+        Action::AlignAndCompare,
+        Action::SetQualityReference,
         Action::LayoutAuto,
         Action::Layout1x1,
         Action::Layout1x2,
@@ -227,6 +258,7 @@ impl Action {
         Action::ToggleHandTool,
         Action::ToggleZoomTool,
         Action::DeleteProbePoint,
+        Action::CopyMeasurement,
         Action::TogglePixelPipeline,
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
@@ -284,6 +316,9 @@ impl Action {
         Action::FindFacesFolder,
         Action::RedoOutdatedAi,
         Action::RemoveAiTagsFolder,
+        Action::AiTagImage,
+        Action::FindFacesImage,
+        Action::RemoveAiTagsImage,
         Action::TidyAiTags,
         Action::ShowPeople,
         Action::ShowPeopleGraph,
@@ -409,6 +444,20 @@ impl Action {
             Action::ToggleHandTool => "toggle_hand_tool",
             Action::ToggleZoomTool => "toggle_zoom_tool",
             Action::DeleteProbePoint => "delete_probe_point",
+            Action::CopyMeasurement => "copy_measurement",
+            Action::CopyImage => "copy_image",
+            Action::ComposeColors => "compose_colors",
+            Action::AlignAndCompare => "align_and_compare",
+            Action::SetQualityReference => "set_quality_reference",
+            Action::AiTagImage => "ai_tag_image",
+            Action::FindFacesImage => "find_faces_image",
+            Action::RemoveAiTagsImage => "remove_ai_tags_image",
+            Action::CopyFolderPath => "copy_folder_path",
+            Action::OpenInFileManager => "open_in_file_manager",
+            Action::CloseZip => "close_zip",
+            Action::RegisterDataset => "register_dataset",
+            Action::EditDataset => "edit_dataset",
+            Action::UpdateDataset => "update_dataset",
         }
     }
 
@@ -527,6 +576,20 @@ impl Action {
             Action::ToggleHandTool => "Hand tool on/off",
             Action::ToggleZoomTool => "Zoom tool on/off",
             Action::DeleteProbePoint => "Delete selected probe point or ROI",
+            Action::CopyMeasurement => "Copy selected probe point value or ROI statistics",
+            Action::CopyImage => "Copy image",
+            Action::ComposeColors => "Compose colors...",
+            Action::AlignAndCompare => "Align and compare...",
+            Action::SetQualityReference => "Use as evaluation reference",
+            Action::AiTagImage => "Add AI tags to this image",
+            Action::FindFacesImage => "Find faces in this image",
+            Action::RemoveAiTagsImage => "Remove AI tags from this image",
+            Action::CopyFolderPath => "Copy the folder path",
+            Action::OpenInFileManager => "Open the folder in the file manager",
+            Action::CloseZip => "Close the ZIP",
+            Action::RegisterDataset => "Register the folder as a dataset...",
+            Action::EditDataset => "Edit the folder's dataset...",
+            Action::UpdateDataset => "Update the folder's dataset",
         }
     }
 
@@ -569,12 +632,23 @@ impl Action {
             | Action::ReadQrCodes
             | Action::ToggleCalibration
             | Action::NextColorMap
-            | Action::ToggleColorGauge => KeyGroup::Image,
+            | Action::ToggleColorGauge
+            | Action::CopyImage
+            | Action::ComposeColors
+            | Action::AlignAndCompare
+            | Action::SetQualityReference => KeyGroup::Image,
+            Action::CopyFolderPath
+            | Action::OpenInFileManager
+            | Action::CloseZip
+            | Action::RegisterDataset
+            | Action::EditDataset
+            | Action::UpdateDataset => KeyGroup::Folder,
             Action::TogglePixelProbe
             | Action::ToggleRoi
             | Action::ToggleHandTool
             | Action::ToggleZoomTool
             | Action::DeleteProbePoint
+            | Action::CopyMeasurement
             | Action::UndoPosition => KeyGroup::Tools,
             Action::ToggleTagging
             | Action::FlagGood
@@ -616,7 +690,10 @@ impl Action {
             | Action::ShowPeople
             | Action::ShowPeopleGraph
             | Action::ToggleFaceFrames
-            | Action::OpenModelsFolder => KeyGroup::Ai,
+            | Action::OpenModelsFolder
+            | Action::AiTagImage
+            | Action::FindFacesImage
+            | Action::RemoveAiTagsImage => KeyGroup::Ai,
             Action::ToggleFolderTree
             | Action::ToggleMetadata
             | Action::ToggleImages
@@ -868,6 +945,20 @@ impl Action {
             Action::FullscreenNextFolder => vec![KeyCombo::plain(ArrowDown)],
             Action::FullscreenPreviousFolder => vec![KeyCombo::plain(ArrowUp)],
             Action::FullscreenPause => vec![KeyCombo::plain(Space)],
+            Action::CopyMeasurement
+            | Action::CopyImage
+            | Action::ComposeColors
+            | Action::AlignAndCompare
+            | Action::SetQualityReference
+            | Action::AiTagImage
+            | Action::FindFacesImage
+            | Action::RemoveAiTagsImage
+            | Action::CopyFolderPath
+            | Action::OpenInFileManager
+            | Action::CloseZip
+            | Action::RegisterDataset
+            | Action::EditDataset
+            | Action::UpdateDataset => vec![],
         }
     }
 }

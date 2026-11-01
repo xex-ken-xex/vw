@@ -352,14 +352,6 @@ impl VwApp {
         }
     }
 
-    pub(super) fn ai_tag_current_folder(&mut self, ctx: &egui::Context, work: Work) {
-        match self.current.clone() {
-            Some(dir) if work == Work::Tag => self.ai_tag_folder(ctx, &dir),
-            Some(dir) => self.find_faces_folder(ctx, &dir),
-            None => self.log.warn("No folder is open"),
-        }
-    }
-
     /// 見つけた顔を書く。書けたら顔の数。
     fn save_faces(&mut self, path: PathBuf, found: Vec<Found>, size: [usize; 2]) -> Option<usize> {
         let threshold = self.settings().ai.face_threshold;

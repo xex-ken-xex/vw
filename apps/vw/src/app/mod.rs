@@ -34,6 +34,7 @@ use crate::transfer::Transfer;
 use crate::tree::{FolderTree, TreeAction};
 use crate::viewer::{Content, KEY_ZOOM_FACTOR, Slot};
 use crate::watch::FolderWatcher;
+use context_menu::{Availability, Where};
 
 mod activity;
 mod ai_tagging;
@@ -41,6 +42,7 @@ mod ai_tidy;
 mod clipboard;
 mod compare_dialog;
 mod compose_dialog;
+pub(crate) mod context_menu;
 mod dataset_dialogs;
 pub(crate) mod display_ui;
 mod docking;
@@ -904,7 +906,30 @@ impl VwApp {
             .map(KeyCombo::to_string)
     }
 
+    /// キーやメニューバーからの操作。アクティブなスロットと cd しているフォルダに効く。
     fn run(&mut self, ctx: &egui::Context, action: Action) {
+        self.run_on(ctx, action, Where::Active);
+    }
+
+    /// 操作 `action` を `at` に行う。右クリックメニューで灰色のものはキーでも動かさないよう、
+    /// 先に [`VwApp::available`] を見る。
+    fn run_on(&mut self, ctx: &egui::Context, action: Action, at: Where) {
+        if self.available(action, &at) != Availability::Yes {
+            return;
+        }
+        let i = match at {
+            Where::Slot(i) => i,
+            _ => self.active,
+        };
+        let folder = match &at {
+            Where::Folder(path, _) => Some(path.clone()),
+            _ => self.current.clone(),
+        };
+        let shown_path = self
+            .slots
+            .get(i)
+            .and_then(|s| s.shown())
+            .map(|s| s.path.clone());
         match action {
             Action::PreviousImage => {
                 self.stop_playback();
@@ -920,9 +945,67 @@ impl VwApp {
             Action::ToggleHandTool => self.toggle_tool(Tool::Pan),
             Action::ToggleZoomTool => self.toggle_tool(Tool::Zoom),
             Action::DeleteProbePoint => {
-                let slot = &mut self.slots[self.active];
+                let slot = &mut self.slots[i];
                 if !slot.delete_selected_mark() {
                     slot.delete_selected_roi();
+                }
+            }
+            Action::CopyMeasurement => {
+                if let Some(text) = context_menu::measurement_text(&self.slots[i]) {
+                    self.copy_text(ctx, text, "measurement");
+                }
+            }
+            Action::CopyImage => self.copy_image(ctx, i),
+            Action::ComposeColors => self.open_compose_dialog(i),
+            Action::AlignAndCompare => self.open_compare_dialog(i),
+            Action::SetQualityReference => self.set_quality_reference(i),
+            Action::AiTagImage => {
+                if let Some(path) = shown_path {
+                    self.ai_tag_paths(ctx, vec![path]);
+                }
+            }
+            Action::FindFacesImage => {
+                if let Some(path) = shown_path {
+                    self.find_faces_paths(ctx, vec![path]);
+                }
+            }
+            Action::RemoveAiTagsImage => {
+                if let Some(path) = shown_path {
+                    self.remove_ai_tags(vec![frames::file_of(&path)]);
+                }
+            }
+            Action::CopyFolderPath => {
+                if let Some(path) = folder {
+                    let what = format!("path {}", path.display());
+                    self.copy_text(ctx, path.display().to_string(), &what);
+                }
+            }
+            Action::OpenInFileManager => {
+                // ZIP ファイルそのものは開けないので、それのあるフォルダを開く。
+                let dir = match (&at, folder) {
+                    (Where::Folder(zip, context_menu::FolderKind::Zip), _) => {
+                        Some(zip.parent().unwrap_or(zip).to_path_buf())
+                    }
+                    (_, dir) => dir,
+                };
+                if let Some(dir) = dir {
+                    self.open_in_file_manager(&dir);
+                }
+            }
+            Action::CloseZip => {
+                if let Where::Folder(dir, context_menu::FolderKind::MountedRoot) = &at {
+                    self.unmount(ctx, dir);
+                }
+            }
+            Action::RegisterDataset | Action::EditDataset | Action::UpdateDataset => {
+                use crate::dataset_ui::Request;
+                if let Some(dir) = folder {
+                    let request = match action {
+                        Action::RegisterDataset => Request::Register(dir),
+                        Action::EditDataset => Request::Edit(dir),
+                        _ => Request::Update(dir),
+                    };
+                    self.open_dataset_dialog(ctx, request);
                 }
             }
             Action::FilterAll => self.set_filter(ctx, Filter::All),
@@ -947,7 +1030,16 @@ impl VwApp {
                     self.send_active_to_app(i);
                 }
             }
-            Action::TogglePixelPipeline => self.toggle_pipeline(),
+            // 右クリックからは、そのスロットをアクティブにして開く（閉じない）。
+            Action::TogglePixelPipeline => match at {
+                Where::Active => self.toggle_pipeline(),
+                _ => {
+                    self.active = i;
+                    if !self.pipeline.open {
+                        self.toggle_pipeline();
+                    }
+                }
+            },
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
@@ -961,8 +1053,14 @@ impl VwApp {
             Action::ShowGradationTest => self.display.test.open_setup(),
             Action::OpenQualityHelp => self.open_help(crate::help::Page::Quality),
             Action::ShowAiModels => self.ai_models.open = true,
-            Action::AiTagFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Tag),
-            Action::FindFacesFolder => self.ai_tag_current_folder(ctx, ai_tagging::Work::Faces),
+            Action::AiTagFolder => match folder {
+                Some(dir) => self.ai_tag_folder(ctx, &dir),
+                None => self.log.warn("No folder is open"),
+            },
+            Action::FindFacesFolder => match folder {
+                Some(dir) => self.find_faces_folder(ctx, &dir),
+                None => self.log.warn("No folder is open"),
+            },
             Action::RedoOutdatedAi => self.redo_outdated_ai(ctx),
             Action::OpenSettingsFolder => {
                 let dir = self
@@ -978,7 +1076,7 @@ impl VwApp {
                 self.open_settings_subfolder(dir);
             }
             Action::TidyAiTags => self.tidy_current_folder(),
-            Action::RemoveAiTagsFolder => match self.current.clone() {
+            Action::RemoveAiTagsFolder => match folder {
                 Some(dir) => self.ask_remove_ai_tags(&dir),
                 None => self.log.warn("No folder is open"),
             },
@@ -987,7 +1085,7 @@ impl VwApp {
             Action::ToggleFaceFrames => self.show_faces = !self.show_faces,
             Action::FlagGood => self.flag(Flag::Good),
             Action::FlagBad => self.flag(Flag::Bad),
-            Action::KeepInGroup => self.keep_in_group(self.active),
+            Action::KeepInGroup => self.keep_in_group(i),
             Action::Tag1
             | Action::Tag2
             | Action::Tag3
@@ -1046,22 +1144,25 @@ impl VwApp {
                 None => self.toggle_maximize(self.active),
             },
             Action::ParentFolder => self.parent_folder(ctx),
-            Action::FitImage => self.slots[self.active].reset_view(),
-            Action::ActualSize => self.slots[self.active].actual_size(),
-            Action::ResetDisplay => self.reset_slot_display(self.active),
-            Action::DevelopRaw => self.develop_slot(self.active),
-            Action::SwapRawPreview => self.swap_raw_face(self.active),
+            Action::FitImage => self.slots[i].reset_view(),
+            Action::ActualSize => self.slots[i].actual_size(),
+            Action::ResetDisplay => self.reset_slot_display(i),
+            Action::DevelopRaw => self.develop_slot(i),
+            Action::SwapRawPreview => self.swap_raw_face(i),
             Action::ToggleClippingWarning => self.toggle_check_node("clipping"),
             Action::ToggleFocusPeaking => self.toggle_check_node("peaking"),
             Action::ToggleColorVision => self.toggle_check_node("color_vision"),
             Action::ToggleAutoStretch => self.toggle_check_node("auto_stretch"),
             Action::ToggleGamutWarning => self.toggle_gamut_warning(),
-            Action::ReadQrCodes => self.read_qr_codes_active(ctx),
-            Action::ToggleCalibration => self.toggle_calibration(self.active),
-            Action::NextColorMap => self.next_color_map(self.active),
+            Action::ReadQrCodes => match shown_path {
+                Some(path) => self.read_qr_codes(ctx, path),
+                None => self.log.warn("No image to read QR codes from"),
+            },
+            Action::ToggleCalibration => self.toggle_calibration(i),
+            Action::NextColorMap => self.next_color_map(i),
             Action::ToggleColorGauge => self.show_gauge ^= true,
-            Action::ZoomIn => self.slots[self.active].zoom_by(KEY_ZOOM_FACTOR),
-            Action::ZoomOut => self.slots[self.active].zoom_by(1.0 / KEY_ZOOM_FACTOR),
+            Action::ZoomIn => self.slots[i].zoom_by(KEY_ZOOM_FACTOR),
+            Action::ZoomOut => self.slots[i].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),
             Action::LayoutAuto
             | Action::Layout1x1
