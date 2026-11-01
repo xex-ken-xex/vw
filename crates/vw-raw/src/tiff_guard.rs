@@ -23,6 +23,17 @@ const EXIF_IFD: u16 = 0x8769;
 const GPS_IFD: u16 = 0x8825;
 const MAKER_NOTE: u16 = 0x927C;
 
+/// メーカーノートの見出しと、その後ろの IFD（または II / MM）までのバイト数。
+/// OLYMPUS は OLYMP より先に照らす。
+const MAKER_NOTE_HEADERS: [(&[u8], u64); 6] = [
+    (b"OLYMPUS", 12),
+    (b"OLYMP", 8),
+    (b"EPSON", 8),
+    (b"FUJIFILM", 12),
+    (b"SONY DSC ", 12),
+    (b"AOC\0", 4),
+];
+
 /// 型番号ごとの 1 要素のバイト数（rawler と同じ表。不明な型は 1）。
 const TYPE_SIZE: [u64; 13] = [1, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8];
 
@@ -133,8 +144,10 @@ impl Walker<'_> {
             .map_or(0, u64::from))
     }
 
-    /// メーカーノートの中の IFD。rawler が読むメーカーのうち、vw が扱う Nikon と Sony のほか、
-    /// 先頭に II / MM を置く一般の形。
+    /// メーカーノートの中の IFD。見出しの表は rawler 0.8.0 の `IFD::parse_makernote` と同じにする。
+    /// 表にない英字の見出し（SIGMA・LEICA など）は歩かない。そうした見出しを IFD として読むと、
+    /// 文字を項目数や個数と取り違えて「巨大な項目」を作り、壊れていないファイルを断ってしまう。
+    /// rawler は DNG などのメーカーノートを読まないので、歩かなくても守る範囲は減らない。
     fn maker_note(
         &mut self,
         base: u64,
@@ -145,31 +158,37 @@ impl Walker<'_> {
         let Some(head) = self.data.get(at as usize..(at as usize).saturating_add(16)) else {
             return Ok(());
         };
+        let endian_at = |off: u64| match self.data.get((at + off) as usize..(at + off) as usize + 2)
+        {
+            Some(b"II") => Some(Endian::Little),
+            Some(b"MM") => Some(Endian::Big),
+            _ => None,
+        };
         if head.starts_with(b"Nikon\0\x02") {
             // 10 バイトの印の後ろに TIFF の見出しがあり、位置はそこから数える。
-            let inner = at + 10;
-            let endian = if self.data.get(inner as usize..inner as usize + 2) == Some(b"II") {
-                Endian::Little
-            } else {
-                Endian::Big
-            };
-            return self.chain(inner, 8, endian);
+            let endian = endian_at(10).unwrap_or(Endian::Big);
+            return self.chain(at + 10, 8, endian);
         }
-        let mut off = 0u64;
-        if head.starts_with(b"SONY DSC ") {
-            off += 12;
+        if head.starts_with(b"PENTAX") {
+            // IFD は 10 バイト目から。値の位置はメーカーノートの先頭から数える。
+            let endian = endian_at(8).unwrap_or(Endian::Big);
+            return self.chain(at, 10, endian);
         }
+        let skip = MAKER_NOTE_HEADERS
+            .iter()
+            .find(|(mark, _)| head.starts_with(mark))
+            .map(|&(_, skip)| skip);
+        let mut off = match skip {
+            Some(skip) => skip,
+            None if endian_at(0).is_none() && head[..3].iter().all(u8::is_ascii_alphabetic) => {
+                return Ok(());
+            }
+            None => 0,
+        };
         let mut endian = endian;
-        match self.data.get((at + off) as usize..(at + off) as usize + 2) {
-            Some(b"II") => {
-                off += 2;
-                endian = Endian::Little;
-            }
-            Some(b"MM") => {
-                off += 2;
-                endian = Endian::Big;
-            }
-            _ => {}
+        if let Some(e) = endian_at(off) {
+            off += 2;
+            endian = e;
         }
         if off < size {
             self.chain(base, at + off - base, endian)?;
@@ -242,5 +261,54 @@ mod tests {
     #[test]
     fn non_tiff_data_is_not_checked() {
         assert!(check(b"FUJIFILMCCD-RAW 0201").is_ok());
+    }
+
+    /// IFD0 にメーカーノート（型 7）だけを持ち、その中身を `note` にした TIFF。
+    fn with_maker_note(note: &[u8]) -> Vec<u8> {
+        let mut data = tiff(&[(MAKER_NOTE, 7, note.len() as u32, 0)]);
+        let note_at = data.len() as u32;
+        data[18..22].copy_from_slice(&note_at.to_le_bytes());
+        data.extend(note);
+        data
+    }
+
+    /// 1 項目で 6.8 GB を名乗る IFD（位置はファイルの外）。
+    fn huge_ifd() -> Vec<u8> {
+        let mut ifd = 1u16.to_le_bytes().to_vec();
+        ifd.extend(0x9003u16.to_le_bytes());
+        ifd.extend(4u16.to_le_bytes());
+        ifd.extend(1_700_000_000u32.to_le_bytes());
+        ifd.extend(8u32.to_le_bytes());
+        ifd.extend(0u32.to_le_bytes());
+        ifd
+    }
+
+    #[test]
+    fn sigma_maker_note_is_not_read_as_an_ifd() {
+        // SIGMA fp の DNG と同じ先頭。IFD として読むと 0x4D47 が 67,174,400 バイトを名乗る。
+        let mut note = b"SIGMA\0\0\0\x01\x04".to_vec();
+        note.extend(huge_ifd());
+        note.resize(64, 0);
+        assert!(check(&with_maker_note(&note)).is_ok());
+    }
+
+    #[test]
+    fn ifd_after_pentax_aoc_header_is_walked() {
+        let mut note = b"AOC\0II".to_vec();
+        note.extend(huge_ifd());
+        let err = check(&with_maker_note(&note)).unwrap_err().to_string();
+        assert!(err.contains("0x9003"), "{err}");
+    }
+
+    #[test]
+    fn ifd_after_sony_header_is_walked() {
+        let mut note = b"SONY DSC \0\0\0".to_vec();
+        note.extend(huge_ifd());
+        assert!(check(&with_maker_note(&note)).is_err());
+    }
+
+    #[test]
+    fn maker_note_without_header_is_walked_as_an_ifd() {
+        assert!(check(&with_maker_note(&huge_ifd())).is_err());
     }
 }
