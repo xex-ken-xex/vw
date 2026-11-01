@@ -136,6 +136,14 @@ impl Values {
         }
     }
 
+    /// [`Values::pixel`] の逆。画素の値から読んだ値に戻す。
+    pub fn read_of(&self, pixel: f64) -> f64 {
+        match self.stored {
+            Some((slope, intercept)) => pixel * slope + intercept,
+            None => pixel,
+        }
+    }
+
     pub fn measured(&self, read: f64) -> f64 {
         read * self.suv.unwrap_or(1.0)
     }

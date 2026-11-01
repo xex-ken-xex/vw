@@ -525,6 +525,13 @@ const ITEMS: &[Item] = &[
         widget: open_profile_widget,
     },
     Item {
+        section: Section::Reports,
+        key: "measure.roi_bins",
+        title: "Bins of the ROI histogram",
+        description: "How many bins the histogram of the ROI graph splits the values into. Integer values whose range is this or less get one bin per value.",
+        widget: roi_bins_widget,
+    },
+    Item {
         section: Section::Quality,
         key: "quality.psnr",
         title: "PSNR verdict",
@@ -2822,6 +2829,11 @@ fn report_theme_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
 
 fn open_profile_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.measure.open_profile, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn roi_bins_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    ui.add(egui::DragValue::new(&mut s.measure.roi_bins).range(4..=4096))
         .changed()
 }
 

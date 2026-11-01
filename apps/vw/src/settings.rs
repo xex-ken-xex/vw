@@ -577,11 +577,16 @@ impl ReportSettings {
 pub struct MeasureSettings {
     /// 線を引き終えたら、計測線のグラフの欄を開く。
     pub open_profile: bool,
+    /// ROI のヒストグラムの区間の数（値の幅がこれ以下の整数なら、1 つの値に 1 区間）。
+    pub roi_bins: usize,
 }
 
 impl Default for MeasureSettings {
     fn default() -> Self {
-        Self { open_profile: true }
+        Self {
+            open_profile: true,
+            roi_bins: 64,
+        }
     }
 }
 
@@ -591,6 +596,10 @@ impl MeasureSettings {
         let mut r = r.at("measure");
         Self {
             open_profile: r.get("open_profile").unwrap_or(d.open_profile),
+            roi_bins: r
+                .get::<usize>("roi_bins")
+                .filter(|n| (4..=4096).contains(n))
+                .unwrap_or(d.roi_bins),
         }
     }
 }

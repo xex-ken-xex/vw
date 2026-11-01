@@ -68,6 +68,10 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleLineProfile, Some(line_profile)) {
                     chosen = Some(Action::ToggleLineProfile);
                 }
+                let roi_graph = self.roi_graph.open;
+                if self.menu_item(ui, Action::ToggleRoiGraph, Some(roi_graph)) {
+                    chosen = Some(Action::ToggleRoiGraph);
+                }
                 if self.settings().map.enabled {
                     let map = self.map.open;
                     if self.menu_item(ui, Action::ToggleMap, Some(map)) {
