@@ -106,6 +106,18 @@ impl Tool {
         }
     }
 
+    /// スロットの本体でのマウス操作の意味。計測はまだ機能がないので矢印と同じ。
+    fn in_slot(self) -> crate::viewer::Tool {
+        use crate::viewer::Tool as T;
+        match self {
+            Tool::Browse | Tool::Measure => T::Select,
+            Tool::Pan => T::Hand,
+            Tool::Zoom => T::Zoom,
+            Tool::PixelProbe => T::Probe,
+            Tool::Roi => T::Roi,
+        }
+    }
+
     fn available(self) -> bool {
         matches!(
             self,

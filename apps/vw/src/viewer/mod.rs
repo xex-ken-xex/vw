@@ -1,14 +1,17 @@
 //! 画像フィールドの 1 枠（スロット）。ヘッダ、ズーム、パン（移動）を受け持つ。
 //!
-//! ズームとパンの計算は egui に依存しない関数（[`fit_scale`], [`zoom_at`]）に分けてあり、
-//! テストではそちらを確かめる。
+//! ズームとパンの計算は [`geometry`]、マウス操作をツールごとに解釈する決まりは [`input`] に
+//! 分けてあり、どちらも egui の `Ui` に依らないのでテストはそちらで確かめる。
+
+pub mod geometry;
+pub mod input;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, Color32, ColorImage, MouseWheelUnit, PointerButton, Pos2, Rect, Sense, TextureFilter,
-    TextureHandle, TextureOptions, Vec2, pos2, vec2,
+    self, Color32, ColorImage, Pos2, Rect, Sense, TextureFilter, TextureHandle, TextureOptions,
+    Vec2, pos2, vec2,
 };
 use egui_phosphor::regular as icon;
 use serde::{Deserialize, Serialize};
@@ -23,6 +26,13 @@ use crate::probe::{self, Mark};
 use crate::quantity::Quantity;
 use crate::roi::{self, Region, Roi};
 use crate::settings::{ColorFormat, Language};
+pub use geometry::{
+    KEY_ZOOM_FACTOR, Placed, ViewWindow, drag_zoom_factor, fit_scale, needs_full, pan_to_center,
+    split_wheel, visible_part, wheel_delta, wheel_steps, zoom_at,
+};
+use geometry::{MARK_HIT, MAX_PIXEL_SCALE, MIN_ZOOM};
+pub use input::Tool;
+use input::{Click, Drag, Hits, Pointer, roi_kind};
 
 /// スロットに出しているもの。描き方と右クリックの中身はこれで分かれる。
 // `Image` だけ大きいが、スロット 1 つに 1 つしか持たず、画像を読むたびに作るものなので、
@@ -334,16 +344,8 @@ pub struct SlotLook<'a> {
     pub empty_hint: &'static str,
     /// 表示中の画像のフラグとタグ。
     pub label: &'a Label,
-    /// 画素値の確認ツールを使っている（クリックで十字を置き、カーソル位置の値を出す）。
-    pub probe: bool,
-    /// ROI ツールを使っている（ドラッグで矩形を描く。左ドラッグはパンではなく描画になる）。
-    pub roi: bool,
-    /// 画像の上の左ドラッグで表示位置を動かす（手のひら・画素値の確認ツール）。
-    /// 動かさないとき（矢印）は、見出しと同じく画像を運ぶドラッグになる。
-    pub pan: bool,
-    /// ズームのツールを使っている（左ドラッグの上下で拡大縮小、クリックで 1 段拡大、
-    /// Alt+クリックで 1 段縮小）。
-    pub zoom: bool,
+    /// 画像の上のマウス操作の意味を決めるツール。
+    pub tool: Tool,
     /// 右クリックの「送る ▸」に並べる送信先の名前。
     pub destinations: &'a [String],
     /// 右クリックの「送る ▸」に並べるアプリ。
@@ -494,25 +496,8 @@ impl SlotFrame {
 const HEADER: f32 = 20.0;
 /// 色導出を選ぶ下の帯の高さ。
 const DERIVE_BAR: f32 = 22.0;
-/// ズーム倍率の下限（全体表示に対して）。
-const MIN_ZOOM: f32 = 0.05;
-/// 実寸に対する拡大率の上限。画素を 1 つずつ確認できれば十分なので 200 倍で止める。
-const MAX_PIXEL_SCALE: f32 = 200.0;
-/// 拡大縮小のドラッグ 1 論理ピクセル分のズーム量（指数の係数）。100 px で約 2.7 倍。
-const DRAG_ZOOM_RATE: f32 = 0.01;
-/// ホイールで 1 枚送るのに要る回転量（論理ピクセル）。egui がホイール 1 目盛りを
-/// 40 論理ピクセルに換算するので、1 目盛りで 1 枚になる。
-pub const WHEEL_STEP: f32 = 40.0;
-/// キーで拡大縮小するときの 1 回分の倍率。
-pub const KEY_ZOOM_FACTOR: f32 = 1.25;
-/// パンに使うマウスボタン。
-const PAN_BUTTON: PointerButton = PointerButton::Primary;
-/// 上下のドラッグで拡大縮小するマウスボタン。
-const ZOOM_BUTTON: PointerButton = PointerButton::Secondary;
 /// 十字の腕の長さ（論理ピクセル）。
 const MARK_ARM: f32 = 8.0;
-/// 十字をクリックで選べる距離（論理ピクセル）。
-const MARK_HIT: f32 = 8.0;
 
 /// ROI の色。対象は赤、背景は青（品質評価の資料と同じ色分け）。
 fn roi_color(kind: roi::Kind) -> Color32 {
@@ -622,137 +607,6 @@ fn draw_beam(
 /// 複数枚の並びの「何枚目 / 全部で何枚」。1 枚しかなければ出さない。
 pub fn page_text(seq: &Sequence) -> Option<String> {
     (seq.paths.len() > 1).then(|| format!("{} / {}", seq.index + 1, seq.paths.len()))
-}
-
-pub fn wheel_steps(acc: &mut f32, delta: f32) -> isize {
-    if delta == 0.0 {
-        return 0;
-    }
-    if acc.signum() != delta.signum() {
-        *acc = 0.0;
-    }
-    *acc += delta;
-    let steps = (*acc / WHEEL_STEP).trunc();
-    *acc -= steps * WHEEL_STEP;
-    -(steps as isize)
-}
-
-/// 画像を枠いっぱいに収める倍率。枠より小さい画像も拡大する。
-///
-/// 小さな画像を 100% のまま止めないのは、1x1 や最大化でスロットを広げても画像が
-/// 広がらず、「枠に合わせる」が効いていないように見えるため。実寸で見たいときは
-/// 100% 表示の操作がある。
-pub fn fit_scale(view: Vec2, image: Vec2) -> f32 {
-    if image.x <= 0.0 || image.y <= 0.0 {
-        return 1.0;
-    }
-    (view.x / image.x).min(view.y / image.y)
-}
-
-/// 倍率を `factor` 倍し、`cursor`（画像中心からのずれではなく枠中心からの位置）の下にある
-/// 点が動かないようにパンを補正した `(zoom, pan)` を返す。
-pub fn zoom_at(zoom: f32, pan: Vec2, factor: f32, base: f32, cursor: Option<Vec2>) -> (f32, Vec2) {
-    let new_zoom = (zoom * factor).clamp(MIN_ZOOM, MAX_PIXEL_SCALE / base.max(1e-6));
-    let pan = match cursor {
-        Some(c) => pan + (c - pan) * (1.0 - new_zoom / zoom),
-        None => pan,
-    };
-    (new_zoom, pan)
-}
-
-/// 枠（大きさ `body`）に見えている画像の範囲。画像の左上を (0, 0)、右下を (1, 1) とした
-/// 割合で、画像の外にはみ出す分は切り取る。`scale` は実寸に対する表示倍率、
-/// `pan` は枠の中心から画像の中心までのずれ。
-pub fn visible_part(body: Vec2, image: Vec2, scale: f32, pan: Vec2) -> Rect {
-    let shown = image * scale;
-    if shown.x <= 0.0 || shown.y <= 0.0 {
-        return Rect::NOTHING;
-    }
-    let to_image = |q: Vec2| ((q - pan) / shown + vec2(0.5, 0.5)).to_pos2();
-    let r = Rect::from_min_max(to_image(-body / 2.0), to_image(body / 2.0));
-    r.intersect(Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)))
-}
-
-/// 画像の `at`（[`visible_part`] と同じ割合）を枠の中心に持ってくるパン。
-pub fn pan_to_center(at: Pos2, image: Vec2, scale: f32) -> Vec2 {
-    -(at.to_vec2() - vec2(0.5, 0.5)) * image * scale
-}
-
-/// ズームマップに渡す、スロットの今の表示。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ViewWindow {
-    /// 見えている範囲（[`visible_part`]）。
-    pub visible: Rect,
-    /// 実寸に対する表示倍率。
-    pub scale: f32,
-    /// 選べる倍率の範囲。
-    pub min_scale: f32,
-    pub max_scale: f32,
-}
-
-/// 長辺 `shown_side`（物理ピクセル）で表示するのに、長辺 `thumb_side` の縮小画像では
-/// 画素が足りないか。元画像（長辺 `image_side`）が縮小されていない小さな画像なら、
-/// 縮小画像がそのまま元の画素なので要らない。
-pub fn needs_full(shown_side: f32, thumb_side: usize, image_side: u32) -> bool {
-    image_side as usize > thumb_side && shown_side > thumb_side as f32
-}
-
-/// このフレームのホイールの縦の回転量（論理ピクセル、上に回すと正）。
-///
-/// egui の `smooth_scroll_delta` を使わないのは、回転量を数フレームに分けて届けるので、
-/// 1 目盛りで 1 枚送る判定がフレームの区切りでぶれるため。Ctrl 付きは egui が
-/// ズームとして扱うので数えない。
-pub fn wheel_delta(events: &[egui::Event], page_height: f32) -> f32 {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            egui::Event::MouseWheel {
-                unit,
-                delta,
-                modifiers,
-                ..
-            } if !modifiers.command => Some(match unit {
-                MouseWheelUnit::Point => delta.y,
-                MouseWheelUnit::Line => delta.y * WHEEL_STEP,
-                MouseWheelUnit::Page => delta.y * page_height,
-            }),
-            _ => None,
-        })
-        .sum()
-}
-
-/// このフレームのホイールの回転量を、Shift なしと Shift 付きに分ける（[`wheel_delta`] と同じ向きと単位）。
-/// Shift 付きはページ送りに使う。
-///
-/// Shift 付きは横の回転量も数える。macOS などでは OS が Shift+ホイールを横スクロールに
-/// 変えて届けるため、縦だけ見ると回しても何も起きない。
-pub fn split_wheel(events: &[egui::Event], page_height: f32) -> (f32, f32) {
-    let (mut plain, mut shifted) = (0.0, 0.0);
-    for e in events {
-        let egui::Event::MouseWheel {
-            unit,
-            delta,
-            modifiers,
-            ..
-        } = e
-        else {
-            continue;
-        };
-        if modifiers.command {
-            continue;
-        }
-        let scale = match unit {
-            MouseWheelUnit::Point => 1.0,
-            MouseWheelUnit::Line => WHEEL_STEP,
-            MouseWheelUnit::Page => page_height,
-        };
-        if modifiers.shift {
-            shifted += (delta.y + delta.x) * scale;
-        } else {
-            plain += delta.y * scale;
-        }
-    }
-    (plain, shifted)
 }
 
 impl Slot {
@@ -884,7 +738,7 @@ impl Slot {
         ui: &egui::Ui,
         body: Rect,
         lang: Language,
-        region_rect: &dyn Fn(Region) -> Rect,
+        placed: &Placed,
         drawing: Option<(roi::Kind, Region)>,
     ) {
         let Some(shown) = self.shown() else { return };
@@ -899,7 +753,7 @@ impl Slot {
             .map(|r| (r.kind, r.region, selected == Some(r), true));
         let in_progress = drawing.map(|(kind, region)| (kind, region, false, false));
         for (kind, region, is_selected, finished) in shown_rois.chain(in_progress) {
-            let rect = region_rect(region);
+            let rect = placed.region_rect(region);
             // 選んでいる ROI は太くする。選択色に変えると背景（青）の ROI と見分けがつかないため。
             let stroke_color = roi_color(kind);
             let width = if is_selected { 2.5 } else { 1.0 };
@@ -1065,13 +919,7 @@ impl Slot {
     }
 
     /// 表示中の画像に置いた十字と、その値を描く。
-    fn draw_marks(
-        &self,
-        ui: &egui::Ui,
-        body: Rect,
-        lang: Language,
-        mark_pos: &dyn Fn(&Mark) -> Pos2,
-    ) {
+    fn draw_marks(&self, ui: &egui::Ui, body: Rect, lang: Language, placed: &Placed) {
         let Some(shown) = self.shown() else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_mark();
@@ -1083,7 +931,7 @@ impl Slot {
             )
         });
         for mark in self.marks.iter().filter(|m| m.path == shown.path) {
-            let at = mark_pos(mark);
+            let at = placed.mark_pos(mark);
             let color = if selected == Some(mark) {
                 ui.visuals().selection.stroke.color
             } else {
@@ -1331,10 +1179,7 @@ impl Slot {
             lang,
             empty_hint,
             label: image_label,
-            probe: probing,
-            roi: roi_tool,
-            pan: pan_tool,
-            zoom: zoom_tool,
+            tool,
             destinations,
             apps,
             presets,
@@ -1354,7 +1199,10 @@ impl Slot {
         let visuals = ui.visuals().clone();
         // グラフには画素がないので、十字・ROI・色導出は当てない。
         let graph = spectrum_graph && self.shown().is_some_and(|s| s.info.spectrum.is_some());
-        let (probing, roi_tool) = (probing && !graph, roi_tool && !graph);
+        let tool = match tool {
+            Tool::Probe | Tool::Roi if graph => Tool::Hand,
+            tool => tool,
+        };
         // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
         let (gauge, beam) = (gauge.filter(|_| !graph), beam && !graph);
         let derivable = !graph && self.shown().is_some_and(is_derivable);
@@ -1409,7 +1257,8 @@ impl Slot {
             ui.id().with(("slot", self.id)),
             Sense::click_and_drag(),
         );
-        if response.clicked() || response.drag_started() || response.secondary_clicked() {
+        let pointer = Pointer::read(&response);
+        if pointer.clicked || pointer.drag_started || pointer.secondary_clicked {
             out.push(SlotCommand::Activate);
         }
         let drop_target = self
@@ -1429,11 +1278,10 @@ impl Slot {
                 out.push(SlotCommand::Drop(file.0.clone()));
             }
         }
-        // ズームのツールでは続けてクリックして拡大するので、ダブルクリックを最大化にしない。
-        if response.double_clicked() && !zoom_tool {
+        if pointer.double_clicked && tool.maximizes_on_double_click() {
             out.push(SlotCommand::ToggleMaximize);
         }
-        if response.hovered() {
+        if pointer.hovered {
             let (wheel, shifted) = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
             let step = wheel_steps(&mut self.wheel, wheel);
             if step != 0 {
@@ -1449,58 +1297,47 @@ impl Slot {
         let base = self.base_scale(body);
         // `content` だけを借りて、パンや ROI の描きかけなどほかの欄を変えられるようにする。
         if let Content::Image(shown) = &self.content {
-            if pan_tool && !roi_tool {
-                if response.dragged_by(PAN_BUTTON) {
-                    self.pan += response.drag_delta();
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                } else if response.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            let drag = tool.drag();
+            match drag {
+                Drag::Pan if pointer.dragged => self.pan += pointer.drag_delta,
+                // サブフォルダのスロットの画像は、そのフォルダの中のものなので運ばない。
+                Drag::CarryFile if self.folder().is_none() => {
+                    response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
+                    out.dragging |= pointer.dragged;
                 }
-            } else if !roi_tool && !zoom_tool && self.folder().is_none() {
-                response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
-                out.dragging |= response.dragged_by(egui::PointerButton::Primary);
+                _ => {}
             }
-            let zoom_drag = zoom_tool && !roi_tool && response.dragged_by(PAN_BUTTON);
-            if zoom_tool && !roi_tool {
-                let (alt, pointer) = ui.input(|i| (i.modifiers.alt, i.pointer.interact_pos()));
-                if response.clicked() {
-                    let factor = if alt {
-                        1.0 / KEY_ZOOM_FACTOR
-                    } else {
-                        KEY_ZOOM_FACTOR
-                    };
-                    let cursor = pointer.map(|p| p - body.center());
-                    (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
-                }
-                if response.hovered() {
-                    ui.ctx().set_cursor_icon(if alt {
-                        egui::CursorIcon::ZoomOut
-                    } else {
-                        egui::CursorIcon::ZoomIn
-                    });
-                }
-            }
-            if response.dragged_by(ZOOM_BUTTON) || zoom_drag {
-                let factor = (-response.drag_delta().y * DRAG_ZOOM_RATE).exp();
-                let anchor = ui.input(|i| i.pointer.press_origin());
-                let cursor = anchor.map(|p| p - body.center());
+            if pointer.clicked
+                && let Some(factor) = tool.zoom_on_click(pointer.alt)
+            {
+                let cursor = pointer.pos.map(|p| p - body.center());
                 (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
             }
-            if response.hovered() {
+            if pointer.dragged_secondary || (drag == Drag::Zoom && pointer.dragged) {
+                let cursor = pointer.press_origin.map(|p| p - body.center());
+                let factor = drag_zoom_factor(pointer.drag_delta.y);
+                (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, factor, base, cursor);
+            }
+            if pointer.hovered {
                 // タッチパッドのピンチと Ctrl+ホイール（egui がズームとして届ける）。
-                let (pinch, pointer) = ui.input(|i| (i.zoom_delta(), i.pointer.hover_pos()));
+                let pinch = ui.input(|i| i.zoom_delta());
                 // ピンチがなければ egui はちょうど 1.0 を返す。
                 if pinch != 1.0 {
-                    let cursor = pointer.map(|p| p - body.center());
+                    let cursor = pointer.hover.map(|p| p - body.center());
                     (self.zoom, self.pan) = zoom_at(self.zoom, self.pan, pinch, base, cursor);
                 }
             }
-            let scale = base * self.zoom;
-            let size = vec2(shown.info.width as f32, shown.info.height as f32) * scale;
-            let img_rect = Rect::from_center_size(body.center() + self.pan, size);
+            let placed = Placed::new(
+                body,
+                shown.info.width,
+                shown.info.height,
+                base * self.zoom,
+                self.pan,
+            );
+            let (img_rect, scale) = (placed.rect, placed.scale);
             let [tw, th] = shown.thumb.size();
             out.wants_full = needs_full(
-                size.max_elem() * ui.ctx().pixels_per_point(),
+                placed.size().max_elem() * ui.ctx().pixels_per_point(),
                 tw.max(th),
                 shown.info.width.max(shown.info.height),
             );
@@ -1518,7 +1355,7 @@ impl Slot {
                             s,
                             lang,
                             &visuals,
-                            response.hover_pos(),
+                            pointer.hover,
                         );
                     }
                 }
@@ -1557,58 +1394,31 @@ impl Slot {
             // 色導出は元の画像から描くので、縮小画像で足りる大きさでも元の画像を持たせる。
             out.wants_full |= self.derive.is_some();
 
-            let pixel_at = |p: Pos2| {
-                let v = (p - img_rect.min) / scale;
-                let inside = v.x >= 0.0
-                    && v.y >= 0.0
-                    && (v.x as u32) < shown.info.width
-                    && (v.y as u32) < shown.info.height;
-                inside.then_some((v.x as u32, v.y as u32))
+            let hits = Hits {
+                mark: pointer.pos.and_then(|p| {
+                    self.marks.iter().position(|m| {
+                        m.path == shown.path && placed.mark_pos(m).distance(p) <= MARK_HIT
+                    })
+                }),
+                roi: pointer.pos.and_then(|p| {
+                    self.rois.iter().position(|r| {
+                        r.path == shown.path && placed.region_rect(r.region).expand(2.0).contains(p)
+                    })
+                }),
+                pixel: pointer.pos.and_then(|p| placed.pixel_at(p)),
             };
-            let mark_pos =
-                |m: &Mark| img_rect.min + vec2(m.x as f32 + 0.5, m.y as f32 + 0.5) * scale;
-            // 画像の外にはみ出したドラッグも、端の画素に丸めて矩形にする。
-            let pixel_clamped = |p: Pos2| {
-                let v = (p - img_rect.min) / scale;
-                (
-                    (v.x.max(0.0) as u32).min(shown.info.width.saturating_sub(1)),
-                    (v.y.max(0.0) as u32).min(shown.info.height.saturating_sub(1)),
-                )
-            };
-            let region_rect = |r: Region| {
-                Rect::from_min_max(
-                    img_rect.min + vec2(r.x as f32, r.y as f32) * scale,
-                    img_rect.min + vec2(r.right() as f32, r.bottom() as f32) * scale,
-                )
-            };
-            let pointer = response.interact_pointer_pos();
-            let hit = pointer.and_then(|p| {
-                self.marks
-                    .iter()
-                    .position(|m| m.path == shown.path && mark_pos(m).distance(p) <= MARK_HIT)
-            });
-            let roi_hit = pointer.and_then(|p| {
-                self.rois.iter().position(|r| {
-                    r.path == shown.path && region_rect(r.region).expand(2.0).contains(p)
-                })
-            });
             let mut drawing = None;
-            if roi_tool {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                if response.drag_started_by(PAN_BUTTON) {
-                    let kind = if ui.input(|i| i.modifiers.shift) {
-                        roi::Kind::Background
-                    } else {
-                        roi::Kind::Target
-                    };
-                    self.drawing = pointer.map(|p| (kind, pixel_clamped(p)));
+            if drag == Drag::DrawRoi {
+                if pointer.drag_started {
+                    let kind = roi_kind(pointer.shift);
+                    self.drawing = pointer.pos.map(|p| (kind, placed.pixel_clamped(p)));
                 }
-                if let (Some((kind, start)), Some(p)) = (self.drawing, pointer) {
-                    let region = Region::from_corners(start, pixel_clamped(p));
-                    if response.dragged_by(PAN_BUTTON) {
+                if let (Some((kind, start)), Some(p)) = (self.drawing, pointer.pos) {
+                    let region = Region::from_corners(start, placed.pixel_clamped(p));
+                    if pointer.dragged {
                         drawing = Some((kind, region));
                     }
-                    if response.drag_stopped_by(PAN_BUTTON) {
+                    if pointer.drag_stopped {
                         self.drawing = None;
                         // 同じ画像の同じ種類はひとつだけなので、前のものと入れ替える。
                         let path = shown.path.clone();
@@ -1620,44 +1430,40 @@ impl Slot {
             } else {
                 self.drawing = None;
             }
-            if response.clicked() {
-                if roi_tool {
-                    self.selected_roi = roi_hit;
-                } else if !probing {
-                    self.selected_mark = None;
-                    self.selected_roi = None;
-                } else if let Some(i) = hit {
-                    self.selected_mark = Some(i);
-                } else if let Some((x, y)) = pointer.and_then(pixel_at) {
-                    self.marks.push(Mark {
-                        path: shown.path.clone(),
-                        x,
-                        y,
-                    });
-                    self.selected_mark = Some(self.marks.len() - 1);
+            if pointer.clicked {
+                match tool.click(hits) {
+                    Click::Nothing => {}
+                    Click::ClearSelection => {
+                        self.selected_mark = None;
+                        self.selected_roi = None;
+                    }
+                    Click::SelectMark(i) => self.selected_mark = Some(i),
+                    Click::AddMark(x, y) => {
+                        self.marks.push(Mark {
+                            path: shown.path.clone(),
+                            x,
+                            y,
+                        });
+                        self.selected_mark = Some(self.marks.len() - 1);
+                    }
+                    Click::SelectRoi(i) => self.selected_roi = i,
                 }
             }
-            let face_rect = |m: &FaceMark| {
-                let (w, h) = (shown.info.width as f32, shown.info.height as f32);
-                Rect::from_min_size(
-                    img_rect.min + vec2(m.rect[0] * w, m.rect[1] * h) * scale,
-                    vec2(m.rect[2] * w, m.rect[3] * h) * scale,
-                )
-            };
-            if response.secondary_clicked() {
-                if let Some(i) = hit {
+            if pointer.secondary_clicked {
+                if let Some(i) = hits.mark {
                     self.selected_mark = Some(i);
                 }
-                if let Some(i) = roi_hit {
+                if let Some(i) = hits.roi {
                     self.selected_roi = Some(i);
                 }
                 // 重なった枠は小さいほうを選ぶ。大きな顔の中に小さな顔が写り込むことがあるため。
                 self.selected_face = pointer
+                    .pos
                     .and_then(|p| {
                         faces
                             .iter()
                             .enumerate()
-                            .filter(|(_, m)| face_rect(m).contains(p))
+                            .filter(|(_, m)| placed.fraction_rect(m.rect).contains(p))
                             .min_by(|a, b| {
                                 (a.1.rect[2] * a.1.rect[3]).total_cmp(&(b.1.rect[2] * b.1.rect[3]))
                             })
@@ -1665,7 +1471,13 @@ impl Slot {
                     })
                     .map(|i| (shown.path.clone(), i));
             }
-            draw_faces(ui, body, lang, faces, &face_rect, &self.colors);
+            let over_pixel = pointer.hover.is_some_and(|p| placed.pixel_at(p).is_some());
+            if (pointer.hovered || pointer.dragged)
+                && let Some(cursor) = tool.cursor(pointer.alt, over_pixel, pointer.dragged)
+            {
+                ui.ctx().set_cursor_icon(cursor);
+            }
+            draw_faces(ui, body, lang, faces, &placed, &self.colors);
             if beam {
                 // 帯を重ねている間は、その上に出す。
                 let clear = if floating {
@@ -1678,13 +1490,12 @@ impl Slot {
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
-            out.wants_full |= has_marks || has_rois || (probing && response.hovered());
-            self.draw_rois(ui, body, lang, &region_rect, drawing);
-            self.draw_marks(ui, body, lang, &mark_pos);
-            if probing {
-                let hover = response.hover_pos().and_then(pixel_at);
+            out.wants_full |= has_marks || has_rois || (tool == Tool::Probe && pointer.hovered);
+            self.draw_rois(ui, body, lang, &placed, drawing);
+            self.draw_marks(ui, body, lang, &placed);
+            if tool == Tool::Probe {
+                let hover = pointer.hover.and_then(|p| placed.pixel_at(p));
                 if let Some((x, y)) = hover {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                     let value = self.mark_value(&Mark {
                         path: shown.path.clone(),
                         x,
@@ -2374,12 +2185,12 @@ fn draw_faces(
     body: Rect,
     lang: Language,
     faces: &[FaceMark],
-    face_rect: &dyn Fn(&FaceMark) -> Rect,
+    placed: &Placed,
     colors: &Colors,
 ) {
     let painter = ui.painter_at(body);
     for (i, m) in faces.iter().enumerate() {
-        let rect = face_rect(m);
+        let rect = placed.fraction_rect(m.rect);
         let color = if m.person.is_some() {
             colors.face_known
         } else {
@@ -2521,37 +2332,6 @@ mod tests {
     }
 
     #[test]
-    fn whole_image_is_visible_when_it_fits() {
-        let r = visible_part(vec2(200.0, 100.0), vec2(100.0, 100.0), 1.0, Vec2::ZERO);
-        assert_eq!(r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)));
-    }
-
-    #[test]
-    fn zoomed_in_view_shows_the_middle_part_shifted_by_the_pan() {
-        let r = visible_part(vec2(100.0, 100.0), vec2(100.0, 100.0), 4.0, Vec2::ZERO);
-        assert_eq!(
-            r,
-            Rect::from_min_max(pos2(0.375, 0.375), pos2(0.625, 0.625))
-        );
-        // 画像を右へずらすと、見えるのは画像の左寄り。
-        let r = visible_part(
-            vec2(100.0, 100.0),
-            vec2(100.0, 100.0),
-            4.0,
-            vec2(100.0, 0.0),
-        );
-        assert_eq!(r.min.x, 0.125);
-    }
-
-    #[test]
-    fn centering_a_point_makes_it_the_middle_of_the_visible_part() {
-        let (body, image, scale) = (vec2(100.0, 80.0), vec2(300.0, 200.0), 2.0);
-        let at = pos2(0.2, 0.7);
-        let r = visible_part(body, image, scale, pan_to_center(at, image, scale));
-        assert!((r.center() - at).length() < 1e-5, "{r:?}");
-    }
-
-    #[test]
     fn nearest_minify_uses_no_mipmaps_so_only_original_values_are_shown() {
         let o = texture_options(ScaleFilter::Nearest, ScaleFilter::Nearest);
         assert_eq!(o.magnification, TextureFilter::Nearest);
@@ -2565,137 +2345,6 @@ mod tests {
         assert_eq!(o.magnification, TextureFilter::Linear);
         assert_eq!(o.minification, TextureFilter::Linear);
         assert_eq!(o.mipmap_mode, Some(TextureFilter::Linear));
-    }
-
-    #[test]
-    fn large_image_fits_the_limiting_side() {
-        assert_eq!(fit_scale(vec2(100.0, 100.0), vec2(400.0, 200.0)), 0.25);
-        assert_eq!(fit_scale(vec2(100.0, 100.0), vec2(200.0, 400.0)), 0.25);
-    }
-
-    #[test]
-    fn small_image_is_enlarged_to_fill_the_slot() {
-        assert_eq!(fit_scale(vec2(1000.0, 500.0), vec2(10.0, 10.0)), 50.0);
-    }
-
-    #[test]
-    fn empty_image_does_not_divide_by_zero() {
-        assert_eq!(fit_scale(vec2(100.0, 100.0), vec2(0.0, 0.0)), 1.0);
-    }
-
-    #[test]
-    fn zoom_keeps_point_under_cursor_fixed() {
-        let (zoom, pan, base) = (1.0, vec2(10.0, -5.0), 0.5);
-        let cursor = vec2(40.0, 30.0);
-        // カーソル位置にある画像上の点（画像中心からの距離を倍率で割った値）
-        let image_point = (cursor - pan) / (base * zoom);
-        let (z2, p2) = zoom_at(zoom, pan, 2.0, base, Some(cursor));
-        assert_eq!(z2, 2.0);
-        let after = p2 + image_point * (base * z2);
-        assert!((after - cursor).length() < 1e-4, "{after:?}");
-    }
-
-    #[test]
-    fn zoom_without_cursor_keeps_pan() {
-        let (z, p) = zoom_at(1.0, vec2(3.0, 4.0), 1.5, 1.0, None);
-        assert_eq!((z, p), (1.5, vec2(3.0, 4.0)));
-    }
-
-    #[test]
-    fn zoom_is_clamped() {
-        assert_eq!(zoom_at(1.0, Vec2::ZERO, 1e-6, 1.0, None).0, MIN_ZOOM);
-        // 全体表示が 50% なら、実寸 200 倍は全体表示の 400 倍。
-        assert_eq!(zoom_at(1.0, Vec2::ZERO, 1e6, 0.5, None).0, 400.0);
-    }
-
-    #[test]
-    fn full_resolution_is_needed_only_when_shown_larger_than_the_thumbnail() {
-        assert!(!needs_full(400.0, 512, 4000));
-        assert!(!needs_full(512.0, 512, 4000));
-        assert!(needs_full(513.0, 512, 4000));
-    }
-
-    #[test]
-    fn images_smaller_than_the_thumbnail_never_need_full_resolution() {
-        // 元が 300 x 200 なら縮小画像は元の画素そのもの。拡大表示しても読み直さない。
-        assert!(!needs_full(3000.0, 300, 300));
-    }
-
-    #[test]
-    fn image_just_over_the_thumbnail_size_needs_full_resolution() {
-        // 513 px は半分の 257 px に縮小されるので、それより大きく出すなら元が要る。
-        assert!(needs_full(300.0, 257, 513));
-    }
-
-    #[test]
-    fn one_wheel_notch_steps_one_image() {
-        let mut acc = 0.0;
-        assert_eq!(wheel_steps(&mut acc, -WHEEL_STEP), 1);
-        assert_eq!(wheel_steps(&mut acc, WHEEL_STEP), -1);
-    }
-
-    #[test]
-    fn small_touchpad_deltas_add_up_to_one_step() {
-        let mut acc = 0.0;
-        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
-        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
-        assert_eq!(wheel_steps(&mut acc, -15.0), 1);
-        assert_eq!(wheel_steps(&mut acc, -15.0), 0);
-    }
-
-    #[test]
-    fn fast_spin_steps_several_images_at_once() {
-        let mut acc = 0.0;
-        assert_eq!(wheel_steps(&mut acc, -3.0 * WHEEL_STEP), 3);
-    }
-
-    #[test]
-    fn reversing_the_wheel_drops_the_leftover() {
-        let mut acc = 0.0;
-        assert_eq!(wheel_steps(&mut acc, -30.0), 0);
-        assert_eq!(wheel_steps(&mut acc, WHEEL_STEP), -1);
-    }
-
-    #[test]
-    fn wheel_with_ctrl_is_not_counted_as_image_steps() {
-        let wheel = |ctrl: bool| egui::Event::MouseWheel {
-            unit: MouseWheelUnit::Line,
-            delta: vec2(0.0, -1.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: if ctrl {
-                egui::Modifiers::COMMAND
-            } else {
-                egui::Modifiers::NONE
-            },
-        };
-        assert_eq!(wheel_delta(&[wheel(false)], 500.0), -WHEEL_STEP);
-        assert_eq!(wheel_delta(&[wheel(true)], 500.0), 0.0);
-    }
-
-    #[test]
-    fn wheel_with_shift_turns_pages_instead_of_images() {
-        let wheel = |modifiers: egui::Modifiers, delta: Vec2| egui::Event::MouseWheel {
-            unit: MouseWheelUnit::Line,
-            delta,
-            phase: egui::TouchPhase::Move,
-            modifiers,
-        };
-        let down = vec2(0.0, -1.0);
-        assert_eq!(
-            split_wheel(&[wheel(egui::Modifiers::NONE, down)], 500.0),
-            (-WHEEL_STEP, 0.0)
-        );
-        assert_eq!(
-            split_wheel(&[wheel(egui::Modifiers::SHIFT, down)], 500.0),
-            (0.0, -WHEEL_STEP)
-        );
-        // OS が横スクロールに変えて届けても、ページ送りとして数える。
-        assert_eq!(
-            split_wheel(&[wheel(egui::Modifiers::SHIFT, vec2(-1.0, 0.0))], 500.0),
-            (0.0, -WHEEL_STEP)
-        );
-        let ctrl_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-        assert_eq!(split_wheel(&[wheel(ctrl_shift, down)], 500.0), (0.0, 0.0));
     }
 
     #[test]
