@@ -471,6 +471,7 @@ mod tests {
             gamut: None,
             frame_delays: None,
             spectrum: None,
+            geo: None,
         }
     }
 

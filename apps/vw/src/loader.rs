@@ -74,6 +74,8 @@ pub struct ImageInfo {
     pub frame_delays: Option<Arc<[u32]>>,
     /// 1 次元のスペクトルとして読んだときの値と横軸。設定でグラフにするときは画像の代わりに描く。
     pub spectrum: Option<Arc<vw_core::spectrum::Spectrum>>,
+    /// 画素ごとの緯度・経度（気象・海洋の格子のデータ）。
+    pub geo: Option<Arc<vw_core::geo::GeoGrid>>,
 }
 
 impl ImageInfo {
@@ -516,6 +518,7 @@ fn finish(
             .and_then(|t| vw_compare::pairs::sharpness(t.size[0], t.size[1], t.as_raw())),
         frame_delays: None,
         spectrum: image.spectrum.clone(),
+        geo: image.geo.clone(),
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),

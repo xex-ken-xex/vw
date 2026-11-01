@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use vw_core::geo::{GeoGrid, format_lat_lon};
 use vw_core::{ColorModel, Metadata, VwImage};
 use vw_report::{Chart, Panel, Series, Table, Theme};
 
@@ -52,6 +53,12 @@ impl MeasureLine {
             })
             .collect()
     }
+}
+
+/// 線を始点から終点まで地球の上でたどった長さ（km）。緯度・経度が分からなければ `None`。
+pub fn length_km(geo: &GeoGrid, line: &MeasureLine) -> Option<f64> {
+    let positions: Vec<(u32, u32)> = line.points().iter().map(|p| p.1).collect();
+    Earth::along(geo, &positions).map(|e| e.length_km())
 }
 
 /// 次に引く線の番号。その画像の線の番号の最大の次。
@@ -203,6 +210,43 @@ pub struct Profile {
     pub pixel: Vec<Vec<f64>>,
     /// 計測の値（モノクロで 2 種類ある画像だけ）。
     pub measured: Option<Vec<f64>>,
+    /// 点ごとの緯度・経度と、始点から線に沿って測った距離（km）。緯度・経度の分かる画像で、
+    /// 全部の点が格子の中にあるときだけ。
+    pub earth: Option<Earth>,
+}
+
+/// 線の上の点の、地球の上の位置。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Earth {
+    pub places: Vec<(f64, f64)>,
+    pub distance_km: Vec<f64>,
+}
+
+impl Earth {
+    /// 隣どうしの点の大円の距離を足していく。始点と終点の大円の距離にしないのは、曲がった格子や
+    /// 図法の格子では、画像の上の直線が地球の上の大円にならないため。
+    fn along(geo: &GeoGrid, positions: &[(u32, u32)]) -> Option<Self> {
+        let places = positions
+            .iter()
+            .map(|&(x, y)| geo.at(f64::from(x), f64::from(y)))
+            .collect::<Option<Vec<_>>>()?;
+        let mut total = 0.0;
+        let mut distance_km = Vec::with_capacity(places.len());
+        for (i, &p) in places.iter().enumerate() {
+            if i > 0 {
+                total += vw_core::geo::distance_km(places[i - 1], p);
+            }
+            distance_km.push(total);
+        }
+        Some(Self {
+            places,
+            distance_km,
+        })
+    }
+
+    pub fn length_km(&self) -> f64 {
+        self.distance_km.last().copied().unwrap_or(0.0)
+    }
 }
 
 /// 色の名前。モノクロは空。
@@ -234,15 +278,21 @@ pub fn profile(img: &VwImage, meta: &Metadata, line: &MeasureLine, values: &Valu
     }
     let measured = (channels == 1 && values.two_kinds())
         .then(|| read.iter().map(|&r| values.measured(r)).collect());
+    let positions: Vec<(u32, u32)> = points.iter().map(|p| p.1).collect();
+    let earth = img
+        .geo
+        .as_deref()
+        .and_then(|geo| Earth::along(geo, &positions));
     Profile {
         number: line.number,
         start: line.start,
         end: line.end,
         length: line.length(),
         distance: points.iter().map(|p| p.0).collect(),
-        positions: points.iter().map(|p| p.1).collect(),
+        positions,
         pixel,
         measured,
+        earth,
     }
 }
 
@@ -300,8 +350,14 @@ pub fn chart(
     theme: Theme,
 ) -> Chart {
     let names = channel_names(color);
+    // 線の 1 本でも緯度・経度が分からなければ、横軸をそろえるため全部を画素で測る。
+    let km = !profiles.is_empty() && profiles.iter().all(|p| p.earth.is_some());
     let points = |p: &Profile, v: &[f64]| -> Vec<[f64; 2]> {
-        p.distance.iter().zip(v).map(|(&d, &v)| [d, v]).collect()
+        let distance = match &p.earth {
+            Some(e) if km => &e.distance_km,
+            _ => &p.distance,
+        };
+        distance.iter().zip(v).map(|(&d, &v)| [d, v]).collect()
     };
     let mut pixel = Vec::new();
     for (i, p) in profiles.iter().enumerate() {
@@ -341,7 +397,8 @@ pub fn chart(
         panels[0].y_label = with_unit(labels.pixel_value, &values.unit);
     }
     Chart {
-        x_label: format!("{} (px)", labels.distance),
+        x_label: format!("{} ({})", labels.distance, if km { "km" } else { "px" }),
+        x_names: Vec::new(),
         panels,
     }
 }
@@ -356,7 +413,18 @@ pub fn table(
     let names = channel_names(color);
     let mut rows = Vec::new();
     let n = histogram::number;
+    let km = !profiles.is_empty() && profiles.iter().all(|p| p.earth.is_some());
     for p in profiles {
+        let end = |at: (u32, u32), place: Option<&(f64, f64)>| match place {
+            Some(&(lat, lon)) => format!("{}, {}  {}", at.0, at.1, format_lat_lon(lat, lon)),
+            None => format!("{}, {}", at.0, at.1),
+        };
+        let start = end(p.start, p.earth.as_ref().and_then(|e| e.places.first()));
+        let finish = end(p.end, p.earth.as_ref().and_then(|e| e.places.last()));
+        let length = match &p.earth {
+            Some(e) if km => format!("{:.1}", e.length_km()),
+            _ => format!("{:.1}", p.length),
+        };
         let mut kinds: Vec<(String, &[f64])> = p
             .pixel
             .iter()
@@ -378,9 +446,9 @@ pub fn table(
             let cell = |i: usize| s.map_or_else(String::new, |s| n(s[i]));
             rows.push(vec![
                 p.number.to_string(),
-                format!("{}, {}", p.start.0, p.start.1),
-                format!("{}, {}", p.end.0, p.end.1),
-                format!("{:.1}", p.length),
+                start.clone(),
+                finish.clone(),
+                length.clone(),
                 kind,
                 cell(0),
                 cell(1),
@@ -394,7 +462,7 @@ pub fn table(
             labels.line.to_owned(),
             labels.start.to_owned(),
             labels.end.to_owned(),
-            format!("{} (px)", labels.length),
+            format!("{} ({})", labels.length, if km { "km" } else { "px" }),
             labels.kind.to_owned(),
             labels.min.to_owned(),
             labels.max.to_owned(),
@@ -410,6 +478,10 @@ pub fn table(
 pub fn rows(profiles: &[Profile], color: ColorModel, values: &Values, separator: char) -> String {
     let names = channel_names(color);
     let mut head = vec!["line", "index", "distance_px", "x", "y"];
+    let earth = profiles.iter().any(|p| p.earth.is_some());
+    if earth {
+        head.extend(["distance_km", "latitude", "longitude"]);
+    }
     let pixel_columns: Vec<String> = names
         .iter()
         .map(|c| {
@@ -451,6 +523,16 @@ pub fn rows(profiles: &[Profile], color: ColorModel, values: &Values, separator:
                 p.positions[i].0.to_string(),
                 p.positions[i].1.to_string(),
             ];
+            if earth {
+                match &p.earth {
+                    Some(e) => row.extend([
+                        format!("{:.3}", e.distance_km[i]),
+                        format!("{:.6}", e.places[i].0),
+                        format!("{:.6}", e.places[i].1),
+                    ]),
+                    None => row.extend([String::new(), String::new(), String::new()]),
+                }
+            }
             row.extend(p.pixel.iter().map(|c| value(c[i])));
             if measured {
                 row.push(
@@ -700,5 +782,89 @@ mod tests {
             rows(&[p], ColorModel::Gray, &v, '\t'),
             "line\tindex\tdistance_px\tx\ty\tpixel_value\n1\t0\t0.000\t0\t0\t7\n"
         );
+    }
+
+    /// 赤道の上で経度が 1° ずつ増える 3×1 の格子。
+    fn equator() -> VwImage {
+        let mut img =
+            VwImage::new(3, 1, ColorModel::Gray, PixelData::F32(vec![1.0, 2.0, 3.0])).unwrap();
+        img.geo = Some(std::sync::Arc::new(GeoGrid {
+            width: 3,
+            height: 1,
+            cells: vw_core::geo::Cells::Axes {
+                longitudes: vec![0.0, 1.0, 2.0],
+                latitudes: vec![0.0],
+            },
+        }));
+        img
+    }
+
+    const KM_PER_DEGREE: f64 = vw_core::geo::EARTH_RADIUS_KM * std::f64::consts::PI / 180.0;
+
+    #[test]
+    fn lines_on_a_latitude_longitude_grid_are_measured_in_kilometers() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let p = profile(&equator(), &m, &line((0, 0), (2, 0)), &v);
+        let earth = p.earth.as_ref().unwrap();
+        assert_eq!(earth.places, vec![(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)]);
+        assert!((earth.length_km() - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
+        let c = chart(
+            std::slice::from_ref(&p),
+            ColorModel::Gray,
+            &v,
+            &LABELS,
+            Theme::default(),
+        );
+        assert_eq!(c.x_label, "Distance from the start (km)");
+        let last = c.panels[0].series[0].points[2][0];
+        assert!((last - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
+        let t = table(&[p], ColorModel::Gray, &v, &LABELS);
+        assert_eq!(t.head[3], "Length (km)");
+        assert_eq!(t.rows[0][1], "0, 0  0.00°N 0.00°E");
+        assert_eq!(t.rows[0][3], format!("{:.1}", 2.0 * KM_PER_DEGREE));
+    }
+
+    #[test]
+    fn csv_adds_kilometers_latitude_and_longitude_per_point() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let p = profile(&equator(), &m, &line((0, 0), (1, 0)), &v);
+        let csv = rows(&[p], ColorModel::Gray, &v, ',');
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "line,index,distance_px,x,y,distance_km,latitude,longitude,pixel_value"
+        );
+        assert_eq!(
+            lines[2],
+            format!("1,1,1.000,1,0,{KM_PER_DEGREE:.3},0.000000,1.000000,2")
+        );
+    }
+
+    #[test]
+    fn mixing_lines_with_and_without_coordinates_keeps_pixels_on_the_axis() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let with = profile(&equator(), &m, &line((0, 0), (2, 0)), &v);
+        let plain = VwImage::new(3, 1, ColorModel::Gray, PixelData::U8(vec![1, 2, 3])).unwrap();
+        let mut without = profile(&plain, &m, &line((0, 0), (2, 0)), &v);
+        without.number = 2;
+        let c = chart(
+            &[with, without],
+            ColorModel::Gray,
+            &v,
+            &LABELS,
+            Theme::default(),
+        );
+        assert_eq!(c.x_label, "Distance from the start (px)");
+        assert_eq!(c.panels[0].series[0].points[2][0], 2.0);
+    }
+
+    #[test]
+    fn the_length_of_a_line_is_measured_on_the_earth() {
+        let img = equator();
+        let km = length_km(img.geo.as_deref().unwrap(), &line((0, 0), (2, 0))).unwrap();
+        assert!((km - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
     }
 }

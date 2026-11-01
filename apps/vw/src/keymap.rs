@@ -110,6 +110,7 @@ pub enum Action {
     ToggleLineProfile,
     ToggleRoiGraph,
     ToggleMap,
+    ShowSlotOnMap,
     ToggleSkyChart,
     ToggleSubframes,
     UndoPosition,
@@ -273,6 +274,7 @@ impl Action {
         Action::ToggleLineProfile,
         Action::ToggleRoiGraph,
         Action::ToggleMap,
+        Action::ShowSlotOnMap,
         Action::ToggleSkyChart,
         Action::ToggleSubframes,
         Action::UndoPosition,
@@ -428,6 +430,7 @@ impl Action {
             Action::ToggleLineProfile => "toggle_line_profile",
             Action::ToggleRoiGraph => "toggle_roi_graph",
             Action::ToggleMap => "toggle_map",
+            Action::ShowSlotOnMap => "show_slot_on_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::ToggleSubframes => "toggle_subframes",
             Action::UndoPosition => "undo_position",
@@ -564,6 +567,7 @@ impl Action {
             Action::ToggleLineProfile => "Show/hide line profile",
             Action::ToggleRoiGraph => "Show/hide ROI graph",
             Action::ToggleMap => "Show/hide map",
+            Action::ShowSlotOnMap => "Show the slot's data on the map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
             Action::UndoPosition => "Undo the last position change or flag clearing",
@@ -728,6 +732,7 @@ impl Action {
             | Action::ToggleLineProfile
             | Action::ToggleRoiGraph
             | Action::ToggleMap
+            | Action::ShowSlotOnMap
             | Action::ToggleSkyChart
             | Action::ToggleSubframes => KeyGroup::Windows,
             Action::ToggleSettings
@@ -944,6 +949,7 @@ impl Action {
             Action::ToggleLineProfile => vec![KeyCombo::ctrl(L)],
             Action::ToggleRoiGraph => vec![KeyCombo::ctrl(L).with(true, true, false)],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
+            Action::ShowSlotOnMap => vec![],
             Action::ToggleSkyChart => vec![],
             Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],

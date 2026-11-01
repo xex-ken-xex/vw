@@ -142,6 +142,8 @@ pub struct VwImage {
     pub gamut: Option<crate::icc::Gamut>,
     /// 1 次元のスペクトルとして読んだとき、その値と横軸。あれば画像ではなくグラフで描く。
     pub spectrum: Option<std::sync::Arc<crate::spectrum::Spectrum>>,
+    /// 画素ごとの緯度・経度が分かるとき（気象・海洋の格子のデータ）。
+    pub geo: Option<std::sync::Arc<crate::geo::GeoGrid>>,
 }
 
 impl VwImage {
@@ -178,6 +180,7 @@ impl VwImage {
             missing: None,
             gamut: None,
             spectrum: None,
+            geo: None,
         })
     }
 }

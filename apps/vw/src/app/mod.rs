@@ -1177,6 +1177,7 @@ impl VwApp {
             Action::NextVariable => self.step_variable(i, 1),
             Action::PreviousVariable => self.step_variable(i, -1),
             Action::NextColorMap => self.next_color_map(i),
+            Action::ShowSlotOnMap => self.show_slot_on_map(i),
             Action::ToggleColorGauge => self.show_gauge ^= true,
             Action::ZoomIn => self.slots[i].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[i].zoom_by(1.0 / KEY_ZOOM_FACTOR),

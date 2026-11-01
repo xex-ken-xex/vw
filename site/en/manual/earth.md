@@ -30,8 +30,27 @@ Pixels hold the file values with `scale_factor` and `add_offset` applied (with t
 
 - A color map (viridis by default) is applied from the start. Change it in the **NetCDF data** setting
 - Black and white are chosen once per variable from all its times and levels, so planes keep the same coloring and can be compared. Variables such as temperature and precipitation have different units, so each has its own
-- For data around zero, such as anomalies and winds, set **First black and white** to **Symmetric around zero** to put zero in the middle of the color map
+- Variables whose name (such as `sst_anom`), `standard_name` or `long_name` says anomaly (differences from normal) automatically get black and white symmetric around zero and a color map with zero in the middle (coolwarm). Turn this off with **Anomalies around zero**
+- For other data around zero, such as winds, set **First black and white** to **Symmetric around zero** to put zero in the middle of the color map
 - Black and white changed by hand on the gauge go back when you switch variables
+
+## Latitude, longitude, time and level
+
+When the file says where its pixels are, vw reads the latitude and longitude of each pixel. These forms are read:
+
+- Grids whose latitudes and longitudes are 1-D axes (the most common form)
+- Curvilinear grids with 2-D latitude and longitude tables (named in the variable's `coordinates` attribute, as in ocean models)
+- Projected grids (named in `grid_mapping`, with x / y in m or km). Lambert conformal conic, polar stereographic, Mercator, transverse Mercator, Albers equal area and rotated poles are turned into latitude and longitude
+
+The positions are shown here:
+
+- Next to the [pixel probe](check.html) cross and in the cursor readout at the bottom left, after the value and the position, as "35.68°N 139.77°E  time = 2024-01-18 06:00" with the time or level of the plane. **Ctrl+C** adds the latitude and longitude (south and west as negative numbers) and the plane label after the value, separated by commas
+- The length tag of a measurement line and the line profile measure distance in km along the line on the earth. The table adds the latitude and longitude of the start and end, and the CSV adds `distance_km`, `latitude` and `longitude` columns. If any line has no latitude and longitude, all lines are measured in pixels
+- The ROI graph's **Mean per frame** shows the dates or levels of the planes on the horizontal axis instead of frame numbers. The CSV adds a `plane` column
+- The [map](find.html#see-photo-locations-on-a-map) outlines the NetCDF files of the open folder in red. Click an outline or its center point to see the name and open it, as with photos. Where outlines overlap, the smaller one is picked
+- The key action **Show the slot's data on the map** opens the map and fits it to the current slot's data. It has no key at first; assign one in the key settings
+
+Grids with longitudes from 0 to 360 degrees (Japan on the left, America on the right) can be turned with **Longitudes from -180 to 180** so the left edge is 180 degrees west. Pixel positions in graphs and CSV follow the turned grid.
 
 ## Metadata and search
 
@@ -49,3 +68,6 @@ All settings are under **Earth science grids (NetCDF)**.
 | Same black and white for all planes | Choose one black and white from all planes of the variable. When off, each plane gets its own | On |
 | North up | Turn data whose latitudes go from south to north upside down | On |
 | Color of missing pixels | Color of pixels without a value | Gray |
+| Show coordinates | Show latitude, longitude and the plane's time or level at the cross, the line profile, the ROI graph and the map | On |
+| Longitudes from -180 to 180 | Make the left edge of 0 to 360 degree grids 180 degrees west | Off |
+| Anomalies around zero | Give anomaly variables black and white symmetric around zero and coolwarm | On |

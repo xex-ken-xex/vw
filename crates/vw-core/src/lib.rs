@@ -15,6 +15,7 @@
 
 pub mod display;
 pub mod exif;
+pub mod geo;
 pub mod icc;
 pub mod image;
 pub mod limits;

@@ -293,6 +293,7 @@ mod tests {
         let mut p = Page::new(Theme::Paper, Words::ENGLISH, "t", &[]);
         let chart = Chart {
             x_label: "x".into(),
+            x_names: Vec::new(),
             panels: vec![Panel {
                 y_label: "y".into(),
                 series: vec![Series {

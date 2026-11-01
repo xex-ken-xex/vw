@@ -19,6 +19,9 @@ use crate::viewer::{Content, Full, Origin, RawFace, Shown, Slot, SlotCommand, Sl
 
 use super::*;
 
+/// 地図に合わせる範囲の外周の、1 辺あたりの点の数。
+const MAP_OUTLINE_POINTS_PER_SIDE: usize = 16;
+
 impl VwApp {
     /// 空のスロットを末尾に足し、アクティブにする。
     pub(super) fn add_slot(&mut self) {
@@ -573,6 +576,27 @@ impl VwApp {
     }
 
     /// スロット `index` の NetCDF の変数を、`step` 個先（負なら前、端は反対の端へ回る）にする。
+    /// スロット `index` のデータの範囲が入るように地図を開いて合わせる。
+    pub(super) fn show_slot_on_map(&mut self, index: usize) {
+        if !self.settings().map.enabled {
+            self.log.warn("The map is turned off in the settings");
+            return;
+        }
+        let outline = self
+            .slots
+            .get(index)
+            .and_then(|s| s.shown())
+            .and_then(|s| s.info.geo.as_ref())
+            .map(|g| g.outline(MAP_OUTLINE_POINTS_PER_SIDE));
+        match outline.filter(|o| !o.is_empty()) {
+            Some(outline) => {
+                self.map.open = true;
+                self.map.show_extent(&outline);
+            }
+            None => self.log.warn("The image has no latitude and longitude"),
+        }
+    }
+
     pub(super) fn step_variable(&mut self, index: usize, step: isize) {
         self.choose_variable(index, |variables| {
             let current = variables.iter().position(|v| v.current).unwrap_or(0);

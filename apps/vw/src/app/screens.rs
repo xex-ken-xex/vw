@@ -443,6 +443,7 @@ impl VwApp {
             cache: cache.as_deref(),
             places: self.place_names.as_deref(),
             labels: &self.labels,
+            extents: settings.netcdf.show_coordinates,
         };
         let commands = self.map.ui(ui, &inputs);
         for problem in self.map.take_problems() {
