@@ -104,7 +104,8 @@ impl Place {
         Some(Self { lat, lon, plane })
     }
 
-    fn label(&self) -> String {
+    /// 緯度・経度と面の札を 1 行にした文字。
+    pub fn label(&self) -> String {
         let at = vw_core::geo::format_lat_lon(self.lat, self.lon);
         match &self.plane {
             Some(plane) => format!("{at}  {plane}"),

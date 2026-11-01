@@ -382,10 +382,45 @@ fn flip(cells: &mut Cells, w: usize, h: usize) {
 /// 偏差（平年との差）の変数か。`standard_name` に `anomaly` が入るか、`valid_range` が 0 をはさんで対称。
 /// 0 を真ん中にした色で見ると、正と負がひと目で分かるため。
 pub fn is_anomaly(var: &NcVariable) -> bool {
-    let named = text(var, "standard_name").is_some_and(|s| s.contains("anomaly"));
+    let named = anomaly_named(
+        &var.name,
+        text(var, "standard_name").as_deref(),
+        text(var, "long_name").as_deref(),
+    );
     let symmetric = var
         .attribute("valid_range")
         .and_then(|a| a.value.as_f64_vec())
         .is_some_and(|v| v.len() >= 2 && v[1] > 0.0 && (v[0] + v[1]).abs() <= v[1] * 1e-6);
     named || symmetric
+}
+
+/// 名前・`standard_name`・`long_name` が偏差を表すか。変数の名前は `sst_anom` のように略すことが多い。
+fn anomaly_named(name: &str, standard_name: Option<&str>, long_name: Option<&str>) -> bool {
+    let has = |s: &str, word: &str| s.to_lowercase().contains(word);
+    let word_starts_anom = name
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w.starts_with("anom"));
+    word_starts_anom
+        || standard_name.is_some_and(|s| has(s, "anomaly"))
+        || long_name.is_some_and(|s| has(s, "anomal") || s.contains("偏差"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::anomaly_named;
+
+    #[test]
+    fn anomalies_are_found_by_name_standard_name_or_long_name() {
+        assert!(anomaly_named("sst_anom", None, None));
+        assert!(!anomaly_named("manometer", None, None));
+        assert!(anomaly_named("t", Some("air_temperature_anomaly"), None));
+        assert!(anomaly_named("t", None, Some("Air Temperature Anomalies")));
+        assert!(anomaly_named("t", None, Some("気温の平年偏差")));
+        assert!(!anomaly_named(
+            "t2m",
+            Some("air_temperature"),
+            Some("2 m temperature")
+        ));
+    }
 }

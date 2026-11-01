@@ -14,6 +14,9 @@ pub struct Variable {
     /// 縦（行）と横（列）にする次元の添字。
     pub rows: usize,
     pub cols: usize,
+    /// ほかの変数の `coordinates` 属性に名前がある、2 次元の緯度・経度などの補助の座標。
+    /// 一覧には残すが（中身を見たいこともある）、最初には見せない。
+    pub auxiliary: bool,
 }
 
 impl Variable {
@@ -73,9 +76,12 @@ pub fn variables(file: &NcFile) -> Vec<Variable> {
     out
 }
 
-/// 最初に見せる変数。面の画素がいちばん多い変数（同じなら先のもの）。
+/// 最初に見せる変数。補助の座標でないもののうち、面の画素がいちばん多い変数（同じなら先のもの）。
 pub fn default_variable(variables: &[Variable]) -> Option<&Variable> {
-    variables.iter().rev().max_by_key(|v| v.plane_pixels())
+    variables
+        .iter()
+        .rev()
+        .max_by_key(|v| (!v.auxiliary, v.plane_pixels()))
 }
 
 fn collect<'a>(group: &'a NcGroup, parents: &[&'a NcGroup], prefix: &str, out: &mut Vec<Variable>) {
@@ -85,6 +91,12 @@ fn collect<'a>(group: &'a NcGroup, parents: &[&'a NcGroup], prefix: &str, out: &
         .variables
         .iter()
         .filter_map(|v| v.attribute("bounds")?.value.as_string())
+        .collect();
+    let coordinates: Vec<String> = group
+        .variables
+        .iter()
+        .filter_map(|v| v.attribute("coordinates")?.value.as_string())
+        .flat_map(|c| c.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
         .collect();
     for var in &group.variables {
         if !numeric(&var.dtype)
@@ -106,6 +118,7 @@ fn collect<'a>(group: &'a NcGroup, parents: &[&'a NcGroup], prefix: &str, out: &
             dtype: var.dtype.clone(),
             rows,
             cols,
+            auxiliary: coordinates.iter().any(|c| c == &var.name),
         });
     }
     for child in &group.groups {

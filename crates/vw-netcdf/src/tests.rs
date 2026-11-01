@@ -468,3 +468,15 @@ fn the_extent_follows_the_edge_of_the_default_variable() {
 fn files_that_cannot_be_read_have_no_extent() {
     assert_eq!(extent(b"not a NetCDF file"), None);
 }
+
+#[test]
+fn two_dimensional_latitudes_and_longitudes_are_not_shown_first() {
+    let variables = variables(&fixture("geo_cases.nc")).unwrap();
+    let lat = variables
+        .iter()
+        .find(|v| v.path == "lat2d")
+        .expect("listed");
+    assert!(lat.auxiliary);
+    let first = layout::default_variable(&variables).unwrap();
+    assert!(!first.auxiliary, "{}", first.path);
+}

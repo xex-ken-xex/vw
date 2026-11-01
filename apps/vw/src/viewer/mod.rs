@@ -960,6 +960,7 @@ impl Slot {
         let next = self.shown().map_or(1, |s| {
             crate::line_profile::next_number(&self.lines, &s.path)
         });
+        let geo = self.shown().and_then(|s| s.info.geo.as_deref());
         for (start, end, number, is_selected) in finished.chain(in_progress) {
             let color = line_color(number.unwrap_or(next));
             let (a, b) = (
@@ -977,9 +978,22 @@ impl Slot {
                 let dy = f64::from(end.1) - f64::from(start.1);
                 dx.hypot(dy)
             };
-            let text = match number {
-                Some(n) => format!("{n}  {length:.1} px"),
+            let km = geo.and_then(|g| {
+                let line = MeasureLine {
+                    path: PathBuf::new(),
+                    start,
+                    end,
+                    number: 0,
+                };
+                crate::line_profile::length_km(g, &line)
+            });
+            let length = match km {
+                Some(km) => format!("{km:.1} km"),
                 None => format!("{length:.1} px"),
+            };
+            let text = match number {
+                Some(n) => format!("{n}  {length}"),
+                None => length,
             };
             let tag = Rect::from_center_size(b, vec2(0.0, 0.0)).expand(6.0);
             crate::marks::name_tag(&painter, tag, body, &text, color);
@@ -2017,15 +2031,18 @@ impl Slot {
             if tool == Tool::Probe {
                 let hover = pointer.hover.and_then(|p| placed.pixel_at(p));
                 if let Some((x, y)) = hover {
-                    let value = self.mark_value(&Mark {
+                    let mark = Mark {
                         path: shown.path.clone(),
                         x,
                         y,
-                    });
-                    let text = match value {
+                    };
+                    let mut text = match self.mark_value(&mark) {
                         Some(v) => format!("x {x}, y {y}   {}", crate::i18n::tr_text(lang, &v)),
                         None => format!("x {x}, y {y}"),
                     };
+                    if let Some(place) = self.mark_place(&mark) {
+                        text = format!("{text}   {}", place.label());
+                    }
                     let galley = painter.layout_no_wrap(
                         text,
                         egui::FontId::proportional(13.0),

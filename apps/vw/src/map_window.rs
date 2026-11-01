@@ -47,6 +47,9 @@ pub struct Place {
     world: [f64; 2],
     /// 格子のデータ（NetCDF）の範囲の外周（地図の座標）。写真は空。点はその真ん中に置く。
     outline: Vec<[f64; 2]>,
+    /// 外周のうち線を描く点の数。極を回って閉じた分（[`ring`]）は、中か外かを決めるのにだけ使い、
+    /// 描かない（地図の継ぎ目に縦の線が出るため）。
+    drawn: usize,
 }
 
 impl Place {
@@ -59,6 +62,7 @@ impl Place {
             placed: false,
             world,
             outline: Vec::new(),
+            drawn: 0,
         }
     }
 
@@ -66,13 +70,17 @@ impl Place {
     /// ずらして続ける（地図は横に繰り返すので、そのまま描ける）。
     fn with_outline(mut self, outline: &[(f64, f64)]) -> Self {
         self.outline = ring(outline);
+        self.drawn = outline.len();
         self
     }
 }
 
+///
+/// 極を囲む格子（北極の海氷など）の外周は、地球を 1 周して始まりと 1 周ずれた所で終わる。
+/// そのまま閉じると地図を横切る線になるので、極の側の地図の端を回って閉じる。
 fn ring(outline: &[(f64, f64)]) -> Vec<[f64; 2]> {
     let mut previous: Option<f64> = None;
-    outline
+    let mut points: Vec<[f64; 2]> = outline
         .iter()
         .map(|&(lat, lon)| {
             let [mut x, y] = geo_map::project(lat, lon);
@@ -82,7 +90,15 @@ fn ring(outline: &[(f64, f64)]) -> Vec<[f64; 2]> {
             previous = Some(x);
             [x, y]
         })
-        .collect()
+        .collect();
+    if let (Some(&first), Some(&last)) = (points.first(), points.last())
+        && (last[0] - first[0]).abs() > 0.5
+    {
+        let north = outline.iter().map(|p| p.0).sum::<f64>() > 0.0;
+        let edge = if north { 0.0 } else { 1.0 };
+        points.extend([[last[0], edge], [first[0], edge]]);
+    }
+    points
 }
 
 /// 読んだ画像 1 枚。地図で置いた位置は、出すときにラベルから重ねる（置いたり消したりする
@@ -527,6 +543,8 @@ impl MapWindow {
         }
         if let Some(points) = self.fit_to.take() {
             view.fit(rect, &points);
+            // 読み終えたときに全部の点へ合わせ直すと、頼まれた範囲から離れてしまう。
+            self.fit_when_done = false;
         }
         navigate(ui, &response, rect, view);
         let view = *view;
@@ -878,9 +896,11 @@ fn draw_outlines(
             if !bounds.translate(shift).intersects(rect) {
                 continue;
             }
-            let mut closed: Vec<Pos2> = ring.iter().map(|&q| q + shift).collect();
-            closed.push(closed[0]);
-            painter.add(egui::Shape::line(closed, stroke));
+            let mut line: Vec<Pos2> = ring.iter().take(p.drawn).map(|&q| q + shift).collect();
+            if p.drawn == ring.len() {
+                line.push(line[0]);
+            }
+            painter.add(egui::Shape::line(line, stroke));
         }
         let area = polygon_area(&p.outline);
         if let Some(w) = at
@@ -1241,6 +1261,19 @@ mod tests {
         ]);
         assert!(r[1][0] > 1.0, "x continues past the edge: {r:?}");
         assert!((r[1][0] - r[0][0] - 20.0 / 360.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn outlines_around_a_pole_are_closed_over_the_pole() {
+        let around: Vec<(f64, f64)> = (0..8)
+            .map(|i| (60.0, -180.0 + 45.0 * f64::from(i)))
+            .collect();
+        let r = ring(&around);
+        assert_eq!(r.len(), 10);
+        assert_eq!(r[8][1], 0.0);
+        assert_eq!(r[9], [r[0][0], 0.0]);
+        assert!(inside(&r, [0.5, 0.05]), "the pole is inside");
+        assert!(!inside(&r, [0.5, 0.5]), "the equator is outside");
     }
 
     #[test]

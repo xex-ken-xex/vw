@@ -55,6 +55,12 @@ impl MeasureLine {
     }
 }
 
+/// 線を始点から終点まで地球の上でたどった長さ（km）。緯度・経度が分からなければ `None`。
+pub fn length_km(geo: &GeoGrid, line: &MeasureLine) -> Option<f64> {
+    let positions: Vec<(u32, u32)> = line.points().iter().map(|p| p.1).collect();
+    Earth::along(geo, &positions).map(|e| e.length_km())
+}
+
 /// 次に引く線の番号。その画像の線の番号の最大の次。
 pub fn next_number(lines: &[MeasureLine], path: &std::path::Path) -> usize {
     lines
@@ -853,5 +859,12 @@ mod tests {
         );
         assert_eq!(c.x_label, "Distance from the start (px)");
         assert_eq!(c.panels[0].series[0].points[2][0], 2.0);
+    }
+
+    #[test]
+    fn the_length_of_a_line_is_measured_on_the_earth() {
+        let img = equator();
+        let km = length_km(img.geo.as_deref().unwrap(), &line((0, 0), (2, 0))).unwrap();
+        assert!((km - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
     }
 }
