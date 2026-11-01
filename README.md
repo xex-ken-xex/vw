@@ -54,14 +54,6 @@ Nikon・Sony・富士フイルムを中心に、Canon や DNG も読めます。
 - **空のどこかを知る**: 写した範囲を星図に出します
 - **ヘッダで探す**: ヘッダの全項目が検索カタログに入り、「この望遠鏡で撮った」「このフィルター」で探せます。キューブや電波望遠鏡の画像も開けます
 
-## 4. NetCDF のデータでできること
-
-気象・気候・海洋の格子のデータ（`.nc` `.nc4` `.cdf` `.netcdf`、NetCDF-3 と NetCDF-4）を開きます。NetCDF でない HDF5 と HDF4 は、まだ開けません。
-
-- **変数を選んで見る**: 2 次元以上の数値の変数を画像にします。**N** / **Shift+N** か右クリックの「変数」で切り替え、時刻や高さはホイールで送ります。札に日時が出ます
-- **値のまま測る**: `scale_factor`・`add_offset` を戻した値と単位で、十字・ROI・計測線のグラフに出します。ファイルに入っている値も並べて出します
-- **欠けを見分ける**: `_FillValue` や `valid_range` の外は欠損の色で描きます。緯度が南から北へ並ぶデータは北を上にします
-
 ## ダウンロード
 
 [Releases](https://github.com/xex-ken-xex/vw/releases) から正式版（vX.Y.Z）をダウンロードします。
@@ -77,7 +69,7 @@ Nikon・Sony・富士フイルムを中心に、Canon や DNG も読めます。
 
 やりたいことごとに、[使い方のページ](https://xex-ken-xex.github.io/vw/manual/) にまとめてあります。英語版は [User guide](https://xex-ken-xex.github.io/vw/en/manual/) です。
 
-[はじめる](https://xex-ken-xex.github.io/vw/manual/start.html) ・ [画像を見る](https://xex-ken-xex.github.io/vw/manual/view.html) ・ [写真を選り分ける](https://xex-ken-xex.github.io/vw/manual/sort.html) ・ [RAW で撮った写真](https://xex-ken-xex.github.io/vw/manual/raw.html) ・ [画像を探す・しまう](https://xex-ken-xex.github.io/vw/manual/find.html) ・ [天体写真（FITS）](https://xex-ken-xex.github.io/vw/manual/astro.html) ・ [測る・確かめる](https://xex-ken-xex.github.io/vw/manual/check.html) ・ [設定とキーの一覧](https://xex-ken-xex.github.io/vw/manual/reference.html) ・ [よくある質問](https://xex-ken-xex.github.io/vw/manual/faq.html)
+[はじめる](https://xex-ken-xex.github.io/vw/manual/start.html) ・ [画像を見る](https://xex-ken-xex.github.io/vw/manual/view.html) ・ [写真を選り分ける](https://xex-ken-xex.github.io/vw/manual/sort.html) ・ [RAW で撮った写真](https://xex-ken-xex.github.io/vw/manual/raw.html) ・ [画像を探す・しまう](https://xex-ken-xex.github.io/vw/manual/find.html) ・ [天体写真（FITS）](https://xex-ken-xex.github.io/vw/manual/astro.html) ・ [気象・海洋のデータ（NetCDF）](https://xex-ken-xex.github.io/vw/manual/earth.html) ・ [測る・確かめる](https://xex-ken-xex.github.io/vw/manual/check.html) ・ [設定とキーの一覧](https://xex-ken-xex.github.io/vw/manual/reference.html) ・ [よくある質問](https://xex-ken-xex.github.io/vw/manual/faq.html)
 
 不具合は [Issue](https://github.com/xex-ken-xex/vw/issues/new/choose) で知らせてください。修正の提案は [CONTRIBUTING.md](CONTRIBUTING.md)、脆弱性は [SECURITY.md](SECURITY.md) の方法でお願いします。
 

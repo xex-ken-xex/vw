@@ -128,6 +128,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | P | Play / pause the slideshow |
 | F5 | Fullscreen slideshow |
 | V | Toggle the pixel probe |
+| N / Shift+N | Next / previous NetCDF variable |
 | R | Toggle the ROI tool |
 | Delete | Delete the selected cross or ROI |
 | G | Show / hide the color gauge |
@@ -202,6 +203,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | ZIP / 7z / tar | Open the images inside like a folder. Password-protected ones too (ZIP: ZipCrypto and AES; 7z: AES). tar uncompressed, gzip, bzip2, xz and zstd (`.tar.gz` `.tgz` `.tar.bz2` `.tar.xz` `.tar.zst`...), comic book `.cbz` `.cb7` `.cbt`, and single compressed files `.gz` `.bz2` `.xz` `.zst` |
 | TIFF | 1 to 16-bit integers and 32-bit floats, gray / RGB / alpha / palette / CMYK, black-and-white fax compression (CCITT G3 / G4), LZW / Deflate / PackBits / JPEG compression, tiles, BigTIFF. Multi-page files show all pages in one slot, stepped with the wheel (reduced-size pages are left out). Follows the orientation tag and shows camera and software information |
 | FITS (astronomy images) | `.fits` `.fit` `.fts`, tile-compressed `.fz` (RICE / GZIP), whole-file gzip `.fits.gz`. 8 to 64-bit integers and floats, `BSCALE` / `BZERO`, missing values (`BLANK` and NaN). Images after an empty primary HDU (JWST and others) open too. Cubes and 3-plane images go in one slot, stepped with the wheel, and Bayer mosaics of color cameras (`BAYERPAT`) become color. Astronomy images are dark, so the first black and white come from the 0.5% to 99.5% pixels (the **Astronomy images (FITS)** settings can switch to zscale and others, and lift the range between with asinh, log or square-root curves). Up and down follow `ROWORDER`, or else the file order (can be flipped in settings). All header entries show in the metadata and can be used in dataset search. The sky area shows on the [sky chart](astro.html#see-what-you-captured-on-a-sky-chart). If dark, flat and bias masters are nearby, they are [applied before display](astro.html#apply-darks-and-flats) |
+| NetCDF (weather and ocean grids) | `.nc` `.nc4` `.cdf` `.netcdf`, NetCDF-3 (classic, 64-bit offset, 64-bit data) and NetCDF-4 (with groups). Shown as values with units after `scale_factor` / `add_offset`; missing values (`_FillValue`, `missing_value`, outside `valid_range`) are drawn in the missing color. Times and levels are stepped with the wheel in one slot, and variables are switched with N / Shift+N or right-click **Variable**. Data whose latitudes go from south to north are shown north up. See [Weather and ocean data (NetCDF)](earth.html) |
 
 ## Files vw makes
 
