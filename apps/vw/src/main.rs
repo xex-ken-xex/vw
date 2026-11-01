@@ -145,6 +145,7 @@ fn window_icon() -> eframe::egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    vw_renderer::restrict_dll_search();
     let started = Instant::now();
     let initial: Vec<PathBuf> = std::env::args_os()
         .skip(1)
