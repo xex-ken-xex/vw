@@ -12,8 +12,10 @@
 //! ファイルはバイト列から開く。読み込みのクレートにはファイルをメモリマップで開く入口もあるが、
 //! Windows ではマップしたままのファイルを移動・ごみ箱へ送る・上書きできなくなるため使わない。
 
+pub mod geo;
 mod layout;
 mod meta;
+pub mod projection;
 mod values;
 
 use std::collections::HashMap;
@@ -50,6 +52,12 @@ pub const ADD_OFFSET: &str = "add_offset";
 /// 北を上にするため上下を返したとき、[`ROWS`] に書く値。
 pub const ROWS: &str = vw_fits::ROWS;
 pub const ROWS_FLIPPED: &str = vw_fits::ROWS_FLIPPED;
+/// 経度を −180〜180° に回したとき、この鍵に [`LONGITUDES_ROTATED`] を書く。
+pub const LONGITUDES: &str = "Longitudes";
+pub const LONGITUDES_ROTATED: &str = "Rotated to -180..180";
+/// 偏差の変数と見て、色の表を勧めるとき（[`SUGGESTED_PALETTE`] の値）。
+pub const COLOR_MAP: &str = "Suggested color map";
+pub const SUGGESTED_PALETTE: &str = "coolwarm";
 
 /// 対応する拡張子。HDF5 の拡張子（`.h5`）は、NetCDF でない HDF5 を開かないよう入れない。
 pub const EXTENSIONS: [&str; 4] = ["nc", "nc4", "cdf", "netcdf"];
@@ -66,6 +74,10 @@ pub struct Options {
     pub north_up: bool,
     /// 欠損を描く色（[`VwImage::missing`]）。`None` は黒。
     pub missing: Option<[u8; 3]>,
+    /// 経度が 0〜360° の格子を、−180〜180° に回す（地図と同じ並びにする）。
+    pub rotate_longitude: bool,
+    /// 偏差の変数（[`geo::is_anomaly`]）は、0 から対称の黒と白と、0 を真ん中にした色の表にする。
+    pub auto_anomaly: bool,
 }
 
 impl Default for Options {
@@ -77,6 +89,8 @@ impl Default for Options {
             same_window_for_planes: true,
             north_up: true,
             missing: Some(vw_fits::MISSING_COLOR),
+            rotate_longitude: false,
+            auto_anomaly: true,
         }
     }
 }
@@ -128,36 +142,46 @@ pub fn file_key(data: &[u8]) -> u64 {
     h.finish()
 }
 
-/// 変数の全部の面から決めた黒と白。面を送るたびに全体を読み直すと重いので覚える。
-#[derive(Debug, Clone, Default)]
-struct PlaneWindows(Arc<Mutex<HashMap<u64, Window>>>);
+/// 面を送るたびに作り直すと重いもの（全部の面の黒と白、画素ごとの緯度・経度）を覚える。
+/// 作れなかったことも覚える。
+#[derive(Debug, Clone)]
+struct Memo<T>(Arc<Mutex<HashMap<u64, T>>>, usize);
 
-/// 黒と白。決められなかった（値がない）ことも覚える。
-type Window = Option<(f32, f32)>;
+impl<T: Clone> Memo<T> {
+    /// `keep` 個まで覚え、超えたら全部忘れる。
+    fn new(keep: usize) -> Self {
+        Self(Arc::default(), keep)
+    }
 
-impl PlaneWindows {
-    /// 覚えておく数。超えたら全部忘れる。
-    const KEEP: usize = 64;
-
-    fn get_or(&self, key: u64, make: impl FnOnce() -> Option<(f32, f32)>) -> Option<(f32, f32)> {
-        if let Some(w) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-            return *w;
+    fn get_or(&self, key: u64, make: impl FnOnce() -> T) -> T {
+        if let Some(v) = self.0.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return v.clone();
         }
-        let window = make();
+        let value = make();
         let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if map.len() >= Self::KEEP {
+        if map.len() >= self.1 {
             map.clear();
         }
-        map.insert(key, window);
-        window
+        map.insert(key, value.clone());
+        value
     }
 }
 
-#[derive(Default)]
+/// 黒と白。
+type Window = Option<(f32, f32)>;
+
 pub struct NetcdfPlugin {
     options: SharedOptions,
     choices: Choices,
-    windows: PlaneWindows,
+    windows: Memo<Window>,
+    /// 画素ごとの緯度・経度は、図法から作ると大きな格子で数十 MB になるので、少しだけ覚える。
+    grids: Memo<Option<Arc<vw_core::geo::GeoGrid>>>,
+}
+
+impl Default for NetcdfPlugin {
+    fn default() -> Self {
+        Self::new(SharedOptions::default(), Choices::default())
+    }
 }
 
 impl NetcdfPlugin {
@@ -165,7 +189,8 @@ impl NetcdfPlugin {
         Self {
             options,
             choices,
-            windows: PlaneWindows::default(),
+            windows: Memo::new(64),
+            grids: Memo::new(4),
         }
     }
 }
@@ -219,8 +244,21 @@ impl NetcdfPlugin {
         let var = file
             .variable(&chosen.path)
             .map_err(|e| DecodeError::Invalid(format!("NetCDF: {e}")))?;
-        let plane = values::read_plane(&file, chosen, var, frame)?;
-        let options = self.options.get();
+        let mut plane = values::read_plane(&file, chosen, var, frame)?;
+        let mut options = self.options.get();
+        let anomaly = options.auto_anomaly && geo::is_anomaly(var);
+        if anomaly {
+            options.stretch = Stretch::Symmetric;
+        }
+        let roll = options
+            .rotate_longitude
+            .then(|| geo::longitude_roll(&file, chosen))
+            .flatten();
+        if let Some(k) = roll {
+            for row in plane.values.chunks_mut(plane.width) {
+                row.rotate_left(k);
+            }
+        }
         let mut img = VwImage::new(
             plane.width as u32,
             plane.height as u32,
@@ -232,9 +270,13 @@ impl NetcdfPlugin {
         if flipped {
             img.apply_orientation(4);
         }
+        let grid_key = window_key(data, &chosen.path, &(flipped, roll));
+        img.geo = self.grids.get_or(grid_key, || {
+            geo::grid(&file, chosen, flipped, roll).map(Arc::new)
+        });
         let same = planes > 1 && options.same_window_for_planes;
         img.window = if same {
-            let key = window_key(data, &chosen.path, &options);
+            let key = window_key(data, &chosen.path, &format!("{options:?}"));
             self.windows
                 .get_or(key, || planes_window(&file, chosen, var, &options))
         } else {
@@ -248,6 +290,12 @@ impl NetcdfPlugin {
         }
         if flipped {
             img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
+        }
+        if roll.is_some() {
+            img.metadata.push(GROUP, LONGITUDES, LONGITUDES_ROTATED);
+        }
+        if anomaly {
+            img.metadata.push(GROUP, COLOR_MAP, SUGGESTED_PALETTE);
         }
         if same {
             img.metadata
@@ -276,11 +324,12 @@ fn window(data: &PixelData, options: &Options) -> Option<(f32, f32)> {
     )
 }
 
-fn window_key(data: &[u8], path: &str, options: &Options) -> u64 {
+/// ファイル・変数・`extra`（決め方）ごとの、覚えておく値の鍵。
+fn window_key(data: &[u8], path: &str, extra: &impl Hash) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     file_key(data).hash(&mut h);
     path.hash(&mut h);
-    format!("{options:?}").hash(&mut h);
+    extra.hash(&mut h);
     h.finish()
 }
 

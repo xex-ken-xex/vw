@@ -298,3 +298,156 @@ fn a_choice_for_a_variable_that_is_not_there_falls_back_to_the_default() {
     let img = plugin_for(&data, "nothing").decode(&data).unwrap();
     assert_eq!(img.metadata.get(GROUP, VARIABLE), Some("t2m"));
 }
+
+/// geo-expected.txt の `変数 行,列 緯度 経度` の行。
+fn geo_expected(variable: &str) -> Vec<((f64, f64), (f64, f64))> {
+    let text = String::from_utf8(fixture("geo-expected.txt")).unwrap();
+    text.lines()
+        .filter_map(|line| {
+            let p: Vec<&str> = line.split_whitespace().collect();
+            (p[0] == variable).then(|| {
+                let (r, c) = p[1].split_once(',').unwrap();
+                (
+                    (c.parse().unwrap(), r.parse().unwrap()),
+                    (p[2].parse().unwrap(), p[3].parse().unwrap()),
+                )
+            })
+        })
+        .collect()
+}
+
+fn geo_of(data: &[u8], variable: &str, options: Options) -> VwImage {
+    let shared = SharedOptions::default();
+    shared.set(options);
+    let choices = Choices::default();
+    choices.set(data, variable);
+    NetcdfPlugin::new(shared, choices).decode(data).unwrap()
+}
+
+fn assert_near(got: (f64, f64), want: (f64, f64), tolerance: f64) {
+    assert!(
+        (got.0 - want.0).abs() < tolerance && (got.1 - want.1).abs() < tolerance,
+        "got {got:?}, expected {want:?}"
+    );
+}
+
+#[test]
+fn latitude_and_longitude_axes_give_each_pixel_its_position() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "lon360", Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    assert_eq!(geo.at(0.0, 0.0), Some((30.0, 0.0)));
+    assert_eq!(geo.at(2.0, 2.0), Some((-30.0, 90.0)));
+    // 225° は西経 135° と出す。
+    assert_eq!(geo.at(5.0, 1.0), Some((0.0, -135.0)));
+}
+
+#[test]
+fn longitudes_from_0_to_360_can_be_rotated_to_start_at_minus_180() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(
+        &data,
+        "lon360",
+        Options {
+            rotate_longitude: true,
+            ..Options::default()
+        },
+    );
+    // 値は列の番号。180° の列（4 番）が左端に来る。
+    assert_eq!(
+        &values(&img)[..8],
+        &[4.0, 5.0, 6.0, 7.0, 0.0, 1.0, 2.0, 3.0]
+    );
+    let geo = img.geo.as_ref().unwrap();
+    assert_eq!(geo.at(0.0, 0.0), Some((30.0, -180.0)));
+    assert_eq!(geo.at(4.0, 0.0), Some((30.0, 0.0)));
+    assert_eq!(
+        img.metadata.get(GROUP, LONGITUDES),
+        Some(LONGITUDES_ROTATED)
+    );
+}
+
+#[test]
+fn longitudes_are_not_rotated_unless_asked() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "lon360", Options::default());
+    assert_eq!(values(&img)[0], 0.0);
+    assert_eq!(img.metadata.get(GROUP, LONGITUDES), None);
+}
+
+#[test]
+fn turning_north_up_also_turns_the_latitudes() {
+    let data = fixture("edge_cases.nc");
+    let img = plugin_for(&data, "south_up").decode(&data).unwrap();
+    let geo = img.geo.as_ref().unwrap();
+    let top = geo.at(0.0, 0.0).unwrap().0;
+    let bottom = geo.at(0.0, 4.0).unwrap().0;
+    assert!(top > bottom, "{top} {bottom}");
+}
+
+#[test]
+fn curvilinear_grids_read_the_latitude_and_longitude_tables() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "curvilinear", Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    for ((x, y), want) in geo_expected("curvilinear") {
+        assert_near(geo.at(x, y).unwrap(), want, 1e-5);
+    }
+}
+
+#[test]
+fn projected_grids_are_turned_into_latitude_and_longitude() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "lcc_field", Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    let cases = geo_expected("lcc_field");
+    assert_eq!(cases.len(), 3);
+    for ((x, y), want) in cases {
+        // 表は f32 で持つので 1e-4 度（約 10 m）まで。
+        assert_near(geo.at(x, y).unwrap(), want, 1e-4);
+    }
+}
+
+#[test]
+fn rotated_pole_grids_are_turned_into_latitude_and_longitude() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "rotated_field", Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    for ((x, y), want) in geo_expected("rotated_field") {
+        assert_near(geo.at(x, y).unwrap(), want, 1e-4);
+    }
+}
+
+#[test]
+fn anomalies_get_zero_in_the_middle_and_a_diverging_color_map() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(&data, "t_anomaly", Options::default());
+    let (black, white) = img.window.unwrap();
+    assert!((black + white).abs() < 1e-3, "{black} {white}");
+    assert_eq!(img.metadata.get(GROUP, COLOR_MAP), Some(SUGGESTED_PALETTE));
+}
+
+#[test]
+fn anomalies_keep_the_usual_black_and_white_when_switched_off() {
+    let data = fixture("geo_cases.nc");
+    let img = geo_of(
+        &data,
+        "t_anomaly",
+        Options {
+            auto_anomaly: false,
+            ..Options::default()
+        },
+    );
+    let (black, white) = img.window.unwrap();
+    assert!((black + white).abs() > 1.0, "{black} {white}");
+    assert_eq!(img.metadata.get(GROUP, COLOR_MAP), None);
+}
+
+#[test]
+fn variables_in_groups_use_the_latitudes_and_longitudes_of_the_parent_group() {
+    let data = fixture("sst_groups.nc");
+    let img = plugin_for(&data, "quality/quality_level")
+        .decode(&data)
+        .unwrap();
+    assert!(img.geo.is_some());
+}
