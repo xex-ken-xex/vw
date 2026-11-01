@@ -3,6 +3,7 @@ name = "vw-renderer"
 description = "Starts an eframe app with OpenGL (or wgpu for a 10-bit surface), and falls back to the other where one cannot start"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vw-compare"
 description = "Align similar images and analyse their differences (PSNR, SSIM, colour difference, noise, vignetting)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

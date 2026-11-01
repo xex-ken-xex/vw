@@ -3,6 +3,7 @@ name = "vw-quality"
 description = "Image quality metrics (PSNR, SSIM, SNR, CNR, sharpness) on plain pixel arrays"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
