@@ -19,6 +19,12 @@ on:
 permissions:
   contents: read
 
+# 同じプルリクエストに続けて push したら、前の実行は止めて最新だけを走らせる。
+# main とタグの push は止めない。配布物を作る実行を途中で止めると main-latest が古いままになるため。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # 依存クレートの既知の脆弱性（RustSec）・取り下げられた版・crates.io 以外の取得元を止める。
   # 設定は deny.toml。ライセンスはビルドの中の cargo-about で確かめる。
@@ -57,12 +63,18 @@ jobs:
       # --locked: Cargo.lock にない版を取ってこないよう、コミットした依存のままビルドする。
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      # ここから下は配布物を作る手順で、プルリクエストでは飛ばす。プルリクエストの成果物は誰も使わず、
+      # リリースビルドと第三者ライセンスの一覧だけで Windows の実行時間の半分以上を占めていたため。
+      # ジョブを分けないのは、ルールセットの必須チェックがこのジョブの名前を指しているため。
       - run: cargo build --locked --release
+        if: github.event_name != 'pull_request'
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        if: github.event_name != 'pull_request'
         with:
           tool: cargo-about
       # アプリごとに集める。--workspace だと、片方のアプリしか使わない依存(CharLS など)が両方の一覧に載る
       - name: Collect third-party licenses
+        if: github.event_name != 'pull_request'
         run: |
           cargo about generate -c packaging/about.toml packaging/about.hbs --manifest-path apps/vw/Cargo.toml -o THIRD-PARTY-LICENSES.txt
           cargo about generate -c packaging/about.toml packaging/about-vwbatch.hbs --manifest-path apps/vwbatch/Cargo.toml -o THIRD-PARTY-LICENSES-vwbatch.txt
@@ -84,14 +96,14 @@ jobs:
 
       # アプリを 1 つずつ別の書庫にする。使う人が要るものだけ取れるように
       - name: Package (Linux)
-        if: runner.os == 'Linux'
+        if: github.event_name != 'pull_request' && runner.os == 'Linux'
         run: |
           mkdir -p dist/vw
           # vwbatch は vw で保存したパイプラインをかけるツールなので、別の書庫にせず vw と一緒に配る
           cp target/release/vw target/release/vwbatch README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt THIRD-PARTY-LICENSES-vwbatch.txt packaging/linux/vw.desktop packaging/linux/install.sh packaging/icons/vw.png dist/vw/
           tar -C dist -czf dist/${{ matrix.package }} vw
       - name: Package (Windows)
-        if: runner.os == 'Windows'
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/vw | Out-Null
@@ -102,18 +114,19 @@ jobs:
       # Microsoft Store に出す MSIX。Store が自分の証明書で署名し直すので、未署名のまま作る。
       # 未署名の MSIX は利用者の PC には入れられないので Release には載せず、Actions の成果物にだけ置く。
       - name: Package for Microsoft Store
-        if: runner.os == 'Windows'
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force dist/store | Out-Null
           packaging/windows/msix/make-msix.ps1 -Source dist/vw -OutFile dist/store/vw-windows-x64.msix -Version $version
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: runner.os == 'Windows'
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
         with:
           name: vw-store-msix
           path: dist/store/vw-windows-x64.msix
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request'
         with:
           name: ${{ matrix.package }}
           path: dist/${{ matrix.package }}
