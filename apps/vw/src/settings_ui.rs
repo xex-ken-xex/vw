@@ -110,7 +110,7 @@ struct Item {
     widget: fn(&mut Settings, &mut egui::Ui, Language) -> bool,
 }
 
-const ITEMS: [Item; 124] = [
+const ITEMS: &[Item] = &[
     Item {
         section: Section::Appearance,
         key: "appearance.theme",
@@ -2954,7 +2954,8 @@ impl SettingsUi {
             _ => None,
         };
         let actions: Vec<Action> = Action::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|a| Some(a.scope()) == scope)
             .filter(|a| self.action_matches(*a, &settings.keys, lang))
             .collect();
@@ -3354,7 +3355,7 @@ mod tests {
 
     #[test]
     fn every_setting_has_japanese_title_and_description() {
-        for i in &ITEMS {
+        for i in ITEMS {
             assert_ne!(tr(Language::Japanese, i.title), i.title);
             assert_ne!(tr(Language::Japanese, i.description), i.description);
         }
@@ -3371,9 +3372,58 @@ mod tests {
     }
 
     #[test]
+    fn every_saved_setting_has_an_item_or_is_listed_as_hidden() {
+        // 項目の一覧（ITEMS）の外で画面に出すもの。keys はキーの節が Action::ALL から並べ、
+        // 送り先の表は DICOM の節が自分で描く。
+        const HIDDEN: &[&str] = &["keys", "dicom_send.destinations"];
+        // 1 つの項目の widget が、鍵の名前の値と一緒に変えるもの。
+        const SHARED: &[(&str, &[&str])] = &[
+            ("check.clipping_high", &["check.clipping_low"]),
+            ("check.peaking_threshold", &["check.peaking_dim"]),
+            (
+                "check.auto_stretch_background",
+                &["check.auto_stretch_shadows", "check.auto_stretch_linked"],
+            ),
+            (
+                "subframes.fwhm_ratio",
+                &[
+                    "subframes.eccentricity",
+                    "subframes.stars_ratio",
+                    "subframes.background_sigmas",
+                ],
+            ),
+        ];
+        for (item, _) in SHARED {
+            assert!(ITEMS.iter().any(|i| i.key == *item), "{item}");
+        }
+        let toml = Settings::default().to_toml();
+        let mut table = String::new();
+        let mut missing = Vec::new();
+        for line in toml.lines() {
+            let line = line.trim();
+            if let Some(t) = line.strip_prefix("[[").or_else(|| line.strip_prefix('[')) {
+                table = t.trim_end_matches(']').to_owned();
+                continue;
+            }
+            let Some((key, _)) = line.split_once(" = ") else {
+                continue;
+            };
+            let full = format!("{table}.{key}");
+            let covered = |k: &str| full == k || full.starts_with(&format!("{k}.")) || table == k;
+            let shared = SHARED.iter().flat_map(|(_, keys)| keys.iter());
+            if !ITEMS.iter().any(|i| covered(i.key))
+                && !HIDDEN.iter().chain(shared).any(|k| covered(k))
+            {
+                missing.push(full);
+            }
+        }
+        assert!(missing.is_empty(), "no settings item for: {missing:?}");
+    }
+
+    #[test]
     fn setting_keys_point_at_real_toml_entries() {
         let toml = Settings::default().to_toml();
-        for i in &ITEMS {
+        for i in ITEMS {
             let (table, field) = i.key.rsplit_once('.').unwrap();
             // 表の配列（検索のグループなど）は `[[table.field]]`、入れ子の表（判定の閾値）は
             // `[table.field]` の見出しで書かれる。

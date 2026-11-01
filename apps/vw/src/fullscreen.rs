@@ -1147,7 +1147,7 @@ impl Setup {
                         .num_columns(2)
                         .spacing([24.0, 2.0])
                         .show(ui, |ui| {
-                            for a in Action::ALL.into_iter().filter(|a| a.scope() == Scope::Fullscreen) {
+                            for a in Action::ALL.iter().copied().filter(|a| a.scope() == Scope::Fullscreen) {
                                 ui.label(tr(lang, a.title()));
                                 let keys: Vec<String> =
                                     settings.keys.keys(a).iter().map(ToString::to_string).collect();
