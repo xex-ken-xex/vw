@@ -909,7 +909,7 @@ const ITEMS: &[Item] = &[
         section: Section::Netcdf,
         key: "netcdf.auto_anomaly",
         title: "Anomalies around zero",
-        description: "Show anomaly variables (standard_name with \"anomaly\", or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
+        description: "Show anomaly variables (\"anom\" in the name, \"anomaly\" in standard_name or long_name, or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
         widget: netcdf_auto_anomaly_widget,
     },
     Item {

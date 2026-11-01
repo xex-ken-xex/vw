@@ -3086,8 +3086,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Anomalies around zero", "偏差は 0 を真ん中に"),
     (
-        "Show anomaly variables (standard_name with \"anomaly\", or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
-        "偏差の変数（standard_name に「anomaly」が入るか、valid_range が 0 をはさんで対称なもの）を、0 を真ん中にして、青・白・赤の色の表（coolwarm）で出します。",
+        "Show anomaly variables (\"anom\" in the name, \"anomaly\" in standard_name or long_name, or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
+        "偏差の変数（名前に「anom」、standard_name か long_name に「anomaly」や「偏差」が入るか、valid_range が 0 をはさんで対称なもの）を、0 を真ん中にして、青・白・赤の色の表（coolwarm）で出します。",
     ),
     (
         "Turn data whose latitudes go from south to north upside down, so that north is at the top. Data without coordinates are shown in the order of the file.",

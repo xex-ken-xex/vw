@@ -30,7 +30,7 @@ Pixels hold the file values with `scale_factor` and `add_offset` applied (with t
 
 - A color map (viridis by default) is applied from the start. Change it in the **NetCDF data** setting
 - Black and white are chosen once per variable from all its times and levels, so planes keep the same coloring and can be compared. Variables such as temperature and precipitation have different units, so each has its own
-- Variables whose name or `long_name` says anomaly (differences from normal) automatically get black and white symmetric around zero and a color map with zero in the middle (coolwarm). Turn this off with **Anomalies around zero**
+- Variables whose name (such as `sst_anom`), `standard_name` or `long_name` says anomaly (differences from normal) automatically get black and white symmetric around zero and a color map with zero in the middle (coolwarm). Turn this off with **Anomalies around zero**
 - For other data around zero, such as winds, set **First black and white** to **Symmetric around zero** to put zero in the middle of the color map
 - Black and white changed by hand on the gauge go back when you switch variables
 
@@ -44,8 +44,8 @@ When the file says where its pixels are, vw reads the latitude and longitude of 
 
 The positions are shown here:
 
-- Next to the [pixel probe](check.html) cross, after the value and the position, as "35.68°N 139.77°E  time = 2024-01-18 06:00" with the time or level of the plane. **Ctrl+C** adds the latitude and longitude (south and west as negative numbers) and the plane label after the value, separated by commas
-- The line profile measures distance in km along the line on the earth. The table adds the latitude and longitude of the start and end, and the CSV adds `distance_km`, `latitude` and `longitude` columns. If any line has no latitude and longitude, all lines are measured in pixels
+- Next to the [pixel probe](check.html) cross and in the cursor readout at the bottom left, after the value and the position, as "35.68°N 139.77°E  time = 2024-01-18 06:00" with the time or level of the plane. **Ctrl+C** adds the latitude and longitude (south and west as negative numbers) and the plane label after the value, separated by commas
+- The length tag of a measurement line and the line profile measure distance in km along the line on the earth. The table adds the latitude and longitude of the start and end, and the CSV adds `distance_km`, `latitude` and `longitude` columns. If any line has no latitude and longitude, all lines are measured in pixels
 - The ROI graph's **Mean per frame** shows the dates or levels of the planes on the horizontal axis instead of frame numbers. The CSV adds a `plane` column
 - The [map](find.html#see-photo-locations-on-a-map) outlines the NetCDF files of the open folder in red. Click an outline or its center point to see the name and open it, as with photos. Where outlines overlap, the smaller one is picked
 - The key action **Show the slot's data on the map** opens the map and fits it to the current slot's data. It has no key at first; assign one in the key settings
