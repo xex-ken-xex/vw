@@ -6,6 +6,8 @@
 //! vw の側で先に歩いて断る。
 //!
 //! 読む範囲は rawler と同じ、ルートの IFD の連なり、SubIFDs・Exif・GPS、メーカーノート。
+//! 「次の IFD」をたどるのはルートの連なりだけで、ほかは IFD を 1 つだけ読む（rawler もそうする）。
+//! DNG はメーカーノートを読まない（rawler の DNG のデコーダは読まない）。
 //! ファイルの外を指す項目でも小さなものは断らない。rawler はその項目を読めないと警告して飛ばすので、
 //! 小さな壊れを許すその振る舞いを変えないため。
 
@@ -22,6 +24,7 @@ const SUB_IFDS: u16 = 0x014A;
 const EXIF_IFD: u16 = 0x8769;
 const GPS_IFD: u16 = 0x8825;
 const MAKER_NOTE: u16 = 0x927C;
+const DNG_VERSION: u16 = 0xC612;
 
 /// メーカーノートの見出しと、その後ろの IFD（または II / MM）までのバイト数。
 /// OLYMPUS は OLYMP より先に照らす。
@@ -46,6 +49,8 @@ enum Endian {
 struct Walker<'a> {
     data: &'a [u8],
     seen: HashSet<u64>,
+    /// IFD0 に DNGVersion がある。メーカーノートを歩かない。
+    dng: bool,
 }
 
 /// `data` が TIFF なら IFD を歩き、巨大な確保になる項目があれば `Err`。TIFF でなければ何もしない。
@@ -58,8 +63,10 @@ pub fn check(data: &[u8]) -> Result<(), DecodeError> {
     let mut walker = Walker {
         data,
         seen: HashSet::new(),
+        dng: false,
     };
     let first = walker.u32(4, endian).ok_or_else(truncated)?;
+    walker.dng = walker.has_tag(u64::from(first), DNG_VERSION, endian);
     walker.chain(0, u64::from(first), endian)
 }
 
@@ -84,7 +91,25 @@ impl Walker<'_> {
         })
     }
 
-    /// `base + offset` から始まる IFD と、その「次の IFD」の連なり。
+    /// `at` の IFD に `tag` の項目があるか。
+    fn has_tag(&self, at: u64, tag: u16, endian: Endian) -> bool {
+        let Some(count) = self.u16(at, endian) else {
+            return false;
+        };
+        (0..u64::from(count)).any(|i| self.u16(at + 2 + i * 12, endian) == Some(tag))
+    }
+
+    /// `base + offset` から始まる IFD だけ。「次の IFD」はたどらない。Canon のメーカーノートのように、
+    /// ルート以外の IFD の「次の IFD」の欄には 0 でない値（画像のデータの中）を書くものがあり、
+    /// rawler もたどらないため。
+    fn single(&mut self, base: u64, offset: u64, endian: Endian) -> Result<(), DecodeError> {
+        if offset == 0 || self.seen.len() >= MAX_IFDS || !self.seen.insert(base + offset) {
+            return Ok(());
+        }
+        self.ifd(base, offset, endian).map(drop)
+    }
+
+    /// ルートの、`base + offset` から始まる IFD と、その「次の IFD」の連なり。
     fn chain(&mut self, base: u64, offset: u64, endian: Endian) -> Result<(), DecodeError> {
         let mut next = offset;
         while next != 0 {
@@ -131,11 +156,13 @@ impl Walker<'_> {
                 SUB_IFDS | EXIF_IFD | GPS_IFD if kind == 4 || kind == 13 => {
                     for k in 0..u64::from(n).min(16) {
                         if let Some(sub) = self.u32(value_at + k * 4, endian) {
-                            self.chain(base, u64::from(sub), endian)?;
+                            self.single(base, u64::from(sub), endian)?;
                         }
                     }
                 }
-                MAKER_NOTE if kind == 7 => self.maker_note(base, value_at, size, endian)?,
+                MAKER_NOTE if kind == 7 && !self.dng => {
+                    self.maker_note(base, value_at, size, endian)?;
+                }
                 _ => {}
             }
         }
@@ -167,12 +194,12 @@ impl Walker<'_> {
         if head.starts_with(b"Nikon\0\x02") {
             // 10 バイトの印の後ろに TIFF の見出しがあり、位置はそこから数える。
             let endian = endian_at(10).unwrap_or(Endian::Big);
-            return self.chain(at + 10, 8, endian);
+            return self.single(at + 10, 8, endian);
         }
         if head.starts_with(b"PENTAX") {
             // IFD は 10 バイト目から。値の位置はメーカーノートの先頭から数える。
             let endian = endian_at(8).unwrap_or(Endian::Big);
-            return self.chain(at, 10, endian);
+            return self.single(at, 10, endian);
         }
         let skip = MAKER_NOTE_HEADERS
             .iter()
@@ -191,7 +218,7 @@ impl Walker<'_> {
             endian = e;
         }
         if off < size {
-            self.chain(base, at + off - base, endian)?;
+            self.single(base, at + off - base, endian)?;
         }
         Ok(())
     }
@@ -310,5 +337,57 @@ mod tests {
     #[test]
     fn maker_note_without_header_is_walked_as_an_ifd() {
         assert!(check(&with_maker_note(&huge_ifd())).is_err());
+    }
+
+    /// 小さな項目 1 つと、「次の IFD」の欄に `next` を持つ IFD。
+    fn small_ifd(next: u32) -> Vec<u8> {
+        let mut ifd = 1u16.to_le_bytes().to_vec();
+        ifd.extend(256u16.to_le_bytes());
+        ifd.extend(4u16.to_le_bytes());
+        ifd.extend(1u32.to_le_bytes());
+        ifd.extend(1u32.to_le_bytes());
+        ifd.extend(next.to_le_bytes());
+        ifd
+    }
+
+    #[test]
+    fn next_ifd_of_a_maker_note_is_not_followed() {
+        // Canon の CR2 のように、メーカーノートの「次の IFD」の欄が画像のデータの中を指す。
+        let note_at = tiff(&[(MAKER_NOTE, 7, 0, 0)]).len() as u32;
+        let garbage_at = note_at + small_ifd(0).len() as u32;
+        let mut note = small_ifd(garbage_at);
+        note.extend(huge_ifd());
+        assert!(check(&with_maker_note(&note)).is_ok());
+    }
+
+    #[test]
+    fn next_ifd_of_an_exif_ifd_is_not_followed() {
+        let mut data = tiff(&[(EXIF_IFD, 4, 1, 0)]);
+        let exif_at = data.len() as u32;
+        data[18..22].copy_from_slice(&exif_at.to_le_bytes());
+        let garbage_at = exif_at + small_ifd(0).len() as u32;
+        data.extend(small_ifd(garbage_at));
+        data.extend(huge_ifd());
+        assert!(check(&data).is_ok());
+    }
+
+    #[test]
+    fn huge_tag_in_the_second_root_ifd_is_refused() {
+        let mut data = tiff(&[(256, 4, 1, 1)]);
+        let len = data.len();
+        data[len - 4..].copy_from_slice(&(len as u32).to_le_bytes());
+        data.extend(huge_ifd());
+        assert!(check(&data).is_err());
+    }
+
+    #[test]
+    fn maker_note_of_a_dng_is_not_walked() {
+        let mut data = tiff(&[(MAKER_NOTE, 7, 0, 0), (DNG_VERSION, 1, 4, 0x0104)]);
+        let note = huge_ifd();
+        let note_at = data.len() as u32;
+        data[14..18].copy_from_slice(&(note.len() as u32).to_le_bytes());
+        data[18..22].copy_from_slice(&note_at.to_le_bytes());
+        data.extend(note);
+        assert!(check(&data).is_ok());
     }
 }
