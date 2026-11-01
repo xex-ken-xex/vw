@@ -220,6 +220,7 @@ Turn on **Map → Use the map** in the settings, and **View → Map** (**Ctrl+M*
 - Drag to move, wheel to zoom, double-click to zoom in one step. East-west scrolls endlessly and stays connected across the date line
 - Nearby dots merge into numbered circles. Click a circle to zoom to it; photos taken at the same spot are listed
 - Click a dot for its thumbnail, file name and time taken. **Open** goes to the photo's folder and selects it
+- In **This folder**, NetCDF files with latitudes and longitudes are also outlined in red ([Weather and ocean data](earth.html#latitude-longitude-time-and-level))
 - Type a town, state or country name (English or Japanese) in **Search places** at the top left to get suggestions; pick one to go there. The first time, press **Place names...** and **Download** **Place names (GeoNames)** in the download screen (about 4 MB, into `models/geonames` in the settings folder)
 - With place name data, nearby town names appear in the dot information and in the metadata window. When a dataset's search catalog is **updated**, metadata `location` gets country (`Country`), state (`Region`) and city (`Town`) in English and Japanese, usable in advanced search
 - By default the map pictures are the standard [OpenStreetMap](https://www.openstreetmap.org/copyright) tiles. Only while the map is open, the visible part is downloaded and kept for 7 days or more in `map-tiles` in the settings folder. Without a connection, only the dots on a grid are shown
