@@ -237,8 +237,10 @@ fn mix(dst: &mut [u8], src: [u8; 4]) {
 }
 
 fn over(dst: &mut Rgba, src: &Rgba) {
-    for (d, s) in dst.data.chunks_exact_mut(4).zip(src.data.chunks_exact(4)) {
-        mix(d, [s[0], s[1], s[2], s[3]]);
+    let (dst, _) = dst.data.as_chunks_mut::<4>();
+    let (src, _) = src.data.as_chunks::<4>();
+    for (d, s) in dst.iter_mut().zip(src) {
+        mix(d, *s);
     }
 }
 
