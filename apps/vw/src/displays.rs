@@ -218,6 +218,7 @@ mod platform {
     fn targets() -> HashMap<String, Target> {
         let mut out = HashMap::new();
         let (mut paths, mut modes) = (0u32, 0u32);
+        // SAFETY: 2 つの u32 に数を書くだけ。
         if unsafe { GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut paths, &mut modes) }
             != ERROR_SUCCESS
         {
@@ -225,6 +226,7 @@ mod platform {
         }
         let mut path_list = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
         let mut mode_list = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
+        // SAFETY: 2 つの配列は直前に聞いた数で確保してあり、書き込まれた数は paths・modes に返る。
         let ok = unsafe {
             QueryDisplayConfig(
                 QDC_ONLY_ACTIVE_PATHS,
@@ -247,6 +249,7 @@ mod platform {
                 ),
                 ..Default::default()
             };
+            // SAFETY: header の size と type は header() が構造体に合わせて入れている。
             if unsafe { DisplayConfigGetDeviceInfo(&mut source.header) } != 0 {
                 continue;
             }
@@ -258,6 +261,7 @@ mod platform {
                 ),
                 ..Default::default()
             };
+            // SAFETY: 同上。
             let named = unsafe { DisplayConfigGetDeviceInfo(&mut target.header) } == 0;
             let mut color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
                 header: header::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(
@@ -268,6 +272,7 @@ mod platform {
                 ..Default::default()
             };
             // Windows 10 1709 より前は読めない。
+            // SAFETY: 同上。
             let colored = unsafe { DisplayConfigGetDeviceInfo(&mut color.header) } == 0;
             let rate = path.targetInfo.refreshRate;
             let gdi = text(&source.viewGdiDeviceName);
@@ -289,6 +294,7 @@ mod platform {
                     .then_some(color.bitsPerColorChannel)
                     .filter(|&b| b > 0),
                 // 2 番目の bit が「HDR が入っている」（advancedColorEnabled）。
+                // SAFETY: 共用体のどの見方でも 32bit の整数で、colored のときだけ読む。
                 hdr: colored.then_some(unsafe { color.Anonymous.value } & 0b10 != 0),
             });
         }
@@ -303,8 +309,10 @@ mod platform {
     ) -> BOOL {
         // SAFETY: data は system() が渡した Vec へのポインタで、列挙の間だけ使う。
         let out = unsafe { &mut *(data as *mut Vec<(String, Display)>) };
+        // SAFETY: 整数と固定長の配列だけの C の構造体で、0 は正しい値。
         let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        // SAFETY: cbSize を入れた MONITORINFOEXW は MONITORINFO として渡せる。
         if unsafe {
             GetMonitorInfoW(
                 monitor,
@@ -314,6 +322,7 @@ mod platform {
         {
             let r = info.monitorInfo.rcMonitor;
             let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+            // SAFETY: 列挙中のモニタの手がかりと、書き込み先の 2 つの u32 を渡すだけ。
             unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
             let gdi = text(&info.szDevice);
             out.push((
@@ -332,6 +341,7 @@ mod platform {
 
     pub fn system() -> System {
         let mut monitors: Vec<(String, Display)> = Vec::new();
+        // SAFETY: collect は列挙の間だけ呼ばれ、渡した Vec はこの呼び出しの間生きている。
         unsafe {
             EnumDisplayMonitors(
                 std::ptr::null_mut(),

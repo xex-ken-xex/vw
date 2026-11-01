@@ -27,6 +27,7 @@ pub fn open_file(path: &Path) -> std::io::Result<()> {
     // cmd の start を使わないのは、cmd が引数を独自に読み直すため、起動はしても
     // 何も開かないことがあり、失敗も返ってこないから。ShellExecuteW なら結果の値で失敗が分かる。
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: wide は NUL で終わり、呼び出しの間生きている。ほかは null か定数。
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),

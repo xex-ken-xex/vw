@@ -2268,7 +2268,10 @@ fn archive_dir_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
     let picker: Option<Arc<Mutex<vw_tree::picker::Picker>>> =
         ui.data_mut(|d| d.get_temp(picker_id));
     if let Some(picker) = picker {
-        let outcome = picker.lock().unwrap().show(ui.ctx());
+        let outcome = picker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .show(ui.ctx());
         match outcome {
             vw_tree::picker::Outcome::Open => {}
             vw_tree::picker::Outcome::Chosen(dir) => {

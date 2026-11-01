@@ -44,16 +44,16 @@ pub fn estimate(reference: &Plane, moving: &Plane) -> Option<Coarse> {
         .max()
         .unwrap_or(1);
     let n = (2 * side).next_power_of_two().clamp(64, 1024);
-    let mut fft = Fft2::new(n, n);
+    let fft = Fft2::new(n, n);
     let (rc, r_off) = canvas(&r, n);
     let (mc, m_off) = canvas(&m, n);
     let rs = fft.forward(&rc);
     let ms = fft.forward(&mc);
     let lp_r = log_polar(&magnitude(&rs, n), n);
     let lp_m = log_polar(&magnitude(&ms, n), n);
-    let mut lp_fft = Fft2::new(RADII, ANGLES);
+    let lp_fft = Fft2::new(RADII, ANGLES);
     let (_, d_angle, d_radius) = {
-        let (dx, dy, peak) = phase_correlate(&mut lp_fft, &lp_r, &lp_m);
+        let (dx, dy, peak) = phase_correlate(&lp_fft, &lp_r, &lp_m);
         (peak, dy, dx)
     };
     let angle = d_angle * std::f64::consts::PI / ANGLES as f64;
@@ -71,7 +71,7 @@ pub fn estimate(reference: &Plane, moving: &Plane) -> Option<Coarse> {
         let t = Affine::similarity(scale, turn, rcen, mcen);
         let warped = warp_canvas(&mc, n, &t);
         let ws = fft.forward(&warped);
-        let (dx, dy, peak) = correlate_spectra(&mut fft, &reference_spectrum, &ws);
+        let (dx, dy, peak) = correlate_spectra(&fft, &reference_spectrum, &ws);
         // 写した画像が基準より d だけずれているなら、基準の x は写した画像の x + d。
         let shifted = Affine {
             c: dx,
@@ -184,13 +184,13 @@ fn log_polar(mag: &[f32], n: usize) -> Vec<f32> {
 }
 
 /// `b` が `a` を `(dx, dy)` ずらしたもの（`b(x) ≈ a(x − d)`）とみたときの `d` と、相関の高さ。
-fn phase_correlate(fft: &mut Fft2, a: &[f32], b: &[f32]) -> (f64, f64, f64) {
+fn phase_correlate(fft: &Fft2, a: &[f32], b: &[f32]) -> (f64, f64, f64) {
     let fa = fft.forward(a);
     let fb = fft.forward(b);
     correlate_spectra(fft, &fa, &fb)
 }
 
-fn correlate_spectra(fft: &mut Fft2, fa: &[Complex32], fb: &[Complex32]) -> (f64, f64, f64) {
+fn correlate_spectra(fft: &Fft2, fa: &[Complex32], fb: &[Complex32]) -> (f64, f64, f64) {
     let cross: Vec<Complex32> = fa
         .iter()
         .zip(fb)
@@ -270,12 +270,12 @@ impl Fft2 {
         }
     }
 
-    fn forward(&mut self, data: &[f32]) -> Vec<Complex32> {
+    fn forward(&self, data: &[f32]) -> Vec<Complex32> {
         let c: Vec<Complex32> = data.iter().map(|&v| Complex32::new(v, 0.0)).collect();
         self.run(c, false)
     }
 
-    fn inverse(&mut self, data: &[Complex32]) -> Vec<Complex32> {
+    fn inverse(&self, data: &[Complex32]) -> Vec<Complex32> {
         self.run(data.to_vec(), true)
     }
 
@@ -316,8 +316,8 @@ mod tests {
             128,
             &Affine::similarity(1.0, 0.0, [0.0, 0.0], [-5.0, 3.0]),
         );
-        let mut fft = Fft2::new(128, 128);
-        let (dx, dy, peak) = phase_correlate(&mut fft, &a.data, &b.data);
+        let fft = Fft2::new(128, 128);
+        let (dx, dy, peak) = phase_correlate(&fft, &a.data, &b.data);
         assert!(
             (dx + 5.0).abs() < 0.3 && (dy - 3.0).abs() < 0.3,
             "{dx} {dy}"

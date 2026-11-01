@@ -9,3 +9,6 @@ repository.workspace = true
 
 [dependencies]
 egui = { version = "0.36", default-features = false }
+
+[lints]
+workspace = true

@@ -463,8 +463,7 @@ mod tests {
         // プラグインの拡張子なら中身は見ない。
         assert!(r.supports_file(&dir.join("missing.aaa")));
 
-        r.clone()
-            .set_probe_extensions(ProbeExtensions::new("^xyz$").unwrap());
+        r.set_probe_extensions(ProbeExtensions::new("^xyz$").unwrap());
         assert!(r.supports_file(&other));
         assert!(!r.supports_file(&no_extension));
         std::fs::remove_dir_all(&dir).unwrap();

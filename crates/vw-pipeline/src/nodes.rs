@@ -1469,7 +1469,7 @@ mod tests {
         let flat = Float::new(200, 100, 1, vec![0.5; 20_000]);
         let mut a = flat.clone();
         let mut b = flat.clone();
-        let mut c = flat.clone();
+        let mut c = flat;
         let node = |seed| Node::Noise { sigma: 0.1, seed };
         apply(&[node(1)], &mut a).unwrap();
         apply(&[node(1)], &mut b).unwrap();

@@ -68,6 +68,7 @@ fn query(ext: &str, what: windows_sys::Win32::UI::Shell::ASSOCSTR) -> Option<Str
     let mut buf = vec![0u16; 2048];
     let mut len = buf.len() as u32;
     // IGNOREUNKNOWN が無いと、関連付けの無い拡張子でも「アプリを選ぶ」の項目が返ってくる。
+    // SAFETY: assoc は NUL で終わり、buf とその長さ len を書き込み先として渡している。
     let hr = unsafe {
         AssocQueryStringW(
             ASSOCF_INIT_IGNOREUNKNOWN,

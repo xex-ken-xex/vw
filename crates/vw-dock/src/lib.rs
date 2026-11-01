@@ -813,7 +813,7 @@ impl Dock {
         panes.ui(&mut child, pane);
     }
 
-    fn dividers_ui(&mut self, ui: &mut Ui, window: Window, dividers: &[tree::Divider]) {
+    fn dividers_ui(&mut self, ui: &Ui, window: Window, dividers: &[tree::Divider]) {
         for d in dividers {
             let zone = d.rect.expand(3.0);
             let id = Id::new(("vw-dock-divider", window, &d.path));
@@ -1227,7 +1227,7 @@ impl Dock {
     }
 
     /// カーソルがこのウインドウの上にあればガイドを描く。
-    fn guides_ui(&mut self, ui: &mut Ui, window: Window) {
+    fn guides_ui(&self, ui: &Ui, window: Window) {
         let Some(drag) = &self.drag else {
             return;
         };

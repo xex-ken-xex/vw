@@ -58,6 +58,7 @@ mod platform {
             main: main.hwnd.get() as HWND,
             found: 0,
         };
+        // SAFETY: visit は列挙の間だけ呼ばれ、渡した Search はこの呼び出しの間生きている。
         unsafe {
             EnumThreadWindows(
                 GetCurrentThreadId(),
@@ -69,6 +70,7 @@ mod platform {
     }
 
     unsafe extern "system" fn visit(hwnd: HWND, search: LPARAM) -> BOOL {
+        // SAFETY: search は adopt() が渡した Search へのポインタで、列挙の間だけ使う。
         let search = unsafe { &mut *(search as *mut Search) };
         if hwnd == search.main || !is_winit_window(hwnd) {
             return 1;
@@ -76,7 +78,9 @@ mod platform {
         search.found += 1;
         // 作ったあとで持ち主を変えるのは、CreateWindowEx の hWndParent に渡す手段が
         // egui に無いから。GWLP_HWNDPARENT は最上位のウインドウでは持ち主を変える。
+        // SAFETY: 列挙中の hwnd を読むだけ。
         if unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
+            // SAFETY: どちらも同じスレッドのウインドウの手がかりと整数を渡すだけ。
             unsafe {
                 SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, search.main as isize);
                 // 持ち主を付けただけでは、次に本体を触るまで重なりの順は変わらない。
@@ -98,6 +102,7 @@ mod platform {
 
     fn is_winit_window(hwnd: HWND) -> bool {
         let mut name = [0u16; 32];
+        // SAFETY: 書き込み先の配列と、その長さを渡している。
         let len = unsafe { GetClassNameW(hwnd, name.as_mut_ptr(), name.len() as i32) };
         len > 0 && String::from_utf16_lossy(&name[..len as usize]) == WINIT_CLASS
     }

@@ -51,3 +51,15 @@ opt-level = 3
 [patch.crates-io]
 winit = { path = "vendor/winit" }
 egui-wgpu = { path = "vendor/egui-wgpu" }
+
+# 普段の clippy に足す lint。ここで宣言し、各クレートは `[lints] workspace = true` で継ぐ。
+# pedantic 全体は入れない。`use_self` や `as` の精度の注意が 2,000 件を超え、直す差分が意味のある変更を埋めるため。
+[workspace.lints.clippy]
+# manual_midpoint は入れない。該当が浮動小数点の 17 箇所だけで桁あふれは起きず、
+# `(size + 1.0) / 2.0`（中心画素）を `midpoint(size, 1.0)` に書き換えると意味が読みにくくなるため。
+# significant_drop_tightening と match_same_arms も入れない。前者の該当 8 箇所はどれも lock の中身を
+# 最後まで使っていて縮められず、後者の該当 19 箇所は guard 付きの腕や既定キーの一覧で、まとめると読みにくくなるため。
+redundant_clone = "warn"
+needless_pass_by_ref_mut = "warn"
+# unsafe ブロックには、呼び出しが安全な前提を `// SAFETY:` で残す。
+undocumented_unsafe_blocks = "warn"

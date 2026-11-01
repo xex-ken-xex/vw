@@ -126,7 +126,7 @@ impl LabelStore {
 
     /// 画像のフラグを `flag` にする。同じフラグがもう付いていたら外す。
     /// 付いたフラグを返す。
-    pub fn toggle_flag(&mut self, path: &Path, flag: Flag) -> Result<Option<Flag>, String> {
+    pub fn toggle_flag(&self, path: &Path, flag: Flag) -> Result<Option<Flag>, String> {
         self.edit_file(path, |label| {
             label.flag = (label.flag != Some(flag)).then_some(flag);
             label.flag
@@ -134,12 +134,12 @@ impl LabelStore {
     }
 
     /// 画像のフラグを `flag` にする（`None` で外す）。
-    pub fn set_flag(&mut self, path: &Path, flag: Option<Flag>) -> Result<(), String> {
+    pub fn set_flag(&self, path: &Path, flag: Option<Flag>) -> Result<(), String> {
         self.edit_file(path, |label| label.flag = flag)
     }
 
     /// 画像のタグを付ける・外す。付いたら `true`。
-    pub fn toggle_tag(&mut self, path: &Path, tag: &str) -> Result<bool, String> {
+    pub fn toggle_tag(&self, path: &Path, tag: &str) -> Result<bool, String> {
         self.edit_file(path, |label| {
             let added = !label.tags.remove(tag);
             if added {
@@ -151,7 +151,7 @@ impl LabelStore {
 
     /// 地図で置いた撮影地点を `position` にする（`None` なら消す）。前の位置を返す。
     pub fn set_position(
-        &mut self,
+        &self,
         path: &Path,
         position: Option<Position>,
     ) -> Result<Option<Position>, String> {
@@ -170,7 +170,7 @@ impl LabelStore {
 
     /// 手で直した位置合わせを残す（`None` なら消す）。
     pub fn set_aligned(
-        &mut self,
+        &self,
         path: &Path,
         reference: &Path,
         aligned: Option<Aligned>,
@@ -187,7 +187,7 @@ impl LabelStore {
     }
 
     /// 画像のラベルを `label` に置き換える（空なら消す）。ファイルを移動・コピーしたときに使う。
-    pub fn set(&mut self, path: &Path, label: Label) -> Result<(), String> {
+    pub fn set(&self, path: &Path, label: Label) -> Result<(), String> {
         self.edit_file(path, |l| *l = label)
     }
 
@@ -377,7 +377,7 @@ mod tests {
     fn flag_is_saved_next_to_the_image_and_read_back() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         assert_eq!(store.toggle_flag(&img, Flag::Good), Ok(Some(Flag::Good)));
         let fresh = LabelStore::new(None);
         assert_eq!(fresh.get(&img).flag, Some(Flag::Good));
@@ -388,7 +388,7 @@ mod tests {
     fn same_flag_again_clears_it_and_removes_the_empty_file() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         store.toggle_flag(&img, Flag::Bad).unwrap();
         assert_eq!(store.toggle_flag(&img, Flag::Bad), Ok(None));
         assert!(!dir.path().join(FILE_NAME).exists());
@@ -398,7 +398,7 @@ mod tests {
     fn clearing_a_flag_keeps_the_tags() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         store.toggle_flag(&img, Flag::Bad).unwrap();
         store.toggle_tag(&img, "sky").unwrap();
         store.set_flag(&img, None).unwrap();
@@ -411,7 +411,7 @@ mod tests {
     fn other_flag_replaces_the_current_one() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         store.toggle_flag(&img, Flag::Good).unwrap();
         assert_eq!(store.toggle_flag(&img, Flag::Bad), Ok(Some(Flag::Bad)));
     }
@@ -420,7 +420,7 @@ mod tests {
     fn tags_toggle_independently() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         assert_eq!(store.toggle_tag(&img, "cat"), Ok(true));
         assert_eq!(store.toggle_tag(&img, "dog"), Ok(true));
         assert_eq!(store.toggle_tag(&img, "cat"), Ok(false));
@@ -432,7 +432,7 @@ mod tests {
     fn placed_position_is_saved_and_returns_the_previous_one() {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         let sapporo = Position {
             latitude: 43.0621,
             longitude: 141.3544,
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn a_manual_alignment_is_kept_per_reference_and_can_be_removed() {
         let dir = TempDir::new();
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         let jpg = dir.path().join("DSC_0001.JPG");
         let nef = dir.path().join("DSC_0001.NEF");
         let other = std::path::PathBuf::from("/elsewhere/ref.png");
@@ -504,7 +504,7 @@ mod tests {
         let dir = TempDir::new();
         let img = dir.touch("a.png");
         std::fs::write(dir.path().join(FILE_NAME), "{ not json").unwrap();
-        let mut store = LabelStore::new(None);
+        let store = LabelStore::new(None);
         assert!(store.get(&img).is_empty());
         assert_eq!(store.take_problems().len(), 1);
         store.toggle_flag(&img, Flag::Good).unwrap();
@@ -516,7 +516,7 @@ mod tests {
         let dir = TempDir::new();
         let fallback = dir.mkdir("config");
         let missing = dir.path().join("gone").join("a.png");
-        let mut store = LabelStore::new(Some(fallback.clone()));
+        let store = LabelStore::new(Some(fallback.clone()));
         store.toggle_flag(&missing, Flag::Good).unwrap();
         assert_eq!(std::fs::read_dir(&fallback).unwrap().count(), 1);
         assert_eq!(

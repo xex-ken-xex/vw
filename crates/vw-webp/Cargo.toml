@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 image-webp = "0.2"
 vw-core.workspace = true
+
+[lints]
+workspace = true

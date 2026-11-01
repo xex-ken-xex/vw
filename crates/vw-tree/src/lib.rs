@@ -676,7 +676,7 @@ mod tests {
         let sub = dir.mkdir("sub");
         let mut tree =
             FolderTree::with_roots(vec![Node::<()>::dir(dir.path().to_path_buf(), None, false)]);
-        tree.restore_open(&[dir.path().to_path_buf(), sub.clone()], &list);
+        tree.restore_open(&[dir.path().to_path_buf(), sub], &list);
         dir.mkdir("added");
         tree.refresh(dir.path(), &list, &by_name);
         let children = tree.roots[0].children.as_ref().unwrap();

@@ -82,3 +82,6 @@ libc = "0.2"
 
 [target.'cfg(not(windows))'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }
+
+[lints]
+workspace = true

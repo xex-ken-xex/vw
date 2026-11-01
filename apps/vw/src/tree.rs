@@ -950,7 +950,7 @@ mod tests {
         let sub = dir.mkdir("sub");
         dir.touch("a.png");
         let mut tree = tree_at(dir.path());
-        tree.restore_open(&[dir.path().to_path_buf(), sub.clone()], &png_registry());
+        tree.restore_open(&[dir.path().to_path_buf(), sub], &png_registry());
         dir.touch("b.png");
         std::fs::remove_file(dir.path().join("a.png")).unwrap();
         tree.refresh(dir.path(), &png_registry());
@@ -1091,7 +1091,7 @@ mod tests {
         let b = dir.mkdir("a/b");
         dir.touch("a/b/pic.png");
         let mut tree = tree_at(dir.path());
-        let paths = vec![dir.path().to_path_buf(), a.clone(), b.clone()];
+        let paths = vec![dir.path().to_path_buf(), a, b];
         tree.restore_open(&paths, &png_registry());
         assert_eq!(tree.open_paths(), paths);
         let b_node = &tree.roots()[0].children.as_ref().unwrap()[0]

@@ -950,7 +950,7 @@ mod tests {
         let tmp = TempDir::new();
         let image = tmp.path().join("a.png");
         write_png(&image, 1, 1, &[0; 3]);
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels
             .set_position(
                 &image,
@@ -985,7 +985,7 @@ mod tests {
         let (a, b) = (tmp.path().join("a.png"), tmp.path().join("b.png"));
         write_png(&a, 1, 1, &[0; 3]);
         write_png(&b, 1, 1, &[0; 3]);
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.toggle_flag(&a, labels::Flag::Good).unwrap();
         labels.toggle_tag(&a, "cat").unwrap();
         labels.toggle_tag(&a, "night").unwrap();
@@ -1028,7 +1028,7 @@ mod tests {
             name: name.into(),
             score: 0.8,
         };
-        let mut store = AiTagStore::new(None);
+        let store = AiTagStore::new(None);
         store
             .update(&image, |e| {
                 e.model = "tagger".into();

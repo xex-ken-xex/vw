@@ -12,3 +12,6 @@ vw-fits.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 rustfft = "6"
+
+[lints]
+workspace = true

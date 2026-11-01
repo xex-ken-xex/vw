@@ -369,7 +369,7 @@ fn alignment_keys(
         return None;
     }
     Some((
-        crate::frames::file_of(path).to_path_buf(),
-        crate::frames::file_of(reference).to_path_buf(),
+        crate::frames::file_of(path),
+        crate::frames::file_of(reference),
     ))
 }

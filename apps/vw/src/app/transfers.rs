@@ -73,7 +73,7 @@ impl VwApp {
                 Ok(dest) => {
                     self.log
                         .done(verb, format!("{} to {}", t.file.display(), dest.display()));
-                    if let Some(e) = t.carry_labels(&mut self.labels, &dest) {
+                    if let Some(e) = t.carry_labels(&self.labels, &dest) {
                         self.log.error(format!("Labels were not carried over: {e}"));
                     }
                 }
@@ -300,7 +300,7 @@ impl VwApp {
         if !job.finished.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        let failed = std::mem::take(&mut *job.failed.lock().unwrap());
+        let failed = std::mem::take(&mut *job.failed.lock().unwrap_or_else(|e| e.into_inner()));
         let copied = job.copied.load(std::sync::atomic::Ordering::Relaxed);
         let located = job.located.load(std::sync::atomic::Ordering::Relaxed);
         let strip = dialog.strip_location;

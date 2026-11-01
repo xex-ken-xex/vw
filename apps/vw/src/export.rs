@@ -256,12 +256,15 @@ impl CopyJob {
                         Ok(()) => {
                             copied.fetch_add(1, Ordering::Relaxed);
                         }
-                        Err(e) => failed.lock().unwrap().push(e),
+                        Err(e) => failed.lock().unwrap_or_else(|e| e.into_inner()).push(e),
                     },
                     Copy::Archive { archive, dir, flat } => {
                         let result = unpack_images(&archive, &dir, flat, &registry, &cancel, strip);
                         copied.fetch_add(result.copied, Ordering::Relaxed);
-                        failed.lock().unwrap().extend(result.failed);
+                        failed
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .extend(result.failed);
                     }
                 }
                 done.fetch_add(1, Ordering::Relaxed);
@@ -511,7 +514,7 @@ mod tests {
         dir.touch("other.png");
         let deep = sub.join("deep.png");
         std::fs::write(&deep, b"").unwrap();
-        let mut labels = LabelStore::new(None);
+        let labels = LabelStore::new(None);
         labels.toggle_flag(&top, Flag::Good).unwrap();
         labels.toggle_flag(&deep, Flag::Good).unwrap();
         let filter = Filter::Flag(Some(Flag::Good));
@@ -607,7 +610,7 @@ mod tests {
             flat: false,
         }]);
         assert_eq!(job.copied.load(Ordering::Relaxed), 0);
-        let failed = job.failed.lock().unwrap();
+        let failed = job.failed.lock().unwrap_or_else(|e| e.into_inner());
         assert!(failed[0].contains("password-protected"), "{failed:?}");
         assert!(!dest.path().join("secret.zip").exists());
     }
@@ -636,7 +639,10 @@ mod tests {
         let job = run(CopyJob::start(items, png_registry(), true, || {}));
         assert_eq!(job.copied.load(Ordering::Relaxed), 1);
         assert_eq!(job.located.load(Ordering::Relaxed), 1);
-        assert_eq!(job.failed.lock().unwrap().len(), 1);
+        assert_eq!(
+            job.failed.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            1
+        );
         assert!(!dest.path().join("b.heic").exists());
         let copied = std::fs::read(dest.path().join("a.jpg")).unwrap();
         assert_eq!(copied.len(), jpeg.len());

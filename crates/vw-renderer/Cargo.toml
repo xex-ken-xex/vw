@@ -17,3 +17,6 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(not(windows))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles"] }
+
+[lints]
+workspace = true

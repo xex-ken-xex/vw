@@ -12,3 +12,6 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-c
 # ICC プロファイルを読むだけ（色の変換はしない）。eframe が使う image クレートがすでに引いているので、
 # 実行ファイルは大きくならない。
 moxcms = { version = "0.8", default-features = false }
+
+[lints]
+workspace = true

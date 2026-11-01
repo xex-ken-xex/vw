@@ -603,7 +603,7 @@ mod tests {
         let t = Tmp::new();
         let f = t.0.join("x.dcm");
         dicom(&f, "1.2.8");
-        assert_eq!(collected(&[f.clone(), t.0.clone()]).total(), 1);
+        assert_eq!(collected(&[f, t.0.clone()]).total(), 1);
     }
 
     #[test]
