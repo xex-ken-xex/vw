@@ -15,6 +15,7 @@ use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 use crate::viewer::ScaleFilter;
+use crate::viewer::chrome::{Chip, SlotBar};
 use vw_quality::{Metric, Thresholds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -2521,7 +2522,42 @@ pub struct Settings {
     pub sky: SkySettings,
     pub subframes: SubframesSettings,
     pub repair: Repair,
+    pub slot_bar: SlotBar,
     pub keys: Keymap,
+}
+
+/// `[slot_bar]`: スロットの見出しと下の帯に置く部品の並び。知らない名前と置けない辺の部品は
+/// 外して報告し、残りは生かす（1 つの誤りで並び全体を既定に戻すと、置き直した並びが消えるため）。
+fn read_slot_bar(r: &mut Reader<'_>) -> SlotBar {
+    let d = SlotBar::default();
+    let mut r = r.at("slot_bar");
+    let mut edge = |key: &str, default: Vec<Chip>| -> Vec<Chip> {
+        let Some(names) = r.get::<Vec<String>>(key) else {
+            return default;
+        };
+        let mut chips = Vec::new();
+        for name in names {
+            match Chip::from_id(&name) {
+                Some(c) => chips.push(c),
+                None => r.problem(key, format!("unknown part \"{name}\" (skipped)")),
+            }
+        }
+        chips
+    };
+    let mut bar = SlotBar {
+        top: edge("top", d.top),
+        bottom: edge("bottom", d.bottom),
+    };
+    for c in bar.tidy() {
+        r.problem(
+            "top",
+            format!(
+                "\"{}\" placed twice or where it cannot go (skipped)",
+                c.id()
+            ),
+        );
+    }
+    bar
 }
 
 impl Settings {
@@ -2556,6 +2592,7 @@ impl Settings {
         let sky = SkySettings::read(&mut r);
         let subframes = SubframesSettings::read(&mut r);
         let repair = Repair::read(&mut r);
+        let slot_bar = read_slot_bar(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -2592,6 +2629,7 @@ impl Settings {
                 sky,
                 subframes,
                 repair,
+                slot_bar,
                 keys,
             },
             problems,
@@ -2875,6 +2913,27 @@ mod tests {
         assert_eq!(s.appearance.theme, ThemeChoice::Light);
         assert_eq!(s.appearance.language, Language::English);
         assert_eq!(s.keys, Keymap::default());
+    }
+
+    #[test]
+    fn slot_bar_keeps_the_known_parts_and_reports_the_rest() {
+        let text = "[slot_bar]\ntop = [\"close\", \"nonsense\", \"color_map\"]\nbottom = [\"close\", \"fit_image\"]\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.slot_bar.top, vec![Chip::Close]);
+        assert_eq!(s.slot_bar.bottom, vec![Chip::FitImage]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems[0].contains("nonsense"), "{problems:?}");
+    }
+
+    #[test]
+    fn slot_bar_round_trips_a_changed_order() {
+        let mut s = Settings::default();
+        s.slot_bar
+            .place(Chip::FitImage, crate::viewer::chrome::Edge::Top, 0);
+        s.slot_bar.remove(Chip::Close);
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.slot_bar, s.slot_bar);
     }
 
     #[test]

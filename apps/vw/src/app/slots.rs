@@ -1025,6 +1025,7 @@ impl VwApp {
                     }),
                     color_rules: &self.color_rules,
                     similar,
+                    bar: &self.settings.settings.slot_bar,
                     beam,
                     spectrum_graph,
                 },
@@ -1069,6 +1070,9 @@ impl VwApp {
                         self.set_focus(ui.ctx(), Focus::Images);
                     }
                     SlotCommand::Derive(event) => self.log_derive(event),
+                    SlotCommand::Run(action) => {
+                        self.run_on(ui.ctx(), action, context_menu::Where::Slot(i))
+                    }
                     SlotCommand::ApplyLook(look) => self.apply_look(i, &look),
                     SlotCommand::OpenPipeline => {
                         self.active = i;
@@ -1131,6 +1135,7 @@ impl VwApp {
                         gauge: None,
                         color_rules: &self.color_rules,
                         similar: None,
+                        bar: &self.settings.settings.slot_bar,
                         beam: self.settings().fits.beam,
                         spectrum_graph: self.settings().fits.spectrum_graph,
                     },
