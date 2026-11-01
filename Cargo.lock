@@ -4431,6 +4431,7 @@ dependencies = [
  "vw-quality",
  "vw-raw",
  "vw-renderer",
+ "vw-report",
  "vw-tiff",
  "vw-tree",
  "vw-ui",
@@ -4454,11 +4455,11 @@ dependencies = [
 name = "vw-compare"
 version = "0.8.5"
 dependencies = [
- "base64 0.22.1",
  "png",
  "rayon",
  "rustfft",
  "vw-quality",
+ "vw-report",
 ]
 
 [[package]]
@@ -4584,6 +4585,16 @@ dependencies = [
  "eframe",
  "wgpu",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "vw-report"
+version = "0.8.5"
+dependencies = [
+ "base64 0.22.1",
+ "png",
+ "skrifa",
+ "vello_cpu",
 ]
 
 [[package]]

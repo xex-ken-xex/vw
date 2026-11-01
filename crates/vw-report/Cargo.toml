@@ -1,0 +1,20 @@
+[package]
+name = "vw-report"
+description = "Report look shared by vw outputs: four themes, charts drawn as SVG or as an image, and the HTML page"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# egui（epaint）が字形の描画に使っているのと同じ版。新しいクレートを増やさずに、
+# 題や凡例の文字を入れた画像をクリップボードとファイルに出すため。
+vello_cpu = { version = "0.1", default-features = false, features = ["std", "text", "u8_pipeline"] }
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+png = "0.18"
+base64 = "0.22"
+
+[lints]
+workspace = true

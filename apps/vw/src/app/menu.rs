@@ -64,6 +64,10 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleZoomMap, Some(zoom_map)) {
                     chosen = Some(Action::ToggleZoomMap);
                 }
+                let line_profile = self.line_profile.open;
+                if self.menu_item(ui, Action::ToggleLineProfile, Some(line_profile)) {
+                    chosen = Some(Action::ToggleLineProfile);
+                }
                 if self.settings().map.enabled {
                     let map = self.map.open;
                     if self.menu_item(ui, Action::ToggleMap, Some(map)) {
@@ -386,17 +390,8 @@ impl VwApp {
                 if let Some(hint) = tool.hint() {
                     tip = format!("{tip}\n{}", tr(lang, hint));
                 }
-                let available = tool.available();
-                let r = tool_button(ui, self.tool == tool, available, big(tool.icon()));
-                let r = if available {
-                    r.on_hover_text(tip)
-                } else {
-                    r.on_hover_text(format!(
-                        "{}\n{}",
-                        tr(lang, tool.title()),
-                        tr(lang, "Not available yet")
-                    ))
-                };
+                let r =
+                    tool_button(ui, self.tool == tool, true, big(tool.icon())).on_hover_text(tip);
                 if r.clicked() {
                     self.select_tool(tool);
                 }

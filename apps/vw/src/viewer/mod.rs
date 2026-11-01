@@ -22,6 +22,7 @@ use crate::derive::{self, Derive, View};
 use crate::faces::FaceMark;
 use crate::i18n::{tr, tr1};
 use crate::labels::{self, Label};
+use crate::line_profile::MeasureLine;
 use crate::loader::ImageInfo;
 use crate::probe::{self, Mark};
 use crate::quantity::Quantity;
@@ -322,6 +323,12 @@ pub struct Slot {
     selected_roi: Option<usize>,
     /// ドラッグで描いている途中の ROI（種類と始点の画素）。
     drawing: Option<(roi::Kind, (u32, u32))>,
+    /// 計測線。十字と同じく、ファイルには書かずスロットを閉じると消える。
+    pub lines: Vec<MeasureLine>,
+    /// 選んでいる計測線（[`Slot::lines`] の添字）。
+    selected_line: Option<usize>,
+    /// ドラッグで引いている途中の計測線の始点の画素。
+    drawing_line: Option<(u32, u32)>,
     /// 右クリックした顔の枠（画像と、その画像の枠の番号）。
     selected_face: Option<(PathBuf, usize)>,
     /// 色導出。`None` は標準の表示。起動をまたいでは残さない。
@@ -450,6 +457,8 @@ pub enum SlotCommand {
     /// スロットが自分で実行しないのは、右クリックメニューやキーと同じ 1 本の道（`app/mod.rs` の
     /// `run_on`）を通して、使える条件の判定を 1 か所に保つため。
     Run(crate::keymap::Action),
+    /// 計測線を引き終えた。
+    LineDrawn,
 }
 
 /// 1 フレーム分の操作結果。
@@ -479,6 +488,24 @@ const DERIVE_BAR: f32 = 22.0;
 const BAR_LINGER: std::time::Duration = std::time::Duration::from_millis(300);
 /// 十字の腕の長さ（論理ピクセル）。
 const MARK_ARM: f32 = 8.0;
+
+/// 計測線の色。番号ごとに変える（色覚の違いでも見分けやすい Okabe–Ito の配色）。
+/// 画像の上では黒い縁を付けて描くので、レポートのテーマ（印刷モノクロの黒など）には合わせない。
+pub fn line_color(number: usize) -> Color32 {
+    let [r, g, b, _] = vw_report::Theme::Lab.line(number.saturating_sub(1)).color.0;
+    Color32::from_rgb(r, g, b)
+}
+
+/// 点 `p` から線分 `a`–`b` までの距離。
+fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let t = if ab.length_sq() > 0.0 {
+        ((p - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
+}
 
 /// ROI の色。対象は赤、背景は青（品質評価の資料と同じ色分け）。
 fn roi_color(kind: roi::Kind) -> Color32 {
@@ -714,6 +741,9 @@ impl Slot {
             rois: Vec::new(),
             selected_roi: None,
             drawing: None,
+            lines: Vec::new(),
+            selected_line: None,
+            drawing_line: None,
             selected_face: None,
             derive: None,
             bar_floating: false,
@@ -853,6 +883,106 @@ impl Slot {
             painter.rect_filled(pill, 2.0, Color32::from_black_alpha(160));
             let text_at = draw_swatch(&painter, pill.min + pad, galley.size().y, swatch);
             painter.galley(text_at, galley, stroke_color);
+        }
+    }
+
+    /// 表示中の画像の計測線のうち、選んでいるもの。
+    fn selected_shown_line(&self) -> Option<&MeasureLine> {
+        let shown = self.shown()?;
+        self.selected_line
+            .and_then(|i| self.lines.get(i))
+            .filter(|l| l.path == shown.path)
+    }
+
+    /// 選んでいる計測線の点ごとの値（タブ区切り）。元の画像を読み込み中なら `None`。
+    pub fn selected_line_text(&self) -> Option<String> {
+        let line = self.selected_shown_line()?;
+        let shown = self.shown()?;
+        let full = shown.full.as_ref()?;
+        let meta = &shown.info.metadata;
+        let values = crate::line_profile::Values::of(meta);
+        let p = crate::line_profile::profile(&full.image, meta, line, &values);
+        Some(crate::line_profile::rows(
+            &[p],
+            full.image.color,
+            &values,
+            '\t',
+        ))
+    }
+
+    /// 選んでいる計測線を消す。消したら `true`。
+    pub fn delete_selected_line(&mut self) -> bool {
+        if self.selected_shown_line().is_none() {
+            return false;
+        }
+        if let Some(i) = self.selected_line.take() {
+            self.lines.remove(i);
+        }
+        true
+    }
+
+    /// 表示中の画像の計測線をすべて消す。
+    pub fn clear_shown_lines(&mut self) {
+        let Some(path) = self.shown().map(|s| s.path.clone()) else {
+            return;
+        };
+        self.lines.retain(|l| l.path != path);
+        self.selected_line = None;
+    }
+
+    /// 表示中の画像の計測線（番号の順）。
+    pub fn shown_lines(&self) -> Vec<&MeasureLine> {
+        let Some(shown) = self.shown() else {
+            return Vec::new();
+        };
+        let mut lines: Vec<&MeasureLine> =
+            self.lines.iter().filter(|l| l.path == shown.path).collect();
+        lines.sort_by_key(|l| l.number);
+        lines
+    }
+
+    /// 表示中の画像の計測線と、引いている途中の線を描く。線の色は番号で決め、
+    /// グラフの凡例と同じ番号を始点の横に出す。
+    fn draw_lines(
+        &self,
+        ui: &egui::Ui,
+        body: Rect,
+        placed: &Placed,
+        drawing: Option<((u32, u32), (u32, u32))>,
+    ) {
+        let painter = ui.painter_at(body);
+        let selected = self.selected_shown_line();
+        let shown_lines = self.shown_lines();
+        let finished = shown_lines
+            .iter()
+            .map(|l| (l.start, l.end, Some(l.number), selected == Some(*l)));
+        let in_progress = drawing.map(|(a, b)| (a, b, None, false));
+        let next = self.shown().map_or(1, |s| {
+            crate::line_profile::next_number(&self.lines, &s.path)
+        });
+        for (start, end, number, is_selected) in finished.chain(in_progress) {
+            let color = line_color(number.unwrap_or(next));
+            let (a, b) = (
+                placed.pixel_center(start.0, start.1),
+                placed.pixel_center(end.0, end.1),
+            );
+            let width = if is_selected { 3.0 } else { 1.5 };
+            crate::marks::outline(&painter, &[a, b], false, color, width, number.is_none());
+            for p in [a, b] {
+                painter.circle_filled(p, 3.0, Color32::from_black_alpha(160));
+                painter.circle_filled(p, 2.0, color);
+            }
+            let length = {
+                let dx = f64::from(end.0) - f64::from(start.0);
+                let dy = f64::from(end.1) - f64::from(start.1);
+                dx.hypot(dy)
+            };
+            let text = match number {
+                Some(n) => format!("{n}  {length:.1} px"),
+                None => format!("{length:.1} px"),
+            };
+            let tag = Rect::from_center_size(b, vec2(0.0, 0.0)).expand(6.0);
+            crate::marks::name_tag(&painter, tag, body, &text, color);
         }
     }
 
@@ -1505,7 +1635,7 @@ impl Slot {
         // グラフには画素がないので、十字・ROI・色導出は当てない。
         let graph = spectrum_graph && self.shown().is_some_and(|s| s.info.spectrum.is_some());
         let tool = match tool {
-            Tool::Probe | Tool::Roi if graph => Tool::Hand,
+            Tool::Probe | Tool::Roi | Tool::Measure if graph => Tool::Hand,
             tool => tool,
         };
         // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
@@ -1730,6 +1860,16 @@ impl Slot {
                         r.path == shown.path && placed.region_rect(r.region).expand(2.0).contains(p)
                     })
                 }),
+                line: pointer.pos.and_then(|p| {
+                    self.lines.iter().position(|l| {
+                        l.path == shown.path
+                            && distance_to_segment(
+                                p,
+                                placed.pixel_center(l.start.0, l.start.1),
+                                placed.pixel_center(l.end.0, l.end.1),
+                            ) <= MARK_HIT
+                    })
+                }),
                 pixel: pointer.pos.and_then(|p| placed.pixel_at(p)),
             };
             let mut drawing = None;
@@ -1755,12 +1895,44 @@ impl Slot {
             } else {
                 self.drawing = None;
             }
+            let mut drawing_line = None;
+            if drag == Drag::DrawLine {
+                if pointer.drag_started {
+                    self.drawing_line = pointer.pos.map(|p| placed.pixel_clamped(p));
+                }
+                if let (Some(start), Some(p)) = (self.drawing_line, pointer.pos) {
+                    let mut end = placed.pixel_clamped(p);
+                    if pointer.shift {
+                        end = crate::line_profile::snap(start, end, placed.width, placed.height);
+                    }
+                    if pointer.dragged {
+                        drawing_line = Some((start, end));
+                    }
+                    if pointer.drag_stopped {
+                        self.drawing_line = None;
+                        if start != end {
+                            let number = crate::line_profile::next_number(&self.lines, &shown.path);
+                            self.lines.push(MeasureLine {
+                                path: shown.path.clone(),
+                                start,
+                                end,
+                                number,
+                            });
+                            self.selected_line = Some(self.lines.len() - 1);
+                            out.push(SlotCommand::LineDrawn);
+                        }
+                    }
+                }
+            } else {
+                self.drawing_line = None;
+            }
             if pointer.clicked {
                 match tool.click(hits) {
                     Click::Nothing => {}
                     Click::ClearSelection => {
                         self.selected_mark = None;
                         self.selected_roi = None;
+                        self.selected_line = None;
                     }
                     Click::SelectMark(i) => self.selected_mark = Some(i),
                     Click::AddMark(x, y) => {
@@ -1772,6 +1944,7 @@ impl Slot {
                         self.selected_mark = Some(self.marks.len() - 1);
                     }
                     Click::SelectRoi(i) => self.selected_roi = i,
+                    Click::SelectLine(i) => self.selected_line = i,
                 }
             }
             if pointer.secondary_clicked {
@@ -1780,6 +1953,9 @@ impl Slot {
                 }
                 if let Some(i) = hits.roi {
                     self.selected_roi = Some(i);
+                }
+                if let Some(i) = hits.line {
+                    self.selected_line = Some(i);
                 }
                 // 重なった枠は小さいほうを選ぶ。大きな顔の中に小さな顔が写り込むことがあるため。
                 self.selected_face = pointer
@@ -1814,9 +1990,12 @@ impl Slot {
             }
             let has_marks = self.marks.iter().any(|m| m.path == shown.path);
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
+            let has_lines = self.lines.iter().any(|l| l.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
-            out.wants_full |= has_marks || has_rois || (tool == Tool::Probe && pointer.hovered);
+            out.wants_full |=
+                has_marks || has_rois || has_lines || (tool == Tool::Probe && pointer.hovered);
             self.draw_rois(ui, body, lang, &placed, drawing);
+            self.draw_lines(ui, body, &placed, drawing_line);
             self.draw_marks(ui, body, lang, &placed);
             if tool == Tool::Probe {
                 let hover = pointer.hover.and_then(|p| placed.pixel_at(p));

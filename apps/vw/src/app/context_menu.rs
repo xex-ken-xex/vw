@@ -33,7 +33,11 @@ use Entry::Act;
 /// 画像のスロットの右クリック。節ごとに区切り線を入れる。
 pub const SLOT_SECTIONS: &[&[Entry]] = &[
     &[Entry::Faces],
-    &[Act(Action::CopyMeasurement), Act(Action::DeleteProbePoint)],
+    &[
+        Act(Action::CopyMeasurement),
+        Act(Action::DeleteProbePoint),
+        Act(Action::ToggleLineProfile),
+    ],
     &[
         Act(Action::FitImage),
         Act(Action::CopyImage),
@@ -156,6 +160,10 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
         Action::CopyMeasurement | Action::DeleteProbePoint => {
             shown_if(slot.is_some_and(|s| measurement_text(s).is_some()))
         }
+        Action::ToggleLineProfile => match slot {
+            Some(s) => shown_if(!s.shown_lines().is_empty()),
+            None => Yes,
+        },
         Action::ComposeColors => shown_if(slot.is_some_and(composable)),
         Action::DevelopRaw => shown_if(slot.is_some_and(developable)),
         Action::ToggleCalibration => shown_if(slot.and_then(calibration_on).is_some()),
@@ -186,10 +194,11 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
     }
 }
 
-/// 選んでいる十字の値か、ROI の統計。十字が先。
+/// 選んでいる十字の値か、ROI の統計か、計測線の値。十字・ROI・線の順（消すときも同じ順）。
 pub fn measurement_text(slot: &Slot) -> Option<String> {
     slot.selected_mark_text()
         .or_else(|| slot.selected_roi_text())
+        .or_else(|| slot.selected_line_text())
 }
 
 fn composable(slot: &Slot) -> bool {
@@ -211,15 +220,21 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
     let mark = target
         .slot()
         .is_some_and(|s| s.selected_mark_text().is_some());
+    let roi = target
+        .slot()
+        .is_some_and(|s| s.selected_roi_text().is_some());
     match action {
         Action::CopyImage | Action::CopyFolderPath => "Copy",
         Action::AiTagImage => "Add AI tags",
         Action::FindFacesImage => "Find faces",
         Action::RemoveAiTagsImage => "Remove AI tags",
         Action::CopyMeasurement if mark => "Copy point value",
-        Action::CopyMeasurement => "Copy ROI statistics",
+        Action::CopyMeasurement if roi => "Copy ROI statistics",
+        Action::CopyMeasurement => "Copy line values",
         Action::DeleteProbePoint if mark => "Delete point",
-        Action::DeleteProbePoint => "Delete ROI",
+        Action::DeleteProbePoint if roi => "Delete ROI",
+        Action::DeleteProbePoint => "Delete line",
+        Action::ToggleLineProfile => "Line profile",
         Action::TogglePixelPipeline => "Pixel pipeline...",
         Action::OpenInFileManager => "Open in file manager",
         Action::CloseZip => "Close ZIP",

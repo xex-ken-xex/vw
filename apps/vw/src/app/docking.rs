@@ -28,11 +28,21 @@ pub(super) const DATASETS: &str = "datasets";
 pub(super) const SKY: &str = "sky_chart";
 pub(super) const COMPARE: &str = "compare_images";
 pub(super) const SUBFRAMES: &str = "subframes";
+pub(super) const LINE_PROFILE: &str = "line_profile";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 9] = [
-    ANALYSIS, ZOOM_MAP, PIPELINE, CHARTS, MAP, DATASETS, SKY, COMPARE, SUBFRAMES,
+pub(super) const TOOLS: [&str; 10] = [
+    ANALYSIS,
+    ZOOM_MAP,
+    PIPELINE,
+    CHARTS,
+    MAP,
+    DATASETS,
+    SKY,
+    COMPARE,
+    SUBFRAMES,
+    LINE_PROFILE,
 ];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
@@ -46,6 +56,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         SKY => ([900.0, 640.0], None),
         COMPARE => ([1280.0, 800.0], None),
         SUBFRAMES => ([1000.0, 700.0], None),
+        LINE_PROFILE => ([820.0, 700.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
 }
@@ -129,6 +140,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         SKY => "Sky chart",
         COMPARE => "Compare images",
         SUBFRAMES => "Subframes",
+        LINE_PROFILE => "Line profile",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -159,6 +171,9 @@ impl Panes for AppPanes<'_> {
             COMPARE => self.app.compare.title(lang),
             ZOOM_MAP => {
                 crate::sub_window::title(lang, "Zoom map", self.app.active_image().as_deref())
+            }
+            LINE_PROFILE => {
+                crate::sub_window::title(lang, "Line profile", self.app.active_image().as_deref())
             }
             // 絞り込み中は、ファイルが隠れていることに気づけるよう名前に条件を添える。
             // 別ウインドウでは OS のウインドウバーにも出る。
@@ -244,6 +259,9 @@ impl Panes for AppPanes<'_> {
             SKY => self.app.sky_pane(ui),
             COMPARE => self.app.compare_pane(ui),
             SUBFRAMES => self.app.subframes_pane(ui),
+            LINE_PROFILE => {
+                content_frame().show(ui, |ui| self.app.line_profile_pane(ui));
+            }
             DATASETS => self.app.datasets_pane(ui),
             _ => {
                 content_frame().show(ui, |ui| self.app.log_ui(ui));
@@ -315,6 +333,7 @@ impl VwApp {
             SKY => &mut self.sky.open,
             COMPARE => &mut self.compare.open,
             SUBFRAMES => &mut self.subframes.open,
+            LINE_PROFILE => &mut self.line_profile.open,
             _ => &mut self.map.open,
         }
     }

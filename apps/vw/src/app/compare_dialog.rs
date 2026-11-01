@@ -340,7 +340,8 @@ impl VwApp {
     pub(super) fn compare_pane(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let lang = self.lang();
-        for command in self.compare.ui(ui, lang) {
+        let theme = self.settings.settings.report.theme.theme();
+        for command in self.compare.ui(ui, lang, theme) {
             match command {
                 compare::Command::CopyImage(image, what) => {
                     ctx.copy_image(image);

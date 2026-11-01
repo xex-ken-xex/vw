@@ -10,10 +10,10 @@ repository.workspace = true
 
 [dependencies]
 vw-quality.workspace = true
+vw-report.workspace = true
 rayon = "1"
 rustfft = "6"
 png = "0.18"
-base64 = "0.22"
 
 [lints]
 workspace = true

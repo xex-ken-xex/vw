@@ -1,6 +1,7 @@
 //! 比べた結果の表（CSV・タブ区切り）と、画像を中に入れた 1 ファイルの HTML。
 
-use base64::Engine;
+use vw_report::html::Page;
+use vw_report::{Chart, Color, LegendItem, Panel, Series, Swatch, Table, Theme};
 
 use crate::align::{Alignment, Warped};
 use crate::analysis::{Analysis, Rect};
@@ -34,6 +35,12 @@ pub struct Labels {
     pub yes: &'static str,
     pub no: &'static str,
     pub rows: [&'static str; ROWS],
+    /// ヒストグラムの横軸と縦軸。
+    pub brightness: &'static str,
+    pub pixels: &'static str,
+    /// 違いの色の凡例（0 から最大まで）。
+    pub difference_scale: &'static str,
+    pub words: vw_report::Words,
 }
 
 /// 表の行の数（[`row_keys`] と同じ並び）。
@@ -90,6 +97,10 @@ impl Labels {
             "Largest difference",
             "Aligned",
         ],
+        brightness: "Brightness (0–255)",
+        pixels: "Pixels",
+        difference_scale: "Difference: 0 (black) to max (white)",
+        words: vw_report::Words::ENGLISH,
     };
 
     pub const JAPANESE: Labels = Labels {
@@ -142,6 +153,10 @@ impl Labels {
             "違いの最大",
             "合っている",
         ],
+        brightness: "明るさ（0〜255）",
+        pixels: "画素の数",
+        difference_scale: "違い: 0（黒）から最大（白）",
+        words: vw_report::Words::JAPANESE,
     };
 }
 
@@ -317,37 +332,32 @@ impl Report<'_> {
         out
     }
 
-    /// 画像を中に入れた 1 ファイルの HTML。
-    pub fn html(&self, labels: &Labels) -> String {
-        let mut h = String::new();
-        h.push_str("<!doctype html>\n<html><head><meta charset=\"utf-8\">");
-        h.push_str(&format!("<title>{}</title>", esc(labels.title)));
-        h.push_str(STYLE);
-        h.push_str("</head><body>\n");
-        h.push_str(&format!("<h1>{}</h1>\n", esc(labels.title)));
-        h.push_str(&format!(
-            "<p>{}: {}<br>{}: {}<br>{}: {} × {}</p>\n",
-            esc(labels.created),
-            esc(self.created),
-            esc(labels.reference),
-            esc(self.reference_name),
-            esc(labels.grid),
-            self.grid.width,
-            self.grid.height
-        ));
-        h.push_str(&format!("<p>{}</p>\n", esc(labels.measured)));
+    /// 画像を中に入れた 1 ファイルの HTML。見た目は `theme`。
+    pub fn html(&self, labels: &Labels, theme: Theme) -> String {
+        let mut page = Page::new(
+            theme,
+            labels.words,
+            labels.title,
+            &[
+                format!("{}: {}", labels.reference, self.reference_name),
+                format!("{} × {}", self.reference_size[0], self.reference_size[1]),
+                format!(
+                    "{}: {} × {}",
+                    labels.grid, self.grid.width, self.grid.height
+                ),
+                format!("{}: {}", labels.created, self.created),
+            ],
+        );
+        page.paragraph(labels.measured);
         let matched = self
             .entries
             .iter()
             .any(|e| e.analysis.is_some_and(|a| a.matched));
-        h.push_str(&format!(
-            "<p>{}</p>\n",
-            esc(if matched {
-                labels.matched
-            } else {
-                labels.not_matched
-            })
-        ));
+        page.paragraph(if matched {
+            labels.matched
+        } else {
+            labels.not_matched
+        });
         let (sw, sh, _) = fit_long_side(self.grid.width, self.grid.height, HTML_LONG_SIDE);
         let small = |img: &Rgba| shrink(img, sw, sh);
         let reference = render::masked(
@@ -355,34 +365,28 @@ impl Report<'_> {
             &vec![true; self.grid.width * self.grid.height],
             [0; 3],
         );
-        h.push_str(&format!(
-            "<figure><img src=\"{}\"><figcaption>{}</figcaption></figure>\n",
-            data_url(&small(&reference)),
-            esc(labels.reference)
-        ));
+        page.image(&small(&reference), &[], labels.reference);
         for e in &self.entries {
-            h.push_str(&format!("<h2>{}</h2>\n", esc(e.name)));
+            page.heading(e.name);
             if !e.alignment.looks_right() {
-                h.push_str(&format!("<p class=\"warn\">{}</p>\n", esc(labels.weak)));
+                page.warning(labels.weak);
             }
-            h.push_str(&format!(
-                "<table><tr><th>{}</th><th>{}</th></tr>\n",
-                esc(labels.item),
-                esc(labels.value)
-            ));
-            for (label, value) in labels.rows.iter().zip(self.shown(labels, e)).skip(2) {
-                h.push_str(&format!(
-                    "<tr><td>{}</td><td>{}</td></tr>\n",
-                    esc(label),
-                    esc(&value)
-                ));
-            }
-            h.push_str("</table>\n");
+            page.table(
+                &Table {
+                    head: vec![labels.item.to_owned(), labels.value.to_owned()],
+                    rows: labels
+                        .rows
+                        .iter()
+                        .zip(self.shown(labels, e))
+                        .skip(2)
+                        .map(|(l, v)| vec![(*l).to_owned(), v])
+                        .collect(),
+                    numeric_from: 1,
+                },
+                Some(e.name),
+            );
             let (Some(a), Some(w)) = (e.analysis, e.warped) else {
-                h.push_str(&format!(
-                    "<p class=\"warn\">{}</p>\n",
-                    esc(labels.no_overlap)
-                ));
+                page.warning(labels.no_overlap);
                 continue;
             };
             let aligned = render::masked(&w.image, &w.valid, [0; 3]);
@@ -391,68 +395,75 @@ impl Report<'_> {
                 &mut diff,
                 &a.hotspots.iter().map(|s| s.rect).collect::<Vec<_>>(),
             );
-            h.push_str("<div class=\"row\">");
-            h.push_str(&figure(&small(&aligned), labels.aligned));
-            h.push_str(&figure(
-                &small(&diff),
-                &format!(
-                    "{} ({} {:.1})",
-                    labels.difference, labels.max, a.difference_max
+            let aligned = small(&aligned);
+            let diff = small(&diff);
+            let ssim = render::ssim(a);
+            let mut row: Vec<(&Rgba, String)> = vec![
+                (&aligned, labels.aligned.to_owned()),
+                (
+                    &diff,
+                    format!(
+                        "{} ({} {:.1})",
+                        labels.difference, labels.max, a.difference_max
+                    ),
                 ),
-            ));
-            if let Some(map) = render::ssim(a) {
-                h.push_str(&figure(&map, labels.ssim_map));
+            ];
+            if let Some(map) = &ssim {
+                row.push((map, labels.ssim_map.to_owned()));
             }
-            h.push_str("</div>\n");
-            h.push_str(&format!("<h3>{}</h3>\n<ol>", esc(labels.hotspots)));
-            for s in &a.hotspots {
-                h.push_str(&format!(
-                    "<li>{} ({:.1})</li>",
-                    esc(&self.region_text(s.rect)),
-                    s.mean
-                ));
-            }
-            h.push_str("</ol>\n");
-            h.push_str(&format!(
-                "<h3>{}</h3>\n{}\n",
-                esc(labels.histogram),
-                histogram_svg(&a.histograms, labels.reference, labels.image)
+            page.image_row(&row);
+            page.raw(&vw_report::legend_svg(
+                theme,
+                &[LegendItem {
+                    label: labels.difference_scale.to_owned(),
+                    swatch: Swatch::Ramp(heat_ramp()),
+                }],
+                720.0,
             ));
+            page.subheading(labels.hotspots);
+            page.ordered_list(
+                &a.hotspots
+                    .iter()
+                    .map(|s| format!("{} ({:.1})", self.region_text(s.rect), s.mean))
+                    .collect::<Vec<_>>(),
+            );
+            page.chart(
+                &histogram_chart(&a.histograms, labels, e.name, theme),
+                labels.histogram,
+            );
         }
-        h.push_str("</body></html>\n");
-        h
+        page.finish()
     }
 }
 
-const STYLE: &str = "<style>\
-body{font-family:system-ui,sans-serif;margin:24px;color:#222;background:#fff}\
-table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #ccc;padding:2px 8px;text-align:left}\
-td:last-child{font-variant-numeric:tabular-nums}\
-.row{display:flex;flex-wrap:wrap;gap:12px}figure{margin:0}img{max-width:100%;border:1px solid #ccc}\
-.warn{color:#b00}\
-@media (prefers-color-scheme:dark){body{color:#ddd;background:#1e1e1e}td,th,img{border-color:#555}.warn{color:#f77}}\
-</style>";
-
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+/// 違いの色（[`render::heat`]）の帯。
+pub fn heat_ramp() -> Vec<Color> {
+    (0..12)
+        .map(|i| {
+            let [r, g, b] = render::heat(i as f32 / 11.0);
+            Color([r, g, b, 255])
+        })
+        .collect()
 }
 
-fn data_url(img: &Rgba) -> String {
-    format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(render::png(img))
-    )
-}
-
-fn figure(img: &Rgba, caption: &str) -> String {
-    format!(
-        "<figure><img src=\"{}\"><figcaption>{}</figcaption></figure>",
-        data_url(img),
-        esc(caption)
-    )
+/// 基準と比べる画像の明るさのヒストグラム。
+fn histogram_chart(h: &[Vec<u32>; 2], labels: &Labels, image: &str, theme: Theme) -> Chart {
+    let series = |i: usize, name: &str| Series {
+        name: name.to_owned(),
+        points: h[i]
+            .iter()
+            .enumerate()
+            .map(|(x, &c)| [x as f64, f64::from(c)])
+            .collect(),
+        style: theme.line(i),
+    };
+    Chart {
+        x_label: labels.brightness.to_owned(),
+        panels: vec![Panel {
+            y_label: labels.pixels.to_owned(),
+            series: vec![series(0, labels.reference), series(1, image)],
+        }],
+    }
 }
 
 fn shrink(img: &Rgba, w: usize, h: usize) -> Rgba {
@@ -497,49 +508,6 @@ fn outline(img: &mut Rgba, rects: &[Rect]) {
             }
         }
     }
-}
-
-/// 2 本のヒストグラムの折れ線（基準は灰色、比べる画像は橙）。
-fn histogram_svg(h: &[Vec<u32>; 2], reference: &str, image: &str) -> String {
-    let (w, ht) = (512.0, 160.0);
-    let top = h
-        .iter()
-        .flat_map(|v| v.iter())
-        .copied()
-        .max()
-        .unwrap_or(1)
-        .max(1) as f64;
-    let line = |v: &[u32], color: &str| {
-        let pts: Vec<String> = v
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| {
-                format!(
-                    "{:.1},{:.1}",
-                    i as f64 * w / 255.0,
-                    ht - f64::from(c) / top * ht
-                )
-            })
-            .collect();
-        format!(
-            "<polyline fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\" points=\"{}\"/>",
-            pts.join(" ")
-        )
-    };
-    format!(
-        "<svg width=\"{w}\" height=\"{}\" viewBox=\"0 0 {w} {}\" role=\"img\">\
-<rect width=\"{w}\" height=\"{ht}\" fill=\"none\" stroke=\"#999\"/>{}{}\
-<text x=\"4\" y=\"{}\" font-size=\"12\" fill=\"#888\">{}</text>\
-<text x=\"120\" y=\"{}\" font-size=\"12\" fill=\"#e08020\">{}</text></svg>",
-        ht + 18.0,
-        ht + 18.0,
-        line(&h[0], "#888"),
-        line(&h[1], "#e08020"),
-        ht + 14.0,
-        esc(reference),
-        ht + 14.0,
-        esc(image)
-    )
 }
 
 #[cfg(test)]
@@ -591,7 +559,7 @@ mod tests {
         assert!(lines[1].contains("\"0, 0, 128, 96\""), "{}", lines[1]);
         let tsv = report.tsv(&Labels::JAPANESE);
         assert!(tsv.lines().any(|l| l.starts_with("相関\t0.9900")));
-        let html = report.html(&Labels::ENGLISH);
+        let html = report.html(&Labels::ENGLISH, Theme::Lab);
         assert!(html.contains("<h2>b.JPG</h2>"));
         assert!(html.matches("data:image/png;base64,").count() >= 4);
     }
@@ -613,7 +581,7 @@ mod tests {
             }],
             created: "",
         };
-        let html = report.html(&Labels::ENGLISH);
+        let html = report.html(&Labels::ENGLISH, Theme::Lab);
         assert!(html.contains(Labels::ENGLISH.weak));
         assert!(html.contains("<h2>&lt;b&gt;</h2>"));
     }

@@ -100,10 +100,12 @@ pub enum Action {
     ToggleRoi,
     ToggleHandTool,
     ToggleZoomTool,
+    ToggleMeasureTool,
     DeleteProbePoint,
     TogglePixelPipeline,
     ToggleHistogram,
     ToggleZoomMap,
+    ToggleLineProfile,
     ToggleMap,
     ToggleSkyChart,
     ToggleSubframes,
@@ -257,11 +259,13 @@ impl Action {
         Action::ToggleRoi,
         Action::ToggleHandTool,
         Action::ToggleZoomTool,
+        Action::ToggleMeasureTool,
         Action::DeleteProbePoint,
         Action::CopyMeasurement,
         Action::TogglePixelPipeline,
         Action::ToggleHistogram,
         Action::ToggleZoomMap,
+        Action::ToggleLineProfile,
         Action::ToggleMap,
         Action::ToggleSkyChart,
         Action::ToggleSubframes,
@@ -413,6 +417,7 @@ impl Action {
             Action::TogglePixelPipeline => "toggle_pixel_pipeline",
             Action::ToggleHistogram => "toggle_histogram",
             Action::ToggleZoomMap => "toggle_zoom_map",
+            Action::ToggleLineProfile => "toggle_line_profile",
             Action::ToggleMap => "toggle_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::ToggleSubframes => "toggle_subframes",
@@ -443,6 +448,7 @@ impl Action {
             Action::ToggleRoi => "toggle_roi",
             Action::ToggleHandTool => "toggle_hand_tool",
             Action::ToggleZoomTool => "toggle_zoom_tool",
+            Action::ToggleMeasureTool => "toggle_measure_tool",
             Action::DeleteProbePoint => "delete_probe_point",
             Action::CopyMeasurement => "copy_measurement",
             Action::CopyImage => "copy_image",
@@ -544,6 +550,7 @@ impl Action {
             Action::TogglePixelPipeline => "Show/hide pixel pipeline",
             Action::ToggleHistogram => "Show/hide analysis window (histogram, evaluation)",
             Action::ToggleZoomMap => "Show/hide zoom map",
+            Action::ToggleLineProfile => "Show/hide line profile",
             Action::ToggleMap => "Show/hide map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
@@ -575,6 +582,7 @@ impl Action {
             Action::ToggleRoi => "ROI tool on/off",
             Action::ToggleHandTool => "Hand tool on/off",
             Action::ToggleZoomTool => "Zoom tool on/off",
+            Action::ToggleMeasureTool => "Measure tool on/off",
             Action::DeleteProbePoint => "Delete selected probe point or ROI",
             Action::CopyMeasurement => "Copy selected probe point value or ROI statistics",
             Action::CopyImage => "Copy image",
@@ -647,6 +655,7 @@ impl Action {
             | Action::ToggleRoi
             | Action::ToggleHandTool
             | Action::ToggleZoomTool
+            | Action::ToggleMeasureTool
             | Action::DeleteProbePoint
             | Action::CopyMeasurement
             | Action::UndoPosition => KeyGroup::Tools,
@@ -702,6 +711,7 @@ impl Action {
             | Action::TogglePixelPipeline
             | Action::ToggleHistogram
             | Action::ToggleZoomMap
+            | Action::ToggleLineProfile
             | Action::ToggleMap
             | Action::ToggleSkyChart
             | Action::ToggleSubframes => KeyGroup::Windows,
@@ -914,6 +924,7 @@ impl Action {
             Action::TogglePixelPipeline => vec![],
             Action::ToggleHistogram => vec![KeyCombo::ctrl(H)],
             Action::ToggleZoomMap => vec![],
+            Action::ToggleLineProfile => vec![KeyCombo::ctrl(L)],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ToggleSkyChart => vec![],
             Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],
@@ -938,6 +949,7 @@ impl Action {
             Action::ToggleRoi => vec![KeyCombo::plain(R)],
             Action::ToggleHandTool => vec![KeyCombo::plain(H)],
             Action::ToggleZoomTool => vec![KeyCombo::plain(Z)],
+            Action::ToggleMeasureTool => vec![KeyCombo::plain(M)],
             Action::DeleteProbePoint => vec![KeyCombo::plain(Delete)],
             Action::FullscreenExit => vec![KeyCombo::plain(Escape)],
             Action::FullscreenNext => vec![KeyCombo::plain(ArrowRight)],

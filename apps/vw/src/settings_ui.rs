@@ -45,6 +45,7 @@ enum Section {
     DicomSend,
     Log,
     Quality,
+    Reports,
     Ai,
     Map,
     Sky,
@@ -53,7 +54,7 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 21] = [
+    const ALL: [Section; 22] = [
         Section::Appearance,
         Section::Viewer,
         Section::Display,
@@ -70,6 +71,7 @@ impl Section {
         Section::DicomSend,
         Section::Log,
         Section::Quality,
+        Section::Reports,
         Section::Ai,
         Section::Map,
         Section::Sky,
@@ -95,6 +97,7 @@ impl Section {
             Section::DicomSend => "DICOM sending",
             Section::Log => "Log",
             Section::Quality => "Quality evaluation",
+            Section::Reports => "Reports and graphs",
             Section::Ai => "AI tags",
             Section::Map => "Map",
             Section::Sky => "Sky chart",
@@ -506,6 +509,20 @@ const ITEMS: &[Item] = &[
         title: "ROI color values",
         description: "How the mean color of an ROI on a color image is written: R G B numbers or a color code (#RRGGBB; 16-bit images use four digits per color).",
         widget: roi_color_widget,
+    },
+    Item {
+        section: Section::Reports,
+        key: "report.theme",
+        title: "Look of reports and graphs",
+        description: "The look of written reports (HTML), graph images and comparison pictures copied to the clipboard. Every look has a title, a legend, axis names with units, the file name and image size, the date and time, a table of values and a caption.",
+        widget: report_theme_widget,
+    },
+    Item {
+        section: Section::Reports,
+        key: "measure.open_profile",
+        title: "Open the line graph after drawing a line",
+        description: "When a line is drawn with the measure tool, open the Line profile window that shows the values along it.",
+        widget: open_profile_widget,
     },
     Item {
         section: Section::Quality,
@@ -2774,6 +2791,38 @@ fn remember_open_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> 
 
 fn probe_color_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     color_format_radio(ui, lang, &mut s.metadata.color_format)
+}
+
+fn report_theme_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::settings::ReportTheme;
+    let before = s.report.theme;
+    for choice in ReportTheme::ALL {
+        let (name, about) = match choice {
+            ReportTheme::Paper => (
+                "Paper",
+                "White page, serif type, numbered figures, tables with three rules.",
+            ),
+            ReportTheme::Lab => (
+                "Technical note",
+                "Sans-serif type, monospaced numbers, a light grid, colors told apart with any color vision.",
+            ),
+            ReportTheme::Dark => ("vw dark", "The dark gray and thin lines of the vw window."),
+            ReportTheme::Mono => (
+                "Print in black",
+                "Black only; lines are told apart by dashes and markers.",
+            ),
+        };
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut s.report.theme, choice, tr(lang, name));
+            ui.weak(tr(lang, about));
+        });
+    }
+    s.report.theme != before
+}
+
+fn open_profile_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.measure.open_profile, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn roi_color_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
