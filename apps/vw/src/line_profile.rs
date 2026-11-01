@@ -392,6 +392,7 @@ pub fn chart(
     }
     Chart {
         x_label: format!("{} ({})", labels.distance, if km { "km" } else { "px" }),
+        x_names: Vec::new(),
         panels,
     }
 }
@@ -802,7 +803,13 @@ mod tests {
         let earth = p.earth.as_ref().unwrap();
         assert_eq!(earth.places, vec![(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)]);
         assert!((earth.length_km() - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
-        let c = chart(&[p.clone()], ColorModel::Gray, &v, &LABELS, Theme::default());
+        let c = chart(
+            &[p.clone()],
+            ColorModel::Gray,
+            &v,
+            &LABELS,
+            Theme::default(),
+        );
         assert_eq!(c.x_label, "Distance from the start (km)");
         let last = c.panels[0].series[0].points[2][0];
         assert!((last - 2.0 * KM_PER_DEGREE).abs() < 1e-6);
@@ -837,7 +844,13 @@ mod tests {
         let plain = VwImage::new(3, 1, ColorModel::Gray, PixelData::U8(vec![1, 2, 3])).unwrap();
         let mut without = profile(&plain, &m, &line((0, 0), (2, 0)), &v);
         without.number = 2;
-        let c = chart(&[with, without], ColorModel::Gray, &v, &LABELS, Theme::default());
+        let c = chart(
+            &[with, without],
+            ColorModel::Gray,
+            &v,
+            &LABELS,
+            Theme::default(),
+        );
         assert_eq!(c.x_label, "Distance from the start (px)");
         assert_eq!(c.panels[0].series[0].points[2][0], 2.0);
     }

@@ -147,6 +147,7 @@ mod tests {
     fn a_chart_becomes_an_svg_with_the_theme_background() {
         let c = Chart {
             x_label: "x".into(),
+            x_names: Vec::new(),
             panels: vec![Panel {
                 y_label: "y".into(),
                 series: vec![Series {
@@ -159,5 +160,24 @@ mod tests {
         let s = c.svg(Theme::Dark, 600.0, "chart");
         assert!(s.starts_with("<svg"));
         assert!(s.contains("fill=\"#1e1f22\""));
+    }
+
+    #[test]
+    fn named_x_ticks_replace_the_numbers() {
+        let c = Chart {
+            x_label: "time".into(),
+            x_names: vec![(1.0, "2020-01-01".into()), (2.0, "2020-01-02".into())],
+            panels: vec![Panel {
+                y_label: "y".into(),
+                series: vec![Series {
+                    name: "a".into(),
+                    points: vec![[1.0, 0.0], [2.0, 1.0]],
+                    style: Theme::Dark.line(0),
+                }],
+            }],
+        };
+        let s = c.svg(Theme::Dark, 600.0, "chart");
+        assert!(s.contains("2020-01-02"));
+        assert!(!s.contains(">1.5<"));
     }
 }

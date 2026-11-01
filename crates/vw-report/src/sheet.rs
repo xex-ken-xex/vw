@@ -24,6 +24,9 @@ pub struct Panel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chart {
     pub x_label: String,
+    /// 横軸の目盛りの文字（位置, 文字）。空なら値の範囲から 1・2・5 の刻みで数字を付ける。
+    /// 日時や気圧の面のように、横軸の位置が番号で、見せたいのが別の文字のときに使う。
+    pub x_names: Vec<(f64, String)>,
     pub panels: Vec<Panel>,
 }
 
@@ -156,7 +159,11 @@ pub fn chart(r: &mut Recorder<'_>, theme: Theme, c: &Chart, at: [f32; 2], width:
             .flat_map(|p| p.series.iter())
             .flat_map(|s| s.points.iter().map(|p| p[0])),
     );
-    let x_ticks = ticks(x_range, 7);
+    let x_ticks = if c.x_names.is_empty() {
+        ticks(x_range, 7)
+    } else {
+        c.x_names.clone()
+    };
     let x_range = span(&x_ticks, x_range);
     let mut y = at[1];
     let left_room = c
@@ -545,6 +552,7 @@ mod tests {
             blocks: vec![
                 Block::Chart(Chart {
                     x_label: "Distance from the start (px)".to_owned(),
+                    x_names: Vec::new(),
                     panels: vec![Panel {
                         y_label: "Pixel value".to_owned(),
                         series: vec![series("Line 1", 0), series("Line 2", 1)],
@@ -633,6 +641,7 @@ mod tests {
         let mut r = Recorder::new(&Estimate);
         let chart_with_gap = Chart {
             x_label: String::new(),
+            x_names: Vec::new(),
             panels: vec![Panel {
                 y_label: String::new(),
                 series: vec![Series {

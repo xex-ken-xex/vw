@@ -266,6 +266,8 @@ pub struct FrameMean {
     pub index: usize,
     pub pixel: Vec<f64>,
     pub measured: Option<f64>,
+    /// 面の札（気象・海洋の格子の時刻・高さ。例 `time = 2020-01-01`）。
+    pub plane: Option<String>,
 }
 
 /// `img` の `region` の平均。フレームごとに `values` を作り直す（PET はフレームごとに SUV の
@@ -289,6 +291,9 @@ pub fn frame_mean(img: &VwImage, meta: &Metadata, region: Region, index: usize) 
         index,
         pixel,
         measured,
+        plane: meta
+            .get(vw_netcdf::GROUP, vw_fits::PLANE)
+            .map(str::to_owned),
     }
 }
 
@@ -419,6 +424,7 @@ pub fn band_chart(
                 Direction::Vertical => labels.position_y,
             }
         ),
+        x_names: Vec::new(),
         panels: two_panels(
             &series,
             color,
@@ -478,6 +484,7 @@ pub fn histogram_chart(
     };
     Chart {
         x_label,
+        x_names: Vec::new(),
         panels: vec![Panel {
             y_label: labels.count.to_owned(),
             series,
@@ -535,8 +542,11 @@ pub fn frames_chart(
             (*kind, x, pixel, measured)
         })
         .collect();
+    let (x_label, x_names) =
+        plane_axis(series).unwrap_or_else(|| (labels.frame.to_owned(), Vec::new()));
     Chart {
-        x_label: labels.frame.to_owned(),
+        x_label,
+        x_names,
         panels: two_panels(
             &rows,
             color,
@@ -546,6 +556,42 @@ pub fn frames_chart(
             (labels.mean_pixel, labels.mean_measured),
         ),
     }
+}
+
+/// 横軸の目盛りの数。日時の文字は長いので、番号の目盛り（7 本）より少なくする。
+const PLANE_TICKS: usize = 5;
+
+/// 全部のフレームに面の札があれば、横軸の題（次元の名前）と、等間隔に選んだフレームの目盛り
+/// （札の値）。横軸の位置はフレームの番号のままにする。日時や高さの値そのものを位置にしないのは、
+/// 面の座標が等間隔とは限らず、気圧のように上下で逆に並ぶこともあり、フレームの番号と表の行が
+/// ずれるため。
+fn plane_axis(series: &[(Kind, Vec<FrameMean>)]) -> Option<(String, Vec<(f64, String)>)> {
+    let longest = series.iter().map(|(_, m)| m).max_by_key(|m| m.len())?;
+    let all = series
+        .iter()
+        .flat_map(|(_, m)| m)
+        .all(|m| m.plane.is_some());
+    if longest.is_empty() || !all {
+        return None;
+    }
+    let parts = |m: &FrameMean| split_plane(m.plane.as_deref().unwrap_or_default());
+    let title = parts(&longest[0]).0;
+    let step = longest.len().div_ceil(PLANE_TICKS).max(1);
+    let names = longest
+        .iter()
+        .step_by(step)
+        .map(|m| ((m.index + 1) as f64, parts(m).1))
+        .collect();
+    Some((title, names))
+}
+
+/// 札 `time = 2020-01-01, level = 500 hPa` を、名前 `time, level` と値 `2020-01-01, 500 hPa` に分ける。
+fn split_plane(label: &str) -> (String, String) {
+    let (names, values): (Vec<&str>, Vec<&str>) = label
+        .split(", ")
+        .map(|part| part.split_once(" = ").unwrap_or(("", part)))
+        .unzip();
+    (names.join(", "), values.join(", "))
 }
 
 /// ROI ごと・値の種類ごとの最小・最大・平均・標準偏差の表。`rows` は
@@ -781,6 +827,13 @@ pub fn frames_rows(
     if measured {
         h.extend(["mean_measured_value".to_owned(), "measured_unit".to_owned()]);
     }
+    let planes = series
+        .iter()
+        .flat_map(|(_, m)| m)
+        .any(|m| m.plane.is_some());
+    if planes {
+        h.push("plane".to_owned());
+    }
     h.push("file".to_owned());
     let mut w = Writer::new(separator, &h);
     for (kind, means) in series {
@@ -790,6 +843,9 @@ pub fn frames_rows(
             if measured {
                 row.push(m.measured.map_or_else(String::new, value));
                 row.push(values.unit.clone());
+            }
+            if planes {
+                row.push(m.plane.clone().unwrap_or_default());
             }
             row.push(names.get(m.index).cloned().unwrap_or_default());
             w.row(row);
@@ -1070,12 +1126,94 @@ mod tests {
                 index: 0,
                 pixel: vec![5.0],
                 measured: None,
+                plane: None,
             }],
         )];
         let csv = frames_rows(&series, &["a.dcm".to_owned()], ColorModel::Gray, &v, ',');
         assert_eq!(csv, "roi,frame,mean_pixel_value,file\ntarget,1,5,a.dcm\n");
         let c = frames_chart(&series, ColorModel::Gray, &v, &LABELS, Theme::Lab);
         assert_eq!(c.panels[0].series[0].points, vec![[1.0, 5.0]]);
+    }
+
+    fn dated(index: usize, date: &str) -> FrameMean {
+        FrameMean {
+            index,
+            pixel: vec![index as f64],
+            measured: None,
+            plane: Some(format!("time = {date}")),
+        }
+    }
+
+    #[test]
+    fn frames_with_dates_are_labeled_with_the_dates_on_the_axis() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let means = (0..10)
+            .map(|i| dated(i, &format!("2020-01-{:02}", i + 1)))
+            .collect();
+        let series = vec![(Kind::Target, means)];
+        let c = frames_chart(&series, ColorModel::Gray, &v, &LABELS, Theme::Lab);
+        assert_eq!(c.x_label, "time");
+        assert_eq!(
+            c.x_names,
+            vec![
+                (1.0, "2020-01-01".to_owned()),
+                (3.0, "2020-01-03".to_owned()),
+                (5.0, "2020-01-05".to_owned()),
+                (7.0, "2020-01-07".to_owned()),
+                (9.0, "2020-01-09".to_owned()),
+            ]
+        );
+        assert_eq!(c.panels[0].series[0].points[9], [10.0, 9.0]);
+    }
+
+    #[test]
+    fn frames_with_two_plane_dimensions_name_both() {
+        assert_eq!(
+            split_plane("time = 2020-01-01, level = 500 hPa"),
+            ("time, level".to_owned(), "2020-01-01, 500 hPa".to_owned())
+        );
+    }
+
+    #[test]
+    fn frames_without_planes_keep_frame_numbers() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let mut plain = dated(1, "2020-01-02");
+        plain.plane = None;
+        let series = vec![(Kind::Target, vec![dated(0, "2020-01-01"), plain])];
+        let c = frames_chart(&series, ColorModel::Gray, &v, &LABELS, Theme::Lab);
+        assert_eq!(c.x_label, LABELS.frame);
+        assert!(c.x_names.is_empty());
+    }
+
+    #[test]
+    fn frame_rows_add_the_plane_label() {
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let series = vec![(Kind::Target, vec![dated(0, "2020-01-01")])];
+        let csv = frames_rows(&series, &["a.nc".to_owned()], ColorModel::Gray, &v, ',');
+        assert_eq!(
+            csv,
+            "roi,frame,mean_pixel_value,plane,file\ntarget,1,0,time = 2020-01-01,a.nc\n"
+        );
+    }
+
+    #[test]
+    fn frame_means_read_the_plane_label() {
+        let img = VwImage::new(1, 1, ColorModel::Gray, PixelData::F32(vec![1.0])).unwrap();
+        let mut m = Metadata::default();
+        m.push(vw_netcdf::GROUP, vw_fits::PLANE, "level = 850 hPa");
+        let r = Region {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        assert_eq!(
+            frame_mean(&img, &m, r, 0).plane.as_deref(),
+            Some("level = 850 hPa")
+        );
     }
 
     #[test]

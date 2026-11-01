@@ -98,7 +98,9 @@ impl Place {
     /// 画素 `(x, y)` の位置。緯度・経度の分からない画像や、格子の外なら `None`。
     pub fn at(geo: Option<&GeoGrid>, meta: &Metadata, x: u32, y: u32) -> Option<Self> {
         let (lat, lon) = geo?.at(f64::from(x), f64::from(y))?;
-        let plane = meta.get(vw_netcdf::GROUP, vw_fits::PLANE).map(str::to_owned);
+        let plane = meta
+            .get(vw_netcdf::GROUP, vw_fits::PLANE)
+            .map(str::to_owned);
         Some(Self { lat, lon, plane })
     }
 

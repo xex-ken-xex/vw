@@ -459,6 +459,7 @@ fn histogram_chart(h: &[Vec<u32>; 2], labels: &Labels, image: &str, theme: Theme
     };
     Chart {
         x_label: labels.brightness.to_owned(),
+        x_names: Vec::new(),
         panels: vec![Panel {
             y_label: labels.pixels.to_owned(),
             series: vec![series(0, labels.reference), series(1, image)],

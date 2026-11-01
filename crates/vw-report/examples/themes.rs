@@ -41,6 +41,7 @@ fn main() {
             blocks: vec![
                 Block::Chart(Chart {
                     x_label: "始点からの距離 (px)".into(),
+                    x_names: Vec::new(),
                     panels: vec![
                         Panel {
                             y_label: "画素の値".into(),
