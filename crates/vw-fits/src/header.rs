@@ -160,11 +160,12 @@ fn parse_cards(lines: &[&[u8]]) -> Vec<Card> {
         if key == "CONTINUE" {
             // 長い文字列の続き。前の文字列の末尾の & を外してつなぐ。
             if let Some(prev) = cards.last_mut().filter(|c| c.quoted)
-                && let Some(base) = prev.value.strip_suffix('&') {
-                    let (more, _) = split_value(&text[8..]);
-                    prev.value = format!("{base}{more}");
-                    continue;
-                }
+                && let Some(base) = prev.value.strip_suffix('&')
+            {
+                let (more, _) = split_value(&text[8..]);
+                prev.value = format!("{base}{more}");
+                continue;
+            }
         }
         if key == "HIERARCH" {
             // ESO の長い名前。`HIERARCH ESO DET DIT = 1.0 / comment`

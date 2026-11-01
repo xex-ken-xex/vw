@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn tags_and_faces_made_before_versions_were_kept_count_as_the_first_version() {
-        use crate::ai_models::{faces_version, tagger_version, FACES_NAME, TAGGER_NAME};
+        use crate::ai_models::{FACES_NAME, TAGGER_NAME, faces_version, tagger_version};
         let old = Entry {
             model: TAGGER_NAME.into(),
             faces: vec![FaceMark {
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn another_model_or_version_is_outdated() {
-        use crate::ai_models::{tagger_version, FACES_NAME, TAGGER_NAME};
+        use crate::ai_models::{FACES_NAME, TAGGER_NAME, tagger_version};
         let other_version = Entry {
             model: TAGGER_NAME.into(),
             version: "00000000".into(),

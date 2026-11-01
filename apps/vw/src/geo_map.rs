@@ -4,7 +4,7 @@
 //! 東西はどこまでも続けて見られるよう、中心の x は 0〜1 に収めず、描くときに地図を横に
 //! 繰り返す。南北は地図の端で止める。
 
-use eframe::egui::{pos2, vec2, Pos2, Rect, Vec2};
+use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
 
 /// タイル 1 枚の画素数。
 pub const TILE: f64 = 256.0;

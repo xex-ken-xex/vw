@@ -169,7 +169,7 @@ impl Program {
                             return Err(Error {
                                 line: i + 1,
                                 message: format!("unknown channel \"{other}\" (use r, g, b or v)"),
-                            })
+                            });
                         }
                     };
                     (target, rest)
@@ -243,11 +243,7 @@ fn run(ops: &[Op], env: &Env, stack: &mut Vec<f32>) -> f32 {
                 let no = pop(stack);
                 let yes = pop(stack);
                 let cond = pop(stack);
-                if cond != 0.0 {
-                    yes
-                } else {
-                    no
-                }
+                if cond != 0.0 { yes } else { no }
             }
             Op::Call(f) => call(f, stack),
             binary => {
@@ -282,11 +278,7 @@ fn pop(stack: &mut Vec<f32>) -> f32 {
 }
 
 fn bool_of(b: bool) -> f32 {
-    if b {
-        1.0
-    } else {
-        0.0
-    }
+    if b { 1.0 } else { 0.0 }
 }
 
 fn call(f: Func, stack: &mut Vec<f32>) -> f32 {
@@ -685,24 +677,32 @@ mod tests {
         let e = Program::compile("v * 2\nfoo(v)").unwrap_err();
         assert_eq!(e.line, 2);
         assert!(e.message.contains("foo"), "{e}");
-        assert!(Program::compile("min(v)")
-            .unwrap_err()
-            .message
-            .contains("2 argument"));
-        assert!(Program::compile("(v")
-            .unwrap_err()
-            .message
-            .contains("\")\""));
+        assert!(
+            Program::compile("min(v)")
+                .unwrap_err()
+                .message
+                .contains("2 argument")
+        );
+        assert!(
+            Program::compile("(v")
+                .unwrap_err()
+                .message
+                .contains("\")\"")
+        );
         assert!(Program::compile("v $ 2").unwrap_err().message.contains("$"));
-        assert!(Program::compile("q: v")
-            .unwrap_err()
-            .message
-            .contains("channel"));
+        assert!(
+            Program::compile("q: v")
+                .unwrap_err()
+                .message
+                .contains("channel")
+        );
         assert!(Program::compile("\n# nothing\n").is_err());
-        assert!(Program::compile("v 2")
-            .unwrap_err()
-            .message
-            .contains("unexpected"));
+        assert!(
+            Program::compile("v 2")
+                .unwrap_err()
+                .message
+                .contains("unexpected")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! 色の表の選び方（メニュー）と、スロットに重ねるゲージ（色と値の目盛りの帯）。
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
 use crate::colormap::{self, Applied, Pick, Rules};
 use crate::i18n::tr;

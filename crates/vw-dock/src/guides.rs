@@ -4,9 +4,9 @@
 //! 中央（重ねてタブにする）を出さないのは、vw はタブを使わず、出しているペインを
 //! いつも全部見せる決まりにしたため。
 
-use egui::{pos2, vec2, Color32, Painter, Pos2, Rect, Stroke, StrokeKind};
+use egui::{Color32, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 
-use crate::tree::{preview, Placed, Side, Target};
+use crate::tree::{Placed, Side, Target, preview};
 
 /// ボタンの一辺（ポイント）。
 const BUTTON: f32 = 30.0;
@@ -187,9 +187,11 @@ mod tests {
         assert_eq!(b.len(), 8);
         let beside: Vec<_> = b.iter().filter(|b| b.target.anchor == ["images"]).collect();
         assert_eq!(beside.len(), 4);
-        assert!(beside
-            .iter()
-            .all(|b| panes()[1].rect.contains(b.rect.center())));
+        assert!(
+            beside
+                .iter()
+                .all(|b| panes()[1].rect.contains(b.rect.center()))
+        );
     }
 
     #[test]

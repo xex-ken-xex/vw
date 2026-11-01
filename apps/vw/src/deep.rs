@@ -257,10 +257,11 @@ impl Layer {
             };
         }
         if let State::Dither(texture, current) = &mut self.state
-            && *current != options {
-                crate::viewer::set_texture_options(texture, options);
-                *current = options;
-            }
+            && *current != options
+        {
+            crate::viewer::set_texture_options(texture, options);
+            *current = options;
+        }
         matches!(self.state, State::Gpu { .. } | State::Dither(..))
     }
 

@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vw_core::Registry;
 
@@ -166,10 +166,9 @@ pub fn copy_target(
     keep_structure: bool,
     taken: &mut HashSet<PathBuf>,
 ) -> PathBuf {
-    if keep_structure
-        && let Ok(rel) = file.strip_prefix(root) {
-            return dest.join(rel);
-        }
+    if keep_structure && let Ok(rel) = file.strip_prefix(root) {
+        return dest.join(rel);
+    }
     let name = file.file_name().unwrap_or_default();
     let mut target = dest.join(name);
     let stem = Path::new(name)
@@ -350,15 +349,16 @@ fn unpack_images(
             dir.join(inner)
         };
         if let Some(located) = strip
-            && let Err(e) = strip_bytes(&mut bytes, located) {
-                out.failed.push(format!(
-                    "{}{}{}: {e}",
-                    archive.display(),
-                    crate::catalog::IN_ARCHIVE,
-                    inner.display()
-                ));
-                return Ok(());
-            }
+            && let Err(e) = strip_bytes(&mut bytes, located)
+        {
+            out.failed.push(format!(
+                "{}{}{}: {e}",
+                archive.display(),
+                crate::catalog::IN_ARCHIVE,
+                inner.display()
+            ));
+            return Ok(());
+        }
         match write_new(&target, &bytes) {
             Ok(()) => out.copied += 1,
             Err(e) => out.failed.push(format!("{}: {e}", target.display())),
@@ -392,7 +392,7 @@ fn free_name(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_bytes, png_registry, write_zip, TempDir};
+    use crate::test_util::{TempDir, png_bytes, png_registry, write_zip};
 
     fn label(flag: Option<Flag>, tags: &[&str]) -> Label {
         Label {

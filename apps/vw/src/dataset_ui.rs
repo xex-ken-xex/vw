@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
 use eframe::egui;
@@ -15,7 +15,7 @@ use crate::ai_tags::AiTagStore;
 use crate::catalog::{self, Catalog, Info, Progress, Report};
 use crate::dataset_extract;
 use crate::dataset_search::Index;
-use crate::i18n::{tr, tr1, tr_text};
+use crate::i18n::{tr, tr_text, tr1};
 use crate::labels::LabelStore;
 use crate::log::Log;
 use crate::settings::Language;
@@ -163,9 +163,10 @@ impl DatasetDialog {
                 .unwrap_or_default();
             dialog.error = catalog::check_can_register(&dialog.dir).err();
             if let Some(info) = dialog.unfinished.as_ref().and_then(|u| u.info.clone())
-                && !info.name.is_empty() {
-                    dialog.fill_info(info);
-                }
+                && !info.name.is_empty()
+            {
+                dialog.fill_info(info);
+            }
         } else {
             match catalog::load(&dialog.dir) {
                 Ok(c) => dialog.fill(c),
@@ -253,10 +254,11 @@ impl DatasetDialog {
     fn start(&mut self, registry: &Registry, ctx: &egui::Context, lang: Language) {
         let dest = PathBuf::from(self.dest.trim());
         if self.kind == Kind::Extract
-            && let Err(e) = dataset_extract::check_destination(&self.dir, &dest) {
-                self.error = Some(tr_text(lang, &e));
-                return;
-            }
+            && let Err(e) = dataset_extract::check_destination(&self.dir, &dest)
+        {
+            self.error = Some(tr_text(lang, &e));
+            return;
+        }
         let kind = self.kind;
         let register = self.register_extracted;
         let progress = Arc::new(Progress::default());
@@ -608,13 +610,14 @@ impl DatasetDialog {
     fn poll(&mut self, log: &mut Log, lang: Language) -> Option<bool> {
         let job = self.job.as_ref()?;
         if self.password.is_none()
-            && let Ok(request) = job.asks.try_recv() {
-                self.password = Some(PasswordAsk {
-                    request,
-                    input: String::new(),
-                    focused: false,
-                });
-            }
+            && let Ok(request) = job.asks.try_recv()
+        {
+            self.password = Some(PasswordAsk {
+                request,
+                input: String::new(),
+                focused: false,
+            });
+        }
         let result = match job.result.try_recv() {
             Ok(r) => r,
             Err(TryRecvError::Empty) => return None,
@@ -760,9 +763,10 @@ impl DatasetDialog {
             answer = Some(None);
         }
         if let Some(a) = answer
-            && let Some(ask) = self.password.take() {
-                let _ = ask.request.reply.send(a);
-            }
+            && let Some(ask) = self.password.take()
+        {
+            let _ = ask.request.reply.send(a);
+        }
     }
 }
 

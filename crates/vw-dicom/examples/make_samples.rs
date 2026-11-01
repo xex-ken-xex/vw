@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use vw_dicom::synth::{Synth, CT_IMAGE, JPEG_LS_LOSSLESS, XA_IMAGE};
+use vw_dicom::synth::{CT_IMAGE, JPEG_LS_LOSSLESS, Synth, XA_IMAGE};
 
 const SIDE: u16 = 256;
 
@@ -110,11 +110,7 @@ fn main() -> std::io::Result<()> {
             (0..SIDE as usize * SIDE as usize)
                 .map(|i| {
                     let (x, y) = ((i % 256) as f32 - cx, (i / 256) as f32 - cy);
-                    if x * x + y * y < 400.0 {
-                        230
-                    } else {
-                        40
-                    }
+                    if x * x + y * y < 400.0 { 230 } else { 40 }
                 })
                 .collect()
         })

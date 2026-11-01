@@ -55,7 +55,7 @@ impl Look {
             None if self.color_map_stops.is_empty() => {
                 return Err(format!(
                     "color map \"{name}\" is not built in and has no colors"
-                ))
+                ));
             }
             None => {
                 let stops = self

@@ -1,6 +1,6 @@
 //! 画像や星図の上に重ねる枠と名札の描き方。顔の枠と、星図の写った範囲で同じ見た目にする。
 
-use eframe::egui::{self, pos2, vec2, Color32, Painter, Pos2, Rect, Shape, Stroke};
+use eframe::egui::{self, Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
 /// 枠の下に敷く黒い縁。明るい画像でも暗い画像でも枠が見えるように。
 fn backing() -> Stroke {

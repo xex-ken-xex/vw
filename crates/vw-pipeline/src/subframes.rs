@@ -4,7 +4,7 @@
 //! 薄明や月で明るい 1 枚を見つけて除くため。星の形は [`crate::deconv::find_stars`] で測る。
 //! 位置合わせは、明るい星の組の距離が回転やずれで変わらないことを使って、星どうしを対応させる。
 
-use crate::deconv::{find_stars, FWHM_PER_SIGMA};
+use crate::deconv::{FWHM_PER_SIGMA, find_stars};
 use crate::nodes::Float;
 
 /// 1 枚の評価。
@@ -200,10 +200,11 @@ fn matches(r: &[[f64; 2]], o: &[[f64; 2]], m: &Map) -> Vec<(usize, usize)> {
             .map(|(k, s)| (distance(q, *s), k))
             .min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((d, k)) = nearest
-            && d <= MATCH_PIXELS {
-                used[k] = true;
-                out.push((i, k));
-            }
+            && d <= MATCH_PIXELS
+        {
+            used[k] = true;
+            out.push((i, k));
+        }
     }
     out
 }
@@ -288,20 +289,24 @@ pub fn reasons(evaluations: &[Evaluation], limits: Limits) -> Vec<Vec<Reason>> {
                 out.push(Reason::NoStars);
             }
             if let (Some(f), Some(m)) = (e.fwhm, fwhm)
-                && f > m * limits.fwhm_ratio {
-                    out.push(Reason::Blurred);
-                }
+                && f > m * limits.fwhm_ratio
+            {
+                out.push(Reason::Blurred);
+            }
             if e.eccentricity.is_some_and(|x| x > limits.eccentricity) {
                 out.push(Reason::Elongated);
             }
             if let Some(m) = stars
-                && e.stars > 0 && (e.stars as f32) < m * limits.stars_ratio {
-                    out.push(Reason::FewStars);
-                }
+                && e.stars > 0
+                && (e.stars as f32) < m * limits.stars_ratio
+            {
+                out.push(Reason::FewStars);
+            }
             if let (Some(b), Some(n)) = (background, noise)
-                && e.background > b + limits.background_sigmas * n.max(f32::EPSILON) {
-                    out.push(Reason::BrightSky);
-                }
+                && e.background > b + limits.background_sigmas * n.max(f32::EPSILON)
+            {
+                out.push(Reason::BrightSky);
+            }
             out
         })
         .collect()

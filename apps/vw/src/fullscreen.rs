@@ -7,12 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant, SystemTime};
 
-use eframe::egui::{self, pos2, Color32, Rect, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, Rect, TextureHandle, TextureOptions, pos2};
 use vw_core::Registry;
 
 use crate::frames;
@@ -643,10 +643,11 @@ impl Show {
                 Scan::Found { folder, newest } => {
                     self.folders.push(folder);
                     if let Some(candidate) = newest
-                        && self.newest.as_ref().is_none_or(|n| candidate.0 > n.0) {
-                            self.newest = Some(candidate);
-                            self.show_newest();
-                        }
+                        && self.newest.as_ref().is_none_or(|n| candidate.0 > n.0)
+                    {
+                        self.newest = Some(candidate);
+                        self.show_newest();
+                    }
                     if self.pos.is_none() && self.settings.mode == FullscreenMode::Sequence {
                         self.go(Pos { folder: 0, file: 0 });
                     }
@@ -717,17 +718,18 @@ impl Show {
         let file = self.current_file();
         if let (Some(file), Some(picture)) =
             (&file, file.as_ref().and_then(|f| self.pictures.get(f)))
-            && self.plays_frames(picture) {
-                let frames = picture.info.frames;
-                for k in 1..=FRAMES_AHEAD {
-                    let i = (self.frame + k) % frames;
-                    keep.push(if i == 0 {
-                        file.clone()
-                    } else {
-                        frames::frame_path(file, i)
-                    });
-                }
+            && self.plays_frames(picture)
+        {
+            let frames = picture.info.frames;
+            for k in 1..=FRAMES_AHEAD {
+                let i = (self.frame + k) % frames;
+                keep.push(if i == 0 {
+                    file.clone()
+                } else {
+                    frames::frame_path(file, i)
+                });
             }
+        }
         let lens = self.lens();
         let wrap = self.settings.loop_at_end;
         let mut ahead = pos;
@@ -914,9 +916,10 @@ impl Show {
         self.screen_side = (rect.width().max(rect.height()) * ppp).round() as u32;
         self.manage_loads(loader, next_id);
         if let Some(wanted) = self.wanted()
-            && self.pictures.contains_key(&wanted) {
-                self.shown = Some(wanted);
-            }
+            && self.pictures.contains_key(&wanted)
+        {
+            self.shown = Some(wanted);
+        }
         let before = (self.pos, self.frame);
         self.advance_if_due(now);
         if (self.pos, self.frame) != before {
@@ -976,25 +979,26 @@ impl Show {
             );
         }
         if self.settings.show_path
-            && let (Some(pos), Some(file)) = (self.pos, self.current_file()) {
-                let mut label = relative_label(&self.root, &file);
-                let count = self.folders[pos.folder].files.len();
-                label.push_str(&format!("    {} / {count}", pos.file + 1));
-                if self.frame > 0 {
-                    label.push_str(&format!("  [{}]", self.frame + 1));
-                }
-                if self.scanning {
-                    label.push_str("  …");
-                }
-                let margin = 12.0;
-                painter.text(
-                    rect.right_bottom() - egui::vec2(margin, margin),
-                    egui::Align2::RIGHT_BOTTOM,
-                    label,
-                    font.clone(),
-                    text_color,
-                );
+            && let (Some(pos), Some(file)) = (self.pos, self.current_file())
+        {
+            let mut label = relative_label(&self.root, &file);
+            let count = self.folders[pos.folder].files.len();
+            label.push_str(&format!("    {} / {count}", pos.file + 1));
+            if self.frame > 0 {
+                label.push_str(&format!("  [{}]", self.frame + 1));
             }
+            if self.scanning {
+                label.push_str("  …");
+            }
+            let margin = 12.0;
+            painter.text(
+                rect.right_bottom() - egui::vec2(margin, margin),
+                egui::Align2::RIGHT_BOTTOM,
+                label,
+                font.clone(),
+                text_color,
+            );
+        }
         if self.paused && self.auto_advance_configured() {
             painter.text(
                 rect.right_top() + egui::vec2(-12.0, 12.0),
@@ -1161,7 +1165,7 @@ impl Setup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, write_png, TempDir};
+    use crate::test_util::{TempDir, png_registry, write_png};
 
     const POS: fn(usize, usize) -> Pos = |folder, file| Pos { folder, file };
 

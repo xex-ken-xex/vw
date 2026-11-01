@@ -8,21 +8,21 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Align, Color32, Event, RichText};
 use egui_phosphor::regular as icon;
 
-use crate::i18n::{tr, tr1, tr_text};
+use crate::i18n::{tr, tr_text, tr1};
 use crate::keymap::{
-    is_modifier, os_conflict, Action, KeyCombo, KeyGroup, Keymap, Os, Refusal, Scope,
+    Action, KeyCombo, KeyGroup, Keymap, Os, Refusal, Scope, is_modifier, os_conflict,
 };
 use crate::layout::{SlotLayout, WheelScroll};
 use vw_quality::Thresholds;
 
 use crate::settings::{
-    parse_hex_color, CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling,
-    FitsCalibration, FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode,
-    GaugeSide, HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings,
-    LogStyle, MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, StartTool,
-    ThemeChoice, Tree, Viewer,
+    CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling, FitsCalibration,
+    FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode, GaugeSide,
+    HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle,
+    MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, StartTool, ThemeChoice, Tree,
+    Viewer, parse_hex_color,
 };
-use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
+use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::SortKey;
 use crate::viewer::ScaleFilter;
 
@@ -3175,10 +3175,11 @@ impl SettingsUi {
                 }
             });
             if let Some((a, notice)) = self.notice
-                && a == action {
-                    let (color, text) = notice_text(ui, notice, lang);
-                    ui.colored_label(color, text);
-                }
+                && a == action
+            {
+                let (color, text) = notice_text(ui, notice, lang);
+                ui.colored_label(color, text);
+            }
         });
         changed
     }
@@ -3456,9 +3457,10 @@ mod tests {
             Os::Linux,
         );
         assert_eq!((c, n), (Capture::Done, None));
-        assert!(map
-            .keys(Action::NewSlot)
-            .contains(&KeyCombo::plain(Key::Insert)));
+        assert!(
+            map.keys(Action::NewSlot)
+                .contains(&KeyCombo::plain(Key::Insert))
+        );
     }
 
     #[test]
@@ -3470,9 +3472,10 @@ mod tests {
             ..Modifiers::NONE
         };
         capture(Action::NewSlot, &[press(Key::O, mods)], &mut map, Os::Linux);
-        assert!(map
-            .keys(Action::NewSlot)
-            .contains(&"Ctrl+Shift+O".parse().unwrap()));
+        assert!(
+            map.keys(Action::NewSlot)
+                .contains(&"Ctrl+Shift+O".parse().unwrap())
+        );
     }
 
     #[test]
@@ -3616,9 +3619,10 @@ impl Destinations {
         }
         for echo in self.echoes.values_mut() {
             if let Echo::Running(rx) = echo
-                && let Ok(result) = rx.try_recv() {
-                    *echo = Echo::Done(result);
-                }
+                && let Ok(result) = rx.try_recv()
+            {
+                *echo = Echo::Done(result);
+            }
         }
         if self.echoes.values().any(|e| matches!(e, Echo::Running(_))) {
             ui.ctx()

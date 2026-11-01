@@ -73,11 +73,12 @@ impl VwApp {
             }
             // ターミナル風では状態の行に出ているので、普通の見た目のときだけ。
             if style == LogStyle::Normal
-                && let Some(summary) = self.activity_summary() {
-                    ui.add_space(8.0);
-                    ui.weak(summary);
-                    ui.spinner();
-                }
+                && let Some(summary) = self.activity_summary()
+            {
+                ui.add_space(8.0);
+                ui.weak(summary);
+                ui.spinner();
+            }
         });
         action
     }
@@ -133,9 +134,10 @@ impl VwApp {
             }
             LogAction::OpenFile => {
                 if let Some(path) = self.log.file_path().map(Path::to_path_buf)
-                    && let Err(e) = vw_launch::open_file(&path) {
-                        self.log.error(format!("{}: {e}", path.display()));
-                    }
+                    && let Err(e) = vw_launch::open_file(&path)
+                {
+                    self.log.error(format!("{}: {e}", path.display()));
+                }
             }
             LogAction::OpenFolder => self.open_log_folder(),
             LogAction::CopyAll => {

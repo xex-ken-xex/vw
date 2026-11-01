@@ -14,7 +14,7 @@ use vw_core::Registry;
 
 use crate::ai_tags::AiTagStore;
 use crate::archive::{self, ArchiveError, EntryError};
-use crate::catalog::{self, Catalog, Info, Progress, Report, Skipped, Source, IN_ARCHIVE};
+use crate::catalog::{self, Catalog, IN_ARCHIVE, Info, Progress, Report, Skipped, Source};
 use crate::labels::LabelStore;
 
 /// 取り出した結果。`failed` は写せなかったファイル（元から消えていたもの、出力先に同じ名前が
@@ -248,7 +248,7 @@ fn unpack(
                         }
                     }
                     ArchiveError::NeedsPassword | ArchiveError::WrongPassword => {
-                        return Err("Cancelled".into())
+                        return Err("Cancelled".into());
                     }
                     ArchiveError::Other(e) => return Err(e),
                 }
@@ -302,7 +302,7 @@ pub fn outer_dataset(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_bytes, png_registry, write_png, write_zip, TempDir};
+    use crate::test_util::{TempDir, png_bytes, png_registry, write_png, write_zip};
 
     fn no_password(_: &Path, _: bool) -> Option<String> {
         None

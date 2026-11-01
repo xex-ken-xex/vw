@@ -58,7 +58,7 @@ impl DecoderPlugin for JpegPlugin {
             other => {
                 return Err(DecodeError::Unsupported(format!(
                     "JPEG output colour space {other:?}"
-                )))
+                )));
             }
         };
         let info = decoder

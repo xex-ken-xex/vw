@@ -3,7 +3,7 @@
 //! 完全に消さずにごみ箱へ送るのは、フラグの付け間違いに後から気付いても戻せるようにするため。
 
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 
 /// ごみ箱へ送る前に確かめている画像。
 #[derive(Debug, Clone, PartialEq)]

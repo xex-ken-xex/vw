@@ -8,7 +8,7 @@
 use rayon::prelude::*;
 
 use crate::affine::Affine;
-use crate::plane::{fit_long_side, Plane};
+use crate::plane::{Plane, fit_long_side};
 
 /// 直す段の基準の長辺。最後の段は基準の長辺（この上限まで）。
 const LEVELS: [usize; 4] = [256, 512, 1024, 2048];

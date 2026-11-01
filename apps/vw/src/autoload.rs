@@ -5,9 +5,9 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TryRecvError};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, channel, sync_channel};
 
 use vw_core::Registry;
 
@@ -229,7 +229,7 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, TempDir};
+    use crate::test_util::{TempDir, png_registry};
     use std::time::{Duration, Instant};
 
     fn start(root: &Path, confirm: bool, chunk: usize) -> FolderLoad {

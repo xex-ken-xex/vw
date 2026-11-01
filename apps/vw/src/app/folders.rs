@@ -181,9 +181,10 @@ impl VwApp {
         // 見ていた画像のスロットがシリーズにまとめられて消えたら、最初のシリーズを見せる。
         let alive = |id| self.slots.iter().position(|s| s.id == id);
         if alive(active_id).is_none()
-            && let Some(index) = first_new.and_then(alive) {
-                self.active = index;
-            }
+            && let Some(index) = first_new.and_then(alive)
+        {
+            self.active = index;
+        }
     }
 
     /// フォルダのスロットを開く。サブフォルダまで含めた画像をそのスロットに読み込む

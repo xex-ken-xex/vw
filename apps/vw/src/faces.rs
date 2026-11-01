@@ -168,11 +168,7 @@ fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     let y1 = (a[1] + a[3]).min(b[1] + b[3]);
     let inter = (x1 - x0).max(0.0) * (y1 - y0).max(0.0);
     let union = a[2] * a[3] + b[2] * b[3] - inter;
-    if union > 0.0 {
-        inter / union
-    } else {
-        0.0
-    }
+    if union > 0.0 { inter / union } else { 0.0 }
 }
 
 /// 確からしさの高い順に残し、それと重なりすぎる枠を捨てる。
@@ -494,10 +490,11 @@ mod tests {
         assert_eq!(small.len(), 1);
         let same_person = cosine(&found[0].feature, &small[0].feature);
         assert!(same_person > 0.6, "{same_person}");
-        assert!(m
-            .find(&raw_image(&refs.join("coffee.rgb")))
-            .unwrap()
-            .is_empty());
+        assert!(
+            m.find(&raw_image(&refs.join("coffee.rgb")))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

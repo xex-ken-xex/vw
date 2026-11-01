@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::keymap::Keymap;
 use crate::layout::{SlotLayout, WheelScroll};
-use crate::slideshow::{EndMode, DROP_WINDOW_RANGE, FPS_RANGE};
+use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 use crate::viewer::ScaleFilter;

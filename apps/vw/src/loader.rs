@@ -5,12 +5,12 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, ColorImage};
-use vw_core::{display, ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwImage};
+use vw_core::{ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwImage, display};
 
 use crate::colormap::{self, Look};
 use crate::compose;
@@ -556,7 +556,7 @@ fn color_image(d: &DisplayImage) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{png_registry, write_png, TempDir};
+    use crate::test_util::{TempDir, png_registry, write_png};
 
     /// テストは panic を unwind で走らせるので、配る版の設定を別に確かめる。
     #[test]

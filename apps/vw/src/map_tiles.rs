@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-use vw_core::{display, DisplayParams, Registry};
+use vw_core::{DisplayParams, Registry, display};
 
 use crate::geo_map::TileId;
 
@@ -275,9 +275,10 @@ impl Worker {
             Some((std::fs::read(p).ok()?, age))
         });
         if let Some((bytes, age)) = &stored
-            && *age < FRESH {
-                return Ok(bytes.clone());
-            }
+            && *age < FRESH
+        {
+            return Ok(bytes.clone());
+        }
         match fetch(agent, &tile_url(&self.template, id)) {
             Ok(bytes) => {
                 if let Some(p) = &path {
@@ -407,9 +408,11 @@ mod tests {
     #[test]
     fn tiles_are_read_only_as_png_jpeg_or_webp() {
         let registry = tile_registry();
-        assert!(registry
-            .decode_bytes(Path::new("tile"), &crate::test_util::png_bytes(2, 2))
-            .is_ok());
+        assert!(
+            registry
+                .decode_bytes(Path::new("tile"), &crate::test_util::png_bytes(2, 2))
+                .is_ok()
+        );
         // 中身で形式が分かる DICOM でも、タイルとしては読まない。
         let dicom = vw_dicom::synth::Synth::ct(1, 1).bytes();
         assert!(registry.decode_bytes(Path::new("tile"), &dicom).is_err());

@@ -37,9 +37,11 @@ fn display_p3_and_adobe_rgb_are_wider_than_srgb() {
     ] {
         let (entries, gamut) = read(profile);
         assert_eq!(value(&entries, "Primaries"), Some(name));
-        assert!(value(&entries, "Gamut")
-            .unwrap()
-            .starts_with("wider than sRGB"));
+        assert!(
+            value(&entries, "Gamut")
+                .unwrap()
+                .starts_with("wider than sRGB")
+        );
         assert!(gamut.unwrap().wider_than_srgb());
     }
 }

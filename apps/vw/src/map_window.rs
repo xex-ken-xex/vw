@@ -6,14 +6,14 @@
 //! （ラベルに持ち、EXIF より優先する）。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 
-use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use egui_phosphor::regular as icon;
-use vw_core::exif::Gps;
 use vw_core::Registry;
+use vw_core::exif::Gps;
 
 use crate::geo_map::{self, Cluster, View};
 use crate::geonames::{Found as FoundName, Gazetteer};

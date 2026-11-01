@@ -12,9 +12,9 @@ mod layout;
 
 use std::io::Cursor;
 
+use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
-use tiff::ColorType;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
 pub struct TiffPlugin;
@@ -308,9 +308,10 @@ fn metadata(
         m.push("TIFF", "Bits per sample", bits.join(", "));
     }
     if let Ok(Some(formats)) = decoder.find_tag_unsigned_vec::<u16>(Tag::SampleFormat)
-        && let Some(&f) = formats.first() {
-            m.push("TIFF", "Sample format", sample_format(f));
-        }
+        && let Some(&f) = formats.first()
+    {
+        m.push("TIFF", "Sample format", sample_format(f));
+    }
     if let (Some(w), Some(h)) = (
         unsigned(decoder, Tag::TileWidth),
         unsigned(decoder, Tag::TileLength),

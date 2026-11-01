@@ -5,8 +5,8 @@
 
 use egui::containers::menu::{MenuBar, MenuButton, MenuConfig, SubMenuButton};
 use egui::{
-    vec2, Atom, AtomExt, Button, Color32, ComboBox, CornerRadius, IntoAtoms, Popup,
-    PopupCloseBehavior, Response, Shadow, Stroke, Style, Ui,
+    Atom, AtomExt, Button, Color32, ComboBox, CornerRadius, IntoAtoms, Popup, PopupCloseBehavior,
+    Response, Shadow, Stroke, Style, Ui, vec2,
 };
 
 /// チェック欄の幅。チェックのない項目もこの幅だけ字を右へずらし、頭をそろえる。

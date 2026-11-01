@@ -7,8 +7,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use vw_core::{Metadata, Registry};
@@ -842,7 +842,7 @@ fn rfc3339(t: std::time::SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{all_registry, png_bytes, png_registry, write_png, write_zip, TempDir};
+    use crate::test_util::{TempDir, all_registry, png_bytes, png_registry, write_png, write_zip};
 
     fn no_password(_: &Path, _: bool) -> Option<String> {
         None

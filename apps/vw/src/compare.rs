@@ -6,14 +6,14 @@
 //! 位置合わせと分析は [`vw_compare`]。ここは受け渡しと描画だけを持つ。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui::{
-    self, pos2, vec2, Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2,
+    self, Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2, pos2, vec2,
 };
 use vw_compare::report::{Labels, Report};
-use vw_compare::{render, Affine, Analysis, Compared, Options, Prepared, Rgb};
+use vw_compare::{Affine, Analysis, Compared, Options, Prepared, Rgb, render};
 
 use crate::i18n::{tr, tr1};
 use crate::settings::Language;
@@ -434,24 +434,25 @@ impl Session {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
         });
         if let Some(rx) = &self.reanalysis
-            && let Ok(results) = rx.try_recv() {
-                self.reanalysis = None;
-                let grid = self.grid_size();
-                for (i, a) in results {
-                    let Some(e) = self.entries.get_mut(i) else {
-                        continue;
-                    };
-                    let Some(old) = &e.result else {
-                        continue;
-                    };
-                    e.heat = a.as_ref().map(|a| heat_texture(ctx, i, a, grid));
-                    e.result = Some(Arc::new(Compared {
-                        alignment: old.alignment,
-                        warped: old.warped.clone(),
-                        analysis: a,
-                    }));
-                }
+            && let Ok(results) = rx.try_recv()
+        {
+            self.reanalysis = None;
+            let grid = self.grid_size();
+            for (i, a) in results {
+                let Some(e) = self.entries.get_mut(i) else {
+                    continue;
+                };
+                let Some(old) = &e.result else {
+                    continue;
+                };
+                e.heat = a.as_ref().map(|a| heat_texture(ctx, i, a, grid));
+                e.result = Some(Arc::new(Compared {
+                    alignment: old.alignment,
+                    warped: old.warped.clone(),
+                    analysis: a,
+                }));
             }
+        }
     }
 
     fn grid_size(&self) -> [usize; 2] {
@@ -803,10 +804,10 @@ impl Session {
                     .is_some_and(|p| (p.x - x).abs() < 8.0);
             }
             if self.dragging_swipe
-                && let Some(p) = response.interact_pointer_pos() {
-                    self.swipe =
-                        ((p.x - hovered_tile.min.x) / hovered_tile.width()).clamp(0.0, 1.0);
-                }
+                && let Some(p) = response.interact_pointer_pos()
+            {
+                self.swipe = ((p.x - hovered_tile.min.x) / hovered_tile.width()).clamp(0.0, 1.0);
+            }
             if response.drag_stopped() {
                 self.dragging_swipe = false;
             }

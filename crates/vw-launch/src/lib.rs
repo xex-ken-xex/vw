@@ -22,7 +22,7 @@ pub fn run(program: &Path, args: &[OsString]) -> std::io::Result<()> {
 #[cfg(windows)]
 pub fn open_file(path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::{ShellExecuteW, SE_ERR_NOASSOC};
+    use windows_sys::Win32::UI::Shell::{SE_ERR_NOASSOC, ShellExecuteW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     // cmd の start を使わないのは、cmd が引数を独自に読み直すため、起動はしても
     // 何も開かないことがあり、失敗も返ってこないから。ShellExecuteW なら結果の値で失敗が分かる。

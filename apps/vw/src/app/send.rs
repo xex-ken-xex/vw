@@ -102,7 +102,7 @@ impl VwApp {
 
     /// アプリを起動する。起動の回数が多ければ、先に確かめる。
     fn launch(&mut self, choice: crate::send_app::Choice, paths: Vec<PathBuf>) {
-        use crate::send_app::{Choice, Launch, CONFIRM_LAUNCHES};
+        use crate::send_app::{CONFIRM_LAUNCHES, Choice, Launch};
         if paths.is_empty() {
             return;
         }

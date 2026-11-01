@@ -191,9 +191,11 @@ fn truncated_data_is_invalid() {
         FitsPlugin::default().decode(&file),
         Err(DecodeError::Invalid(_))
     ));
-    assert!(FitsPlugin::default()
-        .decode(b"SIMPLE  =                    T")
-        .is_err());
+    assert!(
+        FitsPlugin::default()
+            .decode(b"SIMPLE  =                    T")
+            .is_err()
+    );
 }
 
 #[test]

@@ -182,11 +182,7 @@ pub fn star_mask(img: &Float, threshold: f32, size: usize) -> Vec<f32> {
     let mut mask: Vec<f32> = (0..w * h)
         .map(|i| {
             let detail = details[0][i] + details[1][i] + details[2][i];
-            if detail > limit && !hole[i] {
-                1.0
-            } else {
-                0.0
-            }
+            if detail > limit && !hole[i] { 1.0 } else { 0.0 }
         })
         .collect();
     mask = max_filter(&mask, w, h, size + 1);

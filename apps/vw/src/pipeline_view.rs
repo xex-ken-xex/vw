@@ -11,15 +11,15 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use eframe::egui::{
-    self, emath::TSTransform, epaint::CubicBezierShape, pos2, vec2, Color32, Pos2, Rect, Sense,
-    Stroke, UiBuilder, Vec2,
+    self, Color32, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2, emath::TSTransform,
+    epaint::CubicBezierShape, pos2, vec2,
 };
 use vw_core::VwImage;
-use vw_dicom::pipeline::{tags, Color, Gray, Origin, Pipeline, Tag};
+use vw_dicom::pipeline::{Color, Gray, Origin, Pipeline, Tag, tags};
 
 use egui_phosphor::regular as icon;
 
@@ -454,10 +454,9 @@ impl PipelineView {
                 self.contents(ui, lang, &marks, preset, &saved, info, &mut out)
             })
             .inner;
-        if edited
-            && let Some(values) = self.values() {
-                out.insert(0, Command::Edit(values));
-            }
+        if edited && let Some(values) = self.values() {
+            out.insert(0, Command::Edit(values));
+        }
         out.extend(self.calibration.take());
         out.extend(self.send_window(ui));
         out.extend(self.show_file_picker(ui.ctx()));
@@ -628,23 +627,24 @@ impl PipelineView {
             .map(|v| v.chain.clone())
             .unwrap_or_default();
         if let Some(Loaded::Reading(rx)) = &self.loaded
-            && let Ok(result) = rx.try_recv() {
-                self.loaded = Some(match result {
-                    Ok(Pipeline::Gray(info)) => Loaded::Gray(Box::new(GrayState {
-                        decoded: Decoded::of(&info),
-                        info: *info,
-                        image: None,
-                        in_file: placeholder(),
-                        file: placeholder(),
-                        params: placeholder(),
-                        histogram: None,
-                        window_edit: None,
-                        window_sent: None,
-                    })),
-                    Ok(Pipeline::Color(c)) => Loaded::Color(c),
-                    Err(e) => Loaded::Failed(e),
-                });
-            }
+            && let Ok(result) = rx.try_recv()
+        {
+            self.loaded = Some(match result {
+                Ok(Pipeline::Gray(info)) => Loaded::Gray(Box::new(GrayState {
+                    decoded: Decoded::of(&info),
+                    info: *info,
+                    image: None,
+                    in_file: placeholder(),
+                    file: placeholder(),
+                    params: placeholder(),
+                    histogram: None,
+                    window_edit: None,
+                    window_sent: None,
+                })),
+                Ok(Pipeline::Color(c)) => Loaded::Color(c),
+                Err(e) => Loaded::Failed(e),
+            });
+        }
         // フル解像度の画像が届いた、または捨てられて読み直されたら、ヒストグラムを作り直す。
         if let (Some(Loaded::Gray(g)), Some(image)) =
             (&mut self.loaded, target.and_then(|t| t.image))
@@ -661,23 +661,25 @@ impl PipelineView {
                 ));
                 // 送った黒と白で読み直した画像が届いたら、欄はスロットの値に戻す。
                 if let (Some(edit), Some((sent, _, _))) = (g.window_edit, g.window_sent)
-                    && edit == sent {
-                        g.window_edit = None;
-                    }
+                    && edit == sent
+                {
+                    g.window_edit = None;
+                }
             }
         }
         if let (Some(Loaded::Gray(g)), Some(t)) = (&mut self.loaded, target)
-            && let Some(image) = &g.image {
-                g.file = match t.info.look.as_ref().and_then(|a| a.slot_window()) {
-                    Some(w) => pixel_pipeline::with_window(g.in_file, image, &g.decoded, w),
-                    None => g.in_file,
-                };
-                g.params = t.values.and_then(|v| v.params).unwrap_or(g.file);
-                if let Some((center, width)) = g.window_edit {
-                    g.params.center = center;
-                    g.params.width = width;
-                }
+            && let Some(image) = &g.image
+        {
+            g.file = match t.info.look.as_ref().and_then(|a| a.slot_window()) {
+                Some(w) => pixel_pipeline::with_window(g.in_file, image, &g.decoded, w),
+                None => g.in_file,
+            };
+            g.params = t.values.and_then(|v| v.params).unwrap_or(g.file);
+            if let Some((center, width)) = g.window_edit {
+                g.params.center = center;
+                g.params.width = width;
             }
+        }
     }
 
     /// 名前を付けて保存・上書き保存・削除。
@@ -745,10 +747,10 @@ impl PipelineView {
                             n,
                         ))
                         .clicked()
-                    {
-                        out.push(Command::Delete(n.to_owned()));
-                        ui.close();
-                    }
+                {
+                    out.push(Command::Delete(n.to_owned()));
+                    ui.close();
+                }
             });
         });
     }
@@ -1138,17 +1140,18 @@ impl PipelineView {
             }
         }
         if let Some((_, c)) = chain_edit
-            && let Some(Node::Chain(i)) = chain_edit.map(|(i, _)| flow[i]) {
-                match c {
-                    ChainEdit::Remove => {
-                        self.chain.remove(i);
-                    }
-                    ChainEdit::Earlier if i > 0 => self.chain.swap(i, i - 1),
-                    ChainEdit::Later if i + 1 < self.chain.len() => self.chain.swap(i, i + 1),
-                    _ => {}
+            && let Some(Node::Chain(i)) = chain_edit.map(|(i, _)| flow[i])
+        {
+            match c {
+                ChainEdit::Remove => {
+                    self.chain.remove(i);
                 }
-                edited = true;
+                ChainEdit::Earlier if i > 0 => self.chain.swap(i, i - 1),
+                ChainEdit::Later if i + 1 < self.chain.len() => self.chain.swap(i, i + 1),
+                _ => {}
             }
+            edited = true;
+        }
         // 丸はノードの枠の上に重ねる。
         for p in ports {
             canvas.painter().circle_filled(p, 4.0 * scale, wire.color);
@@ -1351,9 +1354,10 @@ impl PipelineView {
     ) -> bool {
         if let Node::Chain(i) = node {
             if let Err((at, e)) = nodes::split_at_stretch(&self.chain)
-                && at == i {
-                    ui.colored_label(ui.visuals().error_fg_color, tr_text(lang, &e));
-                }
+                && at == i
+            {
+                ui.colored_label(ui.visuals().error_fg_color, tr_text(lang, &e));
+            }
             let edited = match self.chain.get_mut(i) {
                 Some(n) => chain_body(ui, lang, n),
                 None => false,
@@ -2252,10 +2256,9 @@ fn levels_body(
     if changed {
         *drag = Some((back(black), back(white)));
     }
-    if released
-        && let Some(w) = drag.take() {
-            command = Some(Command::Window((w != applied.file_window).then_some(w)));
-        }
+    if released && let Some(w) = drag.take() {
+        command = Some(Command::Window((w != applied.file_window).then_some(w)));
+    }
     if (applied.slot_window().is_some() || applied.slot_curve().is_some())
         && ui.small_button(tr(lang, "Reset black and white")).clicked()
     {
@@ -2991,8 +2994,14 @@ fn expression_help(lang: Language) -> String {
     let functions: Vec<&str> = crate::expr::function_names().collect();
     format!(
         "{}\n{}\n{}: {}",
-        tr(lang, "Variables: v (this channel), r, g, b, a, x, y (0..1), w, h (pixels). Constants: pi, e."),
-        tr(lang, "Operators: + - * / % ^, comparisons, && || !, cond ? a : b. Lines starting with # are comments."),
+        tr(
+            lang,
+            "Variables: v (this channel), r, g, b, a, x, y (0..1), w, h (pixels). Constants: pi, e."
+        ),
+        tr(
+            lang,
+            "Operators: + - * / % ^, comparisons, && || !, cond ? a : b. Lines starting with # are comments."
+        ),
         tr(lang, "Functions"),
         functions.join(" ")
     )
@@ -3036,11 +3045,7 @@ fn voi_graph(ui: &mut egui::Ui, p: &mut Params, histogram: Option<&Histogram>, s
             a.min(p.center - p.width / 2.0),
             b.max(p.center + p.width / 2.0),
         );
-        if b > a {
-            (a, b)
-        } else {
-            (a - 1.0, a + 1.0)
-        }
+        if b > a { (a, b) } else { (a - 1.0, a + 1.0) }
     };
     let x_of = |v: f64| rect.min.x + ((v - lo) / (hi - lo)) as f32 * rect.width();
     if let Some(h) = histogram {

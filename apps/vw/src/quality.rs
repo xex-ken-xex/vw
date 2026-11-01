@@ -12,11 +12,11 @@
 //! 値はそちらの mean / SD と一致しない。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use eframe::egui;
-use vw_core::{display, DisplayParams, Palette, VwImage};
+use vw_core::{DisplayParams, Palette, VwImage, display};
 use vw_quality::{Image, Metric, Region};
 
 /// 表示の明るさの最大。
@@ -178,10 +178,11 @@ impl Evaluation {
     /// そのときの条件で求め直すので、ここで覚えておく必要はない。
     pub fn update(&mut self, ctx: &egui::Context, input: Option<&Input<'_>>) {
         if let Some((key, rx)) = &self.computing
-            && let Ok(report) = rx.try_recv() {
-                self.report = Some((key.clone(), report));
-                self.computing = None;
-            }
+            && let Ok(report) = rx.try_recv()
+        {
+            self.report = Some((key.clone(), report));
+            self.computing = None;
+        }
         let Some(input) = input else {
             self.clear();
             return;

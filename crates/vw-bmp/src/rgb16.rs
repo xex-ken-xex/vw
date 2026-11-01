@@ -3,8 +3,8 @@
 //! zune-bmp の 16bit の読み込みは、行の詰め物の計算に幅ではなく高さを使っていて、
 //! 正方形でない画像の行がずれる。
 
-use crate::header::{Header, BI_RGB};
 use crate::MAX_SIDE;
+use crate::header::{BI_RGB, Header};
 use vw_core::DecodeError;
 
 /// 上の行から並べた RGB の画素。16bit の BMP のアルファ（1-5-5-5 など）は使うソフトがほぼないので読まない。

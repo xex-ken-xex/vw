@@ -5,7 +5,7 @@
 //! テキストクリップボードの扱いも済んでいるため。
 
 use eframe::egui::ColorImage;
-use vw_core::{display, DisplayParams, VwImage};
+use vw_core::{DisplayParams, VwImage, display};
 
 /// Ctrl+C の対象になる欄。最後にクリックした欄が対象になる。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

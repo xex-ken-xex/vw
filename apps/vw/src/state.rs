@@ -366,12 +366,12 @@ pub fn current_monitors() -> Vec<Monitor> {
 #[cfg(windows)]
 mod platform {
     use super::Monitor;
-    use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{LPARAM, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
     };
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows_sys::core::BOOL;
 
     unsafe extern "system" fn collect(
         monitor: HMONITOR,

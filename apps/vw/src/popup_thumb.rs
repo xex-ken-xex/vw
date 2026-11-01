@@ -1,7 +1,7 @@
 //! 地図や星図の点をクリックしたときに出す、1 枚の縮小画像。別のスレッドで読む。
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui::{self, TextureHandle};
 use vw_core::Registry;
@@ -67,15 +67,16 @@ impl PopupThumb {
             self.0 = Some(State::Loading(path.to_path_buf(), rx));
         }
         if let Some(State::Loading(p, rx)) = &self.0
-            && let Ok(image) = rx.try_recv() {
-                let p = p.clone();
-                self.0 = Some(match image {
-                    Some(image) => State::Ready(
-                        p,
-                        ctx.load_texture("popup_thumb", image, egui::TextureOptions::LINEAR),
-                    ),
-                    None => State::Failed(p),
-                });
-            }
+            && let Ok(image) = rx.try_recv()
+        {
+            let p = p.clone();
+            self.0 = Some(match image {
+                Some(image) => State::Ready(
+                    p,
+                    ctx.load_texture("popup_thumb", image, egui::TextureOptions::LINEAR),
+                ),
+                None => State::Failed(p),
+            });
+        }
     }
 }

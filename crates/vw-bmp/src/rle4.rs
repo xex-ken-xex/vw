@@ -4,8 +4,8 @@
 //! 来るファイル（Windows のペイントなど多くのソフトが書く形）を、画像の外へ出たとしてエラーにする。
 //! RLE8 にはこの問題がないので、RLE4 だけをここで読む。
 
-use crate::header::Header;
 use crate::MAX_SIDE;
+use crate::header::Header;
 use vw_core::DecodeError;
 
 /// 上の行から並べた RGB の画素。

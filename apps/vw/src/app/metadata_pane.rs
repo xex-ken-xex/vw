@@ -122,9 +122,10 @@ impl VwApp {
             meta_view::Group::new(g, shown_name(lang, g, g), rows)
         }));
         if let Some(row) = self.place_row(&entries)
-            && let Some(group) = groups.iter_mut().find(|g| g.id == vw_core::exif::LOCATION) {
-                group.rows.push(row);
-            }
+            && let Some(group) = groups.iter_mut().find(|g| g.id == vw_core::exif::LOCATION)
+        {
+            group.rows.push(row);
+        }
         Some(groups)
     }
 
@@ -267,11 +268,7 @@ impl VwApp {
                             for (i, r) in group.rows.iter().enumerate() {
                                 let tint = |t: &str| {
                                     let t = egui::RichText::new(t);
-                                    if r.hidden {
-                                        t.color(faint)
-                                    } else {
-                                        t
-                                    }
+                                    if r.hidden { t.color(faint) } else { t }
                                 };
                                 // 縞と選択の色は行の高さが決まってから塗るので、先に場所だけ取る。
                                 let background = ui.painter().add(egui::Shape::Noop);
@@ -389,10 +386,11 @@ impl VwApp {
             self.metadata_edit(&ctx, edit);
         }
         if let Some(c) = copy
-            && let Some(text) = copy::metadata_text(&copy_groups(&groups), &c) {
-                let what = selection_name(&c);
-                self.copy_text(&ctx, text, &format!("metadata {what}"));
-            }
+            && let Some(text) = copy::metadata_text(&copy_groups(&groups), &c)
+        {
+            let what = selection_name(&c);
+            self.copy_text(&ctx, text, &format!("metadata {what}"));
+        }
     }
 
     /// 右クリックで選んだ、表示の設定の変更を当てて保存する。

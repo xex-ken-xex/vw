@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
@@ -546,18 +546,20 @@ fn extract(
     };
     let free = free_space(dir);
     if let (Some(size), Some(free)) = (declared, free)
-        && size > free {
-            return Err(ArchiveError::Other(format!(
-                "needs {} but only {} is free in {}",
-                gib(size),
-                gib(free),
-                dir.display()
-            )));
-        }
+        && size > free
+    {
+        return Err(ArchiveError::Other(format!(
+            "needs {} but only {} is free in {}",
+            gib(size),
+            gib(free),
+            dir.display()
+        )));
+    }
     if let (Some(size), Some(limit)) = (declared, budget.limit)
-        && size > limit {
-            return Err(budget.refuse(Some(size)));
-        }
+        && size > limit
+    {
+        return Err(budget.refuse(Some(size)));
+    }
     let total = if streamed {
         std::fs::metadata(archive).ok().map(|m| m.len())
     } else {
@@ -911,7 +913,7 @@ fn each_in_zip(
             (true, None) => return Err(ArchiveError::NeedsPassword),
             (true, Some(pw)) => match archive.by_index_decrypt(i, pw.as_bytes()) {
                 Err(zip::result::ZipError::InvalidPassword) => {
-                    return Err(ArchiveError::WrongPassword)
+                    return Err(ArchiveError::WrongPassword);
                 }
                 other => other?,
             },
@@ -1783,10 +1785,12 @@ mod tests {
         let archives = Archives::in_dir(Some(tmp.path()));
         assert_ne!(archives.base(), taken);
         assert!(archives.base().starts_with(&root));
-        assert!(!std::fs::symlink_metadata(archives.base())
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            !std::fs::symlink_metadata(archives.base())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[cfg(unix)]

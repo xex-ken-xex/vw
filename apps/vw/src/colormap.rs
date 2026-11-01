@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use vw_core::{display, ColorModel, Curve, DisplayParams, Metadata, Palette, VwImage};
+use vw_core::{ColorModel, Curve, DisplayParams, Metadata, Palette, VwImage, display};
 
 use crate::quantity::Quantity;
 use crate::settings::PipelineSettings;

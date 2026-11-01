@@ -306,9 +306,9 @@ impl Store {
             && let Some(pc) = accepted
                 .iter()
                 .find(|pc| is_native(trim_uid(&pc.transfer_syntax)))
-            {
-                return Ok((pc.id, trim_uid(&pc.transfer_syntax).to_owned()));
-            }
+        {
+            return Ok((pc.id, trim_uid(&pc.transfer_syntax).to_owned()));
+        }
         let name = transfer_syntax(&header.transfer_syntax)
             .map_or(String::new(), |ts| format!("{} ", ts.name()));
         Err(SendError::File(format!(
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(p[1].1, vec![IMPLICIT_VR_LE, EXPLICIT_VR_LE]);
     }
 
-    use crate::synth::{Synth, CT_IMAGE, JPEG_LS_LOSSLESS};
+    use crate::synth::{CT_IMAGE, JPEG_LS_LOSSLESS, Synth};
     use receiver::{Received, Receiver};
 
     /// 受け手を別のスレッドで動かし、そこへ送る相手を返す。

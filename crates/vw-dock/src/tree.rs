@@ -3,7 +3,7 @@
 //! 3 つ以上を一度に並べる節を持たず、いつも 2 つに分けるのは、入れる・抜く・境目を動かすが
 //! どれも「その節の 2 つの子」だけの話で済み、入れ子を何段重ねても同じ手順で扱えるため。
 
-use egui::{pos2, Pos2, Rect};
+use egui::{Pos2, Rect, pos2};
 use serde::{Deserialize, Serialize};
 
 /// 分ける向き。
