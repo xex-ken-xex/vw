@@ -3070,6 +3070,21 @@ const JA: &[(&str, &str)] = &[
         "変数の全部の時刻・高さから黒と白を 1 つ決めて、比べられるようにします。切ると、面ごとに決めます。黒と白は変数ごとに決めます。",
     ),
     ("North up", "北を上にする"),
+    ("Show coordinates", "座標を出す"),
+    (
+        "Show the latitude and longitude (and the time or level of the plane) at the probe cross, use kilometers along measurement lines, dates or levels in the ROI graph per frame, and the extent of the data on the map. Projected grids (such as Lambert or polar stereographic) and rotated poles are turned into latitude and longitude.",
+        "十字の位置に緯度・経度（と面の時刻・高さ）を出し、計測線のグラフの横軸を km に、ROI のグラフのフレームごとの平均の横軸を日時・高さにし、地図にデータの範囲を描きます。図法の格子（ランベルト、極の平射など）や回転極の格子も、緯度・経度に直して出します。",
+    ),
+    ("Longitudes from -180 to 180", "経度を −180〜180° に回す"),
+    (
+        "Turn grids whose longitudes go from 0 to 360 degrees so that they start at -180 degrees, like a map. Pixel positions in graphs and CSV then follow the turned grid.",
+        "経度が 0〜360° の格子を、地図と同じく −180° から始まるように回します。グラフや CSV の画素の位置も、回した後の並びで数えます。",
+    ),
+    ("Anomalies around zero", "偏差は 0 を真ん中に"),
+    (
+        "Show anomaly variables (standard_name with \"anomaly\", or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
+        "偏差の変数（standard_name に「anomaly」が入るか、valid_range が 0 をはさんで対称なもの）を、0 を真ん中にして、青・白・赤の色の表（coolwarm）で出します。",
+    ),
     (
         "Turn data whose latitudes go from south to north upside down, so that north is at the top. Data without coordinates are shown in the order of the file.",
         "緯度が南から北へ並ぶデータの上下を返し、北を上にします。座標のないデータは、ファイルの並びのまま表示します。",

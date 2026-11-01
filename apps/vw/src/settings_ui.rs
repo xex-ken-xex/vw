@@ -892,6 +892,27 @@ const ITEMS: &[Item] = &[
         widget: netcdf_missing_color_widget,
     },
     Item {
+        section: Section::Netcdf,
+        key: "netcdf.show_coordinates",
+        title: "Show coordinates",
+        description: "Show the latitude and longitude (and the time or level of the plane) at the probe cross, use kilometers along measurement lines, dates or levels in the ROI graph per frame, and the extent of the data on the map. Projected grids (such as Lambert or polar stereographic) and rotated poles are turned into latitude and longitude.",
+        widget: netcdf_show_coordinates_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.rotate_longitude",
+        title: "Longitudes from -180 to 180",
+        description: "Turn grids whose longitudes go from 0 to 360 degrees so that they start at -180 degrees, like a map. Pixel positions in graphs and CSV then follow the turned grid.",
+        widget: netcdf_rotate_longitude_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.auto_anomaly",
+        title: "Anomalies around zero",
+        description: "Show anomaly variables (standard_name with \"anomaly\", or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
+        widget: netcdf_auto_anomaly_widget,
+    },
+    Item {
         section: Section::Fits,
         key: "subframes.fwhm_ratio",
         title: "Subframe rejection",
@@ -2049,6 +2070,21 @@ fn netcdf_same_window_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language
 
 fn netcdf_north_up_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.netcdf.north_up, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn netcdf_show_coordinates_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.netcdf.show_coordinates, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn netcdf_rotate_longitude_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.netcdf.rotate_longitude, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn netcdf_auto_anomaly_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.netcdf.auto_anomaly, tr(lang, "Enabled"))
         .changed()
 }
 

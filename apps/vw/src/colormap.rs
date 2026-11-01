@@ -216,7 +216,14 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
         image.curve = c;
     }
     let name = match &look.choice.pick {
-        Pick::Auto => look.rules.default_for(kind),
+        // 偏差の変数は、色の表の段を入れる設定のときだけ、0 を真ん中にした表を勧めのとおり使う。
+        Pick::Auto => look.rules.default_for(kind).map(|d| {
+            image
+                .metadata
+                .get(vw_netcdf::GROUP, vw_netcdf::COLOR_MAP)
+                .filter(|_| kind == Kind::Netcdf)
+                .unwrap_or(d)
+        }),
         Pick::Off => None,
         Pick::Palette(name) => Some(name.as_str()),
     };

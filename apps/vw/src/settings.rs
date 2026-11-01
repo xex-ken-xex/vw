@@ -1517,6 +1517,12 @@ pub struct Netcdf {
     pub north_up: bool,
     /// 欠損（_FillValue など）を描く色（#rrggbb）。
     pub missing_color: String,
+    /// 十字・計測線・ROI のグラフ・地図に、緯度・経度と時刻・高さを出す。
+    pub show_coordinates: bool,
+    /// 経度が 0〜360° の格子を −180〜180° に回す。
+    pub rotate_longitude: bool,
+    /// 偏差の変数を、0 から対称の黒と白と、0 を真ん中にした色の表にする。
+    pub auto_anomaly: bool,
 }
 
 impl Default for Netcdf {
@@ -1530,6 +1536,9 @@ impl Default for Netcdf {
             same_window_for_planes: d.same_window_for_planes,
             north_up: d.north_up,
             missing_color: format!("#{r:02x}{g:02x}{b:02x}"),
+            show_coordinates: d.coordinates,
+            rotate_longitude: d.rotate_longitude,
+            auto_anomaly: d.auto_anomaly,
         }
     }
 }
@@ -1567,6 +1576,9 @@ impl Netcdf {
                     "must be #RRGGBB",
                 )
                 .unwrap_or_else(|| d.missing_color.clone()),
+            show_coordinates: r.get("show_coordinates").unwrap_or(d.show_coordinates),
+            rotate_longitude: r.get("rotate_longitude").unwrap_or(d.rotate_longitude),
+            auto_anomaly: r.get("auto_anomaly").unwrap_or(d.auto_anomaly),
         }
     }
 
@@ -1578,6 +1590,9 @@ impl Netcdf {
             same_window_for_planes: self.same_window_for_planes,
             north_up: self.north_up,
             missing: missing_color(&self.missing_color),
+            rotate_longitude: self.rotate_longitude,
+            auto_anomaly: self.auto_anomaly,
+            coordinates: self.show_coordinates,
         }
     }
 }

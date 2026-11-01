@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use vw_core::geo::GeoGrid;
 use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
 use crate::quantity::Quantity;
@@ -85,20 +86,57 @@ pub fn value_text(
     }
 }
 
+/// 画素の地球の上の位置と、面（時刻・高さ）の札。気象・海洋の格子のデータにだけある。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Place {
+    pub lat: f64,
+    pub lon: f64,
+    pub plane: Option<String>,
+}
+
+impl Place {
+    /// 画素 `(x, y)` の位置。緯度・経度の分からない画像や、格子の外なら `None`。
+    pub fn at(geo: Option<&GeoGrid>, meta: &Metadata, x: u32, y: u32) -> Option<Self> {
+        let (lat, lon) = geo?.at(f64::from(x), f64::from(y))?;
+        let plane = meta.get(vw_netcdf::GROUP, vw_fits::PLANE).map(str::to_owned);
+        Some(Self { lat, lon, plane })
+    }
+
+    fn label(&self) -> String {
+        let at = vw_core::geo::format_lat_lon(self.lat, self.lon);
+        match &self.plane {
+            Some(plane) => format!("{at}  {plane}"),
+            None => at,
+        }
+    }
+}
+
 /// 十字の横に出す文字。値がまだ読めない（元の画像を読み込み中）ときは位置だけ。
-pub fn mark_label(x: u32, y: u32, value: Option<&str>) -> String {
-    match value {
+pub fn mark_label(x: u32, y: u32, value: Option<&str>, place: Option<&Place>) -> String {
+    let at = match value {
         Some(v) => format!("{v}  (x {x}, y {y})"),
         None => format!("(x {x}, y {y})"),
+    };
+    match place {
+        Some(place) => format!("{at}\n{}", place.label()),
+        None => at,
     }
 }
 
 /// 十字をコピーしたときの文字。表計算に貼れるよう、カンマで区切る。
-pub fn clipboard_text(x: u32, y: u32, value: Option<&str>) -> String {
-    match value {
+/// 緯度・経度は計算に使えるよう、南と西を負にした数で書く。
+pub fn clipboard_text(x: u32, y: u32, value: Option<&str>, place: Option<&Place>) -> String {
+    let mut text = match value {
         Some(v) => format!("{x}, {y}, {v}"),
         None => format!("{x}, {y}"),
+    };
+    if let Some(place) = place {
+        text += &format!(", {:.6}, {:.6}", place.lat, place.lon);
+        if let Some(plane) = &place.plane {
+            text += &format!(", {plane}");
+        }
     }
+    text
 }
 
 #[cfg(test)]
@@ -207,12 +245,77 @@ mod tests {
 
     #[test]
     fn label_shows_value_and_position() {
-        assert_eq!(mark_label(120, 88, Some("-35 HU")), "-35 HU  (x 120, y 88)");
-        assert_eq!(mark_label(120, 88, None), "(x 120, y 88)");
+        assert_eq!(
+            mark_label(120, 88, Some("-35 HU"), None),
+            "-35 HU  (x 120, y 88)"
+        );
+        assert_eq!(mark_label(120, 88, None, None), "(x 120, y 88)");
     }
 
     #[test]
     fn copied_text_is_comma_separated() {
-        assert_eq!(clipboard_text(120, 88, Some("-35 HU")), "120, 88, -35 HU");
+        assert_eq!(
+            clipboard_text(120, 88, Some("-35 HU"), None),
+            "120, 88, -35 HU"
+        );
+    }
+
+    fn tokyo() -> Place {
+        Place {
+            lat: 35.68,
+            lon: 139.77,
+            plane: Some("time = 2020-01-01".to_owned()),
+        }
+    }
+
+    #[test]
+    fn label_adds_latitude_longitude_and_plane_on_a_second_line() {
+        assert_eq!(
+            mark_label(3, 4, Some("1.5"), Some(&tokyo())),
+            "1.5  (x 3, y 4)\n35.68°N 139.77°E  time = 2020-01-01"
+        );
+    }
+
+    #[test]
+    fn copied_text_adds_signed_latitude_longitude_and_plane() {
+        let place = Place {
+            lat: -12.5,
+            lon: -45.25,
+            plane: None,
+        };
+        assert_eq!(
+            clipboard_text(3, 4, Some("1.5"), Some(&place)),
+            "3, 4, 1.5, -12.500000, -45.250000"
+        );
+        assert_eq!(
+            clipboard_text(3, 4, None, Some(&tokyo())),
+            "3, 4, 35.680000, 139.770000, time = 2020-01-01"
+        );
+    }
+
+    #[test]
+    fn place_is_read_from_the_grid_and_the_plane_label() {
+        let grid = GeoGrid {
+            width: 2,
+            height: 2,
+            cells: vw_core::geo::Cells::Axes {
+                longitudes: vec![10.0, 20.0],
+                latitudes: vec![50.0, 40.0],
+            },
+        };
+        let m = meta(&[]);
+        let mut with_plane = Metadata::default();
+        with_plane.push(vw_netcdf::GROUP, vw_fits::PLANE, "level = 500 hPa");
+        assert_eq!(
+            Place::at(Some(&grid), &with_plane, 1, 1),
+            Some(Place {
+                lat: 40.0,
+                lon: 20.0,
+                plane: Some("level = 500 hPa".to_owned())
+            })
+        );
+        assert_eq!(Place::at(Some(&grid), &m, 1, 0).map(|p| p.lat), Some(50.0));
+        assert_eq!(Place::at(Some(&grid), &m, 5, 0), None);
+        assert_eq!(Place::at(None, &m, 0, 0), None);
     }
 }

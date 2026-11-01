@@ -78,6 +78,8 @@ pub struct Options {
     pub rotate_longitude: bool,
     /// 偏差の変数（[`geo::is_anomaly`]）は、0 から対称の黒と白と、0 を真ん中にした色の表にする。
     pub auto_anomaly: bool,
+    /// 画素ごとの緯度・経度（[`VwImage::geo`]）を付ける。
+    pub coordinates: bool,
 }
 
 impl Default for Options {
@@ -91,6 +93,7 @@ impl Default for Options {
             missing: Some(vw_fits::MISSING_COLOR),
             rotate_longitude: false,
             auto_anomaly: true,
+            coordinates: true,
         }
     }
 }
@@ -271,9 +274,11 @@ impl NetcdfPlugin {
             img.apply_orientation(4);
         }
         let grid_key = window_key(data, &chosen.path, &(flipped, roll));
-        img.geo = self.grids.get_or(grid_key, || {
-            geo::grid(&file, chosen, flipped, roll).map(Arc::new)
-        });
+        if options.coordinates {
+            img.geo = self.grids.get_or(grid_key, || {
+                geo::grid(&file, chosen, flipped, roll).map(Arc::new)
+            });
+        }
         let same = planes > 1 && options.same_window_for_planes;
         img.window = if same {
             let key = window_key(data, &chosen.path, &format!("{options:?}"));

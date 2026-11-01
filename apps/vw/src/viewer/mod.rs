@@ -1018,11 +1018,23 @@ impl Slot {
         Some((text, swatch))
     }
 
+    /// 十字の位置の緯度・経度と面の札。
+    fn mark_place(&self, mark: &Mark) -> Option<probe::Place> {
+        let info = &self.shown()?.info;
+        probe::Place::at(info.geo.as_deref(), &info.metadata, mark.x, mark.y)
+    }
+
     /// 選んでいる十字をコピーするときの文字。
     pub fn selected_mark_text(&self) -> Option<String> {
         let mark = self.selected_shown_mark()?;
         let value = self.mark_value(mark);
-        Some(probe::clipboard_text(mark.x, mark.y, value.as_deref()))
+        let place = self.mark_place(mark);
+        Some(probe::clipboard_text(
+            mark.x,
+            mark.y,
+            value.as_deref(),
+            place.as_ref(),
+        ))
     }
 
     /// 選んでいる十字を消す。消したら `true`。
@@ -1127,7 +1139,12 @@ impl Slot {
             let swatch = sample.as_ref().and_then(|(_, s)| *s);
             let value = sample.map(|(text, _)| crate::i18n::tr_text(lang, &text));
             let galley = painter.layout_no_wrap(
-                probe::mark_label(mark.x, mark.y, value.as_deref()),
+                probe::mark_label(
+                    mark.x,
+                    mark.y,
+                    value.as_deref(),
+                    self.mark_place(mark).as_ref(),
+                ),
                 egui::FontId::proportional(12.0),
                 color,
             );
@@ -2413,6 +2430,7 @@ pub mod test_support {
             gamut: None,
             frame_delays: None,
             spectrum: None,
+            geo: None,
         }
     }
 
