@@ -329,3 +329,100 @@ fn huge_dimensions_in_the_header_are_refused_before_allocating() {
     assert!(err.contains("100000 x 100000"), "{err}");
     assert!(err.contains("image size limit"), "{err}");
 }
+
+/// 最初の IFD から `tag` のエントリを取り除く（リトルエンディアンの TIFF）。
+/// 装置が必須のタグを省いて書いたファイルを真似る。
+fn drop_tag(tiff: &[u8], tag: u16) -> Vec<u8> {
+    let mut out = tiff.to_vec();
+    let ifd = u32::from_le_bytes(out[4..8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(out[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entries = ifd + 2;
+    let at = (0..count)
+        .map(|i| entries + i * 12)
+        .find(|&e| u16::from_le_bytes(out[e..e + 2].try_into().unwrap()) == tag)
+        .expect("tag present");
+    // エントリと次の IFD へのポインタを 12 バイト前へ詰める。
+    out.copy_within(at + 12..entries + count * 12 + 4, at);
+    out[ifd..ifd + 2].copy_from_slice(&((count - 1) as u16).to_le_bytes());
+    out
+}
+
+/// StripByteCounts のない 2x2 の 16bit グレー。
+fn gray16_without_strip_byte_counts() -> Vec<u8> {
+    let pixels: Vec<u8> = [1000u16, 2000, 3000, 65535]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    drop_tag(&build(&[page(2, 2, basic(&[16], 1), pixels)]), 279)
+}
+
+/// 補修の設定は静的な値なので、ON で読むテストは直列に動かす。
+static REPAIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn with_repair_on<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = REPAIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_repair_strip_byte_counts(true);
+    let r = f();
+    set_repair_strip_byte_counts(false);
+    r
+}
+
+#[test]
+fn without_the_setting_a_missing_strip_byte_counts_names_the_setting_to_turn_on() {
+    let _guard = REPAIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tiff = gray16_without_strip_byte_counts();
+    assert!(tiff::decoder::Decoder::new(Cursor::new(&tiff)).is_err());
+    let err = TiffPlugin.decode(&tiff).unwrap_err().to_string();
+    assert!(err.contains("Read files with format errors"), "{err}");
+    assert!(TiffPlugin.frame_count(&tiff).is_err());
+}
+
+#[test]
+fn gray16_without_strip_byte_counts_is_read_as_uncompressed() {
+    let tiff = gray16_without_strip_byte_counts();
+    let img = with_repair_on(|| decode(&tiff));
+    assert_eq!((img.width, img.height), (2, 2));
+    assert!(matches!(&img.data, PixelData::U16(v) if *v == [1000, 2000, 3000, 65535]));
+    with_repair_on(|| {
+        assert_eq!(TiffPlugin.frame_count(&tiff).unwrap(), 1);
+        assert!(TiffPlugin.read_metadata(&tiff).is_ok());
+    });
+}
+
+#[test]
+fn rows_per_strip_may_be_omitted_too() {
+    // 幅 3・高さ 2 の RGB8。RowsPerStrip も省く（既定は全行）。
+    let pixels: Vec<u8> = (0..3 * 2 * 3).map(|i| i as u8 * 10).collect();
+    let mut tags = basic(&[8, 8, 8], 2);
+    tags.push((284, V::Short(vec![1])));
+    let built = build(&[page(3, 2, tags, pixels.clone())]);
+    let tiff = drop_tag(&drop_tag(&built, 279), 278);
+    let img = with_repair_on(|| decode(&tiff));
+    assert_eq!(img.color, ColorModel::Rgb);
+    assert!(matches!(&img.data, PixelData::U8(v) if *v == pixels));
+}
+
+#[test]
+fn compressed_files_without_strip_byte_counts_stay_errors() {
+    use tiff::encoder::{Compression, TiffEncoder, colortype};
+    let pixels: Vec<u8> = (0..4 * 3 * 3).map(|i| i as u8).collect();
+    let mut out = Cursor::new(Vec::new());
+    TiffEncoder::new(&mut out)
+        .unwrap()
+        .with_compression(Compression::Lzw)
+        .write_image::<colortype::RGB8>(4, 3, &pixels)
+        .unwrap();
+    let tiff = drop_tag(out.get_ref(), 279);
+    let err = with_repair_on(|| TiffPlugin.decode(&tiff).unwrap_err().to_string());
+    assert!(!err.contains("Read files with format errors"), "{err}");
+}
+
+#[test]
+fn a_strip_running_past_the_end_of_the_file_is_not_repaired() {
+    let mut p = page(2, 2, basic(&[16], 1), vec![0; 8]);
+    p.tags.push((257, V::Long(vec![1000])));
+    let mut tiff = build(&[p]);
+    // build が足した高さ 2 を 1000 に上書きしたので、画素は 8 バイトしかないのに 4000 バイト要る。
+    tiff = drop_tag(&tiff, 279);
+    assert!(with_repair_on(|| TiffPlugin.decode(&tiff)).is_err());
+}

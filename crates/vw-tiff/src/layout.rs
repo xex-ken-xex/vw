@@ -114,6 +114,53 @@ pub fn with_gray_photometric(data: &[u8], ifd: usize) -> Option<Vec<u8>> {
 
 const PHOTOMETRIC: u16 = 262;
 
+const IMAGE_WIDTH: u16 = 256;
+const IMAGE_LENGTH: u16 = 257;
+const BITS_PER_SAMPLE: u16 = 258;
+const COMPRESSION: u16 = 259;
+const STRIP_OFFSETS: u16 = 273;
+const SAMPLES_PER_PIXEL: u16 = 277;
+const ROWS_PER_STRIP: u16 = 278;
+const STRIP_BYTE_COUNTS: u16 = 279;
+const PLANAR_CONFIGURATION: u16 = 284;
+
+/// たどる IFD の上限（lib.rs の MAX_PAGES と同じ意味。輪になっていても止まる）。
+const MAX_IFDS: usize = 10_000;
+
+/// StripOffsets はあるのに StripByteCounts がない IFD に、無圧縮として計った大きさを補った写し。
+/// 直す IFD がなければ `None`。
+///
+/// TIFF の仕様では StripByteCounts は必須だが、産業用 CT などの装置が書く無圧縮の TIFF には
+/// 省いたものがあり、ほかのビューワは幅 × 高さ × ビット数から補って読む。tiff クレートは
+/// 読めないと断るので、ここで IFD を写しの末尾に書き直して渡す。元の IFD を書き換えないのは、
+/// エントリを 1 つ足す隙間が IFD の中にないため。圧縮されたものや平面ごとに分かれたものは、
+/// 大きさを計算で決められないので補わない。
+pub fn with_strip_byte_counts(data: &[u8]) -> Option<Vec<u8>> {
+    let header = Header::read(data)?;
+    let mut out: Option<Vec<u8>> = None;
+    // 今の IFD の位置が書いてある場所（最初はファイル先頭のポインタ）。写しを作ったら写しの中の位置。
+    let mut link = if header.big { 8 } else { 4 };
+    let mut offset = header.first_ifd(data)?;
+    for _ in 0..MAX_IFDS {
+        let count = header.entry_count(data, offset)?;
+        let after = offset + header.count_size() + count * header.entry_size();
+        match header.strip_byte_counts(data, offset, count) {
+            Some(counts) => {
+                let mut copy = out.take().unwrap_or_else(|| data.to_vec());
+                let next_link = header.append_ifd(&mut copy, data, offset, count, &counts, link)?;
+                link = next_link;
+                out = Some(copy);
+            }
+            None => link = after,
+        }
+        match header.next_ifd(data, offset) {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    out
+}
+
 /// TIFF（BigTIFF を含む）の、IFD をたどるのに要る情報。
 struct Header {
     little: bool,
@@ -173,6 +220,203 @@ impl Header {
     /// エントリの先頭から値（4 バイトか 8 バイトに収まる値はそこに直接入る）までの距離。
     fn value_offset(&self) -> usize {
         if self.big { 12 } else { 8 }
+    }
+
+    /// `ifd` のエントリのうち `tag` の値（SHORT / LONG / LONG8 のどれでも）。なければ `None`。
+    fn tag_values(&self, data: &[u8], ifd: usize, count: usize, tag: u16) -> Option<Vec<u64>> {
+        (0..count)
+            .map(|i| ifd + self.count_size() + i * self.entry_size())
+            .find(|&entry| self.u16(data, entry) == Some(tag))
+            .and_then(|entry| self.entry_values(data, entry))
+    }
+
+    fn entry_values(&self, data: &[u8], entry: usize) -> Option<Vec<u64>> {
+        let kind = self.u16(data, entry + 2)?;
+        let n = if self.big {
+            self.u64(data, entry + 4)?
+        } else {
+            self.u32(data, entry + 4)?
+        };
+        let size = match kind {
+            3 => 2,
+            4 => 4,
+            16 => 8,
+            _ => return None,
+        };
+        let inline = if self.big { 8 } else { 4 };
+        let at = if n * size <= inline {
+            entry + self.value_offset()
+        } else if self.big {
+            self.u64(data, entry + self.value_offset())?
+        } else {
+            self.u32(data, entry + self.value_offset())?
+        };
+        (0..n)
+            .map(|i| {
+                let p = at + i * size;
+                Some(match size {
+                    2 => self.u16(data, p)? as u64,
+                    4 => self.u32(data, p)? as u64,
+                    _ => self.u64(data, p)? as u64,
+                })
+            })
+            .collect()
+    }
+
+    /// 無圧縮でストリップごとの大きさが省かれた IFD なら、各ストリップのバイト数。
+    /// 補う必要がない、または計算で決められない IFD なら `None`。
+    fn strip_byte_counts(&self, data: &[u8], ifd: usize, count: usize) -> Option<Vec<u64>> {
+        let tag = |t| self.tag_values(data, ifd, count, t);
+        let offsets = tag(STRIP_OFFSETS)?;
+        if tag(STRIP_BYTE_COUNTS).is_some()
+            || tag(COMPRESSION).is_some_and(|v| v != [1])
+            || tag(PLANAR_CONFIGURATION).is_some_and(|v| v != [1])
+        {
+            return None;
+        }
+        let width = *tag(IMAGE_WIDTH)?.first()?;
+        let height = *tag(IMAGE_LENGTH)?.first()?;
+        let bits: u64 = tag(BITS_PER_SAMPLE).map_or(1, |b| b.iter().sum());
+        let samples = tag(SAMPLES_PER_PIXEL).map_or(1, |s| s[0]);
+        // BitsPerSample が 1 つだけ書かれていてサンプルが複数のときは、全サンプル同じビット数。
+        let bits = if tag(BITS_PER_SAMPLE).is_some_and(|b| b.len() == 1) {
+            bits * samples
+        } else {
+            bits
+        };
+        let rows_per_strip = tag(ROWS_PER_STRIP).map_or(height, |r| r[0]).min(height);
+        if width == 0 || height == 0 || rows_per_strip == 0 {
+            return None;
+        }
+        let row_bytes = (width * bits).div_ceil(8);
+        let strips = height.div_ceil(rows_per_strip);
+        if strips as usize != offsets.len() {
+            return None;
+        }
+        let counts: Vec<u64> = (0..strips)
+            .map(|i| (height - i * rows_per_strip).min(rows_per_strip) * row_bytes)
+            .collect();
+        let fits = offsets.iter().zip(&counts).all(|(o, c)| {
+            o.checked_add(*c)
+                .is_some_and(|end| end <= data.len() as u64)
+        });
+        fits.then_some(counts)
+    }
+
+    /// `ifd`（`data` の中）に StripByteCounts を足した IFD を `copy` の末尾に書き、`link` の
+    /// ポインタをそこへ向ける。次の IFD へのポインタの位置を返す。
+    fn append_ifd(
+        &self,
+        copy: &mut Vec<u8>,
+        data: &[u8],
+        ifd: usize,
+        count: usize,
+        counts: &[u64],
+        link: usize,
+    ) -> Option<usize> {
+        if copy.len() % 2 == 1 {
+            copy.push(0);
+        }
+        let new_ifd = copy.len();
+        self.write_ptr(copy, link, new_ifd)?;
+        let entries: Vec<usize> = (0..count)
+            .map(|i| ifd + self.count_size() + i * self.entry_size())
+            .collect();
+        let inserted_before = entries
+            .iter()
+            .position(|&e| self.u16(data, e).is_some_and(|t| t > STRIP_BYTE_COUNTS))
+            .unwrap_or(count);
+        // エントリ数
+        if self.big {
+            copy.extend(self.bytes_of_u64((count + 1) as u64));
+        } else {
+            copy.extend(self.bytes_of_u16((count + 1) as u16));
+        }
+        let inline = if self.big { 8 } else { 4 };
+        let values_at = new_ifd
+            + self.count_size()
+            + (count + 1) * self.entry_size()
+            + if self.big { 8 } else { 4 };
+        let mut new_entry = Vec::new();
+        new_entry.extend(self.bytes_of_u16(STRIP_BYTE_COUNTS));
+        let value_bytes: Vec<u8> = if self.big {
+            new_entry.extend(self.bytes_of_u16(16));
+            new_entry.extend(self.bytes_of_u64(counts.len() as u64));
+            counts.iter().flat_map(|c| self.bytes_of_u64(*c)).collect()
+        } else {
+            new_entry.extend(self.bytes_of_u16(4));
+            new_entry.extend(self.bytes_of_u32(counts.len() as u32));
+            counts
+                .iter()
+                .map(|c| u32::try_from(*c).ok())
+                .collect::<Option<Vec<u32>>>()?
+                .iter()
+                .flat_map(|c| self.bytes_of_u32(*c))
+                .collect()
+        };
+        let mut tail = Vec::new();
+        if value_bytes.len() <= inline {
+            let mut v = value_bytes;
+            v.resize(inline, 0);
+            new_entry.extend(v);
+        } else {
+            if self.big {
+                new_entry.extend(self.bytes_of_u64(values_at as u64));
+            } else {
+                new_entry.extend(self.bytes_of_u32(u32::try_from(values_at).ok()?));
+            }
+            tail = value_bytes;
+        }
+        for (i, &e) in entries.iter().enumerate() {
+            if i == inserted_before {
+                copy.extend(&new_entry);
+            }
+            copy.extend(data.get(e..e + self.entry_size())?);
+        }
+        if inserted_before == count {
+            copy.extend(&new_entry);
+        }
+        let next_link = copy.len();
+        let after = ifd + self.count_size() + count * self.entry_size();
+        let ptr_size = if self.big { 8 } else { 4 };
+        copy.extend(data.get(after..after + ptr_size)?);
+        copy.extend(tail);
+        Some(next_link)
+    }
+
+    fn write_ptr(&self, copy: &mut [u8], at: usize, value: usize) -> Option<()> {
+        if self.big {
+            copy.get_mut(at..at + 8)?
+                .copy_from_slice(&self.bytes_of_u64(value as u64));
+        } else {
+            copy.get_mut(at..at + 4)?
+                .copy_from_slice(&self.bytes_of_u32(u32::try_from(value).ok()?));
+        }
+        Some(())
+    }
+
+    fn bytes_of_u16(&self, v: u16) -> [u8; 2] {
+        if self.little {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    }
+
+    fn bytes_of_u32(&self, v: u32) -> [u8; 4] {
+        if self.little {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    }
+
+    fn bytes_of_u64(&self, v: u64) -> [u8; 8] {
+        if self.little {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
     }
 
     fn bytes<const N: usize>(data: &[u8], at: usize) -> Option<[u8; N]> {

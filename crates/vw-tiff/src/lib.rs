@@ -11,6 +11,7 @@
 mod layout;
 
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
@@ -18,6 +19,18 @@ use tiff::tags::Tag;
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
 pub struct TiffPlugin;
+
+/// 必須のタグが省かれた TIFF を補って読むか（設定「フォーマット異常のファイルを無理やり読む」）。
+/// プラグインは設定を受け取る口を持たないので、[`vw_core::limits`] と同じく静的な値で渡す。
+static REPAIR_STRIP_BYTE_COUNTS: AtomicBool = AtomicBool::new(false);
+
+/// StripByteCounts のない無圧縮 TIFF を、大きさを計算で補って読むかを変える。
+pub fn set_repair_strip_byte_counts(on: bool) {
+    REPAIR_STRIP_BYTE_COUNTS.store(on, Ordering::Relaxed);
+}
+
+/// 読めないときに案内する設定の場所（英語。表示側で訳す）。
+pub const REPAIR_HINT: &str = "TIFF without StripByteCounts. Settings > Read files with format errors > TIFF: missing StripByteCounts reads it anyway; the file breaks the format, so turn it on at your own risk.";
 
 /// 数えるページの上限。壊れたファイルで IFD の連なりが輪になっていても止まるように。
 const MAX_PAGES: usize = 10_000;
@@ -79,10 +92,11 @@ impl DecoderPlugin for TiffPlugin {
     }
 
     fn frame_count(&self, data: &[u8]) -> Result<usize, DecodeError> {
-        Ok(pages(data)?.len())
+        Ok(pages(&repaired(data)?)?.len())
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
+        let data = &repaired(data)?;
         let pages = pages(data)?;
         let ifd = *pages
             .get(frame)
@@ -112,10 +126,24 @@ impl DecoderPlugin for TiffPlugin {
 
     /// 画素を読まずに、1 ページ目のタグだけを読む。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
+        let data = &repaired(data)?;
         let pages = pages(data)?;
         let mut decoder = open(data)?;
         decoder.seek_to_image(pages[0]).map_err(invalid)?;
         Ok(metadata(&mut decoder, data, 0, pages.len()))
+    }
+}
+
+/// 必須のタグが省かれた TIFF を、tiff クレートが読める形に直した写し。直す所がなければそのまま。
+/// 直せるのに設定で止めているときは、設定の場所を添えて断る（tiff クレートの素のエラーでは、
+/// 何を ON にすれば読めるのか分からないため）。
+fn repaired(data: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, DecodeError> {
+    match layout::with_strip_byte_counts(data) {
+        Some(fixed) if REPAIR_STRIP_BYTE_COUNTS.load(Ordering::Relaxed) => {
+            Ok(std::borrow::Cow::Owned(fixed))
+        }
+        Some(_) => Err(DecodeError::Unsupported(REPAIR_HINT.into())),
+        None => Ok(std::borrow::Cow::Borrowed(data)),
     }
 }
 
