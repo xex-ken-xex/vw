@@ -3057,8 +3057,13 @@ const JA: &[(&str, &str)] = &[
     ("Previous variable", "前の変数"),
     ("Variable", "変数"),
     (
-        "Earth science grids (NetCDF)",
-        "地球科学の格子のデータ (NetCDF)",
+        "Earth science data (NetCDF, HDF5)",
+        "地球科学のデータ (NetCDF・HDF5)",
+    ),
+    ("Extensions opened as HDF5", "HDF5 として開く拡張子"),
+    (
+        "Regular expression for the extensions (without the dot, case-insensitive) of HDF5 files to open, such as satellite swaths. Files that are NetCDF-4 inside are read as NetCDF. .nc files are always opened. The default opens h5, hdf5 and he5.",
+        "衛星の軌道のデータなど、HDF5 のファイルとして開く拡張子（点を除く。大文字小文字は区別しない）の正規表現です。中身が NetCDF-4 のファイルは NetCDF として読みます。.nc のファイルはいつも開きます。既定は h5・hdf5・he5 を開きます。",
     ),
     ("NetCDF data", "NetCDF のデータ"),
     (

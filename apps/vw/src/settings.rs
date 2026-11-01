@@ -1523,6 +1523,8 @@ pub struct Netcdf {
     pub rotate_longitude: bool,
     /// 偏差の変数を、0 から対称の黒と白と、0 を真ん中にした色の表にする。
     pub auto_anomaly: bool,
+    /// HDF5 として開く拡張子の正規表現（[`vw_netcdf::Hdf5Extensions`]）。
+    pub hdf5_extensions: String,
 }
 
 impl Default for Netcdf {
@@ -1539,6 +1541,7 @@ impl Default for Netcdf {
             show_coordinates: d.coordinates,
             rotate_longitude: d.rotate_longitude,
             auto_anomaly: d.auto_anomaly,
+            hdf5_extensions: vw_netcdf::Hdf5Extensions::DEFAULT.into(),
         }
     }
 }
@@ -1579,7 +1582,21 @@ impl Netcdf {
             show_coordinates: r.get("show_coordinates").unwrap_or(d.show_coordinates),
             rotate_longitude: r.get("rotate_longitude").unwrap_or(d.rotate_longitude),
             auto_anomaly: r.get("auto_anomaly").unwrap_or(d.auto_anomaly),
+            hdf5_extensions: r
+                .get_valid(
+                    "hdf5_extensions",
+                    |e: &String| vw_core::ProbeExtensions::new(e).is_ok(),
+                    "not a valid regular expression",
+                )
+                .unwrap_or_else(|| d.hdf5_extensions.clone()),
         }
+    }
+
+    pub fn hdf5_extensions(&self) -> vw_core::ProbeExtensions {
+        vw_core::ProbeExtensions::new(&self.hdf5_extensions).unwrap_or_else(|_| {
+            vw_core::ProbeExtensions::new(vw_netcdf::Hdf5Extensions::DEFAULT)
+                .expect("valid pattern")
+        })
     }
 
     pub fn options(&self) -> vw_netcdf::Options {
@@ -3986,6 +4003,22 @@ ae_title = "PACS"
         let (s, problems) = Settings::from_toml("[labels]\ntags = [\"cat\", \"cat\"]\n").unwrap();
         assert!(s.labels.tags.is_empty());
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn hdf5_opens_h5_hdf5_and_he5_by_default_and_a_broken_pattern_falls_back() {
+        let d = Settings::default();
+        assert_eq!(d.netcdf.hdf5_extensions, "^(h5|hdf5|he5)$");
+        let text = "[netcdf]\nhdf5_extensions = \"(\"\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.netcdf.hdf5_extensions, d.netcdf.hdf5_extensions);
+        assert!(problems[0].starts_with("netcdf.hdf5_extensions:"));
+        let (s, _) = Settings::from_toml("[netcdf]\nhdf5_extensions = \"^hdf$\"\n").unwrap();
+        assert!(
+            s.netcdf
+                .hdf5_extensions()
+                .matches(std::path::Path::new("a.HDF"))
+        );
     }
 
     #[test]

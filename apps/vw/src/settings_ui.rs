@@ -94,7 +94,7 @@ impl Section {
             Section::Fullscreen => "Fullscreen slideshow",
             Section::Pipeline => "Pixel pipeline",
             Section::Fits => "Astronomy images (FITS)",
-            Section::Netcdf => "Earth science grids (NetCDF)",
+            Section::Netcdf => "Earth science data (NetCDF, HDF5)",
             Section::Dicom => "Medical images (DICOM)",
             Section::SendApps => "Send to apps",
             Section::DicomSend => "DICOM sending",
@@ -911,6 +911,13 @@ const ITEMS: &[Item] = &[
         title: "Anomalies around zero",
         description: "Show anomaly variables (\"anom\" in the name, \"anomaly\" in standard_name or long_name, or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
         widget: netcdf_auto_anomaly_widget,
+    },
+    Item {
+        section: Section::Netcdf,
+        key: "netcdf.hdf5_extensions",
+        title: "Extensions opened as HDF5",
+        description: "Regular expression for the extensions (without the dot, case-insensitive) of HDF5 files to open, such as satellite swaths. Files that are NetCDF-4 inside are read as NetCDF. .nc files are always opened. The default opens h5, hdf5 and he5.",
+        widget: hdf5_extensions_widget,
     },
     Item {
         section: Section::Fits,
@@ -3086,13 +3093,27 @@ fn dataset_fields_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) ->
     changed
 }
 
-/// 拡張子の正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、
-/// 打っている途中の正しくない式のたびにフォルダを読み直すことになるため。
 fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let id = ui.make_persistent_id("dicom.probe_extensions.edit");
+    extensions_pattern_widget(&mut s.dicom.probe_extensions, id, ui, lang)
+}
+
+fn hdf5_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("netcdf.hdf5_extensions.edit");
+    extensions_pattern_widget(&mut s.netcdf.hdf5_extensions, id, ui, lang)
+}
+
+/// 拡張子の正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、
+/// 打っている途中の正しくない式のたびにフォルダを読み直すことになるため。
+fn extensions_pattern_widget(
+    pattern: &mut String,
+    id: egui::Id,
+    ui: &mut egui::Ui,
+    lang: Language,
+) -> bool {
     let mut text: String = ui
         .data_mut(|d| d.get_temp(id))
-        .unwrap_or_else(|| s.dicom.probe_extensions.clone());
+        .unwrap_or_else(|| pattern.clone());
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
             .font(egui::TextStyle::Monospace)
@@ -3110,8 +3131,8 @@ fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) 
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, text));
     } else {
-        if r.lost_focus() && error.is_none() && text != s.dicom.probe_extensions {
-            s.dicom.probe_extensions = text;
+        if r.lost_focus() && error.is_none() && text != *pattern {
+            *pattern = text;
             changed = true;
         }
         ui.data_mut(|d| d.remove::<String>(id));

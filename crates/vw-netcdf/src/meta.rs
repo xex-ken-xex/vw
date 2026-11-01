@@ -57,9 +57,14 @@ fn push_attrs(m: &mut Metadata, group: &str, attrs: &[NcAttribute]) {
 }
 
 /// `chosen` を見せているときのメタデータ（面の札は [`plane_label`]）。
-pub fn metadata(file: &NcFile, variables: &[Variable], chosen: &Variable) -> Metadata {
+pub fn metadata(
+    file: &NcFile,
+    format: &str,
+    variables: &[Variable],
+    chosen: &Variable,
+) -> Metadata {
     let mut m = Metadata::default();
-    m.push(GROUP, crate::FORMAT, format_name(file.format()));
+    m.push(GROUP, crate::FORMAT, format);
     m.push(GROUP, crate::VARIABLE, &chosen.path);
     m.push(GROUP, crate::DIMENSIONS, dims_text(&chosen.dims));
     if let Ok(var) = file.variable(&chosen.path) {
@@ -94,9 +99,9 @@ pub fn metadata(file: &NcFile, variables: &[Variable], chosen: &Variable) -> Met
 }
 
 /// 検索カタログに入れる分。全体の属性と、変数ごとの名前・単位・`standard_name`。
-pub fn catalog(file: &NcFile, variables: &[Variable]) -> Metadata {
+pub fn catalog(file: &NcFile, format: &str, variables: &[Variable]) -> Metadata {
     let mut m = Metadata::default();
-    m.push(GROUP, crate::FORMAT, format_name(file.format()));
+    m.push(GROUP, crate::FORMAT, format);
     if let Ok(attrs) = file.global_attributes() {
         push_attrs(&mut m, GLOBAL_GROUP, attrs);
     }
