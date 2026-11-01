@@ -48,6 +48,7 @@ mod keymap;
 mod labels;
 mod layout;
 mod loader;
+mod loading;
 use vw_log::log;
 mod map_tiles;
 mod map_window;
