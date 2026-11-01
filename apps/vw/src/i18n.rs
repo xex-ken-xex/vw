@@ -2016,7 +2016,7 @@ mod tests {
 
     #[test]
     fn every_action_has_a_japanese_name() {
-        for a in Action::ALL {
+        for a in Action::ALL.iter().copied() {
             assert_ne!(tr(Language::Japanese, a.title()), a.title(), "{a:?}");
         }
     }

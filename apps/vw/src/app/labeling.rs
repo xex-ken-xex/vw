@@ -418,7 +418,10 @@ impl VwApp {
                     ui.weak(tr(lang, "Images inside a ZIP cannot be labeled"));
                 }
                 for (i, tag) in tags.iter().enumerate() {
-                    let key = Action::ALL.into_iter().find(|a| a.tag_index() == Some(i));
+                    let key = Action::ALL
+                        .iter()
+                        .copied()
+                        .find(|a| a.tag_index() == Some(i));
                     let text = match key {
                         Some(_) => format!("{} {tag}", i + 1),
                         None => tag.clone(),

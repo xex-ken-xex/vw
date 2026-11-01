@@ -187,7 +187,7 @@ impl KeyGroup {
 
 impl Action {
     /// 設定画面に並べる順。
-    pub const ALL: [Action; 108] = [
+    pub const ALL: &[Action] = &[
         Action::PreviousImage,
         Action::NextImage,
         Action::PreviousSlot,
@@ -413,7 +413,7 @@ impl Action {
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|a| a.id() == id)
+        Self::ALL.iter().copied().find(|a| a.id() == id)
     }
 
     /// 画面に出す名前（英語。翻訳は [`crate::i18n`]）。
@@ -1177,7 +1177,8 @@ impl Keymap {
     /// [`Action::ALL`] の順で先のものを返す。
     pub fn action_for(&self, scope: Scope, combo: KeyCombo) -> Option<Action> {
         Action::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|a| a.scope() == scope && self.keys(*a).contains(&combo))
     }
 
@@ -1220,7 +1221,7 @@ impl Keymap {
     /// 同じ画面の 2 つ以上の操作に割り当てられているキー。設定ファイルを手で編集したときに起こる。
     pub fn duplicates(&self) -> Vec<(KeyCombo, Vec<Action>)> {
         let mut seen: Vec<(KeyCombo, Vec<Action>)> = Vec::new();
-        for a in Action::ALL {
+        for a in Action::ALL.iter().copied() {
             for k in self.keys(a) {
                 let same = |(c, actions): &&mut (KeyCombo, Vec<Action>)| {
                     c == k && actions[0].scope() == a.scope()
@@ -1374,7 +1375,7 @@ mod tests {
 
     #[test]
     fn only_fullscreen_actions_are_grouped_under_fullscreen() {
-        for a in Action::ALL {
+        for a in Action::ALL.iter().copied() {
             assert_eq!(
                 a.group() == KeyGroup::Fullscreen,
                 a.scope() == Scope::Fullscreen,
@@ -1485,6 +1486,35 @@ mod tests {
         assert_eq!(
             map.actions_in(Scope::Fullscreen, &events),
             [Action::FullscreenNext]
+        );
+    }
+
+    #[test]
+    fn every_action_is_listed_in_all() {
+        // 変種の一覧は enum からは取れないので、このファイルの `pub enum Action {` を読んで比べる。
+        // 一覧を導出するマクロのクレートを足さないのは、要るのがこの 1 か所だけのため。
+        let src = include_str!("keymap.rs");
+        let body = src
+            .split_once("pub enum Action {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(body, _)| body)
+            .expect("enum Action in keymap.rs");
+        let variants: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("//"))
+            .map(|l| l.trim_end_matches(','))
+            .collect();
+        for v in &variants {
+            assert!(
+                Action::ALL.iter().any(|a| format!("{a:?}") == *v),
+                "{v} is not in Action::ALL"
+            );
+        }
+        assert_eq!(
+            variants.len(),
+            Action::ALL.len(),
+            "Action::ALL lists an action twice"
         );
     }
 
@@ -1778,7 +1808,7 @@ mod tests {
     fn default_keys_avoid_os_keys() {
         let map = Keymap::default();
         for os in [Os::Windows, Os::Linux] {
-            for a in Action::ALL {
+            for a in Action::ALL.iter().copied() {
                 for k in map.keys(a) {
                     assert_eq!(os_conflict(os, a, *k), None, "{k}");
                 }
