@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 /// 展開したまま残った一時フォルダを消すまでの時間。vw が異常終了すると後片付けできないので、
@@ -35,9 +35,15 @@ impl Mount {
     }
 }
 
-/// 展開が終わった知らせ。
+/// 展開の知らせ。
 #[derive(Debug)]
 pub enum Event {
+    /// 展開の途中で書き終えたファイルと、できたフォルダ。終わる前に知らせるのは、
+    /// 展開しながら中を見せるため。
+    Extracting {
+        mount: Mount,
+        paths: Vec<PathBuf>,
+    },
     Mounted {
         mount: Mount,
         files: usize,
@@ -128,6 +134,21 @@ pub const DEFAULT_SIZE_LIMIT_GIB: u32 = 20;
 struct Count {
     done: AtomicUsize,
     total: AtomicUsize,
+    /// 書き終えたファイルとできたフォルダ。[`Archives::poll`] が取り出す。
+    written: Mutex<Vec<PathBuf>>,
+}
+
+/// 展開に使うスレッド数の上限。これより多くしても、ディスクへの書き込みが先に詰まる。
+pub const MAX_THREADS: usize = 8;
+
+/// 設定の値（0 なら CPU のコア数）から、展開に使うスレッド数を決める。
+pub fn workers(setting: u32) -> usize {
+    let n = if setting == 0 {
+        std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+    } else {
+        setting as usize
+    };
+    n.clamp(1, MAX_THREADS)
 }
 
 /// 展開先のフォルダ名。設定で選んだフォルダの直下にこれを作り、その中だけを消す。
@@ -146,6 +167,7 @@ pub struct Archives {
     pending: Vec<Pending>,
     next: u64,
     size_limit: u64,
+    threads: usize,
 }
 
 impl Archives {
@@ -158,7 +180,13 @@ impl Archives {
             pending: Vec::new(),
             next: 0,
             size_limit: u64::from(DEFAULT_SIZE_LIMIT_GIB) << 30,
+            threads: workers(0),
         }
+    }
+
+    /// これから開くものを展開するスレッド数（設定の値。0 なら CPU のコア数）。
+    pub fn set_threads(&mut self, setting: u32) {
+        self.threads = workers(setting);
     }
 
     /// これから開くものを展開してよい大きさ（バイト）。超えるものは [`Event::TooLarge`] で知らせる。
@@ -219,8 +247,9 @@ impl Archives {
         let budget = Arc::new(Budget::new((!over_limit).then_some(self.size_limit)));
         let limit = budget.clone();
         let key = password.clone();
+        let threads = self.threads;
         std::thread::spawn(move || {
-            let _ = tx.send(extract(&from, &to, key.as_deref(), &count, &limit));
+            let _ = tx.send(extract(&from, &to, key.as_deref(), &count, &limit, threads));
             wake();
         });
         self.pending.push(Pending {
@@ -247,11 +276,20 @@ impl Archives {
             .collect()
     }
 
-    /// 展開が終わったものを受け取る。
+    /// 展開で書き終えたものと、展開が終わったものを受け取る。
     pub fn poll(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         let mut i = 0;
         while i < self.pending.len() {
+            let pending = &self.pending[i];
+            let written = pending.progress.written.lock();
+            let paths = std::mem::take(&mut *written.unwrap_or_else(|e| e.into_inner()));
+            if !paths.is_empty() {
+                events.push(Event::Extracting {
+                    mount: pending.mount.clone(),
+                    paths,
+                });
+            }
             let result = match self.pending[i].done.try_recv() {
                 Ok(r) => r,
                 Err(TryRecvError::Empty) => {
@@ -310,12 +348,11 @@ impl Archives {
         self.mounted.iter().find(|m| path.starts_with(&m.dir))
     }
 
-    /// 閉じた ZIP の展開先（消したところ）か、その中のパス。
-    pub fn is_closed(&self, path: &Path) -> bool {
-        let extracted = std::iter::once(&self.base)
+    /// vw が展開した（している・閉じた）ところか、その中のパス。
+    pub fn extracted_here(&self, path: &Path) -> bool {
+        std::iter::once(&self.base)
             .chain(&self.earlier)
-            .any(|b| path.starts_with(b));
-        extracted && self.mount_of(path).is_none()
+            .any(|b| path.starts_with(b))
     }
 
     /// `zip` を展開したもの。
@@ -536,14 +573,12 @@ fn extract(
     password: Option<&str>,
     count: &Count,
     budget: &Budget,
+    threads: usize,
 ) -> Result<usize, ArchiveError> {
     std::fs::create_dir_all(dir)?;
-    let streamed = kind(archive).is_some_and(|k| k != Kind::ZipOr7z);
-    let declared = if streamed {
-        None
-    } else {
-        total_size(archive, password)
-    };
+    let source = Source::open(archive, password)?;
+    let streamed = matches!(source, Source::Streamed);
+    let declared = source.declared_size();
     let free = free_space(dir);
     if let (Some(size), Some(free)) = (declared, free)
         && size > free
@@ -575,33 +610,20 @@ fn extract(
         .min()
         .unwrap_or(u64::MAX);
     let left = AtomicU64::new(room);
-    let read = streamed.then_some(&count.done);
-    let result = each_entry(archive, password, read, |relative, data| {
-        let out = dir.join(relative);
-        let Some(data) = data else {
-            return std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()));
-        };
-        let target = out
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::File::create(&out));
-        let mut target = match target {
-            Ok(file) => Capped {
-                inner: file,
-                left: &left,
-            },
-            Err(e) => return Err(EntryError::Other(e.to_string())),
-        };
-        if streamed {
-            copy_entry(data, &mut target)
-        } else {
-            let mut counted = Counted {
-                inner: data,
-                count: &count.done,
-            };
-            copy_entry(&mut counted, &mut target)
-        }
-    });
+    let sink = Sink {
+        dir,
+        count,
+        left: &left,
+        streamed,
+        made: Mutex::new(std::collections::HashSet::new()),
+    };
+    let result = match source {
+        Source::Streamed => each_entry(archive, password, Some(&count.done), |r, d, t| {
+            sink.put(r, d, t)
+        }),
+        Source::Zip { entries, .. } => extract_zip(archive, entries, password, threads, &sink),
+        Source::SevenZip(seven) => extract_7z(archive, &seven, password, threads, &sink),
+    };
     if result.is_ok() || left.load(Ordering::Relaxed) != OVER {
         return result;
     }
@@ -616,6 +638,355 @@ fn extract(
             "not enough free space in {}",
             dir.display()
         )))
+    }
+}
+
+/// 展開するアーカイブの目次。ZIP と 7z は展開する前に 1 回だけ開き、展開後の大きさを目次から
+/// 読む。展開のたびに開き直さないのは、ZIP を開くのに大きなものでは 1 秒近くかかるため
+/// （[`open_zip`]）。
+enum Source {
+    /// tar 系と 1 ファイルの圧縮。目次がなく、読みながら展開する。
+    Streamed,
+    /// ZIP。`entries` は項目の数、`size` は展開後の大きさの合計。
+    Zip {
+        entries: usize,
+        size: u64,
+    },
+    SevenZip(Box<sevenz_rust2::Archive>),
+}
+
+impl Source {
+    fn open(archive: &Path, password: Option<&str>) -> Result<Self, ArchiveError> {
+        if kind(archive).is_some_and(|k| k != Kind::ZipOr7z) {
+            return Ok(Self::Streamed);
+        }
+        if is_7z(archive)? {
+            let key =
+                password.map_or_else(sevenz_rust2::Password::empty, sevenz_rust2::Password::from);
+            let seven = sevenz_rust2::Archive::open_with_password(archive, &key)
+                .map_err(|e| map_7z(e, password))?;
+            return Ok(Self::SevenZip(Box::new(seven)));
+        }
+        let mut zip = open_zip(archive)?;
+        let sizes = (0..zip.len()).filter_map(|i| zip.by_index_raw(i).ok().map(|e| e.size()));
+        let size = sizes.fold(0u64, u64::saturating_add);
+        Ok(Self::Zip {
+            entries: zip.len(),
+            size,
+        })
+    }
+
+    /// 展開後の大きさの合計（アーカイブに書いてある値）。
+    fn declared_size(&self) -> Option<u64> {
+        match self {
+            Self::Streamed => None,
+            Self::Zip { size, .. } => Some(*size),
+            Self::SevenZip(seven) => Some(
+                seven
+                    .files
+                    .iter()
+                    .map(|f| f.size)
+                    .fold(0u64, u64::saturating_add),
+            ),
+        }
+    }
+}
+
+/// 先頭のバイト列が 7z のもの。`.7z` という名前なのに ZIP でも 7z でもなければエラー。
+/// 拡張子ではなく中身で見分けるのは、拡張子と中身が違うファイルもあるため。
+fn is_7z(archive: &Path) -> Result<bool, ArchiveError> {
+    let mut head = [0u8; 6];
+    let mut file = std::fs::File::open(archive)?;
+    let seven_zip =
+        std::io::Read::read_exact(&mut file, &mut head).is_ok() && head == SEVEN_ZIP_MAGIC;
+    let named_7z = archive
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("7z") || e.eq_ignore_ascii_case("cb7"));
+    if !seven_zip && named_7z && !head.starts_with(b"PK") {
+        return Err(ArchiveError::Other("not a 7z archive".into()));
+    }
+    Ok(seven_zip)
+}
+
+type ZipFile = zip::ZipArchive<std::io::BufReader<std::fs::File>>;
+
+/// ZIP を開く。目次の位置を探さず、ファイルの先頭から始まるものとして開く
+/// （`ArchiveOffset::Known(0)`）。既定の `Detect` は目次の位置を確かめるためにファイルの
+/// 先頭のほうも読むので、1 GB の ZIP では開くだけで 1 秒近くかかる（`Known(0)` なら数ミリ秒）。
+/// 自己解凍形式のように先頭にほかのデータがあるものは `Known(0)` では開けないので、
+/// そのときだけ `Detect` で開き直す。
+fn open_zip(archive: &Path) -> Result<ZipFile, zip::result::ZipError> {
+    let reader =
+        || std::fs::File::open(archive).map(|f| std::io::BufReader::with_capacity(256 * 1024, f));
+    let known = zip::read::Config {
+        archive_offset: zip::read::ArchiveOffset::Known(0),
+    };
+    match zip::ZipArchive::with_config(known, reader()?) {
+        Ok(zip) => Ok(zip),
+        Err(_) => zip::ZipArchive::new(reader()?),
+    }
+}
+
+/// 書いている途中のファイルの名前に付ける印。画像の拡張子でなくなるので、一覧に出ない。
+const PART_SUFFIX: &str = ".vwpart";
+
+fn part_name(out: &Path) -> PathBuf {
+    let mut name = out
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    name.push(PART_SUFFIX);
+    out.with_file_name(name)
+}
+
+/// 展開先へ書く側。並列に展開するスレッドが共有する。
+struct Sink<'a> {
+    dir: &'a Path,
+    count: &'a Count,
+    left: &'a AtomicU64,
+    /// tar 系。進み具合は書いた量ではなく、元のファイルを読んだ量で数える。
+    streamed: bool,
+    /// 知らせたフォルダ。同じフォルダを 1 度だけ知らせるため。
+    made: Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+impl Sink<'_> {
+    /// `relative` を展開先に書く。フォルダなら `data` は `None`。ファイルは仮の名前
+    /// （[`PART_SUFFIX`]）で書き、書き終えてから本来の名前に変える。展開しながら中を見せるので、
+    /// 書いている途中のファイルを画像として読んで失敗しないようにするため。
+    fn put(
+        &self,
+        relative: &Path,
+        data: Option<&mut dyn std::io::Read>,
+        modified: Option<SystemTime>,
+    ) -> Result<(), EntryError> {
+        let out = self.dir.join(relative);
+        let Some(data) = data else {
+            std::fs::create_dir_all(&out).map_err(|e| EntryError::Other(e.to_string()))?;
+            self.note_folders(&out);
+            return Ok(());
+        };
+        let other = |e: std::io::Error| EntryError::Other(e.to_string());
+        let part = part_name(&out);
+        let target = out
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::File::create(&part));
+        let mut target = Capped {
+            inner: target.map_err(other)?,
+            left: self.left,
+        };
+        if self.streamed {
+            copy_entry(data, &mut target)?;
+        } else {
+            let mut counted = Counted {
+                inner: data,
+                count: &self.count.done,
+            };
+            copy_entry(&mut counted, &mut target)?;
+        }
+        // 更新日時はアーカイブの記録に合わせる。日時順で並べたときに、展開した順ではなく
+        // 元のファイルの順になるため。
+        if let Some(modified) = modified {
+            let _ = target.inner.set_modified(modified);
+        }
+        drop(target);
+        std::fs::rename(&part, &out).map_err(other)?;
+        if let Some(parent) = out.parent() {
+            self.note_folders(parent);
+        }
+        self.note(out);
+        Ok(())
+    }
+
+    /// `folder` とその上のフォルダ（展開先まで）を、まだなら知らせる。
+    fn note_folders(&self, folder: &Path) {
+        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        let new: Vec<PathBuf> = folder
+            .ancestors()
+            .take_while(|a| *a != self.dir)
+            .filter(|a| !made.contains(*a))
+            .map(Path::to_path_buf)
+            .collect();
+        made.extend(new.iter().cloned());
+        drop(made);
+        for folder in new {
+            self.note(folder);
+        }
+    }
+
+    fn note(&self, path: PathBuf) {
+        self.count
+            .written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(path);
+    }
+}
+
+/// 並列に展開するスレッドが最初に出した失敗。1 つ失敗したら、ほかのスレッドも次の項目に
+/// 進まず止まる。
+#[derive(Default)]
+struct Failure {
+    stop: std::sync::atomic::AtomicBool,
+    first: Mutex<Option<ArchiveError>>,
+}
+
+impl Failure {
+    fn fail(&self, error: ArchiveError) {
+        self.stop.store(true, Ordering::Relaxed);
+        let mut first = self.first.lock().unwrap_or_else(|e| e.into_inner());
+        if first.is_none() {
+            *first = Some(error);
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    fn into_result(self, files: usize) -> Result<usize, ArchiveError> {
+        match self.first.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            Some(error) => Err(error),
+            None => Ok(files),
+        }
+    }
+}
+
+/// ZIP の項目を `threads` 本のスレッドで分けて展開する。スレッドごとに ZIP を開き直すのは、
+/// 項目の読み出しが `&mut` を取り、1 つの `ZipArchive` を同時には使えないため。
+fn extract_zip(
+    archive: &Path,
+    entries: usize,
+    password: Option<&str>,
+    threads: usize,
+    sink: &Sink<'_>,
+) -> Result<usize, ArchiveError> {
+    let next = AtomicUsize::new(0);
+    let files = AtomicUsize::new(0);
+    let failure = Failure::default();
+    std::thread::scope(|scope| {
+        for _ in 0..threads.clamp(1, entries.max(1)) {
+            scope.spawn(|| {
+                let mut zip = match open_zip(archive) {
+                    Ok(zip) => zip,
+                    Err(e) => return failure.fail(e.into()),
+                };
+                while !failure.stopped() {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= entries {
+                        return;
+                    }
+                    match zip_entry(&mut zip, i, password, |r, d, t| sink.put(r, d, t)) {
+                        Ok(true) => {
+                            files.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {}
+                        Err(e) => return failure.fail(e),
+                    }
+                }
+            });
+        }
+    });
+    failure.into_result(files.into_inner())
+}
+
+/// 7z のブロックを `threads` 本のスレッドで分けて展開する。ソリッドでない 7z はファイルごとに
+/// ブロックがあるので、ファイルごとに並列になる。ソリッドな 7z はブロックが 1 つなので、
+/// スレッドは伸長の中（LZMA2 の複数ストリーム）に回す。
+fn extract_7z(
+    archive: &Path,
+    seven: &sevenz_rust2::Archive,
+    password: Option<&str>,
+    threads: usize,
+    sink: &Sink<'_>,
+) -> Result<usize, ArchiveError> {
+    use sevenz_rust2::{BlockDecoder, Password};
+    let key = password.map_or_else(Password::empty, Password::from);
+    let blocks = seven.blocks.len();
+    let per_block = if blocks <= 1 { threads as u32 } else { 1 };
+    let next = AtomicUsize::new(0);
+    let files = AtomicUsize::new(0);
+    let failure = Failure::default();
+    let put = |entry: &sevenz_rust2::ArchiveEntry, data: &mut dyn std::io::Read| {
+        let Some(relative) = enclosed_name(entry.name()) else {
+            return Ok(true);
+        };
+        let modified = seven_zip_time(entry);
+        let result = if entry.is_directory() {
+            sink.put(&relative, None, modified)
+        } else {
+            sink.put(&relative, Some(data), modified)
+        };
+        match result {
+            Ok(()) => {
+                files.fetch_add(usize::from(!entry.is_directory()), Ordering::Relaxed);
+                Ok(true)
+            }
+            Err(EntryError::Read(e)) => Err(e.into()),
+            Err(EntryError::Other(e)) => {
+                failure.fail(ArchiveError::Other(format!("{}: {e}", relative.display())));
+                Ok(false)
+            }
+        }
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..threads.clamp(1, blocks.max(1)) {
+            scope.spawn(|| {
+                let mut source = match std::fs::File::open(archive) {
+                    Ok(file) => std::io::BufReader::with_capacity(256 * 1024, file),
+                    Err(e) => return failure.fail(e.into()),
+                };
+                while !failure.stopped() {
+                    let block = next.fetch_add(1, Ordering::Relaxed);
+                    if block >= blocks {
+                        return;
+                    }
+                    let decoder = BlockDecoder::new(per_block, block, seven, &key, &mut source);
+                    if let Err(e) = decoder.for_each_entries(&mut put.clone()) {
+                        return failure.fail(map_7z(e, password));
+                    }
+                }
+            });
+        }
+    });
+    if failure.stopped() {
+        return failure.into_result(0);
+    }
+    // 中身のない項目（フォルダ、空のファイル）はどのブロックにもない。
+    for entry in seven.files.iter().filter(|f| !f.has_stream) {
+        let empty: &mut dyn std::io::Read = &mut std::io::empty();
+        if let Err(e) = put(entry, empty) {
+            failure.fail(map_7z(e, password));
+        }
+        if failure.stopped() {
+            break;
+        }
+    }
+    failure.into_result(files.into_inner())
+}
+
+fn seven_zip_time(entry: &sevenz_rust2::ArchiveEntry) -> Option<SystemTime> {
+    entry
+        .has_last_modified_date
+        .then(|| u64::from(entry.last_modified_date))
+        .and_then(|nt| {
+            // NT の時刻は 1601 年からの 100 ナノ秒。UNIX の 1970 年からの秒に直す。
+            const EPOCH_GAP: u64 = 11_644_473_600;
+            let secs = (nt / 10_000_000).checked_sub(EPOCH_GAP)?;
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+        })
+}
+
+/// 7z の読み出しの失敗を、パスワードの有無で読み替える。違うパスワードでは、復号した見出しや
+/// 中身が壊れたデータになるだけで、どのエラーになるかは決まらない（「見出しがない」などになる）。
+/// パスワードを渡したときの失敗はパスワードの誤りとみなす。
+fn map_7z(e: sevenz_rust2::Error, password: Option<&str>) -> ArchiveError {
+    use sevenz_rust2::Error;
+    match (e, password) {
+        (_, Some(_)) => ArchiveError::WrongPassword,
+        (Error::PasswordRequired | Error::MaybeBadPassword(_), None) => ArchiveError::NeedsPassword,
+        (other, None) => ArchiveError::Other(other.to_string()),
     }
 }
 
@@ -704,34 +1075,20 @@ impl<R: std::io::Read> std::io::Read for Counted<'_, R> {
     }
 }
 
-/// `archive` の中身を展開したときのバイト数の合計（アーカイブに書いてある値）。読めなければ `None`。
-fn total_size(archive: &Path, password: Option<&str>) -> Option<u64> {
-    let file = std::fs::File::open(archive).ok()?;
-    if let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
-        let sizes = (0..zip.len()).filter_map(|i| zip.by_index_raw(i).ok().map(|e| e.size()));
-        return Some(sizes.fold(0u64, u64::saturating_add));
-    }
-    let key = password.map_or_else(sevenz_rust2::Password::empty, sevenz_rust2::Password::from);
-    let reader = sevenz_rust2::ArchiveReader::open(archive, key).ok()?;
-    Some(
-        reader
-            .archive()
-            .files
-            .iter()
-            .map(|f| f.size)
-            .fold(0u64, u64::saturating_add),
-    )
-}
-
 /// `archive` の項目を順に `visit` に渡し、渡したファイルの数を返す。`visit` には
-/// アーカイブの中の相対パスと、ファイルなら中身を読むもの、フォルダなら `None` を渡す。
+/// アーカイブの中の相対パスと、ファイルなら中身を読むもの、フォルダなら `None`、
+/// それに項目の更新日時（記録があれば）を渡す。
 /// 展開先の外を指す名前の項目は渡さない（[`enclosed_name`]）。
 ///
 /// ZIP と 7z、圧縮の方式は拡張子ではなく先頭のバイト列で見分ける（拡張子と中身が違うファイルもあるため）。
 pub fn for_each_entry(
     archive: &Path,
     password: Option<&str>,
-    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
     each_entry(archive, password, None, visit)
 }
@@ -741,7 +1098,11 @@ fn each_entry(
     archive: &Path,
     password: Option<&str>,
     read: Option<&AtomicUsize>,
-    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
     match kind(archive) {
         Some(Kind::Tar) => each_in_tar(decompressed(archive, read)?, visit),
@@ -753,19 +1114,14 @@ fn each_entry(
 fn each_in_zip_or_7z(
     archive: &Path,
     password: Option<&str>,
-    visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
-    let mut head = [0u8; 6];
-    let mut file = std::fs::File::open(archive)?;
-    let seven_zip =
-        std::io::Read::read_exact(&mut file, &mut head).is_ok() && head == SEVEN_ZIP_MAGIC;
-    let named_7z = archive
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("7z") || e.eq_ignore_ascii_case("cb7"));
-    if seven_zip {
+    if is_7z(archive)? {
         each_in_7z(archive, password, visit)
-    } else if named_7z && !head.starts_with(b"PK") {
-        Err(ArchiveError::Other("not a 7z archive".into()))
     } else {
         each_in_zip(archive, password, visit)
     }
@@ -835,7 +1191,11 @@ impl<R: std::io::BufRead> std::io::Read for ZstdFrames<R> {
 
 fn each_in_tar(
     input: impl std::io::Read,
-    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    mut visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
     let mut archive = tar::Archive::new(input);
     let mut files = 0;
@@ -847,11 +1207,16 @@ fn each_in_tar(
             continue;
         };
         // リンクは展開しない。シンボリックリンクは展開先の外を指せ、その先へ書き込まれうるため。
+        let modified = entry
+            .header()
+            .mtime()
+            .ok()
+            .map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
         let result = match entry.header().entry_type() {
-            tar::EntryType::Directory => visit(&relative, None),
+            tar::EntryType::Directory => visit(&relative, None, modified),
             tar::EntryType::Regular | tar::EntryType::Continuous => {
                 files += 1;
-                visit(&relative, Some(&mut entry))
+                visit(&relative, Some(&mut entry), modified)
             }
             _ => continue,
         };
@@ -864,14 +1229,19 @@ fn each_in_tar(
 fn each_in_single(
     archive: &Path,
     mut input: impl std::io::Read,
-    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    mut visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
     let stem = archive
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let relative = enclosed_name(&stem).ok_or_else(|| ArchiveError::Other("no name".into()))?;
-    visit(&relative, Some(&mut input)).map_err(|e| entry_failed(&relative, e, false))?;
+    let modified = std::fs::metadata(archive).and_then(|m| m.modified()).ok();
+    visit(&relative, Some(&mut input), modified).map_err(|e| entry_failed(&relative, e, false))?;
     Ok(1)
 }
 
@@ -893,48 +1263,87 @@ fn decode_name(raw: &[u8]) -> Option<String> {
 fn each_in_zip(
     zip: &Path,
     password: Option<&str>,
-    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    mut visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
-    let file = std::fs::File::open(zip)?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))?;
+    let mut archive = open_zip(zip)?;
     let mut files = 0;
     for i in 0..archive.len() {
-        let encrypted = match archive.by_index(i) {
-            Ok(_) => false,
-            Err(zip::result::ZipError::UnsupportedArchive(m))
-                if m == zip::result::ZipError::PASSWORD_REQUIRED =>
-            {
-                true
-            }
-            Err(e) => return Err(e.into()),
-        };
-        let mut entry = match (encrypted, password) {
-            (false, _) => archive.by_index(i)?,
-            (true, None) => return Err(ArchiveError::NeedsPassword),
-            (true, Some(pw)) => match archive.by_index_decrypt(i, pw.as_bytes()) {
-                Err(zip::result::ZipError::InvalidPassword) => {
-                    return Err(ArchiveError::WrongPassword);
-                }
-                other => other?,
-            },
-        };
-        let name = match decode_name(entry.name_raw()) {
-            Some(name) => name,
-            None => entry.name()?.into_owned(),
-        };
-        let Some(relative) = enclosed_name(&name) else {
-            continue;
-        };
-        if entry.is_dir() {
-            visit(&relative, None).map_err(|e| entry_failed(&relative, e, false))?;
-            continue;
-        }
-        // ZipCrypto はパスワードの確認が 1 バイトしかなく、違うパスワードでも 256 回に 1 回は
-        // 確認を通ってしまう。そのときは中身の CRC が合わずに読む途中で失敗する。
-        visit(&relative, Some(&mut entry)).map_err(|e| entry_failed(&relative, e, encrypted))?;
-        files += 1;
+        files += usize::from(zip_entry(&mut archive, i, password, &mut visit)?);
     }
     Ok(files)
+}
+
+/// ZIP の `i` 番目の項目を `visit` に渡す。ファイルを渡したら `true`。
+fn zip_entry(
+    archive: &mut ZipFile,
+    i: usize,
+    password: Option<&str>,
+    mut visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
+) -> Result<bool, ArchiveError> {
+    let encrypted = match archive.by_index(i) {
+        Ok(_) => false,
+        Err(zip::result::ZipError::UnsupportedArchive(m))
+            if m == zip::result::ZipError::PASSWORD_REQUIRED =>
+        {
+            true
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut entry = match (encrypted, password) {
+        (false, _) => archive.by_index(i)?,
+        (true, None) => return Err(ArchiveError::NeedsPassword),
+        (true, Some(pw)) => match archive.by_index_decrypt(i, pw.as_bytes()) {
+            Err(zip::result::ZipError::InvalidPassword) => {
+                return Err(ArchiveError::WrongPassword);
+            }
+            other => other?,
+        },
+    };
+    let name = match decode_name(entry.name_raw()) {
+        Some(name) => name,
+        None => entry.name()?.into_owned(),
+    };
+    let Some(relative) = enclosed_name(&name) else {
+        return Ok(false);
+    };
+    let modified = entry.last_modified().and_then(zip_time);
+    if entry.is_dir() {
+        visit(&relative, None, modified).map_err(|e| entry_failed(&relative, e, false))?;
+        return Ok(false);
+    }
+    // ZipCrypto はパスワードの確認が 1 バイトしかなく、違うパスワードでも 256 回に 1 回は
+    // 確認を通ってしまう。そのときは中身の CRC が合わずに読む途中で失敗する。
+    visit(&relative, Some(&mut entry), modified)
+        .map_err(|e| entry_failed(&relative, e, encrypted))?;
+    Ok(true)
+}
+
+/// ZIP の日時（時差の記録がない、作った PC の時計の値）をこの PC の時刻として読む。
+/// UTC としないのは、ほかの展開ツールもそう扱い、ファイルの日時が同じになるため。
+fn zip_time(t: zip::DateTime) -> Option<SystemTime> {
+    use chrono::TimeZone as _;
+    let date = chrono::NaiveDate::from_ymd_opt(
+        i32::from(t.year()),
+        u32::from(t.month()),
+        u32::from(t.day()),
+    )?;
+    let time = date.and_hms_opt(
+        u32::from(t.hour()),
+        u32::from(t.minute()),
+        u32::from(t.second()),
+    )?;
+    chrono::Local
+        .from_local_datetime(&time)
+        .earliest()
+        .map(SystemTime::from)
 }
 
 fn entry_failed(relative: &Path, e: EntryError, encrypted: bool) -> ArchiveError {
@@ -948,17 +1357,15 @@ fn entry_failed(relative: &Path, e: EntryError, encrypted: bool) -> ArchiveError
 fn each_in_7z(
     path: &Path,
     password: Option<&str>,
-    mut visit: impl FnMut(&Path, Option<&mut dyn std::io::Read>) -> Result<(), EntryError>,
+    mut visit: impl FnMut(
+        &Path,
+        Option<&mut dyn std::io::Read>,
+        Option<SystemTime>,
+    ) -> Result<(), EntryError>,
 ) -> Result<usize, ArchiveError> {
-    use sevenz_rust2::{ArchiveReader, Error, Password};
-    // 違うパスワードでは、復号した見出しや中身が壊れたデータになるだけで、どのエラーになるかは
-    // 決まらない（「見出しがない」などになる）。パスワードを渡したときの失敗はパスワードの誤りとみなす。
-    // 受け取った側の失敗は `failed` で別に返すので、ここに来るのは読む側の失敗だけ。
-    let map = |e: Error| match (e, password) {
-        (_, Some(_)) => ArchiveError::WrongPassword,
-        (Error::PasswordRequired | Error::MaybeBadPassword(_), None) => ArchiveError::NeedsPassword,
-        (other, None) => ArchiveError::Other(other.to_string()),
-    };
+    use sevenz_rust2::{ArchiveReader, Password};
+    // 受け取った側の失敗は `failed` で別に返すので、`map_7z` に来るのは読む側の失敗だけ。
+    let map = |e| map_7z(e, password);
     let key = password.map_or_else(Password::empty, Password::from);
     let mut reader = ArchiveReader::open(path, key).map_err(map)?;
     let mut files = 0;
@@ -968,10 +1375,11 @@ fn each_in_7z(
             let Some(relative) = enclosed_name(entry.name()) else {
                 return Ok(true);
             };
+            let modified = seven_zip_time(entry);
             let result = if entry.is_directory() {
-                visit(&relative, None)
+                visit(&relative, None, modified)
             } else {
-                visit(&relative, Some(data))
+                visit(&relative, Some(data), modified)
             };
             match result {
                 Ok(()) => {
@@ -1112,12 +1520,17 @@ mod tests {
         }
     }
 
+    /// 展開が終わるまで待ち、終わりの知らせを最後にした知らせ（途中の `Extracting` も）を返す。
     fn wait(archives: &mut Archives) -> Vec<Event> {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut all = Vec::new();
         loop {
-            let events = archives.poll();
-            if !events.is_empty() {
-                return events;
+            for event in archives.poll() {
+                let last = !matches!(event, Event::Extracting { .. });
+                all.push(event);
+                if last {
+                    return all;
+                }
             }
             assert!(
                 std::time::Instant::now() < deadline,
@@ -1139,7 +1552,7 @@ mod tests {
             "the same zip is opened once"
         );
         let events = wait(&mut archives);
-        let Event::Mounted { mount, files } = &events[0] else {
+        let Event::Mounted { mount, files } = events.last().unwrap() else {
             panic!("{events:?}");
         };
         assert_eq!(*files, 2);
@@ -1153,8 +1566,8 @@ mod tests {
         assert!(archives.unmount(&dir).is_some());
         assert!(!dir.exists());
         assert!(archives.mount_of(&b).is_none());
-        assert!(archives.is_closed(&b));
-        assert!(!archives.is_closed(&zip));
+        assert!(archives.extracted_here(&b));
+        assert!(!archives.extracted_here(&zip));
     }
 
     #[test]
@@ -1165,7 +1578,7 @@ mod tests {
             write_encrypted_zip(&zip, "open sesame", aes);
             let out = tmp.path().join("out");
             assert_eq!(
-                extract(&zip, &out, None, &Count::default(), &Budget::new(None)),
+                extract(&zip, &out, None, &Count::default(), &Budget::new(None), 2),
                 Err(ArchiveError::NeedsPassword)
             );
             assert_eq!(
@@ -1174,7 +1587,8 @@ mod tests {
                     &out,
                     Some("wrong"),
                     &Count::default(),
-                    &Budget::new(None)
+                    &Budget::new(None),
+                    2,
                 ),
                 Err(ArchiveError::WrongPassword),
                 "aes = {aes}"
@@ -1185,7 +1599,8 @@ mod tests {
                     &out,
                     Some("open sesame"),
                     &Count::default(),
-                    &Budget::new(None)
+                    &Budget::new(None),
+                    2,
                 ),
                 Ok(1)
             );
@@ -1202,15 +1617,229 @@ mod tests {
         archives.mount(&zip, None, false, || {});
         let events = wait(&mut archives);
         assert!(
-            matches!(&events[0], Event::NeedsPassword { wrong: false, .. }),
+            matches!(
+                events.last().unwrap(),
+                Event::NeedsPassword { wrong: false, .. }
+            ),
             "{events:?}"
         );
         archives.mount(&zip, Some("pw".into()), false, || {});
         let events = wait(&mut archives);
         assert!(
-            matches!(&events[0], Event::Mounted { files: 1, .. }),
+            matches!(events.last().unwrap(), Event::Mounted { files: 1, .. }),
             "{events:?}"
         );
+    }
+
+    /// `files` を 1 ファイル 1 ブロック（ソリッドでない）の 7z にする。
+    fn write_non_solid_7z(path: &Path, files: &[(&str, &[u8])]) {
+        let mut w = sevenz_rust2::ArchiveWriter::create(path).unwrap();
+        for (name, data) in files {
+            let entry = sevenz_rust2::ArchiveEntry::new_file(name);
+            w.push_archive_entry(entry, Some(std::io::Cursor::new(data.to_vec())))
+                .unwrap();
+        }
+        w.finish().unwrap();
+    }
+
+    fn numbered(n: usize) -> Vec<(String, Vec<u8>)> {
+        (0..n)
+            .map(|i| (format!("d{}/img{i:03}.png", i % 3), vec![i as u8; 1000 + i]))
+            .collect()
+    }
+
+    fn assert_extracted(out: &Path, files: &[(String, Vec<u8>)]) {
+        for (name, data) in files {
+            assert_eq!(&std::fs::read(out.join(name)).unwrap(), data, "{name}");
+        }
+    }
+
+    #[test]
+    fn files_are_reported_while_the_archive_is_extracted() {
+        let tmp = TempDir::new();
+        let zip = tmp.path().join("scans.zip");
+        write_zip(
+            &zip,
+            &[
+                ("a.png", b"A"),
+                ("sub/b.png", b"B"),
+                ("sub/deep/c.png", b"C"),
+            ],
+        );
+        let mut archives = Archives::new(tmp.path().join("work"));
+        assert!(archives.mount(&zip, None, false, || {}));
+        let events = wait(&mut archives);
+        let Some(Event::Mounted { mount, files: 3 }) = events.last() else {
+            panic!("{events:?}");
+        };
+        let reported: std::collections::BTreeSet<PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Extracting { mount: m, paths } if m == mount => Some(paths.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let expected: std::collections::BTreeSet<PathBuf> =
+            ["a.png", "sub", "sub/b.png", "sub/deep", "sub/deep/c.png"]
+                .into_iter()
+                .map(|p| mount.dir.join(p))
+                .collect();
+        assert_eq!(reported, expected);
+    }
+
+    #[test]
+    fn a_zip_is_extracted_the_same_with_several_threads() {
+        let tmp = TempDir::new();
+        let files = numbered(20);
+        let entries: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        let zip = tmp.path().join("many.zip");
+        write_zip(&zip, &entries);
+        let out = tmp.path().join("out");
+        let count = Count::default();
+        assert_eq!(
+            extract(&zip, &out, None, &count, &Budget::new(None), 4),
+            Ok(20)
+        );
+        assert_extracted(&out, &files);
+        let total: usize = files.iter().map(|(_, d)| d.len()).sum();
+        assert_eq!(count.done.load(Ordering::Relaxed), total);
+    }
+
+    #[test]
+    fn a_non_solid_7z_is_extracted_block_by_block() {
+        let tmp = TempDir::new();
+        let files = numbered(12);
+        let entries: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        let archive = tmp.path().join("many.7z");
+        write_non_solid_7z(&archive, &entries);
+        assert_eq!(
+            sevenz_rust2::Archive::open(&archive).unwrap().blocks.len(),
+            12,
+            "one block per file"
+        );
+        let out = tmp.path().join("out");
+        assert_eq!(
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                4
+            ),
+            Ok(12)
+        );
+        assert_extracted(&out, &files);
+    }
+
+    #[test]
+    fn a_wrong_password_stops_every_thread() {
+        let tmp = TempDir::new();
+        let zip = tmp.path().join("secret.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .with_aes_encryption(zip::AesMode::Aes256, "right");
+        for i in 0..8 {
+            w.start_file(format!("{i}.png"), options).unwrap();
+            w.write_all(&[i; 100]).unwrap();
+        }
+        w.finish().unwrap();
+        let out = tmp.path().join("out");
+        assert_eq!(
+            extract(
+                &zip,
+                &out,
+                Some("wrong"),
+                &Count::default(),
+                &Budget::new(None),
+                4
+            ),
+            Err(ArchiveError::WrongPassword)
+        );
+        assert_eq!(
+            extract(
+                &zip,
+                &out,
+                Some("right"),
+                &Count::default(),
+                &Budget::new(None),
+                4
+            ),
+            Ok(8)
+        );
+    }
+
+    #[test]
+    fn extracted_files_keep_the_time_recorded_in_the_archive() {
+        let tmp = TempDir::new();
+        let secs = 1_600_000_000u64;
+        let when = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+        let modified = |out: &Path| {
+            std::fs::metadata(out)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        };
+
+        let tar = tmp.path().join("photos.tar");
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_mtime(secs);
+        header.set_path("a.png").unwrap();
+        header.set_cksum();
+        builder.append(&header, &b"A"[..]).unwrap();
+        std::fs::write(&tar, builder.into_inner().unwrap()).unwrap();
+        let out = tmp.path().join("tar");
+        extract(&tar, &out, None, &Count::default(), &Budget::new(None), 2).unwrap();
+        assert_eq!(modified(&out.join("a.png")), secs, "tar");
+
+        let seven = tmp.path().join("photos.7z");
+        let mut w = sevenz_rust2::ArchiveWriter::create(&seven).unwrap();
+        let mut entry = sevenz_rust2::ArchiveEntry::new_file("a.png");
+        entry.has_last_modified_date = true;
+        entry.last_modified_date = sevenz_rust2::NtTime::try_from(when).unwrap();
+        w.push_archive_entry(entry, Some(std::io::Cursor::new(b"A".to_vec())))
+            .unwrap();
+        w.finish().unwrap();
+        let out = tmp.path().join("7z");
+        extract(&seven, &out, None, &Count::default(), &Budget::new(None), 2).unwrap();
+        assert_eq!(modified(&out.join("a.png")), secs, "7z");
+
+        // ZIP の日時はこの PC の時刻として読むので、その日時のこの PC での値と比べる。
+        let zip = tmp.path().join("photos.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        let date = zip::DateTime::from_date_and_time(2020, 9, 13, 12, 26, 40).unwrap();
+        let options = zip::write::SimpleFileOptions::default().last_modified_time(date);
+        w.start_file("a.png", options).unwrap();
+        w.write_all(b"A").unwrap();
+        w.finish().unwrap();
+        let out = tmp.path().join("zip");
+        extract(&zip, &out, None, &Count::default(), &Budget::new(None), 2).unwrap();
+        let expected = zip_time(date)
+            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(modified(&out.join("a.png")), expected, "zip");
+    }
+
+    #[test]
+    fn the_thread_count_follows_the_setting_within_the_limit() {
+        assert_eq!(workers(3), 3);
+        assert!((1..=MAX_THREADS).contains(&workers(0)));
+        assert_eq!(workers(99), MAX_THREADS);
     }
 
     #[test]
@@ -1239,6 +1868,7 @@ mod tests {
                 None,
                 &count,
                 &Budget::new(None),
+                2,
             )
             .unwrap();
             assert_eq!(count.total.load(Ordering::Relaxed), 10, "{name}");
@@ -1253,7 +1883,14 @@ mod tests {
         write_7z(&archive, &[("a.png", b"A"), ("sub/b.png", b"B")], None);
         let out = tmp.path().join("out");
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Ok(2)
         );
         assert_eq!(std::fs::read(out.join("sub/b.png")).unwrap(), b"B");
@@ -1266,7 +1903,14 @@ mod tests {
         write_7z(&archive, &[("a.png", &[1; 4096])], Some("pw"));
         let out = tmp.path().join("out");
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Err(ArchiveError::NeedsPassword)
         );
         assert_eq!(
@@ -1275,7 +1919,8 @@ mod tests {
                 &out,
                 Some("nope"),
                 &Count::default(),
-                &Budget::new(None)
+                &Budget::new(None),
+                2,
             ),
             Err(ArchiveError::WrongPassword)
         );
@@ -1285,7 +1930,8 @@ mod tests {
                 &out,
                 Some("pw"),
                 &Count::default(),
-                &Budget::new(None)
+                &Budget::new(None),
+                2,
             ),
             Ok(1)
         );
@@ -1318,7 +1964,7 @@ mod tests {
         write_zip(&zip, &[("../escaped.txt", b"x"), ("ok.png", b"y")]);
         let out = tmp.path().join("out");
         assert_eq!(
-            extract(&zip, &out, None, &Count::default(), &Budget::new(None)).unwrap(),
+            extract(&zip, &out, None, &Count::default(), &Budget::new(None), 2).unwrap(),
             1
         );
         assert!(!tmp.path().join("escaped.txt").exists());
@@ -1331,7 +1977,10 @@ mod tests {
         std::fs::write(&zip, b"not a zip").unwrap();
         let mut archives = Archives::new(tmp.path().join("work"));
         archives.mount(&zip, None, false, || {});
-        assert!(matches!(wait(&mut archives)[0], Event::Failed { .. }));
+        assert!(matches!(
+            wait(&mut archives).last(),
+            Some(Event::Failed { .. })
+        ));
         assert!(archives.mount_of(&tmp.path().join("work")).is_none());
     }
 
@@ -1478,7 +2127,14 @@ mod tests {
         let out = tmp.path().join("out");
 
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Ok(2)
         );
         assert_eq!(std::fs::read(out.join("a.png")).unwrap(), b"A");
@@ -1501,7 +2157,14 @@ mod tests {
             let out = tmp.path().join(format!("{name}.out"));
 
             assert_eq!(
-                extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+                extract(
+                    &archive,
+                    &out,
+                    None,
+                    &Count::default(),
+                    &Budget::new(None),
+                    2
+                ),
                 Ok(2),
                 "{name}"
             );
@@ -1525,7 +2188,8 @@ mod tests {
                 &tmp.path().join("out"),
                 None,
                 &Count::default(),
-                &Budget::new(None)
+                &Budget::new(None),
+                2,
             ),
             Ok(1)
         );
@@ -1549,7 +2213,14 @@ mod tests {
         let out = tmp.path().join("out");
 
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Ok(1)
         );
         assert!(std::fs::symlink_metadata(out.join("evil")).is_err());
@@ -1568,6 +2239,7 @@ mod tests {
             None,
             &Count::default(),
             &Budget::new(None),
+            2,
         );
         assert!(matches!(result, Err(ArchiveError::Other(_))), "{result:?}");
     }
@@ -1587,7 +2259,14 @@ mod tests {
             let out = out.join(name);
 
             assert_eq!(
-                extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+                extract(
+                    &archive,
+                    &out,
+                    None,
+                    &Count::default(),
+                    &Budget::new(None),
+                    2
+                ),
                 Ok(1),
                 "{name}"
             );
@@ -1612,6 +2291,7 @@ mod tests {
             None,
             &count,
             &Budget::new(None),
+            2,
         )
         .unwrap();
 
@@ -1631,7 +2311,14 @@ mod tests {
         let out = tmp.path().join("out");
 
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Ok(1)
         );
         assert!(out.join("ソ.png").is_file());
@@ -1656,7 +2343,14 @@ mod tests {
         let out = tmp.path().join("out");
 
         assert_eq!(
-            extract(&archive, &out, None, &Count::default(), &Budget::new(None)),
+            extract(
+                &archive,
+                &out,
+                None,
+                &Count::default(),
+                &Budget::new(None),
+                2
+            ),
             Ok(1)
         );
         assert!(out.join("ソ.png").is_file());
@@ -1818,7 +2512,7 @@ mod tests {
         let events = wait(&mut archives);
         assert!(
             matches!(
-                &events[0],
+                events.last().unwrap(),
                 Event::TooLarge {
                     size: Some(1200),
                     limit: 1000,
@@ -1833,7 +2527,7 @@ mod tests {
         archives.mount(&zip, None, true, || {});
         let events = wait(&mut archives);
         assert!(
-            matches!(&events[0], Event::Mounted { files: 2, .. }),
+            matches!(events.last().unwrap(), Event::Mounted { files: 2, .. }),
             "{events:?}"
         );
     }
@@ -1851,7 +2545,7 @@ mod tests {
         let events = wait(&mut archives);
         assert!(
             matches!(
-                &events[0],
+                events.last().unwrap(),
                 Event::TooLarge {
                     size: None,
                     limit: 5000,

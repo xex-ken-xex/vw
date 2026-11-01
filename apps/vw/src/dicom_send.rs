@@ -213,7 +213,7 @@ fn for_each_dicom(
     cancel: &AtomicBool,
     mut visit: impl FnMut(net::Object) -> Result<(), String>,
 ) -> Result<(), String> {
-    let result = archive::for_each_entry(path, None, |inner, data| {
+    let result = archive::for_each_entry(path, None, |inner, data, _| {
         if cancel.load(Ordering::Relaxed) {
             return Err(EntryError::Other("cancelled".into()));
         }

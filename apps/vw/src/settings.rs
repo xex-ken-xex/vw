@@ -354,6 +354,8 @@ pub struct Behavior {
     pub archive_dir: String,
     /// 確かめずに展開してよい大きさ（GB）。超えるアーカイブは展開する前に尋ねる。
     pub archive_size_limit_gb: u32,
+    /// ZIP や 7z を展開するスレッド数。0 なら CPU のコア数（上限 8）。
+    pub archive_threads: u32,
 }
 
 impl Default for Behavior {
@@ -363,6 +365,7 @@ impl Default for Behavior {
             auto_reload: true,
             archive_dir: String::new(),
             archive_size_limit_gb: crate::archive::DEFAULT_SIZE_LIMIT_GIB,
+            archive_threads: 0,
         }
     }
 }
@@ -388,10 +391,19 @@ impl Behavior {
                     "must be 1 to 1048576",
                 )
                 .unwrap_or(d.archive_size_limit_gb),
+            archive_threads: r
+                .get_valid(
+                    "archive_threads",
+                    |v: &u32| Behavior::ARCHIVE_THREADS_RANGE.contains(v),
+                    "must be 0 to 8",
+                )
+                .unwrap_or(d.archive_threads),
         }
     }
 
     pub const ARCHIVE_SIZE_RANGE_GB: std::ops::RangeInclusive<u32> = 1..=1_048_576;
+    pub const ARCHIVE_THREADS_RANGE: std::ops::RangeInclusive<u32> =
+        0..=crate::archive::MAX_THREADS as u32;
 
     pub fn archive_size_limit_bytes(&self) -> u64 {
         u64::from(self.archive_size_limit_gb) << 30

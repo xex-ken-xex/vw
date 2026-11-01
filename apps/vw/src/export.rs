@@ -328,7 +328,7 @@ fn unpack_images(
     strip: Option<&AtomicUsize>,
 ) -> Unpacked {
     let mut out = Unpacked::default();
-    let result = archive::for_each_entry(archive, None, |inner, data| {
+    let result = archive::for_each_entry(archive, None, |inner, data, _| {
         if cancel.load(Ordering::Relaxed) {
             return Err(EntryError::Other("Cancelled".into()));
         }

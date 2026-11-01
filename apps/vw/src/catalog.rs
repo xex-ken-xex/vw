@@ -532,7 +532,7 @@ fn scan_archive(
     loop {
         // パスワードが違うと途中で失敗するので、読み終わるまでは別に貯めておく。
         let mut found = Vec::new();
-        let result = archive::for_each_entry(path, password.as_deref(), |inner, data| {
+        let result = archive::for_each_entry(path, password.as_deref(), |inner, data, _| {
             if progress.paused() {
                 // 最後に読んだ項目は読み終えている。止めている間に閉じても、落ちたとみなさないように。
                 reading("");

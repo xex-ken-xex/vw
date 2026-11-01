@@ -350,6 +350,13 @@ const ITEMS: &[Item] = &[
         widget: archive_size_limit_widget,
     },
     Item {
+        section: Section::Behavior,
+        key: "behavior.archive_threads",
+        title: "Archive extraction threads",
+        description: "How many files of a ZIP or 7z are extracted at the same time. 0 uses the number of CPU cores (up to 8). Solid 7z and tar files are extracted one file at a time whatever this says.",
+        widget: archive_threads_widget,
+    },
+    Item {
         section: Section::Metadata,
         key: "metadata.path",
         title: "Path",
@@ -2222,6 +2229,22 @@ fn archive_size_limit_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Languag
             .speed(1.0)
             .suffix(" GB"),
     );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn archive_threads_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.behavior.archive_threads)
+            .range(crate::settings::Behavior::ARCHIVE_THREADS_RANGE)
+            .speed(0.1),
+    );
+    if s.behavior.archive_threads == 0 {
+        ui.weak(tr1(
+            lang,
+            "0 = {} (CPU cores)",
+            &crate::archive::workers(0).to_string(),
+        ));
+    }
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
