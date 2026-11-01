@@ -1214,7 +1214,6 @@ const JA: &[(&str, &str)] = &[
     ("Whole image", "画像全体"),
     ("Target ROI", "対象の ROI"),
     ("Background ROI", "背景の ROI"),
-    ("Not available yet", "まだ使えません"),
     // 解析ウインドウ（定量評価）
     ("Analysis", "解析"),
     (
@@ -2885,6 +2884,132 @@ const JA: &[(&str, &str)] = &[
     (
         "Not placed (drag here to hide a part)",
         "置いていない部品（ここへ落とすと隠す）",
+    ),
+    // レポートとグラフの見た目、計測線
+    ("Reports and graphs", "レポートとグラフ"),
+    ("Look of reports and graphs", "レポートとグラフの見た目"),
+    (
+        "The look of written reports (HTML), graph images and comparison pictures copied to the clipboard. Every look has a title, a legend, axis names with units, the file name and image size, the date and time, a table of values and a caption.",
+        "書き出すレポート（HTML）と、クリップボードに出すグラフや比較の絵の見た目。どの見た目にも、題・凡例・軸の名前と単位・ファイル名と画像の大きさ・日時・数値の表・説明文が入ります。",
+    ),
+    ("Paper", "論文"),
+    (
+        "White page, serif type, numbered figures, tables with three rules.",
+        "白地に明朝、図の番号、罫線 3 本の表。",
+    ),
+    ("Technical note", "技術ノート"),
+    (
+        "Sans-serif type, monospaced numbers, a light grid, colors told apart with any color vision.",
+        "ゴシックに等幅の数字、薄い方眼。色覚の違いでも見分けやすい配色。",
+    ),
+    ("vw dark", "vw ダーク"),
+    (
+        "The dark gray and thin lines of the vw window.",
+        "画面と同じ暗い灰色と細い線。",
+    ),
+    ("Print in black", "印刷モノクロ"),
+    (
+        "Black only; lines are told apart by dashes and markers.",
+        "黒だけ。線の形と印で見分けます。",
+    ),
+    (
+        "Open the line graph after drawing a line",
+        "線を引いたら計測線のグラフを開く",
+    ),
+    (
+        "When a line is drawn with the measure tool, open the Line profile window that shows the values along it.",
+        "計測ツールで線を引き終えたら、線に沿った値を出す「計測線のグラフ」の欄を開きます。",
+    ),
+    ("Image comparison", "画像の比較"),
+    (
+        "From the left: the reference, then each image aligned to it.",
+        "左から、基準と、基準に位置を合わせた各画像。",
+    ),
+    (
+        "The picture shown when copied (Blink switches between the reference and the image).",
+        "コピーしたときに出ていた絵（点滅は基準と画像を切り替える）。",
+    ),
+    (
+        "Left of the split: the reference. Right: the image aligned to it.",
+        "分割線の左が基準、右が基準に位置を合わせた画像。",
+    ),
+    (
+        "Difference between the reference and the image aligned to it.",
+        "基準と、基準に位置を合わせた画像の違い。",
+    ),
+    (
+        "The difference is overlaid in color.",
+        "違いを色で重ねている。",
+    ),
+    ("Measure tool on/off", "計測ツールの切り替え"),
+    ("Show/hide line profile", "計測線のグラフの表示/非表示"),
+    ("Line profile", "計測線のグラフ"),
+    (
+        "Drag to draw a line and graph the values along it, Shift+drag for 45° steps",
+        "ドラッグで線を引き、線に沿った値をグラフにする。Shift+ドラッグで 45° 刻み",
+    ),
+    ("Copy line values", "線の値をコピー"),
+    ("Delete line", "線を削除"),
+    ("Line", "線"),
+    ("Distance from the start", "始点からの距離"),
+    ("Pixel value", "画素の値"),
+    ("Measured value", "計測の値"),
+    ("Start (x, y)", "始点（x, y）"),
+    ("End (x, y)", "終点（x, y）"),
+    ("Length", "長さ"),
+    ("Min", "最小"),
+    ("SD", "標準偏差"),
+    ("Values", "値の種類"),
+    ("color", "カラー"),
+    (
+        "Values along each measure line from its start to its end. The values are those of the file, before the conversion for display (black and white, color map).",
+        "各計測線の始点から終点までの値。値はファイルの値で、表示のための変換（黒と白、色の表）の前のもの。",
+    ),
+    (
+        "The upper graph shows the pixel values stored in the file, the lower graph the measured values converted with the formula in the file.",
+        "上のグラフはファイルに書かれた画素の値、下のグラフはファイルにある式で換算した計測の値。",
+    ),
+    ("Values along the measure lines", "計測線に沿った値"),
+    (
+        "Choose the measure tool (M) and drag on an image to draw a line.",
+        "計測ツール（M）を選び、画像の上をドラッグして線を引いてください。",
+    ),
+    ("Reading the image...", "画像を読み込んでいます..."),
+    ("Copy graph", "グラフをコピー"),
+    (
+        "Copy the graph with its title, legend and table as an image.",
+        "題・凡例・表の付いたグラフを画像としてコピーします。",
+    ),
+    (
+        "Copy the value of every point as a table to paste into a spreadsheet.",
+        "点ごとの値を、表計算ソフトに貼れる表としてコピーします。",
+    ),
+    ("Write image...", "画像を書き出す..."),
+    (
+        "Write the graph as a PNG image.",
+        "グラフを PNG の画像として書き出します。",
+    ),
+    (
+        "Write an HTML report with the image, the lines, the graph and the values, and a CSV of every point beside it.",
+        "画像・線・グラフ・値の HTML のレポートと、その横に点ごとの値の CSV を書き出します。",
+    ),
+    ("Remove all lines", "線をすべて消す"),
+    ("Write the graph image", "グラフの画像を書き出す"),
+    (
+        "Write the line profile report",
+        "計測線のレポートを書き出す",
+    ),
+    (
+        "The measure lines on the image. The numbers match the graph and the table.",
+        "画像の上の計測線。番号はグラフと表の番号と同じ。",
+    ),
+    (
+        "Position, length and values of each line",
+        "線ごとの位置・長さ・値",
+    ),
+    (
+        "The value of every point is in the CSV file:",
+        "点ごとの値は CSV のファイルにある:",
     ),
 ];
 

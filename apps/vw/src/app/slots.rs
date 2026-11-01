@@ -1070,6 +1070,11 @@ impl VwApp {
                         self.set_focus(ui.ctx(), Focus::Images);
                     }
                     SlotCommand::Derive(event) => self.log_derive(event),
+                    SlotCommand::LineDrawn => {
+                        if self.settings.settings.measure.open_profile {
+                            self.line_profile.open = true;
+                        }
+                    }
                     SlotCommand::Run(action) => {
                         self.run_on(ui.ctx(), action, context_menu::Where::Slot(i))
                     }

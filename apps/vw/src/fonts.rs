@@ -18,7 +18,7 @@ use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId,
 use eframe::epaint::text::{FontInsert, FontPriority, Fonts, InsertFontFamily, TextOptions};
 
 /// 探すフォントファイル。先に見つかったものを使う。
-const CANDIDATES: &[&str] = &[
+pub(crate) const CANDIDATES: &[&str] = &[
     // Windows
     "C:\\Windows\\Fonts\\YuGothM.ttc",
     "C:\\Windows\\Fonts\\meiryo.ttc",

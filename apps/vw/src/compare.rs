@@ -260,7 +260,12 @@ impl CompareWindow {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, lang: Language) -> Vec<Command> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        theme: vw_report::Theme,
+    ) -> Vec<Command> {
         let mut out = Vec::new();
         if let Some(s) = &mut self.session {
             s.receive(ui.ctx());
@@ -275,7 +280,7 @@ impl CompareWindow {
             return out;
         };
         let mut write_report = false;
-        session.toolbar(ui, lang, &mut out, &mut write_report);
+        session.toolbar(ui, lang, &mut out, &mut write_report, theme);
         if session.adjusting {
             session.adjust_bar(ui, lang, &mut out);
         }
@@ -322,7 +327,7 @@ impl CompareWindow {
                     self.picker = None;
                     self.report_dir = path.parent().map(Path::to_path_buf);
                     if let Some(s) = &self.session {
-                        out.push(s.write_report(lang, &path));
+                        out.push(s.write_report(lang, theme, &path));
                     }
                 }
             }
@@ -606,6 +611,7 @@ impl Session {
         lang: Language,
         out: &mut Vec<Command>,
         write_report: &mut bool,
+        theme: vw_report::Theme,
     ) {
         ui.horizontal_wrapped(|ui| {
             for m in Mode::ALL {
@@ -678,7 +684,7 @@ impl Session {
                 .add_enabled(ready, egui::Button::new(tr(lang, "Copy view")))
                 .on_hover_text(tr(lang, "Copy the whole picture of the current view as an image."))
                 .clicked()
-                && let Some(img) = self.view_image() {
+                && let Some(img) = self.view_sheet(lang, theme) {
                     let what = format!("comparison view ({}x{})", img.size[0], img.size[1]);
                     out.push(Command::CopyImage(img, what));
                 }
@@ -1129,13 +1135,13 @@ impl Session {
         })
     }
 
-    fn write_report(&self, lang: Language, path: &Path) -> Command {
+    fn write_report(&self, lang: Language, theme: vw_report::Theme, path: &Path) -> Command {
         let Some(mut report) = self.report() else {
             return Command::Error("Compare: nothing to write yet".to_owned());
         };
-        let created = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let created = crate::report_fonts::now();
         report.created = &created;
-        let html = report.html(labels(lang));
+        let html = report.html(labels(lang), theme);
         let csv_path = path.with_extension("csv");
         let write = |p: &Path, text: &str| -> Result<(), String> {
             use std::io::Write;
@@ -1157,8 +1163,74 @@ impl Session {
         }
     }
 
+    /// 今の見せ方の全体を、題・元の情報・凡例・説明文を付けた 1 枚の図にする（テーマは設定）。
+    fn view_sheet(&self, lang: Language, theme: vw_report::Theme) -> Option<ColorImage> {
+        use vw_report::{Block, LegendItem, Sheet, Swatch};
+        let img = self.view_rgba()?;
+        let reference = &self.entries[0];
+        let size = |e: &Entry| format!("{} × {}", e.size[0], e.size[1]);
+        let mut meta = vec![format!(
+            "{}: {} ({})",
+            tr(lang, "Reference"),
+            reference.name,
+            size(reference)
+        )];
+        let shown: Vec<usize> = match self.mode {
+            Mode::SideBySide => (1..self.entries.len()).collect(),
+            _ => vec![self.target],
+        };
+        for &i in &shown {
+            let e = &self.entries[i];
+            meta.push(format!("{}: {} ({})", tr(lang, "Image"), e.name, size(e)));
+        }
+        meta.push(crate::report_fonts::now());
+        let mut legend = Vec::new();
+        if self.mode == Mode::SideBySide {
+            for (n, i) in std::iter::once(0).chain(shown.iter().copied()).enumerate() {
+                legend.push(LegendItem {
+                    label: format!("{}. {}", n + 1, self.entries[i].name),
+                    swatch: Swatch::Fill(vw_report::Color([128, 128, 128, 255])),
+                });
+            }
+        }
+        if self.mode == Mode::Difference || self.overlay {
+            legend.push(LegendItem {
+                label: labels(lang).difference_scale.to_owned(),
+                swatch: Swatch::Ramp(vw_compare::report::heat_ramp()),
+            });
+        }
+        let mut caption = tr(
+            lang,
+            match self.mode {
+                Mode::SideBySide => {
+                    "From the left: the reference, then each image aligned to it."
+                }
+                Mode::Blink => "The picture shown when copied (Blink switches between the reference and the image).",
+                Mode::Swipe => "Left of the split: the reference. Right: the image aligned to it.",
+                Mode::Difference => "Difference between the reference and the image aligned to it.",
+            },
+        )
+        .to_owned();
+        if self.overlay && self.mode != Mode::Difference {
+            caption.push(' ');
+            caption.push_str(tr(lang, "The difference is overlaid in color."));
+        }
+        let sheet = Sheet {
+            title: format!(
+                "{}: {}",
+                tr(lang, "Image comparison"),
+                tr(lang, self.mode.title())
+            ),
+            meta,
+            blocks: vec![Block::Image { image: img, legend }, Block::Caption(caption)],
+        };
+        let words = crate::report_fonts::words(lang);
+        let out = sheet.image(theme, &words, crate::report_fonts::fonts(theme));
+        Some(color_image(&out))
+    }
+
     /// 今の見せ方の全体を、解析した大きさの 1 枚にする。
-    fn view_image(&self) -> Option<ColorImage> {
+    fn view_rgba(&self) -> Option<render::Rgba> {
         let reference = self.reference.as_ref()?;
         let grid = &reference.image;
         let base = render::masked(grid, &vec![true; grid.width * grid.height], [0; 3]);
@@ -1193,7 +1265,7 @@ impl Session {
             Mode::Swipe => with_overlay(render::swipe(&base, &aligned(t)?, self.swipe), t),
             Mode::Difference => render::difference(self.analysis(t)?, grid.width, grid.height),
         };
-        Some(color_image(&img))
+        Some(img)
     }
 
     /// 値の欄。基準と比べる画像の組ごとの表と、明るさのヒストグラム。

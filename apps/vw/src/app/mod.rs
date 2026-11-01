@@ -49,6 +49,7 @@ mod docking;
 mod export_dialog;
 mod folders;
 mod labeling;
+mod line_profile_pane;
 mod log_pane;
 mod menu;
 mod metadata_pane;
@@ -65,7 +66,7 @@ mod slots;
 mod transfers;
 mod undo;
 
-/// 左端のツール列のツール。Zoom と Measure はまだ機能がなく、押せない状態で置いてある。
+/// 左端のツール列のツール。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Browse,
@@ -108,23 +109,17 @@ impl Tool {
         }
     }
 
-    /// スロットの本体でのマウス操作の意味。計測はまだ機能がないので矢印と同じ。
+    /// スロットの本体でのマウス操作の意味。
     fn in_slot(self) -> crate::viewer::Tool {
         use crate::viewer::Tool as T;
         match self {
-            Tool::Browse | Tool::Measure => T::Select,
+            Tool::Browse => T::Select,
+            Tool::Measure => T::Measure,
             Tool::Pan => T::Hand,
             Tool::Zoom => T::Zoom,
             Tool::PixelProbe => T::Probe,
             Tool::Roi => T::Roi,
         }
-    }
-
-    fn available(self) -> bool {
-        matches!(
-            self,
-            Tool::Browse | Tool::Pan | Tool::Zoom | Tool::PixelProbe | Tool::Roi
-        )
     }
 
     /// キーで切り替えられるツールの操作。
@@ -134,6 +129,7 @@ impl Tool {
             Tool::Roi => Some(Action::ToggleRoi),
             Tool::Pan => Some(Action::ToggleHandTool),
             Tool::Zoom => Some(Action::ToggleZoomTool),
+            Tool::Measure => Some(Action::ToggleMeasureTool),
             _ => None,
         }
     }
@@ -142,6 +138,9 @@ impl Tool {
     fn hint(self) -> Option<&'static str> {
         match self {
             Tool::Roi => Some("Drag to draw the target ROI, Shift+drag for the background ROI"),
+            Tool::Measure => {
+                Some("Drag to draw a line and graph the values along it, Shift+drag for 45° steps")
+            }
             Tool::Browse => Some("Drag an image to a folder to move it, Ctrl+drag to copy it"),
             Tool::Pan => Some("Drag an image to move the view"),
             Tool::Zoom => Some("Drag up or down to zoom, click to zoom in, Alt+click to zoom out"),
@@ -220,6 +219,7 @@ pub struct VwApp {
     pipeline: crate::pipeline_view::PipelineView,
     histogram: crate::histogram_view::HistogramView,
     zoom_map: crate::zoom_map::ZoomMap,
+    line_profile: line_profile_pane::LineProfilePane,
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
     subframes: crate::subframes_window::SubframesWindow,
@@ -766,6 +766,7 @@ impl VwApp {
             quality_reference: None,
             presets,
             zoom_map: Default::default(),
+            line_profile: Default::default(),
             place_names: None,
             place_names_load: None,
             map: Default::default(),
@@ -944,10 +945,11 @@ impl VwApp {
             Action::ToggleRoi => self.toggle_tool(Tool::Roi),
             Action::ToggleHandTool => self.toggle_tool(Tool::Pan),
             Action::ToggleZoomTool => self.toggle_tool(Tool::Zoom),
+            Action::ToggleMeasureTool => self.toggle_tool(Tool::Measure),
             Action::DeleteProbePoint => {
                 let slot = &mut self.slots[i];
-                if !slot.delete_selected_mark() {
-                    slot.delete_selected_roi();
+                if !slot.delete_selected_mark() && !slot.delete_selected_roi() {
+                    slot.delete_selected_line();
                 }
             }
             Action::CopyMeasurement => {
@@ -1042,6 +1044,7 @@ impl VwApp {
             },
             Action::ToggleHistogram => self.toggle_histogram(),
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
+            Action::ToggleLineProfile => self.line_profile.open = !self.line_profile.open,
             Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
             Action::ToggleSkyChart => {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
@@ -1454,6 +1457,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::TogglePixelPipeline => "Pixel pipeline",
         Action::ToggleHistogram => "Analysis",
         Action::ToggleZoomMap => "Zoom map",
+        Action::ToggleLineProfile => "Line profile",
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
         Action::ToggleSubframes => "Subframes",

@@ -24,6 +24,8 @@ pub enum Tool {
     Probe,
     /// 左ドラッグで矩形の ROI を描く（Shift で背景）。
     Roi,
+    /// 左ドラッグで計測線を引く（Shift で 45° 刻み）。クリックで線を選ぶ。
+    Measure,
 }
 
 /// 左ボタンのドラッグでやること。
@@ -34,6 +36,7 @@ pub enum Drag {
     /// 上下で拡大縮小。
     Zoom,
     DrawRoi,
+    DrawLine,
     /// 画像を運ぶ（ほかのスロットやフォルダへ）。
     CarryFile,
 }
@@ -49,6 +52,8 @@ pub enum Click {
     AddMark(u32, u32),
     /// `None` なら ROI の外をクリックしたので選択を外す。
     SelectRoi(Option<usize>),
+    /// `None` なら線の外をクリックしたので選択を外す。
+    SelectLine(Option<usize>),
 }
 
 /// クリックした位置にあったもの。
@@ -58,6 +63,8 @@ pub struct Hits {
     pub mark: Option<usize>,
     /// 表示中の画像の ROI の番号。
     pub roi: Option<usize>,
+    /// 表示中の画像の計測線の番号。
+    pub line: Option<usize>,
     /// 画像の画素。画像の外なら `None`。
     pub pixel: Option<(u32, u32)>,
 }
@@ -69,6 +76,7 @@ impl Tool {
             Tool::Hand | Tool::Probe => Drag::Pan,
             Tool::Zoom => Drag::Zoom,
             Tool::Roi => Drag::DrawRoi,
+            Tool::Measure => Drag::DrawLine,
         }
     }
 
@@ -89,6 +97,7 @@ impl Tool {
     pub fn click(self, hits: Hits) -> Click {
         match self {
             Tool::Roi => Click::SelectRoi(hits.roi),
+            Tool::Measure => Click::SelectLine(hits.line),
             Tool::Probe => match (hits.mark, hits.pixel) {
                 (Some(i), _) => Click::SelectMark(i),
                 (None, Some((x, y))) => Click::AddMark(x, y),
@@ -108,7 +117,7 @@ impl Tool {
             Tool::Zoom => Some(CursorIcon::ZoomIn),
             Tool::Probe if over_pixel && !dragging => Some(CursorIcon::Crosshair),
             Tool::Probe => Some(grab(dragging)),
-            Tool::Roi => Some(CursorIcon::Crosshair),
+            Tool::Roi | Tool::Measure => Some(CursorIcon::Crosshair),
         }
     }
 }
@@ -187,7 +196,12 @@ mod tests {
     use super::*;
 
     fn hits(mark: Option<usize>, roi: Option<usize>, pixel: Option<(u32, u32)>) -> Hits {
-        Hits { mark, roi, pixel }
+        Hits {
+            mark,
+            roi,
+            line: None,
+            pixel,
+        }
     }
 
     #[test]
@@ -210,7 +224,13 @@ mod tests {
     #[test]
     fn only_the_zoom_tool_keeps_double_click_from_maximizing() {
         assert!(!Tool::Zoom.maximizes_on_double_click());
-        for tool in [Tool::Select, Tool::Hand, Tool::Probe, Tool::Roi] {
+        for tool in [
+            Tool::Select,
+            Tool::Hand,
+            Tool::Probe,
+            Tool::Roi,
+            Tool::Measure,
+        ] {
             assert!(tool.maximizes_on_double_click(), "{tool:?}");
         }
     }
@@ -223,7 +243,13 @@ mod tests {
 
     #[test]
     fn other_tools_do_not_zoom_on_click() {
-        for tool in [Tool::Select, Tool::Hand, Tool::Probe, Tool::Roi] {
+        for tool in [
+            Tool::Select,
+            Tool::Hand,
+            Tool::Probe,
+            Tool::Roi,
+            Tool::Measure,
+        ] {
             assert_eq!(tool.zoom_on_click(false), None, "{tool:?}");
             assert_eq!(tool.zoom_on_click(true), None, "{tool:?}");
         }
@@ -271,6 +297,24 @@ mod tests {
                 "{tool:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_measure_tool_draws_lines_and_selects_the_line_under_the_pointer() {
+        assert_eq!(Tool::Measure.drag(), Drag::DrawLine);
+        let on_line = Hits {
+            line: Some(1),
+            ..hits(None, None, Some((0, 0)))
+        };
+        assert_eq!(Tool::Measure.click(on_line), Click::SelectLine(Some(1)));
+        assert_eq!(
+            Tool::Measure.click(hits(None, None, Some((0, 0)))),
+            Click::SelectLine(None)
+        );
+        assert_eq!(
+            Tool::Measure.cursor(false, true, false),
+            Some(CursorIcon::Crosshair)
+        );
     }
 
     #[test]

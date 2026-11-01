@@ -523,6 +523,78 @@ impl RoiSettings {
     }
 }
 
+/// レポートとグラフの見た目（[`vw_report::Theme`]）。設定ファイルでは英語の名前。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportTheme {
+    /// 論文
+    Paper,
+    /// 技術ノート
+    #[default]
+    Lab,
+    /// vw ダーク
+    Dark,
+    /// 印刷モノクロ
+    Mono,
+}
+
+impl ReportTheme {
+    pub const ALL: [ReportTheme; 4] = [
+        ReportTheme::Paper,
+        ReportTheme::Lab,
+        ReportTheme::Dark,
+        ReportTheme::Mono,
+    ];
+
+    pub fn theme(self) -> vw_report::Theme {
+        match self {
+            ReportTheme::Paper => vw_report::Theme::Paper,
+            ReportTheme::Lab => vw_report::Theme::Lab,
+            ReportTheme::Dark => vw_report::Theme::Dark,
+            ReportTheme::Mono => vw_report::Theme::Mono,
+        }
+    }
+}
+
+/// 書き出すレポートと、クリップボードに出すグラフや比較の絵。
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct ReportSettings {
+    pub theme: ReportTheme,
+}
+
+impl ReportSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("report");
+        Self {
+            theme: r.get("theme").unwrap_or(d.theme),
+        }
+    }
+}
+
+/// 計測線（[`crate::line_profile`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MeasureSettings {
+    /// 線を引き終えたら、計測線のグラフの欄を開く。
+    pub open_profile: bool,
+}
+
+impl Default for MeasureSettings {
+    fn default() -> Self {
+        Self { open_profile: true }
+    }
+}
+
+impl MeasureSettings {
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("measure");
+        Self {
+            open_profile: r.get("open_profile").unwrap_or(d.open_profile),
+        }
+    }
+}
+
 /// 名前とキーの組の並びを読む。誤った組だけを外し、残りは使えるようにする。
 fn read_groups(r: &mut crate::toml_reader::Section<'_, '_>, key: &str) -> Option<Vec<SearchGroup>> {
     let groups = r.get::<Vec<SearchGroup>>(key)?;
@@ -2504,6 +2576,8 @@ pub struct Settings {
     pub behavior: Behavior,
     pub metadata: MetadataSettings,
     pub roi: RoiSettings,
+    pub measure: MeasureSettings,
+    pub report: ReportSettings,
     pub labels: Labels,
     pub dicom: Dicom,
     pub fits: Fits,
@@ -2574,6 +2648,8 @@ impl Settings {
         let behavior = Behavior::read(&mut r);
         let metadata = MetadataSettings::read(&mut r);
         let roi = RoiSettings::read(&mut r);
+        let measure = MeasureSettings::read(&mut r);
+        let report = ReportSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
         let fits = Fits::read(&mut r);
@@ -2611,6 +2687,8 @@ impl Settings {
                 behavior,
                 metadata,
                 roi,
+                measure,
+                report,
                 labels,
                 dicom,
                 fits,

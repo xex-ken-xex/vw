@@ -3,13 +3,7 @@
 use crate::analysis::Analysis;
 use crate::plane::Rgb;
 
-/// RGBA8 の画像。
-#[derive(Debug, Clone, PartialEq)]
-pub struct Rgba {
-    pub width: usize,
-    pub height: usize,
-    pub data: Vec<u8>,
-}
+pub use vw_report::Rgba;
 
 /// 0〜1 を 黒 → 赤 → 黄 → 白 の色にする（vw の色導出の差のヒートマップと同じ色）。
 pub fn heat(t: f32) -> [u8; 3] {
@@ -147,15 +141,7 @@ pub fn swipe(left: &Rgba, right: &Rgba, split: f32) -> Rgba {
 
 /// PNG にする。
 pub fn png(img: &Rgba) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, img.width as u32, img.height as u32);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    // 書き出しの失敗はメモリ上の Vec では起きない（大きさは揃えて渡している）。
-    if let Ok(mut w) = enc.write_header() {
-        let _ = w.write_image_data(&img.data);
-    }
-    out
+    vw_report::png(img)
 }
 
 #[cfg(test)]
