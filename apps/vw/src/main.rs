@@ -107,7 +107,12 @@ use vw_core::Registry;
 
 /// 組み込みのデコーダプラグインを登録する。新しい形式はここに 1 行足す。
 /// `fits` と `calibration` は FITS のプラグインと共有する、設定画面で変える表示と校正の決め方。
-fn registry(fits: &vw_fits::SharedOptions, calibration: &vw_fits::Calibration) -> Registry {
+/// `netcdf` は NetCDF のプラグインと共有する表示の決め方と、ファイルごとに選んだ変数。
+fn registry(
+    fits: &vw_fits::SharedOptions,
+    calibration: &vw_fits::Calibration,
+    netcdf: &(vw_netcdf::SharedOptions, vw_netcdf::Choices),
+) -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
     registry.register(Arc::new(vw_jpeg::JpegPlugin));
@@ -118,6 +123,10 @@ fn registry(fits: &vw_fits::SharedOptions, calibration: &vw_fits::Calibration) -
     registry.register(Arc::new(vw_fits::FitsPlugin::new(
         fits.clone(),
         calibration.clone(),
+    )));
+    registry.register(Arc::new(vw_netcdf::NetcdfPlugin::new(
+        netcdf.0.clone(),
+        netcdf.1.clone(),
     )));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));
@@ -159,11 +168,13 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let fits = vw_fits::SharedOptions::default();
             let calibration = vw_fits::Calibration::default();
+            let netcdf = Default::default();
             Ok(Box::new(app::VwApp::new(
                 cc,
-                registry(&fits, &calibration),
+                registry(&fits, &calibration, &netcdf),
                 fits,
                 calibration,
+                netcdf,
                 initial,
                 started,
             )))

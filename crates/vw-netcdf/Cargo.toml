@@ -1,0 +1,16 @@
+[package]
+name = "vw-netcdf"
+description = "NetCDF decoder plugin for vw"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vw-core.workspace = true
+vw-fits.workspace = true
+netcdf-reader = { version = "=0.12.0", features = ["cf"] }
+hdf5-reader = "=0.12.0"
+
+[lints]
+workspace = true

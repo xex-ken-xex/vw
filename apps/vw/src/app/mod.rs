@@ -184,6 +184,10 @@ pub struct VwApp {
     fits: vw_fits::SharedOptions,
     /// 天体の画像のプラグインと共有する校正の決め方と、「校正なし」にした画像。
     calibration: vw_fits::Calibration,
+    /// 地球の格子のデータのプラグインと共有する表示の決め方。変わったら表示中の NetCDF を読み直す。
+    netcdf: vw_netcdf::SharedOptions,
+    /// NetCDF のファイルごとに選んだ変数（プラグインと共有）。
+    netcdf_choices: vw_netcdf::Choices,
     /// 校正の結果をログに出したフォルダ。同じフォルダのライトを次々に見ても 1 回だけ出す。
     calibration_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
@@ -576,6 +580,7 @@ impl VwApp {
         registry: Registry,
         fits: vw_fits::SharedOptions,
         calibration: vw_fits::Calibration,
+        (netcdf, netcdf_choices): (vw_netcdf::SharedOptions, vw_netcdf::Choices),
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
@@ -684,6 +689,7 @@ impl VwApp {
         registry.set_probe_extensions(settings.settings.dicom.probe());
         fits.set(settings.settings.fits.options());
         calibration.set_options(settings.settings.fits.calibration.options());
+        netcdf.set(settings.settings.netcdf.options());
         vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
         vw_tiff::set_repair_strip_byte_counts(settings.settings.repair.tiff_strip_byte_counts);
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
@@ -722,6 +728,8 @@ impl VwApp {
             probe_extensions: settings.settings.dicom.probe_extensions.clone(),
             fits,
             calibration,
+            netcdf,
+            netcdf_choices,
             calibration_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
             color_rules: Arc::new(crate::colormap::Rules::new(&settings.settings.pipeline)),
@@ -1166,6 +1174,8 @@ impl VwApp {
                 None => self.log.warn("No image to read QR codes from"),
             },
             Action::ToggleCalibration => self.toggle_calibration(i),
+            Action::NextVariable => self.step_variable(i, 1),
+            Action::PreviousVariable => self.step_variable(i, -1),
             Action::NextColorMap => self.next_color_map(i),
             Action::ToggleColorGauge => self.show_gauge ^= true,
             Action::ZoomIn => self.slots[i].zoom_by(KEY_ZOOM_FACTOR),

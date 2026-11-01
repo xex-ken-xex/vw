@@ -36,7 +36,9 @@ impl Quantity {
                 Some("CNTS") => Quantity::Unit("counts"),
                 _ => Quantity::Raw,
             },
-            _ => fits_unit(meta).map_or(Quantity::Raw, Quantity::Named),
+            _ => fits_unit(meta)
+                .or_else(|| netcdf_unit(meta))
+                .map_or(Quantity::Raw, Quantity::Named),
         }
     }
 
@@ -78,6 +80,13 @@ pub fn fits_unit(meta: &Metadata) -> Option<String> {
         .filter(|u| !u.is_empty())
 }
 
+/// NetCDF の変数の `units`。
+pub fn netcdf_unit(meta: &Metadata) -> Option<String> {
+    meta.get(vw_netcdf::GROUP, vw_netcdf::UNITS)
+        .map(|u| u.trim().to_owned())
+        .filter(|u| !u.is_empty())
+}
+
 /// 足りない項目（`SUVbw needs` の、カンマで区切った英語の名前）を画面の言葉にする。
 pub fn missing_text(lang: Language, missing: &str) -> String {
     missing
@@ -115,6 +124,13 @@ mod tests {
         m.push(vw_fits::GROUP, "BUNIT", "Jy/beam");
         assert_eq!(Quantity::of(&m).text(0.5), "0.50 Jy/beam");
         assert_eq!(Quantity::of(&Metadata::default()).text(0.5), "0.50");
+    }
+
+    #[test]
+    fn netcdf_values_carry_the_unit_of_the_variable() {
+        let mut m = Metadata::default();
+        m.push(vw_netcdf::GROUP, vw_netcdf::UNITS, "K");
+        assert_eq!(Quantity::of(&m).text(273.5), "273.50 K");
     }
 
     #[test]

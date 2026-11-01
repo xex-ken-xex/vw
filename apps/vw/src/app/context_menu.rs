@@ -24,6 +24,8 @@ pub enum Entry {
     Faces,
     /// 「色の表 ▸」。
     ColorMap,
+    /// NetCDF の「変数 ▸」。
+    Variable,
     /// 「送る ▸」。
     Send,
 }
@@ -54,6 +56,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
     &[
         Act(Action::DevelopRaw),
         Act(Action::ToggleCalibration),
+        Entry::Variable,
         Entry::ColorMap,
         Act(Action::TogglePixelPipeline),
         Entry::Send,
@@ -294,6 +297,8 @@ pub enum Picked {
     },
     /// スロットの色の表を選んだ。
     ColorPick(usize, crate::colormap::Pick),
+    /// スロットの NetCDF の変数を選んだ。
+    Variable(usize, String),
 }
 
 /// 画像のスロットの右クリックメニュー。画像を出していないスロットには出さない。
@@ -352,6 +357,7 @@ fn sections(
                 Act(action) => action_item(ui, cx, action, target, out),
                 Entry::Faces => faces_items(ui, cx, target, out),
                 Entry::ColorMap => color_map_item(ui, cx, target, out),
+                Entry::Variable => variable_item(ui, cx, target, out),
                 Entry::Send => send_item(ui, cx, target, out),
             }
         }
@@ -367,8 +373,44 @@ fn entry_shows(entry: Entry, target: &Target, cx: &MenuContext) -> bool {
             .slot()
             .and_then(|s| s.shown())
             .is_some_and(|s| s.info.look.is_some()),
+        Entry::Variable => target
+            .slot()
+            .and_then(|s| s.shown())
+            .is_some_and(|s| netcdf_variables(&s.info.metadata).len() > 1),
         Entry::Send => true,
     }
+}
+
+/// NetCDF の画像にできる変数（メタデータの一覧）と、表示中の変数。
+fn netcdf_variables(meta: &vw_core::Metadata) -> Vec<&str> {
+    meta.entries
+        .iter()
+        .filter(|(g, _, _)| g == vw_netcdf::VARIABLES_GROUP)
+        .map(|(_, k, _)| k.as_str())
+        .collect()
+}
+
+fn variable_item(ui: &mut egui::Ui, cx: &MenuContext, target: &Target, out: &mut Vec<Picked>) {
+    let Target::Slot { index, slot, .. } = target else {
+        return;
+    };
+    let Some(shown) = slot.shown() else {
+        return;
+    };
+    let meta = &shown.info.metadata;
+    let current = meta.get(vw_netcdf::GROUP, vw_netcdf::VARIABLE);
+    ui.menu_button(tr(cx.lang, "Variable"), |ui| {
+        for name in netcdf_variables(meta) {
+            let detail = meta
+                .get(vw_netcdf::VARIABLES_GROUP, name)
+                .unwrap_or_default();
+            let item = vw_ui::menu::item(current == Some(name), name, "");
+            if ui.add(item).on_hover_text(detail).clicked() {
+                out.push(Picked::Variable(*index, name.to_owned()));
+                ui.close();
+            }
+        }
+    });
 }
 
 fn action_item(
@@ -535,6 +577,7 @@ impl VwApp {
                 self.send_to(choice, targets);
             }
             Picked::ColorPick(i, pick) => self.set_color_pick(i, pick),
+            Picked::Variable(i, name) => self.choose_variable(i, |_| Some(name)),
         }
     }
 }

@@ -117,7 +117,7 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 8] = [
+                let groups: [&[Action]; 9] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -133,6 +133,7 @@ impl VwApp {
                         Action::SwapRawPreview,
                         Action::ToggleCalibration,
                     ],
+                    &[Action::NextVariable, Action::PreviousVariable],
                     &[Action::NextColorMap, Action::ToggleColorGauge],
                     &[
                         Action::ToggleAutoStretch,

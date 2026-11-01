@@ -35,6 +35,7 @@ vw-launch = { path = "crates/vw-launch" }
 vw-renderer = { path = "crates/vw-renderer" }
 vw-pipeline = { path = "crates/vw-pipeline" }
 vw-report = { path = "crates/vw-report" }
+vw-netcdf = { path = "crates/vw-netcdf" }
 
 [profile.release]
 lto = "thin"

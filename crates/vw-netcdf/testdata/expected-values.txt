@@ -1,0 +1,11 @@
+era5_like.nc t2m shape=2x37x72 nan=110 min=245.2416 max=295.4640 mean=267.8623 first=246.5680 last=nan
+era5_like.nc tp shape=2x37x72 nan=0 min=0.0000 max=0.0274 mean=0.0013 first=0.0004 last=0.0005
+classic.nc t2m shape=37x72 nan=0 min=245.7332 max=294.8064 mean=267.4447 first=248.8954 last=247.4622
+classic_64bit.nc land_sea_mask shape=37x72 nan=0 min=0.0000 max=1.0000 mean=0.2113 first=0.0000 last=0.0000
+sst_groups.nc sea_surface/analysed_sst shape=2x36x72 nan=1344 min=269.1661 max=300.7263 mean=286.0912 first=nan last=270.1011
+sst_groups.nc sea_surface/sea_ice_fraction shape=2x36x72 nan=0 min=0.0000 max=1.0000 mean=0.1232 first=0.0000 last=1.0000
+sst_groups.nc quality/quality_level shape=2x36x72 nan=0 min=0.0000 max=5.0000 mean=2.9873 first=0.0000 last=5.0000
+edge_cases.nc south_up shape=5x4 nan=0 min=0.0000 max=43.0000 mean=21.5000 first=0.0000 last=43.0000
+edge_cases.nc lon_lat shape=4x5 nan=0 min=0.0000 max=43.0000 mean=21.5000 first=0.0000 last=43.0000
+edge_cases.nc measured_range shape=5x4 nan=5 min=0.0000 max=10.0000 mean=4.9000 first=0.0000 last=nan
+edge_cases.nc stored_range shape=5x4 nan=12 min=0.0000 max=4.5000 mean=2.2500 first=0.0000 last=nan

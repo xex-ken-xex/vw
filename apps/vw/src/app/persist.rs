@@ -46,6 +46,7 @@ impl VwApp {
         self.tree.set_order(self.settings().tree.order());
         self.apply_probe_extensions();
         self.apply_fits_options();
+        self.apply_netcdf_options();
         self.apply_color_rules();
         self.apply_texture_options();
         self.apply_archive_dir();
@@ -115,6 +116,16 @@ impl VwApp {
         self.reload_fits_slots();
     }
 
+    /// 地球の格子のデータの表示の決め方が変わったら、表示中の NetCDF を読み直す。
+    pub(super) fn apply_netcdf_options(&mut self) {
+        let options = self.settings().netcdf.options();
+        if options == self.netcdf.get() {
+            return;
+        }
+        self.netcdf.set(options);
+        self.reload_plugin_slots(vw_netcdf::NAME);
+    }
+
     /// 画素の変換の設定（色の表の段）が変わったら、表示中の灰色の画像を読み直す。
     pub(super) fn apply_color_rules(&mut self) {
         if self.settings().pipeline == self.color_settings {
@@ -142,15 +153,20 @@ impl VwApp {
 
     /// 表示中の FITS を読み直す。
     pub(super) fn reload_fits_slots(&mut self) {
+        self.reload_plugin_slots("FITS");
+    }
+
+    /// プラグイン `plugin` で読んだ、表示中の画像を読み直す。
+    pub(super) fn reload_plugin_slots(&mut self, plugin: &str) {
         let full = self.cell_needs_full();
-        let fits: Vec<(usize, PathBuf)> = self
+        let shown: Vec<(usize, PathBuf)> = self
             .slots
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.shown().is_some_and(|d| d.info.plugin == "FITS"))
+            .filter(|(_, s)| s.shown().is_some_and(|d| d.info.plugin == plugin))
             .filter_map(|(i, s)| Some((i, s.path.clone()?)))
             .collect();
-        for (index, path) in fits {
+        for (index, path) in shown {
             self.start_load(index, path, full);
         }
     }
@@ -193,6 +209,7 @@ impl VwApp {
                 self.tree.set_order(self.settings().tree.order());
                 self.apply_probe_extensions();
                 self.apply_fits_options();
+                self.apply_netcdf_options();
                 self.apply_color_rules();
                 self.apply_texture_options();
                 self.apply_archive_dir();

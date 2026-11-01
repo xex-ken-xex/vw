@@ -1,0 +1,44 @@
+# vw-netcdf のテスト用データ
+
+`cargo test -p vw-netcdf` が読む、小さい NetCDF のファイルと期待値です。
+ファイルはリポジトリに入れてあるので、テストを流すだけなら何も用意しなくてかまいません。
+`make_fixtures.py` は、これらを作り直すときだけ使います。
+
+## 中身
+
+| ファイル | 形式 | 確かめること |
+| --- | --- | --- |
+| `era5_like.nc` | NetCDF-4 | 時刻 2 × 緯度 37 × 経度 72 の気温。int16 を `scale_factor`・`add_offset` で戻す。一部が `_FillValue`。緯度は北から南 |
+| `classic.nc` | NetCDF-3（CDF-1） | 気温と、陸と海の印（`flag_values`） |
+| `classic_64bit.nc` | NetCDF-3（CDF-2） | `classic.nc` と同じ中身を 64bit オフセットの形で |
+| `sst_groups.nc` | NetCDF-4 | グループ、無制限の次元、陸の `_FillValue`、`_Unsigned` の byte |
+| `edge_cases.nc` | NetCDF-3 | 緯度が南から北の変数、(経度, 緯度) の順の変数、計測の値の `valid_range` と格納値の `valid_range` |
+| `expected-values.txt` | テキスト | 上のファイルを netCDF4 で読んだときの形・欠損の数・最小・最大・平均・角の値 |
+
+値はどれも作り物です（乱数の種は固定）。
+
+## make_fixtures.py
+
+### 前提
+
+- Python 3.9 以上
+- `netCDF4` と `numpy`（`pip install netCDF4 numpy`）
+
+Windows に Python がなくても、テストを流すのには要りません。作り直すときだけ、Python のある Linux などで実行します。
+
+### できること
+
+- 上の表の `.nc` ファイル 5 つと `expected-values.txt` を作ります。
+- `expected-values.txt` の値は netCDF4 で読んだ値です。ただし `edge_cases.nc` の `measured_range` だけは、
+  `valid_range` を計測の値（`scale_factor` を当てた後）と比べた値にしています。`valid_range` の型が
+  `scale_factor` の型と同じで、変数の型と違うとき、vw はそう読むためです。
+
+### 使い方
+
+```sh
+cd crates/vw-netcdf/testdata
+python3 make_fixtures.py          # このフォルダに作り直す
+python3 make_fixtures.py /tmp/nc  # 別のフォルダに作る
+```
+
+作り直したら `cargo test -p vw-netcdf` を流し、期待値と合うことを確かめてください。
