@@ -6,7 +6,7 @@ members = ["crates/*", "apps/*"]
 exclude = ["apps/dicoamplio"]
 
 [workspace.package]
-version = "0.8.6"
+version = "0.9.0"
 edition = "2024"
 # 依存（egui 0.36）が求める最低の版。cargo update は、この版で使える範囲に解決する（resolver 3）。
 rust-version = "1.95"
