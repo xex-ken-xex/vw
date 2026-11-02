@@ -40,7 +40,6 @@ pub enum Action {
 
 /// 「送る ▸」に並べるもの。
 pub struct SendTo<'a> {
-    pub destinations: &'a [String],
     pub apps: &'a [crate::settings::SendApp],
 }
 
@@ -55,7 +54,8 @@ impl SendTo<'_> {
         let first = hits.and_then(|h| h.first()).map(Path::new);
         let offer = crate::send_app::Offer::for_path(
             self.apps,
-            Some(self.destinations),
+            // データセットをネットワークへ送る使い方はないので、送信先は出さない。
+            None,
             first.unwrap_or(Path::new("")),
             first.is_none(),
             false,

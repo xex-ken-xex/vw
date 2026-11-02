@@ -616,17 +616,10 @@ impl VwApp {
         let ctx = ui.ctx().clone();
         let lang = self.lang();
         let dataset = &self.settings.settings.dataset;
-        let destinations = self.destination_names();
         let apps = self.settings.settings.send.apps.as_deref().unwrap_or(&[]);
-        let action = self.datasets.ui(
-            ui,
-            lang,
-            dataset,
-            &crate::datasets_screen::SendTo {
-                destinations: &destinations,
-                apps,
-            },
-        );
+        let action = self
+            .datasets
+            .ui(ui, lang, dataset, &crate::datasets_screen::SendTo { apps });
         match action {
             Some(Action::Show(dir)) => self.show_dataset(&ctx, dir),
             Some(Action::ShowFiles(dir, files)) => self.show_dataset_files(&dir, &files),

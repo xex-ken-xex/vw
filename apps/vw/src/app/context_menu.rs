@@ -520,13 +520,10 @@ fn send_item(ui: &mut egui::Ui, cx: &MenuContext, target: &Target, out: &mut Vec
                 dicom,
             )
         }
-        Target::Folder { path, kind } => crate::send_app::Offer::for_path(
-            cx.apps,
-            Some(cx.destinations),
-            path,
-            *kind != FolderKind::Zip,
-            false,
-        ),
+        // フォルダごとネットワークへ送る使い方はないので、送信先は出さない（ken 2026-11-02）。
+        Target::Folder { path, kind } => {
+            crate::send_app::Offer::for_path(cx.apps, None, path, *kind != FolderKind::Zip, false)
+        }
     };
     if let Some(choice) = crate::send_app::menu(ui, cx.lang, &offer) {
         out.push(Picked::Send {
