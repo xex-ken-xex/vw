@@ -43,6 +43,8 @@ impl VwApp {
     /// 設定画面で値が変わったときに、反映して保存する。
     pub(super) fn settings_changed(&mut self, ctx: &egui::Context) {
         theme::apply(ctx, &self.settings().appearance);
+        self.log
+            .set_translator(crate::log_words::translator(self.lang()));
         self.tree.set_order(self.settings().tree.order());
         self.apply_probe_extensions();
         self.apply_fits_options();

@@ -36,15 +36,33 @@ pub struct Line {
     pub elapsed: f64,
     pub at: DateTime<Local>,
     pub level: Level,
+    /// ログファイルに書く本文。英語のまま残し、問い合わせや検索に使えるようにする。
     pub text: String,
     /// `text` の頭の、済んだことを表す動詞のバイト数（[`Log::done`] の行だけ。ほかは 0）。
+    pub verb: usize,
+    /// 画面に出す訳（[`Log::set_translator`] が訳せた行だけ）。
+    pub shown: Option<Shown>,
+}
+
+/// 画面に出す訳の本文と、その頭の緑にする動詞のバイト数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    pub text: String,
     pub verb: usize,
 }
 
 impl Line {
+    /// 画面に出す本文と、頭の動詞のバイト数。訳があれば訳。
+    pub fn body(&self) -> (&str, usize) {
+        match &self.shown {
+            Some(s) => (&s.text, s.verb),
+            None => (&self.text, self.verb),
+        }
+    }
+
     /// ターミナル風の表示とコピーの形。起動からの経過秒を付ける。
     pub fn terminal(&self) -> String {
-        format!("[{:8.3}] {}", self.elapsed, self.text)
+        format!("[{:8.3}] {}", self.elapsed, self.body().0)
     }
 
     /// 普通の表示の頭に付ける時刻。
@@ -64,11 +82,15 @@ impl Line {
     }
 }
 
+/// 英語の行を画面の言葉に訳す。訳がなければ `None`。
+pub type Translator = Box<dyn Fn(&str) -> Option<String> + Send>;
+
 /// 起動時刻からの経過秒を付けてメッセージを溜め、ファイルにも書く。
 pub struct Log {
     origin: Instant,
     pub lines: Vec<Line>,
     file: Option<LogFile>,
+    translate: Option<Translator>,
 }
 
 impl Log {
@@ -77,7 +99,16 @@ impl Log {
             origin,
             lines: Vec::new(),
             file: None,
+            translate: None,
         }
+    }
+
+    /// ここから先の行を、画面には `translate` の訳で出す（ファイルは英語のまま）。
+    /// 前の行は書いたときの言葉のまま残す。
+    ///
+    /// 出すときに毎回訳さないのは、ログの行は数千になり、毎フレーム全部を訳の表と突き合わせると重いため。
+    pub fn set_translator(&mut self, translate: Option<Translator>) {
+        self.translate = translate;
     }
 
     /// ここから先の行を `file` にも書く。それまでに溜めた行も先に書く。
@@ -99,11 +130,19 @@ impl Log {
             level,
             text: msg.into(),
             verb: 0,
+            shown: None,
         }
     }
 
+    fn translated(&self, english: &str) -> Option<String> {
+        self.translate.as_ref()?(english).filter(|t| t != english)
+    }
+
     pub fn push(&mut self, level: Level, msg: impl Into<String>) {
-        let line = self.line(level, msg);
+        let mut line = self.line(level, msg);
+        line.shown = self
+            .translated(&line.text)
+            .map(|text| Shown { text, verb: 0 });
         if let Some(f) = &self.file {
             f.write_line(&line.raw());
         }
@@ -128,8 +167,16 @@ impl Log {
     /// 処理が済んだ行。`verb` は「Copied」のような済んだことを表す語で、`rest` はその後に続ける。
     pub fn done(&mut self, verb: &str, rest: impl AsRef<str>) {
         self.push(Level::Done, format!("{verb} {}", rest.as_ref()));
+        let shown_verb = self.translated(verb).unwrap_or_else(|| verb.to_owned());
         if let Some(line) = self.lines.last_mut() {
             line.verb = verb.len();
+            if let Some(shown) = &mut line.shown {
+                shown.verb = if shown.text.starts_with(&shown_verb) {
+                    shown_verb.len()
+                } else {
+                    0
+                };
+            }
         }
     }
 
@@ -216,6 +263,7 @@ impl DetailWriter {
             level,
             text: msg.into(),
             verb: 0,
+            shown: None,
         };
         self.file.write_line(&line.raw());
     }
@@ -311,6 +359,39 @@ mod tests {
         assert_eq!(line.level, Level::Done);
         assert_eq!(line.text, "Copied a.png to b");
         assert_eq!(&line.text[..line.verb], "Copied");
+    }
+
+    fn japanese() -> Translator {
+        Box::new(|en: &str| match en {
+            "Opened a" => Some("a を開いた".into()),
+            "Copied" => Some("コピー".into()),
+            "Copied a" => Some("コピー a".into()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_screen_shows_the_translation_and_the_file_keeps_english() {
+        let tmp = TempDir::new();
+        let mut log = Log::new(Instant::now());
+        log.write_to(LogFile::create(tmp.path(), 5, at("2026-11-02 10:00:00")).unwrap());
+        log.set_translator(Some(japanese()));
+        log.info("Opened a");
+        log.info("untranslated");
+        assert_eq!(log.lines[0].body().0, "a を開いた");
+        assert_eq!(log.lines[1].body().0, "untranslated");
+        assert!(log.all_text().contains("] a を開いた"));
+        let text = std::fs::read_to_string(log.file_path().unwrap()).unwrap();
+        assert!(text.contains("] Opened a") && !text.contains("開いた"));
+    }
+
+    #[test]
+    fn a_translated_done_line_keeps_its_verb_green() {
+        let mut log = Log::new(Instant::now());
+        log.set_translator(Some(japanese()));
+        log.done("Copied", "a");
+        let (text, verb) = log.lines[0].body();
+        assert_eq!(&text[..verb], "コピー");
     }
 
     #[test]

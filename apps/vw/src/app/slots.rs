@@ -580,7 +580,7 @@ impl VwApp {
     /// スロット `index` のデータの範囲が入るように地図を開いて合わせる。
     pub(super) fn show_slot_on_map(&mut self, index: usize) {
         if !self.settings().map.enabled {
-            self.log.warn("The map is turned off in the settings");
+            self.map_ask = Some(map_consent::MapAsk::ShowSlot(index));
             return;
         }
         let outline = self

@@ -177,7 +177,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | Ctrl+1 / 2 / 3 / 4 | Show / hide the folder tree / metadata / images / log |
 | Ctrl+D | Open / close the Datasets screen |
 | Ctrl+B | Open / close the subframes window |
-| Ctrl+M | Show / hide the map (only when the map is enabled in settings) |
+| Ctrl+M | Show / hide the map (asks first when the map is off in the settings) |
 | Ctrl+Z | Undo positions placed or removed on the map, and flags cleared in bulk |
 | Ctrl+, | Open / close the settings |
 | F1 | Open this user guide in the browser |

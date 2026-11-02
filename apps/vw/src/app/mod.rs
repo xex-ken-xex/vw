@@ -51,6 +51,7 @@ mod folders;
 mod labeling;
 mod line_profile_pane;
 mod log_pane;
+mod map_consent;
 mod memory_hint;
 mod menu;
 mod metadata_pane;
@@ -418,6 +419,8 @@ pub struct VwApp {
     pending_trash: Option<discard::Pending>,
     /// フラグを消してよいか尋ねている画像。
     pending_clear_flags: Option<labeling::ClearFlags>,
+    /// 地図を使うかを聞いている途中。
+    map_ask: Option<map_consent::MapAsk>,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
     large_archive_prompt: Option<LargeArchivePrompt>,
@@ -625,6 +628,9 @@ impl VwApp {
         let mut log = Log::new(started);
         let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
         let remember_open = settings.settings.metadata.remember_open;
+        log.set_translator(crate::log_words::translator(
+            settings.settings.appearance.language,
+        ));
         for n in notes {
             log.error(format!("Settings: {n}"));
         }
@@ -896,6 +902,7 @@ impl VwApp {
             export: None,
             pending_trash: None,
             pending_clear_flags: None,
+            map_ask: None,
             password_prompt: None,
             large_archive_prompt: None,
             dataset_dialog: None,
@@ -1105,7 +1112,7 @@ impl VwApp {
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleLineProfile => self.line_profile.open = !self.line_profile.open,
             Action::ToggleRoiGraph => self.roi_graph.open = !self.roi_graph.open,
-            Action::ToggleMap => self.map.open = !self.map.open && self.settings().map.enabled,
+            Action::ToggleMap => self.toggle_map(),
             Action::ToggleSkyChart => {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
             }
@@ -1442,6 +1449,7 @@ impl eframe::App for VwApp {
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
         self.clear_flags_dialog(&ctx);
+        self.map_ask_dialog(&ctx);
         self.password_dialog(&ctx);
         self.folder_picker_ui(&ctx);
         self.large_archive_dialog(&ctx);

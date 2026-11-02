@@ -66,9 +66,18 @@ const JA: &[(&str, &str)] = &[
     // 地図
     ("Map", "地図"),
     ("Use the map", "地図を使う"),
+    ("Use the map?", "地図を使いますか？"),
     (
-        "Show the map window (View > Map) with the places where photos were taken. The map pictures are downloaded from the server below while the window is open, so this is off until you turn it on.",
-        "撮影地点を点で出す地図のウインドウ（「表示」→「地図」）を使います。ウインドウを開いている間、地図の絵を下のサーバーから取るので、自分でオンにするまでは切ってあります。",
+        "The map pictures are downloaded from {} while the map is open.",
+        "地図を開いている間、地図の絵を {} から取ります。",
+    ),
+    (
+        "You can turn it off again in Settings > Map.",
+        "設定の「地図」で、また切れます。",
+    ),
+    (
+        "Show the map window (View > Map) with the places where photos were taken. The map pictures are downloaded from the server below while the window is open, so this is off until you turn it on. While it is off, View > Map asks first and turns it on if you agree.",
+        "撮影地点を点で出す地図のウインドウ（「表示」→「地図」）を使います。ウインドウを開いている間、地図の絵を下のサーバーから取るので、自分でオンにするまでは切ってあります。切ってある間は「表示」→「地図」で先に聞き、使うと答えればオンにします。",
     ),
     ("Map picture URL", "地図の絵の URL"),
     (

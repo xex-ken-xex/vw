@@ -52,6 +52,7 @@ mod layout;
 mod line_profile;
 mod loader;
 mod loading;
+mod log_words;
 mod roi_graph;
 use vw_log::log;
 mod map_tiles;

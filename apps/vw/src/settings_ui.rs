@@ -1063,7 +1063,7 @@ const ITEMS: &[Item] = &[
         section: Section::Map,
         key: "map.enabled",
         title: "Use the map",
-        description: "Show the map window (View > Map) with the places where photos were taken. The map pictures are downloaded from the server below while the window is open, so this is off until you turn it on.",
+        description: "Show the map window (View > Map) with the places where photos were taken. The map pictures are downloaded from the server below while the window is open, so this is off until you turn it on. While it is off, View > Map asks first and turns it on if you agree.",
         widget: map_enabled_widget,
     },
     Item {
