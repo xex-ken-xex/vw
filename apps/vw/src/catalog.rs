@@ -22,6 +22,8 @@ pub const FILE_NAME: &str = "vw-search-catalog.json";
 pub const PARTIAL_FILE: &str = "vw-search-catalog.partial.json";
 /// 今読んでいるファイル。読む前に書くので、vw が落ちたら最後に読もうとしたファイルが残る。
 pub const READING_FILE: &str = "vw-search-catalog.reading";
+/// 検索カタログと、その途中の結果・書きかけのファイルの名前の頭。
+const OWN_FILES: &str = "vw-search-catalog";
 const FORMAT: u32 = 1;
 /// AI タグと人物の組の種類。メタデータ欄のグループ「AI tags」に合わせる。
 pub const AI_TAGS: &str = "ai tags";
@@ -59,6 +61,23 @@ pub struct Catalog {
     /// 読めなかったファイルや、パスワードを入れずに飛ばしたアーカイブ。
     #[serde(default)]
     pub skipped: Vec<Skipped>,
+    /// 画像でもアーカイブでもないファイル（バッチ・説明書き・CSV など）。名前・大きさ・更新時刻だけを持ち、
+    /// 検索には出さず、取り出しのときに一緒に写す。
+    ///
+    /// `files` に混ぜないのは、検索・ヒットの数・送信が `files` を画像の一覧として数えているため。
+    #[serde(default)]
+    pub others: Vec<OtherFile>,
+}
+
+/// 画像でもアーカイブでもないファイル。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OtherFile {
+    /// データセットのフォルダからの相対パス（区切りは `/`）。
+    pub path: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub modified: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -332,7 +351,8 @@ pub fn scan_resumable(
     resume: Resume,
 ) -> Result<Report, String> {
     let mut candidates = Vec::new();
-    walk(dir, registry, &mut candidates)?;
+    let mut other_paths = Vec::new();
+    walk(dir, registry, &mut candidates, &mut other_paths)?;
     progress.total.store(candidates.len(), Ordering::Relaxed);
     let mut state = match resume {
         Resume::Continue => load_partial(dir).map(|mut p| {
@@ -473,6 +493,14 @@ pub fn scan_resumable(
         meta: builder.triples,
         files: builder.files,
         skipped: problems,
+        others: other_paths
+            .iter()
+            .map(|p| OtherFile {
+                path: relative_name(dir, p),
+                size: p.metadata().map_or(0, |m| m.len()),
+                modified: modified_time(p),
+            })
+            .collect(),
         ..Catalog::default()
     };
     catalog.set_info(info);
@@ -494,8 +522,14 @@ pub fn skip(path: &str, reason: impl Into<String>) -> Skipped {
     }
 }
 
-/// 調べるファイル（画像とアーカイブ）を名前順に集める。
-fn walk(dir: &Path, registry: &Registry, out: &mut Vec<PathBuf>) -> Result<(), String> {
+/// 調べるファイル（画像とアーカイブ）を `out` に、それ以外のファイルを `others` に、名前順に集める。
+/// vw がデータセットの中に置く自分のファイルは、どちらにも入れない。
+fn walk(
+    dir: &Path,
+    registry: &Registry,
+    out: &mut Vec<PathBuf>,
+    others: &mut Vec<PathBuf>,
+) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -506,13 +540,25 @@ fn walk(dir: &Path, registry: &Registry, out: &mut Vec<PathBuf>) -> Result<(), S
         };
         if kind.is_dir() {
             if !crate::tree::is_recycle_bin(&e.file_name().to_string_lossy()) {
-                walk(&path, registry, out)?;
+                walk(&path, registry, out, others)?;
             }
-        } else if kind.is_file() && (archive::is_archive(&path) || registry.supports_file(&path)) {
-            out.push(path);
+        } else if kind.is_file() {
+            if archive::is_archive(&path) || registry.supports_file(&path) {
+                out.push(path);
+            } else if !is_vw_file(&e.file_name().to_string_lossy()) {
+                others.push(path);
+            }
         }
     }
     Ok(())
+}
+
+/// vw がフォルダに置く自分のファイル（検索カタログ、その途中の結果、フラグとタグ、AI タグ）。
+///
+/// フラグとタグのファイルも写さないのは、取り出しで一部の画像だけを写すと、写していない画像の
+/// フラグまで持ち込み、出力先に前からあるそのファイルとも名前がぶつかるため。
+fn is_vw_file(name: &str) -> bool {
+    name.starts_with(OWN_FILES) || name == labels::FILE_NAME || name == ai_tags::FILE_NAME
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -910,6 +956,24 @@ mod tests {
         assert_eq!(values_of(c, "a/b/x.png", "image", "width"), ["2"]);
         assert_eq!(values_of(c, "a/b/x.png", "image", "height"), ["3"]);
         assert_eq!(values_of(c, "a/b/x.png", "png", "Bit depth"), ["8"]);
+    }
+
+    #[test]
+    fn files_other_than_images_are_listed_by_name_and_size_apart_from_the_images() {
+        let tmp = TempDir::new();
+        write_png(&tmp.path().join("x.png"), 2, 3, &[0; 18]);
+        std::fs::write(tmp.path().join("run.bat"), "@echo off").unwrap();
+        std::fs::write(tmp.mkdir("docs").join("readme.txt"), "read me").unwrap();
+        std::fs::write(tmp.path().join(labels::FILE_NAME), "{}").unwrap();
+        std::fs::write(tmp.path().join(FILE_NAME), "{}").unwrap();
+        std::fs::write(tmp.path().join(READING_FILE), "").unwrap();
+
+        let c = run(tmp.path(), None).unwrap().catalog;
+
+        let others: Vec<_> = c.others.iter().map(|f| (f.path.as_str(), f.size)).collect();
+        assert_eq!(others, [("docs/readme.txt", 7), ("run.bat", 9)]);
+        assert_eq!(c.files.len(), 1);
+        assert!(c.others.iter().all(|f| !f.modified.is_empty()));
     }
 
     #[test]

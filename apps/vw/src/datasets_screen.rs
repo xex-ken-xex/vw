@@ -482,9 +482,18 @@ impl DatasetsScreen {
             .map(Index::field_values)
             .unwrap_or_default();
         let keys: &[(String, String)] = self.index.as_ref().map_or(&[], |i| i.meta_keys.as_slice());
+        let query = self.query.clone();
         let mut remove = None;
+        if !self.query.conditions.is_empty() {
+            ui.label(tr(lang, "Files that meet all the conditions"));
+        }
         for (i, c) in self.query.conditions.iter_mut().enumerate() {
+            let blank = c.is_blank();
             ui.horizontal(|ui| {
+                if blank {
+                    // 値を入れるまで効かない行だと分かるように。
+                    ui.multiply_opacity(0.55);
+                }
                 target_combo(ui, lang, i, &mut c.target, field_names);
                 if let Target::Meta { kind, key } = &mut c.target {
                     ui.add(
@@ -523,7 +532,11 @@ impl DatasetsScreen {
                         );
                     }
                     _ => {
-                        ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(200.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut c.value)
+                                .hint_text(tr(lang, "Enter a value to use this condition"))
+                                .desired_width(200.0),
+                        );
                         let choices: &[String] = match &c.target {
                             Target::Tags => &tags,
                             Target::Field(f) => values.get(f).map_or(&[], Vec::as_slice),
@@ -542,8 +555,22 @@ impl DatasetsScreen {
                             ui.push_id(("dataset-values", i), |ui| {
                                 // 値はファイルの数だけあり得るので、メニューを開いたときだけ集める。
                                 vw_ui::menu::button(ui, icon::CARET_DOWN, |ui| {
-                                    let values = index.meta_values(kind, key);
-                                    value_list(ui, lang, &values, &mut c.value);
+                                    let mut others = query.clone();
+                                    others.conditions.remove(i);
+                                    // ほかの行の正規表現が書きかけで誤っていても、値は選べるように全部から出す。
+                                    let values = dataset_search::meta_value_counts(
+                                        index, &others, kind, key,
+                                    )
+                                    .or_else(|_| {
+                                        dataset_search::meta_value_counts(
+                                            index,
+                                            &Query::default(),
+                                            kind,
+                                            key,
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                    counted_value_list(ui, lang, &values, &mut c.value);
                                 });
                             });
                         }
@@ -1326,6 +1353,40 @@ fn value_list(ui: &mut egui::Ui, lang: Language, values: &[String], value: &mut 
         .show(ui, |ui| {
             for v in values.iter().take(MAX) {
                 if ui.selectable_label(v == value, v).clicked() {
+                    value.clone_from(v);
+                    ui.close();
+                }
+            }
+            if values.len() > MAX {
+                ui.weak(tr1(
+                    lang,
+                    "… and {} more",
+                    &(values.len() - MAX).to_string(),
+                ));
+            }
+        });
+}
+
+/// メタデータの値の候補と、その値を持つファイルの数。
+fn counted_value_list(
+    ui: &mut egui::Ui,
+    lang: Language,
+    values: &[(String, usize)],
+    value: &mut String,
+) {
+    const MAX: usize = 500;
+    if values.is_empty() {
+        ui.weak(tr(lang, "No values"));
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(360.0)
+        .show(ui, |ui| {
+            for (v, n) in values.iter().take(MAX) {
+                if ui
+                    .selectable_label(v == value, format!("{v}  ({n})"))
+                    .clicked()
+                {
                     value.clone_from(v);
                     ui.close();
                 }

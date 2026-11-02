@@ -400,6 +400,9 @@ impl DatasetDialog {
                                 ),
                             );
                         }
+                        if let Some(c) = &self.previous {
+                            others_note(ui, lang, c, self.hits.is_some() && self.only_hits);
+                        }
                         ui.checkbox(
                             &mut self.register_extracted,
                             tr(lang, "Register the destination as a dataset"),
@@ -816,4 +819,22 @@ fn pick(
         });
     });
     chosen
+}
+
+/// 画像でないファイルも写すことと、その数。当たったものだけを取り出すときは直下のものだけ。
+fn others_note(ui: &mut egui::Ui, lang: Language, c: &crate::catalog::Catalog, only_hits: bool) {
+    let (text, count) = if only_hits {
+        (
+            "Files other than images at the top of the dataset are copied too ({}).",
+            c.others.iter().filter(|f| !f.path.contains('/')).count(),
+        )
+    } else {
+        (
+            "Files other than images are copied too ({}).",
+            c.others.len(),
+        )
+    };
+    if count > 0 {
+        ui.weak(tr1(lang, text, &count.to_string()));
+    }
 }

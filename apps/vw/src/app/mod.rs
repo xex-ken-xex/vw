@@ -431,6 +431,11 @@ pub struct VwApp {
     password_prompt: Option<PasswordPrompt>,
     large_archive_prompt: Option<LargeArchivePrompt>,
     dataset_dialog: Option<crate::dataset_ui::DatasetDialog>,
+    /// データセットのダイアログを出すウインドウ。開くよう頼まれたウインドウ（データセット画面を
+    /// 浮かせていればそのウインドウ）にする。
+    dataset_dialog_viewport: egui::ViewportId,
+    /// この回の描画で、データセット画面がダイアログを描いたか。描いていなければ本体が描く。
+    dataset_dialogs_drawn: bool,
     trash_job: Option<TrashJob>,
     /// 裏で進めているドラッグでの移動・コピー。
     transfer_jobs: Vec<crate::transfer::Job>,
@@ -914,6 +919,8 @@ impl VwApp {
             password_prompt: None,
             large_archive_prompt: None,
             dataset_dialog: None,
+            dataset_dialog_viewport: egui::ViewportId::ROOT,
+            dataset_dialogs_drawn: false,
             trash_job: None,
             transfer_jobs: Vec::new(),
             tally: Default::default(),
@@ -1464,9 +1471,9 @@ impl eframe::App for VwApp {
         self.folder_picker_ui(&ctx);
         self.large_archive_dialog(&ctx);
         self.meta_new_group_ui(&ctx);
-        self.next_queued_update(&ctx);
-        self.dataset_window(&ctx);
-        self.outer_update_dialog(&ctx);
+        if !std::mem::take(&mut self.dataset_dialogs_drawn) {
+            self.dataset_dialogs(&ctx);
+        }
         self.resume_offer_dialog(&ctx);
         self.compose_dialog_ui(&ctx);
         self.compare_dialog_ui(&ctx);

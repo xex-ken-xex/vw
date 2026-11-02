@@ -211,34 +211,6 @@ impl Index {
         names
     }
 
-    /// メタデータ `kind` / `key` の、今ある値（重複なし、空は除く）。種類やキーが空なら
-    /// 条件と同じくどれにでも合うとみなすが、値が多すぎて選べないので、キーがなければ出さない。
-    pub fn meta_values(&self, kind: &str, key: &str) -> Vec<String> {
-        let (kind, key) = (kind.trim().to_lowercase(), key.trim().to_lowercase());
-        if key.is_empty() {
-            return Vec::new();
-        }
-        let set: BTreeSet<&String> = self
-            .entries
-            .iter()
-            .flat_map(|e| {
-                let (l, kind, key) = (&e.lower, &kind, &key);
-                e.catalog
-                    .meta
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(i, (_, _, v))| {
-                        let (k, name) = &l.keys[i];
-                        ((kind.is_empty() || l.kinds[i] == *kind)
-                            && (k == key || name.as_ref() == Some(key))
-                            && !v.is_empty())
-                        .then_some(v)
-                    })
-            })
-            .collect();
-        set.into_iter().cloned().collect()
-    }
-
     /// 項目ごとの、今ある値（空は除く）。
     pub fn field_values(&self) -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -481,6 +453,49 @@ pub fn search(index: &Index, query: &Query) -> Result<Vec<Hit>, String> {
         .collect())
 }
 
+/// メタデータ `kind` / `key` の値（空は除く）と、その値を持つファイルの数。値の順に並べる。
+/// 数えるのは `others`（詳細検索の、その行を除いた条件と簡易検索の語）に合うファイルだけ。
+/// 種類が空ならどの種類でもよいが、キーが空なら値が多すぎて選べないので何も出さない。
+///
+/// 全部のファイルの値を出さないのは、ほかの条件で絞った後に足した行の ▼ に、もう結果にない値が並び、
+/// 選ぶと 0 件になったり絞れていないように見えたりするため。
+pub fn meta_value_counts(
+    index: &Index,
+    others: &Query,
+    kind: &str,
+    key: &str,
+) -> Result<Vec<(String, usize)>, String> {
+    let (kind, key) = (kind.trim().to_lowercase(), key.trim().to_lowercase());
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for hit in search(index, others)? {
+        let e = &index.entries[hit.entry];
+        let l = &e.lower;
+        let of_key: Vec<bool> = (0..e.catalog.meta.len())
+            .map(|i| {
+                let (k, name) = &l.keys[i];
+                (kind.is_empty() || l.kinds[i] == kind)
+                    && (*k == key || name.as_ref() == Some(&key))
+                    && !e.catalog.meta[i].2.is_empty()
+            })
+            .collect();
+        for &f in &hit.files {
+            let mut seen = BTreeSet::new();
+            for &i in &e.catalog.files[f].meta {
+                if of_key.get(i as usize).copied().unwrap_or(false) {
+                    seen.insert(e.catalog.meta[i as usize].2.as_str());
+                }
+            }
+            for v in seen {
+                *counts.entry(v).or_default() += 1;
+            }
+        }
+    }
+    Ok(counts.into_iter().map(|(v, n)| (v.to_owned(), n)).collect())
+}
+
 /// `dir` 以下を探す。サブフォルダは並列にたどる（ネットワークドライブでは、1 つずつ一覧を
 /// 待つより、いくつも同時に頼んだほうがずっと速いため）。カタログはフォルダの一覧の名前で
 /// 見つけ、フォルダごとにファイルがあるかを問い合わせ直さない。
@@ -657,13 +672,65 @@ mod tests {
         i
     }
 
+    fn counts(index: &Index, others: &Query, kind: &str, key: &str) -> Vec<(String, usize)> {
+        meta_value_counts(index, others, kind, key).unwrap()
+    }
+
+    fn counted(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
+        pairs.iter().map(|&(v, n)| (v.to_owned(), n)).collect()
+    }
+
     #[test]
-    fn meta_values_lists_each_value_of_a_key_once() {
+    fn value_choices_list_each_value_of_a_key_once_with_its_file_count() {
         let i = sample();
-        assert_eq!(i.meta_values("dicom", "0008,0060"), ["CT", "PT"]);
-        assert_eq!(i.meta_values("", "Modality"), ["CT", "PT"]);
-        assert_eq!(i.meta_values("DICOM", "0010,0020"), ["A", "B"]);
-        assert!(i.meta_values("dicom", "").is_empty());
+        let all = Query::default();
+        let ct_pt = counted(&[("CT", 3), ("PT", 1)]);
+        assert_eq!(counts(&i, &all, "dicom", "0008,0060"), ct_pt);
+        assert_eq!(counts(&i, &all, "", "Modality"), ct_pt);
+        assert_eq!(
+            counts(&i, &all, "DICOM", "0010,0020"),
+            counted(&[("A", 2), ("B", 2)])
+        );
+        assert!(counts(&i, &all, "dicom", "").is_empty());
+    }
+
+    #[test]
+    fn value_choices_count_only_the_files_that_meet_the_other_conditions() {
+        let i = sample();
+        let patient_b = Query {
+            conditions: vec![cond(meta("dicom", "0010,0020"), Op::Equals, "B")],
+            ..Query::default()
+        };
+        assert_eq!(
+            counts(&i, &patient_b, "dicom", "0008,0060"),
+            counted(&[("CT", 1), ("PT", 1)])
+        );
+        let in_mixed = Query {
+            text: "march".into(),
+            conditions: vec![cond(meta("dicom", "0010,0020"), Op::Equals, "B")],
+        };
+        assert_eq!(
+            counts(&i, &in_mixed, "dicom", "0008,0060"),
+            counted(&[("PT", 1)])
+        );
+    }
+
+    #[test]
+    fn value_choices_ignore_blank_rows_and_report_bad_ones() {
+        let i = sample();
+        let blank = Query {
+            conditions: vec![cond(meta("dicom", "0010,0020"), Op::Equals, "")],
+            ..Query::default()
+        };
+        assert_eq!(
+            counts(&i, &blank, "dicom", "0008,0060"),
+            counted(&[("CT", 3), ("PT", 1)])
+        );
+        let bad = Query {
+            conditions: vec![cond(meta("dicom", "0010,0020"), Op::Regex, "(")],
+            ..Query::default()
+        };
+        assert!(meta_value_counts(&i, &bad, "dicom", "0008,0060").is_err());
     }
 
     fn sample() -> Index {
