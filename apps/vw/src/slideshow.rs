@@ -290,6 +290,12 @@ impl Playback {
 
     /// 先読みするコマ数。0.5 秒分を目安に、メモリの上限 `budget` に収まる数にする。
     /// 少なすぎるとデコードの揺らぎでコマが落ち、多すぎると再生の開始とシークが遅れる。
+    /// 先読みが、速さで決まる枚数よりメモリの上限で少なくなっている。
+    pub fn limited_by_memory(&self, budget: usize) -> bool {
+        let by_time = (self.clock.fps * 0.5).ceil() as usize;
+        budget.checked_div(self.frame_bytes).unwrap_or(usize::MAX) < by_time.clamp(2, 24)
+    }
+
     pub fn ahead(&self, budget: usize) -> usize {
         let by_time = (self.clock.fps * 0.5).ceil() as usize;
         let by_memory = budget.checked_div(self.frame_bytes).unwrap_or(usize::MAX);

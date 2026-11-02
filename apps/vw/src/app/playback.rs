@@ -138,6 +138,10 @@ impl VwApp {
             }
         }
         let (start, n, mode) = (pb.clock.start, pb.clock.n, pb.clock.mode);
+        if pb.limited_by_memory(budget) {
+            self.memory_hint.hit = true;
+        }
+        let pb = self.playback.as_mut().expect("checked above");
         let mut wanted = slideshow::upcoming(start, pb.clock.tick(), n, mode, pb.ahead(budget));
         if !wanted.contains(&step.index) {
             wanted.insert(0, step.index);

@@ -14,6 +14,7 @@ use vw_core::{ColorModel, DisplayImage, DisplayParams, Metadata, Registry, VwIma
 
 use crate::colormap::{self, Look};
 use crate::compose;
+use crate::frame_store;
 use crate::frames;
 use crate::log::{DetailWriter, Level};
 use crate::memory::THUMB_SIDE;
@@ -369,6 +370,20 @@ fn load_look(
     let t0 = Instant::now();
     let (file, frame) =
         frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
+    if let Some(got) = frame.and_then(|i| frame_store::STORE.frame(registry, &file, i)) {
+        let got = got?;
+        return Ok(finish(
+            got.image,
+            &got.plugin,
+            1,
+            got.file_size,
+            (got.read, got.decode),
+            thumb,
+            full,
+            fit_side,
+            look,
+        ));
+    }
     let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
     let t1 = Instant::now();
     let (image, plugin) = registry

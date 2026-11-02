@@ -4,6 +4,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 
 use eframe::egui;
 
@@ -11,9 +12,9 @@ use crate::i18n::tr;
 use crate::settings::{Language, SendApp};
 
 /// 関連付けを調べる拡張子。送り先の一覧の最初の中身になる。
-pub const ASSOCIATED_EXTENSIONS: [&str; 14] = [
+pub const ASSOCIATED_EXTENSIONS: [&str; 15] = [
     "jpg", "jpeg", "nef", "nrw", "arw", "srf", "sr2", "raf", "cr2", "cr3", "dng", "orf", "rw2",
-    "pef",
+    "pef", "dcm",
 ];
 
 /// これ以上の回数アプリを起動するときは、先に確かめる。
@@ -40,6 +41,8 @@ pub struct Offer<'a> {
     pub folder: bool,
     /// 送るファイルの拡張子。
     pub extension: Option<String>,
+    /// 送るファイルを DICOM と読んだ（拡張子の欄の `dicom` に当てる）。
+    pub dicom: bool,
 }
 
 impl<'a> Offer<'a> {
@@ -49,12 +52,14 @@ impl<'a> Offer<'a> {
         destinations: Option<&'a [String]>,
         path: &Path,
         folder: bool,
+        dicom: bool,
     ) -> Self {
         Self {
             apps,
             destinations,
             folder,
             extension: (!folder).then(|| extension(path)).flatten(),
+            dicom: dicom && !folder,
         }
     }
 }
@@ -74,7 +79,7 @@ pub fn menu(ui: &mut egui::Ui, lang: Language, offer: &Offer<'_>) -> Option<Choi
         }
         let mut any = false;
         for (i, app) in offer.apps.iter().enumerate() {
-            if !app.takes(offer.folder, offer.extension.as_deref()) {
+            if !app.takes(offer.folder, offer.extension.as_deref(), offer.dicom) {
                 continue;
             }
             any = true;
@@ -105,6 +110,7 @@ pub fn from_associated(app: vw_launch::assoc::AssociatedApp) -> SendApp {
         args: app.args,
         accepts: crate::settings::Accepts::Files,
         extensions: app.extensions.join("|"),
+        show_output: false,
     }
 }
 
@@ -127,6 +133,12 @@ fn same_program(a: &str, b: &str) -> bool {
     }
 }
 
+/// 出力を見るアプリが終わったときの知らせ。
+pub struct Output {
+    pub app: String,
+    pub result: Result<vw_launch::Captured, String>,
+}
+
 /// 起動の予定。確かめてから起動するときは、これを持っておく。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Launch {
@@ -137,6 +149,8 @@ pub enum Launch {
         program: PathBuf,
         /// 起動 1 回ごとの引数。
         runs: Vec<Vec<OsString>>,
+        /// 出力と終了コードをログに出す（[`SendApp::show_output`]）。
+        show_output: bool,
     },
 }
 
@@ -146,6 +160,7 @@ impl Launch {
             name: app.name.clone(),
             program: PathBuf::from(app.program.trim()),
             runs: vw_launch::args::launches(&app.template(), paths),
+            show_output: app.show_output,
         }
     }
 
@@ -165,8 +180,8 @@ impl Launch {
         }
     }
 
-    /// 起動する。失敗の説明を返す。
-    pub fn run(self) -> Vec<String> {
+    /// 起動する。失敗の説明を返す。出力を見るアプリは、終わったら `outputs` に送る。
+    pub fn run(self, outputs: &Sender<Output>, ctx: &egui::Context) -> Vec<String> {
         let mut failures = Vec::new();
         match self {
             Launch::Default(paths) => {
@@ -176,9 +191,28 @@ impl Launch {
                     }
                 }
             }
-            Launch::App { program, runs, .. } => {
+            Launch::App {
+                name,
+                program,
+                runs,
+                show_output,
+            } => {
                 for args in runs {
-                    if let Err(e) = vw_launch::run(&program, &args) {
+                    let started = if show_output {
+                        let tx = outputs.clone();
+                        let name = name.clone();
+                        let ctx = ctx.clone();
+                        vw_launch::run_captured(&program, &args, move |r| {
+                            let _ = tx.send(Output {
+                                app: name,
+                                result: r.map_err(|e| e.to_string()),
+                            });
+                            ctx.request_repaint();
+                        })
+                    } else {
+                        vw_launch::run(&program, &args)
+                    };
+                    if let Err(e) = started {
                         failures.push(format!("{}: {e}", program.display()));
                     }
                 }
@@ -220,9 +254,9 @@ mod tests {
             args: "{paths}".into(),
             extensions: vec!["nef".into(), "arw".into()],
         });
-        assert!(app.takes(false, Some("arw")));
-        assert!(!app.takes(false, Some("jpg")));
-        assert!(!app.takes(true, None));
+        assert!(app.takes(false, Some("arw"), false));
+        assert!(!app.takes(false, Some("jpg"), false));
+        assert!(!app.takes(true, None, false));
     }
 
     #[test]
@@ -237,9 +271,9 @@ mod tests {
 
     #[test]
     fn folder_offer_has_no_extension() {
-        let offer = Offer::for_path(&[], None, Path::new("/a/b.c"), true);
+        let offer = Offer::for_path(&[], None, Path::new("/a/b.c"), true, false);
         assert_eq!(offer.extension, None);
-        let offer = Offer::for_path(&[], None, Path::new("/a/B.NEF"), false);
+        let offer = Offer::for_path(&[], None, Path::new("/a/B.NEF"), false, false);
         assert_eq!(offer.extension.as_deref(), Some("nef"));
     }
 }

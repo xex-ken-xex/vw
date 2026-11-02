@@ -145,6 +145,8 @@ pub struct Viewer {
     pub background: String,
     /// フル解像度の画像に使うメモリの上限（MB）。超えた分は縮小画像で表示する。
     pub full_image_limit_mb: u32,
+    /// 上限に当たったとき、空きメモリに余裕があれば上限を上げるよう勧める。
+    pub suggest_full_image_limit: bool,
     /// 1 枚の画像をデコードするのに使ってよいメモリの上限（MB）。見出しにこれより大きな幅・高さを
     /// 書いたファイルは開かない。
     pub image_size_limit_mb: u32,
@@ -250,6 +252,7 @@ impl Default for Viewer {
         Self {
             background: String::new(),
             full_image_limit_mb: 256,
+            suggest_full_image_limit: true,
             image_size_limit_mb: (vw_core::limits::DEFAULT_MAX_IMAGE_BYTES >> 20) as u32,
             layout: SlotLayout::Auto,
             custom_layout: SlotLayout::grid(6, 6),
@@ -287,6 +290,9 @@ impl Viewer {
                     "must be 256 to 1048576",
                 )
                 .unwrap_or(d.full_image_limit_mb),
+            suggest_full_image_limit: r
+                .get("suggest_full_image_limit")
+                .unwrap_or(d.suggest_full_image_limit),
             image_size_limit_mb: r
                 .get_valid(
                     "image_size_limit_mb",
@@ -1825,6 +1831,10 @@ pub struct SendApp {
     /// 大文字小文字を区別せずに照らす。空なら何でも。
     #[serde(default)]
     pub extensions: String,
+    /// アプリの標準出力・標準エラーと終了コードを vw のログに出す。コンソールで動く道具は、
+    /// 出力したらすぐ終わり、vw から起動すると何も見えないため。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_output: bool,
 }
 
 /// 送り先のアプリが受け付けるもの。
@@ -1871,7 +1881,11 @@ impl SendApp {
     }
 
     /// フォルダ（`folder`）か、拡張子 `extension` のファイルを受け付けるか。
-    pub fn takes(&self, folder: bool, extension: Option<&str>) -> bool {
+    ///
+    /// `dicom` はファイルを DICOM と読んだか。拡張子の欄に `dicom` を書いたアプリは、拡張子がない・
+    /// 数字だけの DICOM も受け取る。DICOM は拡張子で見分けられないことが多く、拡張子の正規表現で
+    /// 書き分けてもらうのは難しいため。
+    pub fn takes(&self, folder: bool, extension: Option<&str>, dicom: bool) -> bool {
         if folder {
             return self.accepts != Accepts::Files;
         }
@@ -1880,7 +1894,10 @@ impl SendApp {
         }
         match self.extension_pattern() {
             Ok(None) => true,
-            Ok(Some(pattern)) => extension.is_some_and(|ext| pattern.is_match(ext)),
+            Ok(Some(pattern)) => {
+                extension.is_some_and(|ext| pattern.is_match(ext))
+                    || (dicom && pattern.is_match("dicom"))
+            }
             Err(_) => false,
         }
     }
@@ -3546,10 +3563,26 @@ args = '"{path}'
             extensions: "NEF|arw".into(),
             ..Default::default()
         };
-        assert!(app.takes(false, Some("nef")));
-        assert!(app.takes(false, Some("ARW")));
-        assert!(!app.takes(false, Some("jpg")));
-        assert!(!app.takes(false, None));
+        assert!(app.takes(false, Some("nef"), false));
+        assert!(app.takes(false, Some("ARW"), false));
+        assert!(!app.takes(false, Some("jpg"), false));
+        assert!(!app.takes(false, None, false));
+    }
+
+    #[test]
+    fn send_app_with_dicom_in_its_extensions_takes_dicom_files_without_an_extension() {
+        let app = SendApp {
+            extensions: "dcm|dicom".into(),
+            ..Default::default()
+        };
+        assert!(app.takes(false, None, true));
+        assert!(app.takes(false, Some("1"), true));
+        assert!(!app.takes(false, None, false));
+        let jpeg_only = SendApp {
+            extensions: "jpg".into(),
+            ..Default::default()
+        };
+        assert!(!jpeg_only.takes(false, None, true));
     }
 
     #[test]
@@ -3558,10 +3591,10 @@ args = '"{path}'
             extensions: "cr[23]|jpe?g".into(),
             ..Default::default()
         };
-        assert!(app.takes(false, Some("cr3")));
-        assert!(app.takes(false, Some("JPEG")));
-        assert!(!app.takes(false, Some("crw")));
-        assert!(!app.takes(false, Some("jpgx")));
+        assert!(app.takes(false, Some("cr3"), false));
+        assert!(app.takes(false, Some("JPEG"), false));
+        assert!(!app.takes(false, Some("crw"), false));
+        assert!(!app.takes(false, Some("jpgx"), false));
     }
 
     #[test]
@@ -3573,14 +3606,14 @@ args = '"{path}'
             ..Default::default()
         };
         assert!(app.problem().is_some());
-        assert!(!app.takes(false, Some("nef")));
+        assert!(!app.takes(false, Some("nef"), false));
     }
 
     #[test]
     fn send_app_without_extensions_takes_any_file() {
         let app = SendApp::default();
-        assert!(app.takes(false, Some("png")));
-        assert!(app.takes(false, None));
+        assert!(app.takes(false, Some("png"), false));
+        assert!(app.takes(false, None, false));
     }
 
     #[test]
@@ -3589,13 +3622,13 @@ args = '"{path}'
             extensions: "jpg".into(),
             ..Default::default()
         };
-        assert!(!app.takes(true, None));
+        assert!(!app.takes(true, None, false));
         app.accepts = Accepts::Folders;
-        assert!(app.takes(true, None));
-        assert!(!app.takes(false, Some("jpg")));
+        assert!(app.takes(true, None, false));
+        assert!(!app.takes(false, Some("jpg"), false));
         app.accepts = Accepts::Both;
-        assert!(app.takes(true, None));
-        assert!(app.takes(false, Some("jpg")));
+        assert!(app.takes(true, None, false));
+        assert!(app.takes(false, Some("jpg"), false));
     }
 
     #[test]

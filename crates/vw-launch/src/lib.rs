@@ -18,6 +18,49 @@ pub fn run(program: &Path, args: &[OsString]) -> std::io::Result<()> {
         .map(drop)
 }
 
+/// [`run_captured`] で受け取った、アプリの出力と終わり方。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Captured {
+    /// 終了コード。シグナルで止められたときは `None`。
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// [`run`] と同じに起動し、標準出力・標準エラーを受け取る。終わったら別スレッドで `done` を呼ぶ。
+///
+/// Windows ではコンソールの窓を出さない。出力は vw が受け取るので、窓は一瞬開いて閉じるだけになるため。
+/// 出力は UTF-8 として読み、読めないバイトは置き換える（コンソールの文字コードで書く道具の
+/// 日本語は化けるが、ログで終わり方と英語の出力が分かれば足りる）。
+pub fn run_captured(
+    program: &Path,
+    args: &[OsString],
+    done: impl FnOnce(std::io::Result<Captured>) + Send + 'static,
+) -> std::io::Result<()> {
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = command.spawn()?;
+    std::thread::spawn(move || {
+        let result = child.wait_with_output().map(|out| Captured {
+            code: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+        done(result);
+    });
+    Ok(())
+}
+
 /// ファイルを、拡張子に関連付けられたアプリで開く。
 #[cfg(windows)]
 pub fn open_file(path: &Path) -> std::io::Result<()> {
@@ -82,4 +125,32 @@ fn xdg_open(path: &Path) -> std::io::Result<()> {
         .arg(path)
         .spawn()
         .map(drop)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    #[test]
+    fn run_captured_hands_back_the_output_and_exit_code() {
+        let (tx, rx) = channel();
+        let args = ["-c", "echo out; echo err >&2; exit 3"].map(OsString::from);
+        run_captured(Path::new("/bin/sh"), &args, move |r| tx.send(r).unwrap()).unwrap();
+        let got = rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        assert_eq!(
+            got,
+            Captured {
+                code: Some(3),
+                stdout: "out\n".into(),
+                stderr: "err\n".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn run_captured_fails_at_once_for_a_missing_program() {
+        assert!(run_captured(Path::new("/no/such/program"), &[], |_| {}).is_err());
+    }
 }

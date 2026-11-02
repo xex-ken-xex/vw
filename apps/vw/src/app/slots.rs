@@ -472,6 +472,7 @@ impl VwApp {
         let bytes = full.bytes();
         let limit = self.settings().viewer.full_image_limit_bytes();
         if !memory::fits(&self.full_states(), bytes, limit) {
+            self.memory_hint.hit = true;
             // 持てないときは、コピー待ちなら標準の表示（と色の表）だけ写しておく。
             let s = &mut self.slots[index];
             if let (true, Some(shown)) = (std::mem::take(&mut s.copy_when_full), s.shown()) {

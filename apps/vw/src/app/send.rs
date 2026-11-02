@@ -89,7 +89,10 @@ impl VwApp {
             ));
             return;
         };
-        if !app.takes(false, crate::send_app::extension(first).as_deref()) {
+        let dicom = self.slots[self.active]
+            .shown()
+            .is_some_and(|s| s.info.plugin == "DICOM");
+        if !app.takes(false, crate::send_app::extension(first).as_deref(), dicom) {
             self.log.warn(format!(
                 "Send to {}: does not take {}",
                 app.name,
@@ -131,7 +134,7 @@ impl VwApp {
         let lang = self.lang();
         let name = launch.name(lang);
         let count = launch.count();
-        let failures = launch.run();
+        let failures = launch.run(&self.launch_outputs.0, &self.egui_ctx);
         for failure in &failures {
             self.log.error(format!("Send to {name}: {failure}"));
         }
@@ -140,6 +143,46 @@ impl VwApp {
                 "Sent to {name} ({} launch(es))",
                 count - failures.len()
             ));
+        }
+    }
+
+    /// 出力を見るアプリが終わっていれば、出力と終了コードをログに出す。
+    pub(super) fn finish_launch_outputs(&mut self) {
+        while let Ok(out) = self.launch_outputs.1.try_recv() {
+            let app = &out.app;
+            let captured = match out.result {
+                Ok(c) => c,
+                Err(e) => {
+                    self.log.error(format!("{app}: {e}"));
+                    continue;
+                }
+            };
+            for (text, error) in [(&captured.stdout, false), (&captured.stderr, true)] {
+                let lines: Vec<&str> = text.lines().collect();
+                for line in lines.iter().take(OUTPUT_LINES) {
+                    let line = format!("{app}: {line}");
+                    if error {
+                        self.log.warn(line);
+                    } else {
+                        self.log.info(line);
+                    }
+                }
+                if lines.len() > OUTPUT_LINES {
+                    self.log.info(format!(
+                        "{app}: ...{} more lines not shown",
+                        lines.len() - OUTPUT_LINES
+                    ));
+                }
+            }
+            match captured.code {
+                Some(0) => self.log.info(format!("{app} finished (exit code 0)")),
+                Some(code) => self
+                    .log
+                    .warn(format!("{app} finished with exit code {code}")),
+                None => self
+                    .log
+                    .warn(format!("{app} was stopped without an exit code")),
+            }
         }
     }
 
@@ -388,3 +431,7 @@ impl VwApp {
         }
     }
 }
+
+/// アプリの出力をログに出す行数（標準出力と標準エラーのそれぞれ）。全タグを並べる道具などで
+/// ログが埋まり、ほかの行が流れてしまわないため。
+const OUTPUT_LINES: usize = 500;
