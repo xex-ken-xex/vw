@@ -103,6 +103,12 @@ pub fn open_file(path: &Path) -> std::io::Result<()> {
     xdg_open(path)
 }
 
+/// Web のページを既定のブラウザで開く。ファイルと同じ口（Windows は ShellExecuteW、
+/// Linux は xdg-open）がそのまま URL も受けるので、ブラウザを探す依存は足さない。
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    open_file(Path::new(url))
+}
+
 /// フォルダをエクスプローラ（Linux では既定のファイラ）で開く。
 #[cfg(windows)]
 pub fn open_folder(path: &Path) -> std::io::Result<()> {

@@ -32,6 +32,8 @@ pub enum Action {
     PreviousPage,
     NextPage,
     ToggleMaximize,
+    /// 最大化しているスロットを戻す。最大化していなければ何もしない。
+    RestoreSlot,
     FitImage,
     ActualSize,
     ResetDisplay,
@@ -65,6 +67,7 @@ pub enum Action {
     FilterUnflagged,
     ExportImages,
     ParentFolder,
+    OpenFolder,
     DevelopRaw,
     SwapRawPreview,
     ToggleClippingWarning,
@@ -118,6 +121,8 @@ pub enum Action {
     ShowSystemInfo,
     ShowGradationTest,
     OpenQualityHelp,
+    OpenUserGuide,
+    ShowKeys,
     ShowAiModels,
     AiTagFolder,
     FindFacesFolder,
@@ -222,6 +227,8 @@ impl Action {
         Action::PreviousPage,
         Action::NextPage,
         Action::ToggleMaximize,
+        Action::RestoreSlot,
+        Action::OpenFolder,
         Action::ParentFolder,
         Action::CopyFolderPath,
         Action::OpenInFileManager,
@@ -319,6 +326,8 @@ impl Action {
         Action::ToggleLog,
         Action::ToggleSettings,
         Action::ToggleDatasets,
+        Action::OpenUserGuide,
+        Action::ShowKeys,
         Action::ShowAbout,
         Action::ShowSystemInfo,
         Action::ShowGradationTest,
@@ -365,6 +374,7 @@ impl Action {
             Action::PreviousPage => "previous_page",
             Action::NextPage => "next_page",
             Action::ToggleMaximize => "toggle_maximize",
+            Action::RestoreSlot => "restore_slot",
             Action::FitImage => "fit_image",
             Action::ActualSize => "actual_size",
             Action::ResetDisplay => "reset_display",
@@ -398,6 +408,7 @@ impl Action {
             Action::FilterUnflagged => "filter_unflagged",
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
+            Action::OpenFolder => "open_folder",
             Action::DevelopRaw => "develop_raw",
             Action::SwapRawPreview => "swap_raw_preview",
             Action::ToggleClippingWarning => "toggle_clipping_warning",
@@ -438,6 +449,8 @@ impl Action {
             Action::ShowSystemInfo => "show_system_info",
             Action::ShowGradationTest => "show_gradation_test",
             Action::OpenQualityHelp => "open_quality_help",
+            Action::OpenUserGuide => "open_user_guide",
+            Action::ShowKeys => "show_keys",
             Action::ShowAiModels => "show_ai_models",
             Action::AiTagFolder => "ai_tag_folder",
             Action::FindFacesFolder => "find_faces_folder",
@@ -503,6 +516,7 @@ impl Action {
             Action::PreviousPage => "Previous page",
             Action::NextPage => "Next page",
             Action::ToggleMaximize => "Maximize/restore slot, or open folder",
+            Action::RestoreSlot => "Restore the maximized slot",
             Action::FitImage => "Fit image to slot",
             Action::ActualSize => "Actual size (100%)",
             Action::ResetDisplay => "Reset the display to when it was loaded",
@@ -575,6 +589,8 @@ impl Action {
             Action::ShowSystemInfo => "System information",
             Action::ShowGradationTest => "Display gradation test...",
             Action::OpenQualityHelp => "Image quality metrics help",
+            Action::OpenUserGuide => "User guide (web)",
+            Action::ShowKeys => "Keyboard shortcuts",
             Action::ShowAiModels => "AI models...",
             Action::AiTagFolder => "Add AI tags to this folder",
             Action::FindFacesFolder => "Find faces in this folder",
@@ -587,6 +603,7 @@ impl Action {
             Action::ShowPeopleGraph => "Relationship charts...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
+            Action::OpenFolder => "Open folder...",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
             Action::FullscreenNext => "Fullscreen: next image",
@@ -626,8 +643,10 @@ impl Action {
             | Action::NextSlot
             | Action::PreviousPage
             | Action::NextPage
-            | Action::ParentFolder => KeyGroup::Navigate,
+            | Action::ParentFolder
+            | Action::OpenFolder => KeyGroup::Navigate,
             Action::ToggleMaximize
+            | Action::RestoreSlot
             | Action::FitImage
             | Action::ActualSize
             | Action::ResetDisplay
@@ -741,6 +760,8 @@ impl Action {
             | Action::ShowSystemInfo
             | Action::ShowGradationTest
             | Action::OpenQualityHelp
+            | Action::OpenUserGuide
+            | Action::ShowKeys
             | Action::Quit => KeyGroup::App,
             Action::FullscreenExit
             | Action::FullscreenNext
@@ -879,6 +900,8 @@ impl Action {
             Action::PreviousPage => vec![KeyCombo::plain(PageUp)],
             Action::NextPage => vec![KeyCombo::plain(PageDown)],
             Action::ToggleMaximize => vec![KeyCombo::plain(Enter)],
+            Action::RestoreSlot => vec![KeyCombo::plain(Escape)],
+            Action::OpenFolder => vec![KeyCombo::ctrl(O)],
             Action::ParentFolder => vec![
                 KeyCombo::plain(Backspace),
                 KeyCombo::mouse(MouseButton::Back),
@@ -957,6 +980,8 @@ impl Action {
             Action::ShowSystemInfo => vec![],
             Action::ShowGradationTest => vec![],
             Action::OpenQualityHelp => vec![],
+            Action::OpenUserGuide => vec![KeyCombo::plain(F1)],
+            Action::ShowKeys => vec![],
             Action::ShowAiModels => vec![],
             Action::AiTagFolder => vec![],
             Action::FindFacesFolder => vec![],
@@ -1593,7 +1618,14 @@ mod tests {
             map.action_for(Scope::Fullscreen, combo("Up")),
             Some(Action::FullscreenPreviousFolder)
         );
-        assert_eq!(map.action_for(Scope::Main, combo("Escape")), None);
+        assert_eq!(
+            map.action_for(Scope::Main, combo("Escape")),
+            Some(Action::RestoreSlot)
+        );
+        assert_eq!(
+            map.action_for(Scope::Fullscreen, combo("Escape")),
+            Some(Action::FullscreenExit)
+        );
         assert_eq!(map.action_for(Scope::Fullscreen, combo("Ctrl+Comma")), None);
     }
 

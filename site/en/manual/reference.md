@@ -121,6 +121,8 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | Ctrl+→ / Ctrl+← | Next / previous slot (including folder slots) |
 | PageDown / PageUp | Next / previous page |
 | Enter | Maximize / restore the slot (on a folder slot, go to that folder) |
+| Esc | Restore the maximized slot (if a dialog or menu is open, it closes that instead) |
+| Ctrl+O | Open a folder (shows a window to choose one) |
 | Backspace / mouse back button | Up one folder |
 | 0 | Fit to slot |
 | Ctrl+0 | Actual size (100%) |
@@ -178,6 +180,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | Ctrl+M | Show / hide the map (only when the map is enabled in settings) |
 | Ctrl+Z | Undo positions placed or removed on the map, and flags cleared in bulk |
 | Ctrl+, | Open / close the settings |
+| F1 | Open this user guide in the browser |
 | Ctrl+Q | Quit |
 
 ### Mouse

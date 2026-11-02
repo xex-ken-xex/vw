@@ -225,6 +225,7 @@ impl VwApp {
             self.mount(ctx, &folder);
             return;
         }
+        self.remember_folder(&folder);
         let tree = &self.settings().tree;
         let other = ctx.input(|i| tree.other_load_modifier.held(i.modifiers));
         let into = if other {
@@ -926,6 +927,7 @@ impl VwApp {
     /// ZIP をツリーで開く。展開は別スレッドで行い、終わったら [`Self::receive_archives`] で
     /// ルートに足す。
     pub(super) fn mount(&mut self, ctx: &egui::Context, zip: &Path) {
+        self.remember_folder(zip);
         if let Some(mount) = self.archives.mounted_zip(zip) {
             let (dir, into) = (mount.dir.clone(), self.settings().tree.load_into);
             self.cd(ctx, dir, into);

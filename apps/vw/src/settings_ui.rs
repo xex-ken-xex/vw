@@ -3287,6 +3287,12 @@ impl SettingsUi {
         self.jump = Some(Section::SendApps);
     }
 
+    /// キーの割り当てへ移る（ヘルプの「キーの一覧」）。
+    pub fn show_keys(&mut self) {
+        self.query.clear();
+        self.jump = Some(Section::Keys);
+    }
+
     /// 画面を開いたときに呼ぶ。すぐ検索語を打てるようにする。
     pub fn opened(&mut self) {
         self.focus_search = true;

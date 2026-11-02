@@ -351,6 +351,7 @@ impl VwApp {
                 .current
                 .clone()
                 .filter(|c| self.archives.mount_of(c).is_none()),
+            recent_folders: self.recent_folders.clone(),
             extract_dir: self.last_extract_dir.clone(),
             fullscreen_root: self.last_fullscreen_root.clone(),
             pipeline_nodes: self.pipeline.node_positions(),

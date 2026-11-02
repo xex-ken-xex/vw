@@ -72,6 +72,7 @@ mod qr;
 mod quality;
 mod quality_view;
 mod quantity;
+mod recent;
 mod report_fonts;
 mod roi;
 mod send_app;
