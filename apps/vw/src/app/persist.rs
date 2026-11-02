@@ -77,19 +77,19 @@ impl VwApp {
         }
     }
 
-    /// DICOM か調べる拡張子や HDF5 として開く拡張子が変わったら、開いているフォルダを
+    /// DICOM か調べる拡張子や HDF として開く拡張子が変わったら、開いているフォルダを
     /// 読み直してツリーにすぐ反映する。
     pub(super) fn apply_probe_extensions(&mut self) {
         let dicom = &self.settings.settings.dicom;
         let netcdf = &self.settings.settings.netcdf;
         if dicom.probe_extensions == self.probe_extensions
-            && netcdf.hdf5_extensions == self.hdf5_pattern
+            && netcdf.hdf_extensions == self.hdf_pattern
         {
             return;
         }
         self.probe_extensions = dicom.probe_extensions.clone();
-        self.hdf5_pattern = netcdf.hdf5_extensions.clone();
-        self.hdf5_extensions.set(netcdf.hdf5_extensions());
+        self.hdf_pattern = netcdf.hdf_extensions.clone();
+        self.hdf_extensions.set(netcdf.hdf_extensions());
         let registry = self.loader.registry().clone();
         registry.set_probe_extensions(dicom.probe());
         self.tree.forget_peeks();
