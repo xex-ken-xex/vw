@@ -94,7 +94,7 @@ impl Section {
             Section::Fullscreen => "Fullscreen slideshow",
             Section::Pipeline => "Pixel pipeline",
             Section::Fits => "Astronomy images (FITS)",
-            Section::Netcdf => "Earth science data (NetCDF, HDF5)",
+            Section::Netcdf => "Earth science data (NetCDF, HDF)",
             Section::Dicom => "Medical images (DICOM)",
             Section::SendApps => "Send to apps",
             Section::DicomSend => "DICOM sending",
@@ -914,10 +914,10 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Netcdf,
-        key: "netcdf.hdf5_extensions",
-        title: "Extensions opened as HDF5",
-        description: "Regular expression for the extensions (without the dot, case-insensitive) of HDF5 files to open, such as satellite swaths. Files that are NetCDF-4 inside are read as NetCDF. .nc files are always opened. The default opens h5, hdf5 and he5.",
-        widget: hdf5_extensions_widget,
+        key: "netcdf.hdf_extensions",
+        title: "Extensions opened as HDF",
+        description: "Regular expression for the extensions (without the dot, case-insensitive) of HDF5 and HDF4 files to open, such as satellite data. Which of the two a file is, or NetCDF-4 inside, is decided from its first bytes. .nc files are always opened. The default opens h5, hdf5, he5, hdf, hdf4, h4 and he2.",
+        widget: hdf_extensions_widget,
     },
     Item {
         section: Section::Fits,
@@ -3098,9 +3098,9 @@ fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) 
     extensions_pattern_widget(&mut s.dicom.probe_extensions, id, ui, lang)
 }
 
-fn hdf5_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
-    let id = ui.make_persistent_id("netcdf.hdf5_extensions.edit");
-    extensions_pattern_widget(&mut s.netcdf.hdf5_extensions, id, ui, lang)
+fn hdf_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("netcdf.hdf_extensions.edit");
+    extensions_pattern_widget(&mut s.netcdf.hdf_extensions, id, ui, lang)
 }
 
 /// 拡張子の正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、

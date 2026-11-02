@@ -1,7 +1,8 @@
 //! NetCDF（NetCDF-3 と NetCDF-4）と HDF5 のデコーダプラグイン。読むだけ。
 //!
 //! - HDF5 は NetCDF-4 の入れ物なので、NetCDF-4 の印のない HDF5 も同じ読み方で開く
-//!   （次元には大きさから名前が付く）。開く拡張子は [`Hdf5Extensions`] で決める
+//!   （次元には大きさから名前が付く）。HDF4 は [`hdf4`] で NetCDF-3 に書き直してから開く。
+//!   開く拡張子は [`HdfExtensions`] で決める
 //! - 数値で 2 次元以上の変数を画像にする（座標の変数と `bounds` の変数は除く）。見せる変数は
 //!   [`Choices`] で選び、選んでいなければ面のいちばん大きい変数
 //! - 縦と横は座標の変数の CF の軸（`axis`・`standard_name`・`units`）で決め、他の次元
@@ -15,6 +16,7 @@
 //! Windows ではマップしたままのファイルを移動・ごみ箱へ送る・上書きできなくなるため使わない。
 
 pub mod geo;
+pub mod hdf4;
 mod layout;
 pub mod lzf;
 mod meta;
@@ -62,18 +64,20 @@ pub const LONGITUDES_ROTATED: &str = "Rotated to -180..180";
 pub const COLOR_MAP: &str = "Suggested color map";
 pub const SUGGESTED_PALETTE: &str = "coolwarm";
 
-/// 対応する拡張子。HDF5 の拡張子は設定で変えるので、ここには入れず [`Hdf5Extensions`] で当てる。
+/// 対応する拡張子。HDF の拡張子は設定で変えるので、ここには入れず [`HdfExtensions`] で当てる。
 pub const EXTENSIONS: [&str; 4] = ["nc", "nc4", "cdf", "netcdf"];
 /// NetCDF-4 の印のない HDF5 のファイルの [`FORMAT`] の値。
 pub const FORMAT_HDF5: &str = "HDF5";
+/// HDF4 のファイルの [`FORMAT`] の値。
+pub const FORMAT_HDF4: &str = "HDF4";
 
-/// HDF5 として開く拡張子。プラグインとアプリで共有し、設定を変えたらすぐ効かせる。
+/// HDF として開く拡張子。プラグインとアプリで共有し、設定を変えたらすぐ効かせる。
 #[derive(Debug, Clone)]
-pub struct Hdf5Extensions(Arc<RwLock<vw_core::ProbeExtensions>>);
+pub struct HdfExtensions(Arc<RwLock<vw_core::ProbeExtensions>>);
 
-impl Hdf5Extensions {
-    /// 既定。HDF5 と HDF-EOS5 のよく使う拡張子。
-    pub const DEFAULT: &'static str = "^(h5|hdf5|he5)$";
+impl HdfExtensions {
+    /// 既定。HDF5・HDF-EOS5 と HDF4・HDF-EOS2 のよく使う拡張子。
+    pub const DEFAULT: &'static str = "^(h5|hdf5|he5|hdf|hdf4|h4|he2)$";
 
     pub fn set(&self, pattern: vw_core::ProbeExtensions) {
         *self.0.write().unwrap_or_else(|e| e.into_inner()) = pattern;
@@ -89,7 +93,7 @@ impl Hdf5Extensions {
     }
 }
 
-impl Default for Hdf5Extensions {
+impl Default for HdfExtensions {
     fn default() -> Self {
         let pattern = vw_core::ProbeExtensions::new(Self::DEFAULT).expect("valid pattern");
         Self(Arc::new(RwLock::new(pattern)))
@@ -213,7 +217,7 @@ pub struct NetcdfPlugin {
     windows: Memo<Window>,
     /// 画素ごとの緯度・経度は、図法から作ると大きな格子で数十 MB になるので、少しだけ覚える。
     grids: Memo<Option<Arc<vw_core::geo::GeoGrid>>>,
-    hdf5_extensions: Hdf5Extensions,
+    hdf_extensions: HdfExtensions,
     /// ファイルが NetCDF-4 の印のない HDF5 か（[`is_plain_hdf5`]）。
     plain: Memo<bool>,
 }
@@ -231,14 +235,14 @@ impl NetcdfPlugin {
             choices,
             windows: Memo::new(64),
             grids: Memo::new(4),
-            hdf5_extensions: Hdf5Extensions::default(),
+            hdf_extensions: HdfExtensions::default(),
             plain: Memo::new(64),
         }
     }
 
-    /// HDF5 として開く拡張子を、アプリの設定と共有する。
-    pub fn with_hdf5_extensions(mut self, extensions: Hdf5Extensions) -> Self {
-        self.hdf5_extensions = extensions;
+    /// HDF として開く拡張子を、アプリの設定と共有する。
+    pub fn with_hdf_extensions(mut self, extensions: HdfExtensions) -> Self {
+        self.hdf_extensions = extensions;
         self
     }
 }
@@ -247,9 +251,38 @@ impl NetcdfPlugin {
 pub fn is_netcdf(header: &[u8]) -> bool {
     matches!(header.get(..4), Some(b"CDF\x01" | b"CDF\x02" | b"CDF\x05"))
         || header.starts_with(b"\x89HDF\r\n\x1a\n")
+        || hdf4::is_hdf4(header)
+}
+
+/// HDF4 を書き直した NetCDF-3 のバイト列。面を送るたびに書き直すと重いので、少しだけ覚える。
+fn hdf4_as_netcdf(data: &[u8]) -> Result<Arc<Vec<u8>>, DecodeError> {
+    type Converted = Vec<(u64, Arc<Vec<u8>>)>;
+    static MEMO: std::sync::OnceLock<Mutex<Converted>> = std::sync::OnceLock::new();
+    let key = file_key(data);
+    let memo = MEMO.get_or_init(Mutex::default);
+    if let Some((_, v)) = memo
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(k, _)| *k == key)
+    {
+        return Ok(v.clone());
+    }
+    // 1 つのデータセットの上限ではなく、書き直す全部の上限。ファイルの全部の変数を書き直すため。
+    let limit = vw_core::limits::max_image_bytes().saturating_mul(4);
+    let bytes = Arc::new(hdf4::to_netcdf(data, limit).map_err(DecodeError::Invalid)?);
+    let mut memo = memo.lock().unwrap_or_else(|e| e.into_inner());
+    if memo.len() >= 2 {
+        memo.remove(0);
+    }
+    memo.push((key, bytes.clone()));
+    Ok(bytes)
 }
 
 fn open(data: &[u8]) -> Result<NcFile, DecodeError> {
+    if hdf4::is_hdf4(data) {
+        return open(&hdf4_as_netcdf(data)?);
+    }
     let options = NcOpenOptions {
         max_read_bytes: vw_core::limits::max_image_bytes(),
         filter_registry: Some(lzf::registry()),
@@ -319,6 +352,9 @@ impl NetcdfPlugin {
     /// [`FORMAT`] の値。NetCDF-4 の印のない HDF5 は [`FORMAT_HDF5`]。見分けるのにファイルを
     /// もう一度開く（中身を写す）ので、ファイルごとに覚える。
     fn format_name(&self, data: &[u8], file: &NcFile) -> &'static str {
+        if hdf4::is_hdf4(data) {
+            return FORMAT_HDF4;
+        }
         let plain = file.format() == netcdf_reader::NcFormat::Nc4
             && self.plain.get_or(file_key(data), || is_plain_hdf5(data));
         if plain {
@@ -507,7 +543,7 @@ impl DecoderPlugin for NetcdfPlugin {
     }
 
     fn claims_path(&self, path: &Path) -> bool {
-        self.hdf5_extensions.matches(path)
+        self.hdf_extensions.matches(path)
     }
 
     fn probe(&self, header: &[u8]) -> bool {
@@ -533,13 +569,13 @@ impl DecoderPlugin for NetcdfPlugin {
         data: &[u8],
         frame: usize,
     ) -> Result<VwImage, DecodeError> {
-        // HDF5 の頭は、画像でない HDF5（機械学習の重みなど）にもある。拡張子で決めたものだけ開く。
-        if data.starts_with(b"\x89HDF")
+        // HDF の頭は、画像でない HDF（機械学習の重みなど）にもある。拡張子で決めたものだけ開く。
+        if (data.starts_with(b"\x89HDF") || hdf4::is_hdf4(data))
             && !has_netcdf_extension(path)
-            && !self.hdf5_extensions.matches(path)
+            && !self.hdf_extensions.matches(path)
         {
             return Err(DecodeError::Unsupported(format!(
-                "HDF5 file {} has none of the NetCDF or HDF5 extensions",
+                "HDF file {} has none of the NetCDF or HDF extensions",
                 path.display()
             )));
         }

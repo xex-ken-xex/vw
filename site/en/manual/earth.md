@@ -1,12 +1,12 @@
 ---
-title: "Weather and ocean data (NetCDF, HDF5)"
+title: "Weather and ocean data (NetCDF, HDF)"
 ---
 
 See and measure grids of weather, climate and ocean data with their values and units.
 
 ## Formats
 
-NetCDF files (`.nc` `.nc4` `.cdf` `.netcdf`) open from a folder just like photos. vw reads NetCDF-3 (classic, 64-bit offset, 64-bit data) and NetCDF-4. HDF5 files (`.h5` `.hdf5` `.he5`) open too (see [HDF5 files](#hdf5-files)). HDF4 files do not open yet.
+NetCDF files (`.nc` `.nc4` `.cdf` `.netcdf`) open from a folder just like photos. vw reads NetCDF-3 (classic, 64-bit offset, 64-bit data) and NetCDF-4. HDF5 files (`.h5` `.hdf5` `.he5`) and HDF4 files (`.hdf` `.hdf4` `.h4` `.he2`) open too (see [HDF5 files](#hdf5-files) and [HDF4 files](#hdf4-files)).
 
 Each numeric variable with two or more dimensions becomes an image. The variable with the largest plane is shown first.
 
@@ -65,7 +65,21 @@ HDF5 files that are not NetCDF, such as satellite observations, are shown the sa
 - Enumerations show their values only, not their names, for now
 - Positions of HDF-EOS5 grids (projections written in StructMetadata) are not read yet
 
-The extensions are set with **Extensions opened as HDF5** (a regular expression). Narrow it in folders with many HDF5 files that are not images, such as machine learning weights.
+The extensions are set with **Extensions opened as HDF** (a regular expression). Narrow it in folders with many HDF5 files that are not images, such as machine learning weights.
+
+## HDF4 files
+
+HDF4 (including HDF-EOS2), the older format used by MODIS and other satellite data, is shown the same way as NetCDF. It is a different format from HDF5 inside; whether a `.hdf` file is HDF4 or HDF5 is decided from its first bytes. **Format** in the metadata is "HDF4".
+
+- Scientific datasets (SDS) become images, switched with **N** / **Shift+N** or right-click **Variable**. Three or more dimensions are stepped with the wheel. Dimension names and attributes are shown as they are
+- HDF4 calibration (value = `scale_factor` × (stored − `add_offset`), datasets with the `calibrated_nt` attribute) subtracts before scaling, following HDF4. The `add_offset` in the metadata is turned into its CF meaning (added after scaling), and the original value is shown as `hdf4_add_offset`. `scale_factor` and `add_offset` without `calibrated_nt` are applied as in CF
+- `_FillValue` and values outside `valid_range` are missing
+- Latitude and longitude datasets of the same shape (such as `Latitude` and `Longitude`) give each pixel its position
+- deflate, RLE and Huffman compression and chunks are read. szip and N-bit compression are not read yet
+- HDF-EOS2 grids (projections in StructMetadata) and coarser latitudes and longitudes that need interpolation are not read yet
+- When items in different HDF-EOS2 grids share a name, the second and later get a number, like "name_2"
+- Old images (GR, RIS) and tables (Vdata) are not read
+- The whole file is unpacked when it opens, so large files take some time and memory
 
 ## Metadata and search
 
@@ -73,7 +87,7 @@ The metadata pane shows the attributes of the current variable ("NetCDF variable
 
 ## Settings
 
-All settings are under **Earth science data (NetCDF, HDF5)**. HDF5 files use the same settings.
+All settings are under **Earth science data (NetCDF, HDF)**. HDF5 and HDF4 files use the same settings.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -86,4 +100,4 @@ All settings are under **Earth science data (NetCDF, HDF5)**. HDF5 files use the
 | Show coordinates | Show latitude, longitude and the plane's time or level at the cross, the line profile, the ROI graph and the map | On |
 | Longitudes from -180 to 180 | Make the left edge of 0 to 360 degree grids 180 degrees west | Off |
 | Anomalies around zero | Give anomaly variables black and white symmetric around zero and coolwarm | On |
-| Extensions opened as HDF5 | Regular expression for the extensions of files opened as HDF5. `.nc` and the like always open | `^(h5\|hdf5\|he5)$` |
+| Extensions opened as HDF | Regular expression for the extensions of files opened as HDF5 or HDF4. `.nc` and the like always open | `^(h5\|hdf5\|he5\|hdf\|hdf4\|h4\|he2)$` |

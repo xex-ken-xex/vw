@@ -123,16 +123,16 @@ fn hdf5_with_neither_a_netcdf_nor_an_hdf5_extension_is_not_opened() {
 }
 
 #[test]
-fn hdf5_extensions_follow_the_setting() {
-    let extensions = Hdf5Extensions::default();
-    let plugin = NetcdfPlugin::default().with_hdf5_extensions(extensions.clone());
-    for name in ["a.h5", "a.HDF5", "swath.he5"] {
+fn hdf_extensions_follow_the_setting() {
+    let extensions = HdfExtensions::default();
+    let plugin = NetcdfPlugin::default().with_hdf_extensions(extensions.clone());
+    for name in ["a.h5", "a.HDF5", "swath.he5", "MOD13.hdf", "a.he2"] {
         assert!(plugin.claims_path(Path::new(name)), "{name}");
     }
-    assert!(!plugin.claims_path(Path::new("a.hdf")));
+    assert!(!plugin.claims_path(Path::new("a.hdr")));
     assert!(!plugin.claims_path(Path::new("h5")));
-    extensions.set(vw_core::ProbeExtensions::new("^hdf$").unwrap());
-    assert!(plugin.claims_path(Path::new("a.hdf")));
+    extensions.set(vw_core::ProbeExtensions::new("^hdr$").unwrap());
+    assert!(plugin.claims_path(Path::new("a.hdr")));
     assert!(!plugin.claims_path(Path::new("a.h5")));
     let data = fixture("hdf5_cases.h5");
     assert!(plugin.decode_frame_at(Path::new("a.h5"), &data, 0).is_err());
@@ -590,4 +590,46 @@ fn two_dimensional_latitudes_and_longitudes_are_not_shown_first() {
     assert!(lat.auxiliary);
     let first = layout::default_variable(&variables).unwrap();
     assert!(!first.auxiliary, "{}", first.path);
+}
+
+#[test]
+fn hdf4_files_are_labelled_hdf4_and_opened_by_extension() {
+    let data = fixture("hdf4_cases.hdf");
+    assert!(is_netcdf(&data));
+    let plugin = NetcdfPlugin::default();
+    let img = plugin
+        .decode_frame_at(Path::new("a.HDF"), &data, 0)
+        .unwrap();
+    assert_eq!(img.metadata.get(GROUP, FORMAT), Some(FORMAT_HDF4));
+    assert!(
+        plugin
+            .decode_frame_at(Path::new("a.bin"), &data, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn hdf4_calibration_subtracts_the_offset_before_scaling() {
+    let data = fixture("hdf4_cases.hdf");
+    let img = plugin_for(&data, "calibrated").decode(&data).unwrap();
+    let v = values(&img);
+    assert!(v[0].is_nan(), "_FillValue is missing");
+    // 1 行 2 列: 0.5 × ((20 + 10 + 2) − 10)
+    assert_eq!(v[7], 11.0);
+}
+
+#[test]
+fn hdf4_three_dimensional_datasets_are_planes() {
+    let data = fixture("hdf4_cases.hdf");
+    let plugin = plugin_for(&data, "cube");
+    assert_eq!(plugin.frame_count(&data).unwrap(), 3);
+    assert_eq!(values(&plugin.decode_frame(&data, 1).unwrap())[0], 100.0);
+}
+
+#[test]
+fn hdf4_latitude_and_longitude_datasets_give_each_pixel_its_position() {
+    let data = fixture("hdf4_cases.hdf");
+    let img = geo_of(&data, "Radiance", Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    assert_eq!(geo.at(2.0, 3.0), Some((33.0, 132.0)));
 }

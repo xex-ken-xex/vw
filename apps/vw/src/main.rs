@@ -108,7 +108,7 @@ use vw_core::Registry;
 /// 組み込みのデコーダプラグインを登録する。新しい形式はここに 1 行足す。
 /// `fits` と `calibration` は FITS のプラグインと共有する、設定画面で変える表示と校正の決め方。
 /// `netcdf` は NetCDF のプラグインと共有する表示の決め方と、ファイルごとに選んだ変数と、
-/// HDF5 として開く拡張子。
+/// HDF として開く拡張子。
 fn registry(
     fits: &vw_fits::SharedOptions,
     calibration: &vw_fits::Calibration,
@@ -127,7 +127,7 @@ fn registry(
     )));
     registry.register(Arc::new(
         vw_netcdf::NetcdfPlugin::new(netcdf.0.clone(), netcdf.1.clone())
-            .with_hdf5_extensions(netcdf.2.clone()),
+            .with_hdf_extensions(netcdf.2.clone()),
     ));
     registry.register(Arc::new(vw_raw::RawPlugin));
     registry.register(Arc::new(vw_dicom::DicomPlugin));

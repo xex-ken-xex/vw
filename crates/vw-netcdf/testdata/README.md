@@ -15,6 +15,7 @@
 | `edge_cases.nc` | NetCDF-3 | 緯度が南から北の変数、(経度, 緯度) の順の変数、計測の値の `valid_range` と格納値の `valid_range` |
 | `geo_cases.nc` | NetCDF-4 | 緯度・経度の読み方。経度 0〜360° の格子、偏差の変数（`t_anomaly`）、2 次元の緯度・経度の表（曲がった格子）、ランベルト正角円錐図法（x / y が km）、回転極 |
 | `hdf5_cases.h5` | HDF5（NetCDF-4 の印なし） | HDF-EOS5 に似せた並び（Data Fields と Geolocation Fields の緯度・経度）、`scale_factor` と `_FillValue`、LZF 圧縮、3 次元、印の変数（`flag_meanings`）、列挙型と構造体（画像にしない）。期待値はテストの中の式 |
+| `hdf4_cases.hdf` | HDF4 | SD の API で書いたデータセット。HDF4 の校正（SDsetcal）と `_FillValue`、deflate・RLE・Huffman の圧縮、チャンク（deflate と、端が半端な圧縮なし）、3 次元、Vgroup に入れた緯度・経度、全体の属性。期待値はテストの中の式 |
 | `expected-values.txt` | テキスト | 上のファイルを netCDF4 で読んだときの形・欠損の数・最小・最大・平均・角の値 |
 | `geo-expected.txt` | テキスト | `geo_cases.nc` の図法と回転極の格子の、画素（行,列）ごとの緯度・経度。pyproj で逆投影した値 |
 
@@ -63,4 +64,25 @@ python3 make_fixtures.py /tmp/nc  # 別のフォルダに作る
 cd crates/vw-netcdf/testdata
 python3 make_hdf5_fixtures.py          # このフォルダに作り直す
 python3 make_hdf5_fixtures.py /tmp/h5  # 別のフォルダに作る
+```
+
+## make_hdf4_fixtures.py
+
+### 前提
+
+- Python 3.9 以上
+- `pyhdf`・`numpy`（`pip install pyhdf numpy`）。pyhdf の wheel に HDF4 の公式ライブラリが入っています。Linux で確かめました
+- チャンクは pyhdf に入口がないので、wheel の中の `libmfhdf` を ctypes で呼びます（`pyhdf.libs` フォルダにあるもの）
+
+### できること
+
+- `hdf4_cases.hdf` を作ります。値は式で決まるので、期待値のファイルはありません（テストが同じ式で確かめます）。
+- szip は、pyhdf の入ったライブラリに圧縮する側がないので作りません。
+
+### 使い方
+
+```sh
+cd crates/vw-netcdf/testdata
+python3 make_hdf4_fixtures.py          # このフォルダに作り直す
+python3 make_hdf4_fixtures.py /tmp/h4  # 別のフォルダに作る
 ```

@@ -188,9 +188,9 @@ pub struct VwApp {
     netcdf: vw_netcdf::SharedOptions,
     /// NetCDF のファイルごとに選んだ変数（プラグインと共有）。
     netcdf_choices: vw_netcdf::Choices,
-    /// HDF5 として開く拡張子（プラグインと共有）と、その式。変わったときだけフォルダを読み直すため。
-    hdf5_extensions: vw_netcdf::Hdf5Extensions,
-    hdf5_pattern: String,
+    /// HDF として開く拡張子（プラグインと共有）と、その式。変わったときだけフォルダを読み直すため。
+    hdf_extensions: vw_netcdf::HdfExtensions,
+    hdf_pattern: String,
     /// 校正の結果をログに出したフォルダ。同じフォルダのライトを次々に見ても 1 回だけ出す。
     calibration_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
@@ -578,11 +578,11 @@ pub fn group_metadata(entries: &[(String, String, String)]) -> Vec<(&str, Vec<(&
 }
 
 /// NetCDF のプラグインとアプリで共有するもの。表示の決め方、ファイルごとに選んだ変数、
-/// HDF5 として開く拡張子。
+/// HDF として開く拡張子。
 pub type NetcdfShared = (
     vw_netcdf::SharedOptions,
     vw_netcdf::Choices,
-    vw_netcdf::Hdf5Extensions,
+    vw_netcdf::HdfExtensions,
 );
 
 impl VwApp {
@@ -591,7 +591,7 @@ impl VwApp {
         registry: Registry,
         fits: vw_fits::SharedOptions,
         calibration: vw_fits::Calibration,
-        (netcdf, netcdf_choices, hdf5_extensions): NetcdfShared,
+        (netcdf, netcdf_choices, hdf_extensions): NetcdfShared,
         initial: Vec<PathBuf>,
         started: Instant,
     ) -> Self {
@@ -701,7 +701,7 @@ impl VwApp {
         fits.set(settings.settings.fits.options());
         calibration.set_options(settings.settings.fits.calibration.options());
         netcdf.set(settings.settings.netcdf.options());
-        hdf5_extensions.set(settings.settings.netcdf.hdf5_extensions());
+        hdf_extensions.set(settings.settings.netcdf.hdf_extensions());
         vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
         vw_tiff::set_repair_strip_byte_counts(settings.settings.repair.tiff_strip_byte_counts);
         let mut tree = FolderTree::new(root, settings.settings.tree.order());
@@ -742,8 +742,8 @@ impl VwApp {
             calibration,
             netcdf,
             netcdf_choices,
-            hdf5_extensions,
-            hdf5_pattern: settings.settings.netcdf.hdf5_extensions.clone(),
+            hdf_extensions,
+            hdf_pattern: settings.settings.netcdf.hdf_extensions.clone(),
             calibration_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
             color_rules: Arc::new(crate::colormap::Rules::new(&settings.settings.pipeline)),
