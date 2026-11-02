@@ -4,11 +4,14 @@
 //!   縮小版のページ（NewSubfileType で縮小版と印の付いたもの）はページに数えない
 //! - 16bit のサンプルは 16bit のまま、浮動小数点と符号付き整数は [`PixelData::F32`] にする
 //! - 1/2/4bit のグレーは 8bit に広げ、パレット（カラーマップ）は RGB に展開する
+//! - 10・12・14bit などは値を変えずに 16bit の入れ物に入れ、意味のあるビット数をそのビット数にする
+//!   （24bit などは実数）
 //! - CMYK と YCbCr は RGB に変換する
 //! - 向き（Orientation）のタグに従って画素を並べ替える
 //! - TIFF のタグ（カメラ名、作成ソフトなど）を EXIF と同じ形でメタデータにする
 
 mod layout;
+mod odd_bits;
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -113,7 +116,9 @@ impl DecoderPlugin for TiffPlugin {
             .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
             .map_err(invalid)?;
         check_size(&mut decoder)?;
-        let mut img = if photometric == Some(PALETTE) {
+        let mut img = if let Some(bits) = odd_bits::bits(&mut decoder) {
+            odd_bits::pixels(data, ifd, &mut decoder, bits)?
+        } else if photometric == Some(PALETTE) {
             palette(data, ifd, &mut decoder)?
         } else {
             pixels(&mut decoder)?

@@ -1109,6 +1109,15 @@ const JA: &[(&str, &str)] = &[
         "画素ごとに、足りない 2 色を周りの画素から補います。",
     ),
     ("Black and white", "黒と白"),
+    ("Unpacking", "ビットをほどく"),
+    (
+        "The values packed bit by bit are taken out and put into 16-bit samples as they are; nothing is scaled. Black and white use the bit depth of the file.",
+        "ビット単位で詰めた値を取り出し、値はそのまま 16bit の入れ物に入れます。引き伸ばしはしません。黒と白は、ファイルのビット数で決めます。",
+    ),
+    (
+        "The values packed bit by bit are taken out and kept as real numbers; nothing is scaled.",
+        "ビット単位で詰めた値を取り出し、値はそのまま実数で持ちます。引き伸ばしはしません。",
+    ),
     (
         "Chosen from the distribution of the values when the image opens (Astronomy images (FITS) in the settings).",
         "開いたときに、値の分布から決めます（設定の「天体の画像 (FITS)」）。",

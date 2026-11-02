@@ -147,6 +147,9 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
                 }
             }
             out.push(stored);
+            if let Some(stage) = get("Bits per sample").and_then(unpacking) {
+                out.push(stage);
+            }
             if let Some(p) = get("Photometric") {
                 let stage = Stage::new("Color conversion").line("Photometric", p);
                 out.push(
@@ -274,6 +277,21 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
         out.push(gray_levels(info.bits_per_sample, info.significant_bits));
     }
     out
+}
+
+/// TIFF の、1 サンプルが 8・16bit などの区切りに合わないビット数（`bits` は「12」や「12, 12, 12」）を
+/// ほどく段。区切りに合うなら `None`。
+fn unpacking(bits: &str) -> Option<Stage> {
+    let n: u32 = bits.split(',').next()?.trim().parse().ok()?;
+    if n < 8 || matches!(n, 8 | 16 | 32 | 64) {
+        return None;
+    }
+    let stage = Stage::new("Unpacking").line("Bits per sample", bits);
+    Some(if n <= 16 {
+        stage.note("The values packed bit by bit are taken out and put into 16-bit samples as they are; nothing is scaled. Black and white use the bit depth of the file.")
+    } else {
+        stage.note("The values packed bit by bit are taken out and kept as real numbers; nothing is scaled.")
+    })
 }
 
 /// FITS 以外の灰色の画像の、表示のための黒と白の段（[`vw_core::display::window_of`] の既定）。
@@ -746,6 +764,17 @@ mod tests {
         );
         let color = info("PNG", &[("PNG", "Color type", "RGB")]);
         assert!(stages(&color).iter().all(|s| s.title != BLACK_AND_WHITE));
+    }
+
+    #[test]
+    fn tiff_with_twelve_bit_samples_shows_how_they_were_unpacked() {
+        let twelve = info("TIFF", &[("TIFF", "Bits per sample", "12")]);
+        let twelve = titles(&stages(&twelve));
+        assert!(twelve.contains(&"Unpacking"), "{twelve:?}");
+        let sixteen = info("TIFF", &[("TIFF", "Bits per sample", "16, 16, 16")]);
+        assert!(!titles(&stages(&sixteen)).contains(&"Unpacking"));
+        let four = info("TIFF", &[("TIFF", "Bits per sample", "4")]);
+        assert!(!titles(&stages(&four)).contains(&"Unpacking"));
     }
 
     #[test]

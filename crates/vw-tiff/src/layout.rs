@@ -113,6 +113,59 @@ pub fn with_gray_photometric(data: &[u8], ifd: usize) -> Option<Vec<u8>> {
     None
 }
 
+/// [`with_byte_samples`] で書き換える値。
+pub struct ByteSamples {
+    /// ImageWidth に書く幅（1 行のバイト数。タイルなら横に並ぶタイルの数 × タイルの 1 行のバイト数）。
+    pub image_width: usize,
+    /// TileWidth に書く幅（タイルの 1 行のバイト数）。ストリップなら `None`。
+    pub tile_width: Option<usize>,
+    /// 面を分けて持つ画像なら、サンプル数と色の種類を残す（各面のストリップを番号で引けるように）。
+    pub keep_samples: bool,
+}
+
+/// `data` の写しの、`ifd` 番目の IFD を、8bit のサンプルが `image_width` 個並ぶ画像に見せかけたもの。
+/// tiff クレートが断るビット数の画像を、圧縮をほどいた生のバイトとして読むために使う。
+/// 書き換えられなければ `None`。
+///
+/// 面を分けないときは 1 サンプルのグレーにする。1 行のバイト数がサンプル数で割り切れるとは
+/// 限らないため。SampleFormat と ExtraSamples は、サンプル数と食い違わないよう、
+/// どのリーダーも知らないタグの番号に変えて隠す。
+pub fn with_byte_samples(data: &[u8], ifd: usize, patch: &ByteSamples) -> Option<Vec<u8>> {
+    let header = Header::read(data)?;
+    let mut offset = header.first_ifd(data)?;
+    for _ in 0..ifd {
+        offset = header.next_ifd(data, offset)?;
+    }
+    let count = header.entry_count(data, offset)?;
+    let mut out = data.to_vec();
+    for i in 0..count {
+        let entry = offset + header.count_size() + i * header.entry_size();
+        match header.u16(data, entry)? {
+            IMAGE_WIDTH => header.set_long(&mut out, entry, patch.image_width)?,
+            TILE_WIDTH => header.set_long(&mut out, entry, patch.tile_width?)?,
+            BITS_PER_SAMPLE if patch.keep_samples => {
+                header.fill_shorts(&mut out, data, entry, 8)?
+            }
+            BITS_PER_SAMPLE => header.set_short(&mut out, entry, 8)?,
+            SAMPLES_PER_PIXEL | PHOTOMETRIC if !patch.keep_samples => {
+                header.set_short(&mut out, entry, 1)?;
+            }
+            EXTRA_SAMPLES if !patch.keep_samples => header.hide(&mut out, entry)?,
+            // 符号付きのままだと、8bit の符号付きとして読まれる（読み出すのはバイトなので害はないが、
+            // 型の組み合わせによっては断られる）。
+            SAMPLE_FORMAT => header.hide(&mut out, entry)?,
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// 隠したタグに付ける番号（私用の範囲で、使われていないもの）。
+const HIDDEN_TAG: u16 = 65_000;
+const TILE_WIDTH: u16 = 322;
+const EXTRA_SAMPLES: u16 = 338;
+const SAMPLE_FORMAT: u16 = 339;
+
 const PHOTOMETRIC: u16 = 262;
 
 const IMAGE_WIDTH: u16 = 256;
@@ -383,6 +436,80 @@ impl Header {
         copy.extend(data.get(after..after + ptr_size)?);
         copy.extend(tail);
         Some(next_link)
+    }
+
+    /// エントリ `entry` を、SHORT の値 1 つ（`value`）に書き換える。
+    fn set_short(&self, copy: &mut [u8], entry: usize, value: u16) -> Option<()> {
+        copy.get_mut(entry + 2..entry + 4)?
+            .copy_from_slice(&self.bytes_of_u16(3));
+        let (count, value_at, inline) = if self.big {
+            (entry + 4..entry + 12, entry + 12, 8)
+        } else {
+            (entry + 4..entry + 8, entry + 8, 4)
+        };
+        let n = if self.big {
+            self.bytes_of_u64(1).to_vec()
+        } else {
+            self.bytes_of_u32(1).to_vec()
+        };
+        copy.get_mut(count)?.copy_from_slice(&n);
+        let mut v = vec![0u8; inline];
+        v[..2].copy_from_slice(&self.bytes_of_u16(value));
+        copy.get_mut(value_at..value_at + inline)?
+            .copy_from_slice(&v);
+        Some(())
+    }
+
+    /// エントリ `entry` のタグの番号を、どのリーダーも知らない番号に変えて隠す。
+    fn hide(&self, copy: &mut [u8], entry: usize) -> Option<()> {
+        copy.get_mut(entry..entry + 2)?
+            .copy_from_slice(&self.bytes_of_u16(HIDDEN_TAG));
+        Some(())
+    }
+
+    /// 1 つの値のエントリ `entry` を、LONG の `value` に書き換える（SHORT に入らない幅もあるため）。
+    fn set_long(&self, copy: &mut [u8], entry: usize, value: usize) -> Option<()> {
+        let value = u32::try_from(value).ok()?;
+        copy.get_mut(entry + 2..entry + 4)?
+            .copy_from_slice(&self.bytes_of_u16(4));
+        if self.big {
+            copy.get_mut(entry + 4..entry + 12)?
+                .copy_from_slice(&self.bytes_of_u64(1));
+            let mut v = [0u8; 8];
+            v[..4].copy_from_slice(&self.bytes_of_u32(value));
+            copy.get_mut(entry + 12..entry + 20)?.copy_from_slice(&v);
+        } else {
+            copy.get_mut(entry + 4..entry + 8)?
+                .copy_from_slice(&self.bytes_of_u32(1));
+            copy.get_mut(entry + 8..entry + 12)?
+                .copy_from_slice(&self.bytes_of_u32(value));
+        }
+        Some(())
+    }
+
+    /// SHORT の並びのエントリ `entry` の値を、すべて `value` にする（数は変えない）。
+    fn fill_shorts(&self, copy: &mut [u8], data: &[u8], entry: usize, value: u16) -> Option<()> {
+        if self.u16(data, entry + 2)? != 3 {
+            return None;
+        }
+        let n = if self.big {
+            self.u64(data, entry + 4)?
+        } else {
+            self.u32(data, entry + 4)?
+        };
+        let inline = if self.big { 8 } else { 4 };
+        let at = if n * 2 <= inline {
+            entry + self.value_offset()
+        } else if self.big {
+            self.u64(data, entry + self.value_offset())?
+        } else {
+            self.u32(data, entry + self.value_offset())?
+        };
+        for i in 0..n {
+            copy.get_mut(at + i * 2..at + i * 2 + 2)?
+                .copy_from_slice(&self.bytes_of_u16(value));
+        }
+        Some(())
     }
 
     fn write_ptr(&self, copy: &mut [u8], at: usize, value: usize) -> Option<()> {
