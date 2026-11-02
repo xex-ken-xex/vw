@@ -633,3 +633,68 @@ fn hdf4_latitude_and_longitude_datasets_give_each_pixel_its_position() {
     let geo = img.geo.as_ref().expect("geo");
     assert_eq!(geo.at(2.0, 3.0), Some((33.0, 132.0)));
 }
+
+#[test]
+fn hdf_eos2_swath_positions_are_interpolated_from_the_coarse_geolocation() {
+    let data = fixture("hdf_eos2_cases.hdf");
+    let geo = geo_of(&data, "Temperature", Options::default())
+        .geo
+        .expect("geo");
+    // データの 2 行 2 列が粗い格子の 0 行 0 列（Offset 2、Increment 5）。
+    assert_near(geo.at(2.0, 2.0).unwrap(), (40.0, 179.5), 1e-4);
+    // 180° を越えた先は西経で、粗い格子の外は端から延ばす。
+    assert_near(geo.at(7.0, 7.0).unwrap(), (40.3, -179.5), 1e-4);
+    assert_near(geo.at(0.0, 0.0).unwrap(), (39.88, 179.1), 1e-4);
+    assert_near(geo.at(9.0, 11.0).unwrap(), (40.62, -179.1), 1e-4);
+}
+
+#[test]
+fn hdf_eos2_sinusoidal_grid_positions_match_proj() {
+    let data = fixture("hdf_eos2_cases.hdf");
+    let geo = geo_of(&data, "NDVI", Options::default()).geo.expect("geo");
+    // 期待値は make_hdf_eos_fixtures.py が pyproj で出した値。
+    assert_near(geo.at(0.0, 0.0).unwrap(), (35.523163, -10.497295), 1e-5);
+    assert_near(geo.at(5.0, 3.0).unwrap(), (32.825202, -4.815907), 1e-5);
+}
+
+#[test]
+fn hdf_eos2_geographic_grid_corners_are_packed_degrees_minutes_seconds() {
+    let data = fixture("hdf_eos2_cases.hdf");
+    let geo = geo_of(&data, "Cover", Options::default()).geo.expect("geo");
+    assert_near(geo.at(0.0, 0.0).unwrap(), (67.5, -157.5), 1e-9);
+    assert_near(geo.at(7.0, 3.0).unwrap(), (-67.5, 157.5), 1e-9);
+}
+
+#[test]
+fn hdf_eos5_lambert_azimuthal_grid_positions_match_proj() {
+    let data = fixture("hdf_eos5_cases.h5");
+    let geo = geo_of(
+        &data,
+        "HDFEOS/GRIDS/Polar/Data Fields/Ice",
+        Options::default(),
+    )
+    .geo
+    .expect("geo");
+    assert_near(geo.at(0.0, 0.0).unwrap(), (84.911178, -135.0), 1e-5);
+    assert_near(geo.at(1.0, 4.0).unwrap(), (85.977429, -26.565051), 1e-5);
+    assert_near((geo.at(2.0, 2.0).unwrap().0, 0.0), (90.0, 0.0), 1e-6);
+}
+
+#[test]
+fn hdf_eos5_swath_positions_follow_the_dimension_map() {
+    let data = fixture("hdf_eos5_cases.h5");
+    let geo = geo_of(
+        &data,
+        "HDFEOS/SWATHS/S/Data Fields/Radiance",
+        Options::default(),
+    )
+    .geo
+    .expect("geo");
+    assert_near(geo.at(0.0, 0.0).unwrap(), (10.0, 20.0), 1e-4);
+    assert_near(geo.at(9.0, 9.0).unwrap(), (20.0, 30.0), 1e-4);
+    assert_near(
+        geo.at(3.0, 6.0).unwrap(),
+        (10.0 + 60.0 / 9.0, 20.0 + 30.0 / 9.0),
+        1e-4,
+    );
+}
