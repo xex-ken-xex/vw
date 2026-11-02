@@ -75,6 +75,49 @@ impl DecoderPlugin for DicomPlugin {
         Ok(img)
     }
 
+    /// 解析は 1 回だけにして、フレームを順に取り出す。
+    fn decode_frames(
+        &self,
+        _path: &std::path::Path,
+        data: &[u8],
+        order: &[usize],
+        each: &mut dyn FnMut(usize, Result<VwImage, DecodeError>) -> bool,
+    ) {
+        let opened = open(data, false).and_then(|obj| {
+            check_pixel_size(&obj)?;
+            Ok(obj)
+        });
+        let obj = match opened {
+            Ok(obj) => obj,
+            Err(e) => {
+                if let Some(&first) = order.first() {
+                    each(first, Err(e));
+                }
+                return;
+            }
+        };
+        let frames = frames_in(&obj);
+        let meta = metadata(&obj);
+        for &frame in order {
+            let image = if frame >= frames {
+                Err(DecodeError::Invalid(format!(
+                    "no frame {frame} (the file has {frames})"
+                )))
+            } else {
+                obj.decode_pixel_data_frame(frame as u32)
+                    .map_err(|e| DecodeError::Unsupported(e.to_string()))
+                    .and_then(|px| to_image(&px, frame))
+                    .map(|mut img| {
+                        img.metadata = meta.clone();
+                        img
+                    })
+            };
+            if !each(frame, image) {
+                return;
+            }
+        }
+    }
+
     /// 画素データの手前で読むのをやめるので、大きなファイルでも速い。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         Ok(metadata(&open(data, true)?))
@@ -681,6 +724,43 @@ mod tests {
         let third = DicomPlugin.decode_frame(&bytes, 2).unwrap();
         assert!(matches!(&third.data, PixelData::U8(v) if v == &[30]));
         assert!(DicomPlugin.decode_frame(&bytes, 3).is_err());
+    }
+
+    #[test]
+    fn decode_frames_hands_out_frames_in_the_asked_order_and_stops_when_told() {
+        let synth = Synth::new(XA_IMAGE, 1, 1).frames_u8(&[&[10], &[20], &[30]]);
+        let bytes = synth.bytes();
+        let mut got = Vec::new();
+        DicomPlugin.decode_frames(
+            std::path::Path::new("x.dcm"),
+            &bytes,
+            &[2, 0, 1],
+            &mut |i, img| {
+                let img = img.unwrap();
+                let PixelData::U8(v) = &img.data else {
+                    panic!("8-bit frames");
+                };
+                got.push((i, v[0]));
+                got.len() < 2
+            },
+        );
+        assert_eq!(got, [(2, 30), (0, 10)]);
+    }
+
+    #[test]
+    fn decode_frames_reports_a_frame_the_file_does_not_have() {
+        let bytes = Synth::new(XA_IMAGE, 1, 1).frames_u8(&[&[10]]).bytes();
+        let mut errors = 0;
+        DicomPlugin.decode_frames(
+            std::path::Path::new("x.dcm"),
+            &bytes,
+            &[0, 5],
+            &mut |_, img| {
+                errors += usize::from(img.is_err());
+                true
+            },
+        );
+        assert_eq!(errors, 1);
     }
 
     #[test]

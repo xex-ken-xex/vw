@@ -93,6 +93,24 @@ pub trait DecoderPlugin: Send + Sync {
         self.decode_frame(data, frame)
     }
 
+    /// `order` の順にフレームを取り出して `each` に渡す。`each` が `false` を返したらやめる。
+    /// 何百枚もあるファイルを 1 枚ずつ [`Self::decode_frame_at`] で読むと、そのたびに
+    /// ファイル全体を解析し直すので、一度の解析で全フレームを取り出せる形式は上書きする。
+    /// 既定は 1 枚ずつ取り出す。
+    fn decode_frames(
+        &self,
+        path: &Path,
+        data: &[u8],
+        order: &[usize],
+        each: &mut dyn FnMut(usize, Result<VwImage, DecodeError>) -> bool,
+    ) {
+        for &frame in order {
+            if !each(frame, self.decode_frame_at(path, data, frame)) {
+                return;
+            }
+        }
+    }
+
     /// [`Self::decode`] の画像の代わりに、時間をかけて精細な画像を作る（カメラ RAW の
     /// センサーのデータの現像）。作れるかどうかは [`VwImage::develop_size`] で分かる。
     fn develop(&self, _data: &[u8]) -> Result<VwImage, DecodeError> {
@@ -257,6 +275,21 @@ impl Registry {
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
         Ok((plugin.decode_frame_at(path, data, frame)?, plugin.name()))
+    }
+
+    /// プラグインを選んで [`DecoderPlugin::decode_frames`] し、使ったプラグイン名を返す。
+    pub fn decode_frames_bytes(
+        &self,
+        path: &Path,
+        data: &[u8],
+        order: &[usize],
+        each: &mut dyn FnMut(usize, Result<VwImage, DecodeError>) -> bool,
+    ) -> Result<&str, DecodeError> {
+        let plugin = self
+            .find(path, data)
+            .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
+        plugin.decode_frames(path, data, order, each);
+        Ok(plugin.name())
     }
 
     /// プラグインを選んで [`DecoderPlugin::develop`] し、画像と使ったプラグイン名を返す。

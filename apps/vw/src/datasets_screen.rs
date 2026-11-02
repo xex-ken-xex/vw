@@ -58,6 +58,7 @@ impl SendTo<'_> {
             Some(self.destinations),
             first.unwrap_or(Path::new("")),
             first.is_none(),
+            false,
         );
         crate::send_app::menu(ui, lang, &offer)
     }

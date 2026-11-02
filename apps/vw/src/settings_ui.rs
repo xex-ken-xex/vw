@@ -165,6 +165,13 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Viewer,
+        key: "viewer.suggest_full_image_limit",
+        title: "Suggest raising the memory limit",
+        description: "When images or frames do not fit in the full-resolution memory limit and the computer has free memory, a bar above the images offers to raise the limit.",
+        widget: suggest_limit_widget,
+    },
+    Item {
+        section: Section::Viewer,
         key: "viewer.image_size_limit_mb",
         title: "Image size limit",
         description: "Memory one image may take to decode (MB). A file whose header claims a larger image is not opened, so a broken header cannot exhaust memory.",
@@ -1671,6 +1678,11 @@ fn chunk_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
             .suffix(tr(lang, " images")),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn suggest_limit_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.viewer.suggest_full_image_limit, tr(lang, "Enabled"))
+        .changed()
 }
 
 fn keep_view_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
@@ -3540,7 +3552,7 @@ impl SettingsUi {
                 title_line(ui, tr(lang, "Send to apps"), "send.apps");
                 ui.weak(tr(
                     lang,
-                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file.",
+                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for console tools).",
                 ));
                 self.send_apps.ui(ui, settings, out);
             });
@@ -4307,7 +4319,7 @@ impl SendApps {
             .num_columns(6)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                for title in ["Name", "Program", "Arguments", "Accepts", "Extensions"] {
+                for title in ["Name", "Program", "Arguments", "Accepts", "Output", "Extensions"] {
                     ui.weak(tr(lang, title));
                 }
                 ui.end_row();
@@ -4349,6 +4361,13 @@ impl SendApps {
                                     .changed();
                             }
                         });
+                    edited |= ui
+                        .checkbox(&mut row.show_output, "")
+                        .on_hover_text(tr(
+                            lang,
+                            "Show what the app prints and its exit code in the vw log (for console tools)",
+                        ))
+                        .changed();
                     ui.horizontal(|ui| {
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut row.extensions)

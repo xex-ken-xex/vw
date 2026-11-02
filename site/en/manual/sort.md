@@ -183,7 +183,7 @@ Right-click an image or a folder in the tree → **Send to** to open it in anoth
 
 - **Open with the default app**: open with the app the OS associates with that file type
 - Below it are the apps listed in the **Send to apps** setting. At first these are the apps the OS uses for JPEG and camera RAW
-- For each app, the settings hold a name, program, arguments, what it accepts (files / folders / both) and extensions (a regular expression matched against the whole extension, case-insensitive, such as `nef|arw|cr[23]`; empty means any)
+- For each app, the settings hold a name, program, arguments, what it accepts (files / folders / both), output (when on, what the app prints and its exit code go to the vw log; for console tools that print and exit at once) and extensions (a regular expression matched against the whole extension, case-insensitive, such as `nef|arw|cr[23]`; empty means any)
 - The arguments can contain the following. Without any of them, the files are added at the end
 
 | Placeholder | Meaning |

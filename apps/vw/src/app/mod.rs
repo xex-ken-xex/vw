@@ -51,6 +51,7 @@ mod folders;
 mod labeling;
 mod line_profile_pane;
 mod log_pane;
+mod memory_hint;
 mod menu;
 mod metadata_pane;
 mod people_graph_ui;
@@ -355,6 +356,13 @@ pub struct VwApp {
     restore_job: Option<undo::Restoring>,
     /// 裏の仕事が終わったら描き直すための口。
     egui_ctx: egui::Context,
+    /// フル解像度の上限を上げるよう勧める帯。
+    memory_hint: memory_hint::MemoryHintState,
+    /// 出力を見る送り先のアプリが終わったときの知らせ。
+    launch_outputs: (
+        std::sync::mpsc::Sender<crate::send_app::Output>,
+        std::sync::mpsc::Receiver<crate::send_app::Output>,
+    ),
     /// ドラッグ中に Ctrl が押されていた（コピーとして見せていた）か。
     drag_copy: bool,
     /// OS からドロップされた画像。cd した先で読み込まれたら、そのスロットを選ぶ。
@@ -854,6 +862,8 @@ impl VwApp {
             focus_trash_cancel: false,
             restore_job: None,
             egui_ctx: cc.egui_ctx.clone(),
+            memory_hint: Default::default(),
+            launch_outputs: std::sync::mpsc::channel(),
             drag_copy: false,
             select_when_loaded: None,
             maximized: None,
@@ -1408,6 +1418,8 @@ impl eframe::App for VwApp {
         self.copy_pending(&ctx);
         self.export_window(&ctx);
         self.toast_ui(&ctx);
+        self.memory_hint_tick();
+        self.memory_hint_ui(&ctx);
         self.folder_load_dialog(&ctx);
         self.move_dialog(&ctx);
         self.trash_dialog(&ctx);
@@ -1423,6 +1435,7 @@ impl eframe::App for VwApp {
         self.compare_dialog_ui(&ctx);
         self.finish_trash_job();
         self.finish_restore_job();
+        self.finish_launch_outputs();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);

@@ -26,7 +26,8 @@ The main settings. Find all of them with the search box of the settings screen.
 | | UI scale (`appearance.ui_scale`) | Size of text and icons | 1.00 |
 | | Compact windows (`appearance.compact`) | Less padding to show more information | On |
 | Viewer | Background color (`viewer.background`) | Color behind images (`#RRGGBB`). Empty for the theme default | Empty |
-| | Full-resolution memory limit (`viewer.full_image_limit_mb`) | Memory for full-resolution images. Beyond it, 512 px thumbnails are shown | 256 MB |
+| | Full-resolution memory limit (`viewer.full_image_limit_mb`) | Memory for full-resolution images. Beyond it, 512 px thumbnails are shown. Files with many frames keep all frames up to this amount | 256 MB |
+| | Suggest raising the memory limit (`viewer.suggest_full_image_limit`) | When images do not fit in the limit and the computer has free memory, a bar offers to raise it | On |
 | | Slot layout (`viewer.layout`) | Auto / 1x1 / 1x2 / 2x1 / 2x2 / 3x3 / 4x4 / Custom | Auto |
 | | Custom layout (`viewer.custom_layout`) | Columns x rows for "Custom" in the View menu | 6 x 6 |
 | | Auto layout maximum (`viewer.auto_layout_max`) | Largest columns x rows for the auto layout. More slots go to the next page | 6 x 6 |

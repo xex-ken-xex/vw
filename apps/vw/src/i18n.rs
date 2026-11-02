@@ -1353,6 +1353,21 @@ const JA: &[(&str, &str)] = &[
     ("Theme default", "テーマの既定色"),
     ("Full-resolution memory limit", "フル解像度のメモリ上限"),
     (
+        "Free memory is available ({free} GB). Raise the full-resolution memory limit from {from} MB to {to} MB?",
+        "メモリに余裕があります（空き {free} GB）。フル解像度のメモリ上限を {from} MB から {to} MB に上げますか？",
+    ),
+    ("Raise", "上げる"),
+    ("Not now", "今はしない"),
+    ("Don't ask again", "今後聞かない"),
+    (
+        "Suggest raising the memory limit",
+        "メモリ上限を上げるよう勧める",
+    ),
+    (
+        "When images or frames do not fit in the full-resolution memory limit and the computer has free memory, a bar above the images offers to raise the limit.",
+        "画像やフレームがフル解像度のメモリ上限に収まらず、パソコンのメモリに余裕があるとき、画像の上に上限を上げるか尋ねる帯を出します。",
+    ),
+    (
         "Memory used for full-resolution images (MB). Beyond this, images are shown from 512 px thumbnails until memory frees up.",
         "フル解像度の画像に使うメモリの上限（MB）。超えた分は、空きができるまで 512px の縮小画像で表示します。",
     ),
@@ -2366,13 +2381,18 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Send to apps", "送り先のアプリ"),
     (
-        "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file.",
-        "右クリックの「送る」に並べるアプリ。引数の {path} は 1 ファイル（1 ファイルごとにアプリを起動）、{paths} は全ファイル（アプリは 1 回だけ起動）、{dir} はファイルのあるフォルダ、{name} はファイル名。どれも書かなければ、ファイルを末尾に足します。拡張子は正規表現で、拡張子全体と大文字小文字を区別せずに照らします（nef|arw|cr[23] など）。空なら何でも受け付けます。",
+        "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for console tools).",
+        "右クリックの「送る」に並べるアプリ。引数の {path} は 1 ファイル（1 ファイルごとにアプリを起動）、{paths} は全ファイル（アプリは 1 回だけ起動）、{dir} はファイルのあるフォルダ、{name} はファイル名。どれも書かなければ、ファイルを末尾に足します。拡張子は正規表現で、拡張子全体と大文字小文字を区別せずに照らします（nef|arw|cr[23] など）。空なら何でも受け付けます。拡張子に dicom と書くと、拡張子のない DICOM のファイルも受け取ります。出力: アプリが出した文字と終了コードをログに出します（コンソールで動く道具向け）。",
     ),
     ("Program", "プログラム"),
     ("Arguments", "引数"),
     ("Accepts", "受け付けるもの"),
     ("Extensions", "拡張子"),
+    ("Output", "出力"),
+    (
+        "Show what the app prints and its exit code in the vw log (for console tools)",
+        "アプリが出した文字と終了コードを vw のログに出す（コンソールで動く道具向け）",
+    ),
     ("Files and folders", "ファイルとフォルダ"),
     ("any", "何でも"),
     ("Remove app", "アプリを削除"),

@@ -307,8 +307,13 @@ fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Ve
     vw_ui::menu::context(r, |ui| {
         let first = files.first().map(PathBuf::as_path).unwrap_or(Path::new(""));
         let menus = view.menus;
-        let offer =
-            crate::send_app::Offer::for_path(menus.apps, Some(menus.destinations), first, false);
+        let offer = crate::send_app::Offer::for_path(
+            menus.apps,
+            Some(menus.destinations),
+            first,
+            false,
+            true,
+        );
         if let Some(choice) = crate::send_app::menu(ui, menus.lang, &offer) {
             out.push(TreeAction::Send {
                 choice,
