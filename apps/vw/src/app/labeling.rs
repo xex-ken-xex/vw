@@ -12,7 +12,7 @@ use crate::labels::Flag;
 use crate::settings::{Language, LoadInto};
 use crate::theme;
 use crate::tree::{self};
-use crate::viewer::{Content, Origin, Slot};
+use crate::viewer::{Content, Origin, SequenceKind, Slot};
 
 use super::*;
 
@@ -20,6 +20,13 @@ use super::*;
 pub(super) struct ClearFlags {
     pending: discard::Pending,
     whole: bool,
+}
+
+/// `slot` が `file` のコマを送るスロットか。
+fn shows_frames_of(slot: &Slot, file: &Path) -> bool {
+    slot.sequence
+        .as_ref()
+        .is_some_and(|seq| seq.kind == SequenceKind::Frames && seq.folder == file)
 }
 
 impl VwApp {
@@ -126,6 +133,9 @@ impl VwApp {
         for path in wanted {
             match kept.remove(&path) {
                 Some(slot) => new.push(slot),
+                // コマのある画像（GIF など）は、読んだときにそのコマを送るスロットになって
+                // 1 枚 1 スロットの並びから外れる。そのスロットが残っていれば、もう 1 つ作らない。
+                None if rest.iter().any(|s| shows_frames_of(s, &path)) => {}
                 None => {
                     let mut slot = Slot::new(self.next_id);
                     self.next_id += 1;
