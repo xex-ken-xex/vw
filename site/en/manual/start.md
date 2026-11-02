@@ -45,7 +45,7 @@ On a PC with Windows 11 **Smart App Control** turned on, you get "Smart App Cont
 
 #### Ways to open images
 
-- **After starting vw**: click a folder in the folder tree on the left; its folders and images are laid out on the right
+- **After starting vw**: click a folder in the folder tree on the left; its folders and images are laid out on the right. You can also choose a folder with **File** → **Open folder...** (Ctrl+O). The last 5 folders you opened are listed, newest first, under **File** → **Recent folders**
 - **Drag and drop**: drop images or folders onto the `vw.exe` icon. Dropping onto a running vw window also moves to that folder
 - **From the right-click menu**: right-click an image → **Open with** → **Choose another app** → **Choose an app on your PC** and select `vw.exe`. With "Always use this app", double-clicking opens vw
 - **From the command line**:
@@ -159,7 +159,7 @@ vw divides its main window into four windows.
 
 | Place | Contents |
 | --- | --- |
-| Menu bar | **File**, **View**, **Labels**, **AI tags**, **Image**, **Settings**, **Help**. Each item shows its key on the right. Once one menu is open, hovering over the next name switches to it |
+| Menu bar | **File**, **View**, **Labels**, **AI tags**, **Image**, **Settings**, **Help**. Each item shows its key on the right. Once one menu is open, hovering over the next name switches to it. **Help** → **User guide (web)** (F1) opens this guide, and **Keyboard shortcuts** opens the key list in the settings |
 | Left column (tools) | From the top: select (arrow) / hand / zoom / pixel probe / ROI / measure (greyed out, not ready yet), tagging mode, filter, add slot. The settings button is at the bottom |
 | Folders (left) | A tree of folders and ZIPs. Clicking a folder moves there and lays out its contents in the image window. Start from Home, each drive on Windows, or `/` on Linux |
 | Images (center) | The frames (slots) that show images |

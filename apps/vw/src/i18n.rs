@@ -1678,6 +1678,11 @@ const JA: &[(&str, &str)] = &[
         "スロットの最大化/元に戻す、またはフォルダへ移動",
     ),
     ("Up one folder", "1 つ上のフォルダへ"),
+    ("Open folder...", "フォルダを開く..."),
+    ("Recent folders", "最近開いたフォルダ"),
+    ("No folders yet", "まだありません"),
+    ("Restore the maximized slot", "最大化したスロットを戻す"),
+    ("User guide (web)", "Web の使い方"),
     ("Maximize slot", "スロットを最大化"),
     ("Fit image to slot", "スロットに合わせる"),
     (

@@ -38,7 +38,10 @@ impl VwApp {
     }
 
     /// 設定を開いて、`jump` の節へ移る。
-    fn open_settings_at(&mut self, jump: impl FnOnce(&mut crate::settings_ui::SettingsUi)) {
+    pub(super) fn open_settings_at(
+        &mut self,
+        jump: impl FnOnce(&mut crate::settings_ui::SettingsUi),
+    ) {
         self.show_fullscreen_setup = false;
         if !self.show_settings {
             self.toggle_settings();

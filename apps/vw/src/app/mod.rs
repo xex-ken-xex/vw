@@ -54,6 +54,7 @@ mod log_pane;
 mod memory_hint;
 mod menu;
 mod metadata_pane;
+mod open_folder;
 mod people_graph_ui;
 mod people_ui;
 mod persist;
@@ -306,6 +307,10 @@ pub struct VwApp {
     resume_declined: Vec<PathBuf>,
     /// 最後にデータセットを取り出した出力先の親フォルダ。次の出力先の初期値に使う。
     last_extract_dir: Option<PathBuf>,
+    /// 「フォルダを開く…」の窓。
+    folder_picker: Option<Box<vw_tree::picker::Picker>>,
+    /// 最近開いたフォルダ（ZIP も）。新しい順。
+    recent_folders: Vec<PathBuf>,
     log: Log,
     /// プロセス起動時刻。最初のフレームまでの時間をログに出すために持つ。
     started: Instant,
@@ -836,6 +841,8 @@ impl VwApp {
             resume_offer: None,
             resume_declined: Vec::new(),
             last_extract_dir: saved.extract_dir.clone(),
+            folder_picker: None,
+            recent_folders: saved.recent_folders.clone(),
             log,
             started,
             throughput: crate::status::Throughput::new(started),
@@ -1108,6 +1115,8 @@ impl VwApp {
             Action::ShowSystemInfo => self.display.info_open = true,
             Action::ShowGradationTest => self.display.test.open_setup(),
             Action::OpenQualityHelp => self.open_help(crate::help::Page::Quality),
+            Action::OpenUserGuide => self.open_user_guide(),
+            Action::ShowKeys => self.open_settings_at(|s| s.show_keys()),
             Action::ShowAiModels => self.ai_models.open = true,
             Action::AiTagFolder => match folder {
                 Some(dir) => self.ai_tag_folder(ctx, &dir),
@@ -1199,7 +1208,16 @@ impl VwApp {
                 Some(folder) => self.open_folder(ctx, folder),
                 None => self.toggle_maximize(self.active),
             },
+            // ダイアログやメニューが開いていれば、Esc はそちらを閉じるのに使う。
+            Action::RestoreSlot => {
+                let dialog_open =
+                    ctx.memory(|m| m.top_modal_layer()).is_some() || egui::Popup::is_any_open(ctx);
+                if !dialog_open {
+                    self.maximized = None;
+                }
+            }
             Action::ParentFolder => self.parent_folder(ctx),
+            Action::OpenFolder => self.ask_folder_to_open(),
             Action::FitImage => self.slots[i].reset_view(),
             Action::ActualSize => self.slots[i].actual_size(),
             Action::ResetDisplay => self.reset_slot_display(i),
@@ -1425,6 +1443,7 @@ impl eframe::App for VwApp {
         self.trash_dialog(&ctx);
         self.clear_flags_dialog(&ctx);
         self.password_dialog(&ctx);
+        self.folder_picker_ui(&ctx);
         self.large_archive_dialog(&ctx);
         self.meta_new_group_ui(&ctx);
         self.next_queued_update(&ctx);

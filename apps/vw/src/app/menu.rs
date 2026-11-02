@@ -16,8 +16,18 @@ impl VwApp {
         let lang = self.lang();
         let ctx = ui.ctx().clone();
         let mut chosen = None;
+        let mut recent = None;
         vw_ui::menu::bar(ui, |ui| {
             vw_ui::menu::bar_menu(ui, tr(lang, "File"), |ui| {
+                if self.menu_item(ui, Action::OpenFolder, None) {
+                    chosen = Some(Action::OpenFolder);
+                }
+                if let Some(Some(folder)) =
+                    vw_ui::menu::submenu(ui, tr(lang, "Recent folders"), |ui| self.recent_menu(ui))
+                {
+                    recent = Some(folder);
+                }
+                ui.separator();
                 for action in [Action::NewSlot, Action::CloseSlot, Action::CloseAllSlots] {
                     if self.menu_item(ui, action, None) {
                         chosen = Some(action);
@@ -172,6 +182,12 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Help"), |ui| {
+                for action in [Action::OpenUserGuide, Action::ShowKeys] {
+                    if self.menu_item(ui, action, None) {
+                        chosen = Some(action);
+                    }
+                }
+                ui.separator();
                 if self.menu_item(ui, Action::OpenQualityHelp, None) {
                     chosen = Some(Action::OpenQualityHelp);
                 }
@@ -189,6 +205,9 @@ impl VwApp {
         });
         if let Some(action) = chosen {
             self.run(&ctx, action);
+        }
+        if let Some(folder) = recent {
+            self.open_folder(&ctx, folder);
         }
     }
 

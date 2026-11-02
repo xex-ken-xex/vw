@@ -48,6 +48,8 @@ pub struct AppState {
     pub open_folders: Vec<PathBuf>,
     /// cd していたフォルダ。
     pub current: Option<PathBuf>,
+    /// 最近開いたフォルダ（ZIP も）。新しい順。
+    pub recent_folders: Vec<PathBuf>,
     /// 最後にデータセットを取り出した出力先の親フォルダ。
     pub extract_dir: Option<PathBuf>,
     /// 最後に全画面スライドショーを始めた起点のフォルダ。
@@ -154,6 +156,7 @@ impl AppState {
         let window = read_window(&mut r);
         let open_folders = r.get::<Vec<PathBuf>>("tree", "open").unwrap_or_default();
         let current = r.get::<PathBuf>("tree", "current");
+        let recent_folders = r.get::<Vec<PathBuf>>("tree", "recent").unwrap_or_default();
         let extract_dir = r.get::<PathBuf>("dataset", "extract_dir");
         let fullscreen_root = r.get::<PathBuf>("fullscreen", "root");
         let pipeline_nodes = read_pipeline_nodes(&mut r);
@@ -174,6 +177,7 @@ impl AppState {
                 window,
                 open_folders,
                 current,
+                recent_folders,
                 extract_dir,
                 fullscreen_root,
                 pipeline_nodes,
@@ -216,6 +220,14 @@ impl AppState {
         tree.insert("open".into(), toml::Value::try_from(open).unwrap());
         if let Some(current) = self.current.as_ref().and_then(|p| p.to_str()) {
             tree.insert("current".into(), current.into());
+        }
+        let recent: Vec<&str> = self
+            .recent_folders
+            .iter()
+            .filter_map(|p| p.to_str())
+            .collect();
+        if !recent.is_empty() {
+            tree.insert("recent".into(), toml::Value::try_from(recent).unwrap());
         }
         root.insert("tree".into(), tree.into());
         if let Some(dir) = self.extract_dir.as_ref().and_then(|p| p.to_str()) {
@@ -520,6 +532,10 @@ mod tests {
             window: Some(window(vec![monitor(0, 1920), monitor(1920, 2560)])),
             open_folders: vec![PathBuf::from("/home/ken"), PathBuf::from("/home/ken/写真")],
             current: Some(PathBuf::from("/home/ken/写真")),
+            recent_folders: vec![
+                PathBuf::from("/home/ken/写真"),
+                PathBuf::from("/home/ken/撮影.zip"),
+            ],
             extract_dir: Some(PathBuf::from("/home/ken/評価")),
             fullscreen_root: Some(PathBuf::from("/home/ken/撮影")),
             pipeline_nodes: [("gray.voi".to_owned(), [560.0, -20.5])].into(),
@@ -620,6 +636,7 @@ mod tests {
             window: Some(w),
             open_folders: vec![],
             current: None,
+            recent_folders: Vec::new(),
             extract_dir: None,
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
@@ -681,6 +698,7 @@ mod tests {
             window: None,
             open_folders: vec![dir.path().to_path_buf()],
             current: None,
+            recent_folders: Vec::new(),
             extract_dir: None,
             fullscreen_root: None,
             pipeline_nodes: BTreeMap::new(),
