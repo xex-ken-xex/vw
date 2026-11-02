@@ -31,10 +31,9 @@ mod imp {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     pub fn available() -> Option<u64> {
-        let mut status = MEMORYSTATUSEX {
-            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
-            ..unsafe { std::mem::zeroed() }
-        };
+        // SAFETY: MEMORYSTATUSEX は数値だけの C の構造体で、全部 0 でも正しい値になる。
+        let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
         // SAFETY: dwLength を入れた MEMORYSTATUSEX を渡す。
         (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullAvailPhys)
     }
