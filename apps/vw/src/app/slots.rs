@@ -1359,6 +1359,7 @@ impl VwApp {
                     egui::StrokeKind::Inside,
                 );
             if released {
+                self.drop_taken = true;
                 self.place_slot(from, *to);
             }
         }

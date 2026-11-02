@@ -1,10 +1,12 @@
-//! 元に戻す（Ctrl+Z）。地図で置いた位置の変更と、フラグをまとめて消したことを、新しい順に戻す。
-//! 1 つの履歴にまとめるのは、どちらも Ctrl+Z で戻すので、押したときに直前の操作が戻ってほしいため。
+//! 元に戻す（Ctrl+Z）。地図で置いた位置の変更、フラグをまとめて消したこと、悪い画像をごみ箱へ
+//! 送ったことを、新しい順に戻す。1 つの履歴にまとめるのは、どれも Ctrl+Z で戻すので、押したときに
+//! 直前の操作が戻ってほしいため。
 
 use std::path::PathBuf;
 
+use crate::discard::RestoreJob;
 use crate::i18n::tr;
-use crate::labels::{Flag, Position};
+use crate::labels::{Flag, Label, Position};
 
 use super::*;
 
@@ -16,6 +18,14 @@ pub(super) enum Undo {
     Position(PathBuf, Option<Position>),
     /// まとめて消したフラグ。画像ごとの消す前のフラグ。
     Flags(Vec<(PathBuf, Flag)>),
+    /// ごみ箱へ送った画像。画像ごとの送る前のラベル。
+    Trashed(Vec<(PathBuf, Label)>),
+}
+
+/// ごみ箱から戻している画像と、戻したら付け直すラベル。
+pub(super) struct Restoring {
+    pub job: RestoreJob,
+    pub labels: Vec<(PathBuf, Label)>,
 }
 
 impl VwApp {
@@ -31,6 +41,7 @@ impl VwApp {
         match self.undo.pop() {
             Some(Undo::Position(path, previous)) => self.set_position(&path, previous, false),
             Some(Undo::Flags(flags)) => self.restore_flags(flags),
+            Some(Undo::Trashed(labels)) => self.restore_trashed(labels),
             None => self.log.info(tr(self.lang(), "Nothing to undo")),
         }
     }
@@ -58,5 +69,19 @@ impl VwApp {
         }
         self.log.info(format!("Flags restored: {restored} images"));
         self.apply_filter_to_slots();
+    }
+
+    fn restore_trashed(&mut self, labels: Vec<(PathBuf, Label)>) {
+        if self.restore_job.is_some() {
+            self.log.warn("Still restoring images from the trash");
+            self.remember_undo(Undo::Trashed(labels));
+            return;
+        }
+        let files = labels.iter().map(|(f, _)| f.clone()).collect();
+        let ctx = self.egui_ctx.clone();
+        self.restore_job = Some(Restoring {
+            job: RestoreJob::start(files, move || ctx.request_repaint()),
+            labels,
+        });
     }
 }

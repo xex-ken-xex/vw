@@ -30,6 +30,7 @@ impl VwApp {
         self.map.drop_hover = target.filter(|_| !released);
         if let Some((_, position)) = target.filter(|_| released) {
             egui::DragAndDrop::clear_payload(ctx);
+            self.drop_taken = true;
             self.set_position(&file.0, Some(position), true);
         }
     }

@@ -555,6 +555,19 @@ fn similar_text(mark: &SimilarMark) -> String {
 }
 
 /// 似た画像の印の説明。
+/// 手のひらで画像を引いても運べないので、見出しを引けば運べることをマウスの横に出す。
+fn move_hint(ctx: &egui::Context, pointer: egui::Pos2, lang: Language) {
+    egui::Area::new(egui::Id::new("move_hint"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pointer + egui::vec2(14.0, 14.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(tr(lang, "Drag the header to move the image"));
+            });
+        });
+}
+
 fn similar_hint(mark: &SimilarMark, lang: Language) -> String {
     let mut hint = tr1(
         lang,
@@ -1785,7 +1798,15 @@ impl Slot {
         if let Content::Image(shown) = &self.content {
             let drag = tool.drag();
             match drag {
-                Drag::Pan if pointer.dragged => self.pan += pointer.drag_delta,
+                Drag::Pan if pointer.dragged => {
+                    self.pan += pointer.drag_delta;
+                    // スロットの外まで引いたのは、運ぶつもりで画像をつかんだとみて、運び方を教える。
+                    if self.folder().is_none()
+                        && let Some(p) = pointer.pos.filter(|p| !rect.contains(*p))
+                    {
+                        move_hint(ui.ctx(), p, lang);
+                    }
+                }
                 // サブフォルダのスロットの画像は、そのフォルダの中のものなので運ばない。
                 Drag::CarryFile if self.folder().is_none() => {
                     response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
