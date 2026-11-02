@@ -1,10 +1,11 @@
 //! BMP デコーダプラグイン。
 //!
-//! - 1 / 4 / 8bit のパレット、RLE4 / RLE8、16 / 24 / 32bit、上下逆（トップダウン）の BMP を読む
+//! - 1 / 2 / 4 / 8bit のパレット、RLE4 / RLE8、16 / 24 / 32bit、上下逆（トップダウン）の BMP を読む
 //! - 8bit のグレーと、パレットが灰色だけの画像はグレーにする
 //! - 32bit でアルファがすべて 0（またはすべて 255）の画像は不透明の RGB にする
 
 mod header;
+mod packed;
 mod rgb16;
 mod rle4;
 
@@ -48,6 +49,7 @@ impl DecoderPlugin for BmpPlugin {
             4,
         )?;
         let own = match (header.bits, header.compression) {
+            (1 | 2 | 4, BI_RGB) => Some(packed::decode(data, &header)?),
             (4, BI_RLE4) => Some(rle4::decode(data, &header)?),
             (16, BI_RGB | BI_BITFIELDS | BI_ALPHABITFIELDS) => Some(rgb16::decode(data, &header)?),
             _ => None,
@@ -297,6 +299,63 @@ mod tests {
         let file = bmp(2, 1, 1, &[[0, 0, 0], [255, 255, 255]], &[vec![0b0100_0000]]);
         let img = BmpPlugin.decode(&file).unwrap();
         assert_eq!(u8_pixels(&img), [0, 255]);
+    }
+
+    /// 画素の番号を `bits` ビットずつ左から詰めた 1 行。
+    fn pack(indices: &[u8], bits: u16) -> Vec<u8> {
+        let per_byte = 8 / bits as usize;
+        indices
+            .chunks(per_byte)
+            .map(|c| {
+                c.iter().enumerate().fold(0u8, |byte, (i, &v)| {
+                    byte | (v << (8 - bits as usize * (i + 1)))
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn low_bit_bmp_rows_of_any_width_stay_aligned() {
+        for bits in [1u16, 2, 4] {
+            let colors = 1usize << bits;
+            let palette: Vec<[u8; 3]> = (0..colors).map(|i| [i as u8 * 10, 0, 200]).collect();
+            for width in [1usize, 3, 5, 7, 13, 17, 33] {
+                let height = 4;
+                // 行ごとにずらした番号にして、行の読み始めがずれたら合わなくなるようにする。
+                let index = |x: usize, y: usize| ((x + 3 * y) % colors) as u8;
+                let rows: Vec<Vec<u8>> = (0..height)
+                    .map(|y| pack(&(0..width).map(|x| index(x, y)).collect::<Vec<_>>(), bits))
+                    .collect();
+                let file = bmp(width as i32, height as i32, bits, &palette, &rows);
+                let img = BmpPlugin.decode(&file).unwrap();
+                let px = u8_pixels(&img);
+                for y in 0..height {
+                    // ファイルは下の行から。画像の y 行目はファイルの height-1-y 行目。
+                    for x in 0..width {
+                        let want = index(x, height - 1 - y) * 10;
+                        assert_eq!(
+                            px[(y * width + x) * 3],
+                            want,
+                            "{bits}bit width {width} ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_bit_bmp_cut_short_is_an_error() {
+        let rows = vec![pack(&[1, 2, 3], 2); 3];
+        let mut file = bmp(
+            3,
+            3,
+            2,
+            &[[0, 0, 0], [1, 1, 1], [2, 2, 2], [3, 3, 3]],
+            &rows,
+        );
+        file.truncate(file.len() - 6);
+        assert!(BmpPlugin.decode(&file).is_err());
     }
 
     #[test]
