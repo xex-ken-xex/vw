@@ -31,7 +31,8 @@ The folder tree works like a file explorer.
 
 The strip at the top of a slot is called the **header**.
 
-- The header shows the file name on the left, and on the right the zoom, two buttons (⛶ = fit to slot, 1:1 = actual size) and ×
+- The header shows the file name on the left, and on the right the zoom, two buttons (⛶ = fit to slot, 1:1 = actual size) and ×. The buttons appear only while the pointer is over the slot
+- In narrow slots, room for about eight characters of the name comes first; the zoom and marks that do not fit are folded away. Long names are shortened in the middle with "…", keeping the start and the end (number and extension)
 - The selected slot has a brighter border
 - Folder slots show a folder icon, ZIP slots a ZIP icon
 - When a slot holds several images (a loaded folder, an animation), "current / total" appears at the top right of the image

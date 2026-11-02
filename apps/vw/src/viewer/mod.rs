@@ -2270,20 +2270,29 @@ impl Slot {
             header_response.dnd_set_drag_payload(DraggedFile(crate::frames::file_of(&shown.path)));
             out.dragging |= header_response.dragged();
         }
-        // ボタンはマウスを乗せたスロットにだけ描くが、幅は常に空けておく。並んだスロットの
-        // すべてに描くと画像のヘッダがボタンで埋まって名前が読みにくくなり、幅を空けないと
-        // マウスを乗せた瞬間に倍率と印が左へ飛ぶため。
+        // ボタンはマウスを乗せたスロットにだけ描き、幅もそのときだけ取る。並んだスロットの
+        // すべてに描くと画像のヘッダがボタンで埋まって名前が読みにくくなり、幅をいつも空けると
+        // 狭いスロットで名前が 2〜4 文字しか残らないため（乗せた瞬間に倍率と印が左へ動くのは受け入れる）。
         // 倍率はファイル名の後ろではなく右側にボタンと並べる。名前の長さで位置が動くと
         // ボタンを探しにくく、長い名前ではボタンが名前に重なるため。
+        let name_font = egui::FontId::proportional(13.0);
+        let name_left = header.left() + 6.0;
+        // 名前の最低幅を先に取っておき、右の倍率と印はその残りに収まるものだけを出す。
+        let name_min = {
+            let full = painter
+                .layout_no_wrap(label.clone(), name_font.clone(), text_color)
+                .size()
+                .x;
+            let least = painter
+                .layout_no_wrap(NAME_MIN_SAMPLE.to_owned(), name_font.clone(), text_color)
+                .size()
+                .x;
+            full.min(least)
+        };
+        let keep_left = name_left + name_min + 6.0;
         let buttons = chrome::header_buttons(&top_chips);
-        let indicators = chrome::header_indicators(&top_chips, rect.width() < chrome::NARROW);
-        let folded: Vec<Chip> = top_chips
-            .iter()
-            .copied()
-            .filter(|c| c.is_indicator() && !indicators.contains(c))
-            .collect();
         let mut labels_right = header.right() - 2.0;
-        for &chip in buttons.iter().rev() {
+        for &chip in buttons.iter().rev().filter(|_| hovering) {
             let (width, size) = match chip {
                 Chip::SwapRawPreview => (36.0, 11.0),
                 Chip::FitImage | Chip::ActualSize => (HEADER - 2.0, 12.0),
@@ -2312,15 +2321,33 @@ impl Slot {
             labels_right = button_rect.left();
         }
         if self.shown().is_some() {
-            let zoom = painter.text(
-                pos2(labels_right - 2.0, header.center().y),
-                egui::Align2::RIGHT_CENTER,
+            let galley = painter.layout_no_wrap(
                 format!("{:.0}%", base * self.zoom * 100.0),
                 egui::FontId::proportional(12.0),
                 visuals.weak_text_color(),
             );
-            labels_right = zoom.left();
+            let left = labels_right - 2.0 - galley.size().x;
+            if left >= keep_left {
+                painter.galley(
+                    pos2(left, header.center().y - galley.size().y / 2.0),
+                    galley,
+                    visuals.weak_text_color(),
+                );
+                labels_right = left;
+            }
         }
+        // 印は全部が入らなければ大事な 1 つにまとめ（残りはその説明に出す）、それも入らなければ出さない。
+        let room = labels_right - keep_left;
+        let indicators = [rect.width() < chrome::NARROW, true]
+            .into_iter()
+            .map(|narrow| chrome::header_indicators(&top_chips, narrow))
+            .find(|list| list.len() as f32 * (HEADER - 2.0) <= room)
+            .unwrap_or_default();
+        let folded: Vec<Chip> = top_chips
+            .iter()
+            .copied()
+            .filter(|c| c.is_indicator() && !indicators.contains(c))
+            .collect();
         for &chip in indicators.iter().rev() {
             let mark_rect = self.header_indicator(
                 ui,
@@ -2354,17 +2381,13 @@ impl Slot {
             labels_right = pos.x;
             painter.galley(pos, galley, text_color);
         }
-        // 名前は右側の倍率やボタンを置いてから、残りの幅に収まるよう末尾を省いて描く。
+        // 名前は右側の倍率やボタンを置いてから、残りの幅に収まるよう真ん中を省いて描く。
         // 先に描くと、狭いスロットで長い名前と倍率の文字が重なって読めなくなるため。
-        let name_left = header.left() + 6.0;
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            label,
-            egui::FontId::proportional(13.0),
-            text_color,
-        );
-        job.wrap =
-            egui::text::TextWrapping::truncate_at_width((labels_right - 6.0 - name_left).max(0.0));
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        // 末尾でなく真ん中を省くのは、連番の写真（burst_0001.jpg …）が末尾の番号で見分けられるように。
+        let width = (labels_right - 6.0 - name_left).max(0.0);
+        let galley = fit_name(&label, width, |text| {
+            painter.layout_no_wrap(text, name_font.clone(), text_color)
+        });
         painter.galley(
             pos2(name_left, header.center().y - galley.size().y / 2.0),
             galley,
@@ -2388,6 +2411,50 @@ impl Slot {
         out.body = Some(response);
         out
     }
+}
+
+/// 見出しの名前に必ず残す幅の目安（8 文字ぶん）。
+const NAME_MIN_SAMPLE: &str = "abcdefgh";
+
+/// `name` を幅 `width` に収める。入らなければ真ん中を「…」にして、頭と末尾（拡張子と番号）を残す。
+fn fit_name(
+    name: &str,
+    width: f32,
+    layout: impl Fn(String) -> std::sync::Arc<egui::Galley>,
+) -> std::sync::Arc<egui::Galley> {
+    layout(fit_text(name, width, |t| layout(t.to_owned()).size().x))
+}
+
+/// `name` を、`measure` で測った幅が `width` に入るまで真ん中から縮めた文字。
+fn fit_text(name: &str, width: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(name) <= width {
+        return name.to_owned();
+    }
+    // 残す文字の数で二分探索する。幅は文字の数に対して増えていくだけなので。
+    let (mut lo, mut hi) = (0, name.chars().count());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if measure(&elide_middle(name, mid)) <= width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    elide_middle(name, lo)
+}
+
+/// `name` を `keep` 文字と「…」にする。末尾を半分より 1 つ多めに残す（拡張子と連番を読めるように）。
+fn elide_middle(name: &str, keep: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if keep >= chars.len() {
+        return name.to_owned();
+    }
+    let tail = keep.div_ceil(2);
+    let head = keep - tail;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
 }
 
 /// 顔の枠を描く。人物が分かった顔と分からない顔で色を分け（設定の色）、名札を添える。
@@ -2508,6 +2575,21 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_name_keeps_its_head_and_its_numbered_end() {
+        assert_eq!(elide_middle("burst_20261102_0001.jpg", 12), "burst_…01.jpg");
+        assert_eq!(elide_middle("a.png", 9), "a.png");
+        assert_eq!(elide_middle("abcdef", 0), "…");
+    }
+
+    #[test]
+    fn a_name_is_shortened_until_it_fits() {
+        // 1 文字 10 px として、幅 75 px なら「…」と 6 文字（頭 3 文字と末尾 3 文字）。
+        let width = |t: &str| t.chars().count() as f32 * 10.0;
+        assert_eq!(fit_text("burst_20261102_0001.jpg", 75.0, width), "bur…jpg");
+        assert_eq!(fit_text("a.png", 75.0, width), "a.png");
+    }
     use test_support::raw_preview;
 
     #[test]

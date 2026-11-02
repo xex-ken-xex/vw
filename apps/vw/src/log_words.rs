@@ -48,9 +48,14 @@ const JA: &[(&str, &str)] = &[
         "{} の中の画像には、フラグとタグを付けられません",
     ),
     (
-        "No tag for key {} (add tags in Settings > Flags and tags)",
-        "キー {} のタグがありません（設定の「フラグとタグ」で足せます）",
+        "Tags: added {} for key {}",
+        "タグ: キー {1} に {0} を足しました",
     ),
+    ("{}: flagged good", "{}: 良いのフラグを付けました"),
+    ("{}: flagged bad", "{}: 悪いのフラグを付けました"),
+    ("{}: flag removed", "{}: フラグを外しました"),
+    ("{}: tagged {}", "{}: タグ {} を付けました"),
+    ("{}: untagged {}", "{}: タグ {} を外しました"),
     ("Nothing to undo", "元に戻すものはありません"),
     (
         "Still restoring images from the trash",

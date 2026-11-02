@@ -29,6 +29,7 @@ mountain, sea, flower, city, sky
 ```
 
 - The first nine tags match the number keys **1** to **9** (from the tenth on, click them in the tagging bar)
+- Pressing a number key that has no tag asks for a tag name on the spot. The new tag is added to the settings and put on the selected image (it goes to the next free number key)
 - Two tags cannot have the same name
 - Renaming a tag does not rename labels already given
 
@@ -74,6 +75,7 @@ Show only the images with given labels.
 
 - The filter applies to the slots in the image area, stepping, folder loading and the slideshow
 - While filtering, the heading of the folder window shows the current filter (for example "Filter: good")
+- While filtering, folder slots and sequence slots (GIF frames, series and so on) with no matching image are hidden and the rest close up. Set the filter back to **All** and they return to their places
 
 ## Export
 
