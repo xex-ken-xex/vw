@@ -150,26 +150,27 @@ impl VwApp {
             return;
         };
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("launch_question")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(tr(lang, "Send"));
-            ui.add_space(4.0);
-            ui.label(
-                tr(lang, "Start {app} {n} times?")
-                    .replace("{app}", &launch.name(lang))
-                    .replace("{n}", &thousands(launch.count())),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Launch")).clicked() {
-                    answer = Some(true);
-                }
-                if ui.button(tr(lang, "Cancel")).clicked() {
-                    answer = Some(false);
-                }
+        let modal = vw_ui::dialog::Dialog::new("launch_question")
+            .max_width(520.0)
+            .show(ctx, |ui| {
+                ui.heading(tr(lang, "Send"));
+                ui.add_space(4.0);
+                ui.label(
+                    tr(lang, "Start {app} {n} times?")
+                        .replace("{app}", &launch.name(lang))
+                        .replace("{n}", &thousands(launch.count())),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Launch")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         match answer {
@@ -316,52 +317,53 @@ impl VwApp {
             return;
         }
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("send_question")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(tr(lang, "Send"));
-            ui.add_space(4.0);
-            match job.total {
-                None => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(tr1(
-                            lang,
-                            "Looking for DICOM files... {}",
-                            &thousands(job.counted()),
-                        ));
-                    });
+        let modal = vw_ui::dialog::Dialog::new("send_question")
+            .max_width(520.0)
+            .show(ctx, |ui| {
+                ui.heading(tr(lang, "Send"));
+                ui.add_space(4.0);
+                match job.total {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(tr1(
+                                lang,
+                                "Looking for DICOM files... {}",
+                                &thousands(job.counted()),
+                            ));
+                        });
+                    }
+                    Some(0) => {
+                        ui.label(tr(lang, "There are no DICOM files to send."));
+                    }
+                    Some(n) => {
+                        ui.label(
+                            tr(lang, "Send {n} files to {destination}?")
+                                .replace("{n}", &thousands(n))
+                                .replace("{destination}", &name),
+                        );
+                    }
                 }
-                Some(0) => {
-                    ui.label(tr(lang, "There are no DICOM files to send."));
-                }
-                Some(n) => {
-                    ui.label(
-                        tr(lang, "Send {n} files to {destination}?")
-                            .replace("{n}", &thousands(n))
-                            .replace("{destination}", &name),
-                    );
-                }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let ready = job.total.is_some_and(|n| n > 0);
-                if ready && ui.button(tr(lang, "Send")).clicked() {
-                    answer = Some(true);
-                }
-                let close = if job.total == Some(0) {
-                    "Close"
-                } else {
-                    "Cancel"
-                };
-                if ui.button(tr(lang, close)).clicked() {
-                    answer = Some(false);
-                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let ready = job.total.is_some_and(|n| n > 0);
+                    if ready && ui.button(tr(lang, "Send")).clicked() {
+                        answer = Some(true);
+                    }
+                    let close = if job.total == Some(0) {
+                        "Close"
+                    } else {
+                        "Cancel"
+                    };
+                    if ui.button(tr(lang, close)).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
         if job.total.is_none() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         match answer {

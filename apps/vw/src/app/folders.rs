@@ -436,21 +436,22 @@ impl VwApp {
             ),
         };
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("folder_load_question")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            ui.label(message);
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(yes).clicked() {
-                    answer = Some(true);
-                }
-                if ui.button(no).clicked() {
-                    answer = Some(false);
-                }
+        let modal = vw_ui::dialog::Dialog::new("folder_load_question")
+            .max_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(message);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(yes).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(no).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
         // Esc や枠の外のクリックは、続けない方の答えとして扱う。
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {
@@ -1112,40 +1113,41 @@ impl VwApp {
         };
         let lang = self.settings.settings.appearance.language;
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("archive_password")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            let name = prompt
-                .zip
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            ui.label(tr1(lang, "{} is encrypted. Enter the password.", &name));
-            if prompt.wrong {
-                ui.colored_label(ui.visuals().error_fg_color, tr(lang, "Wrong password."));
-            }
-            ui.add_space(4.0);
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut prompt.input)
-                    .password(true)
-                    .desired_width(f32::INFINITY),
-            );
-            // 毎フレーム focus を求めると、ボタンのクリックまで取られてしまうので、開いたときだけ。
-            if !prompt.focused {
-                field.request_focus();
-                prompt.focused = true;
-            }
-            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Open")).clicked() || entered {
-                    answer = Some(true);
+        let modal = vw_ui::dialog::Dialog::new("archive_password")
+            .max_width(420.0)
+            .show(ctx, |ui| {
+                let name = prompt
+                    .zip
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ui.label(tr1(lang, "{} is encrypted. Enter the password.", &name));
+                if prompt.wrong {
+                    ui.colored_label(ui.visuals().error_fg_color, tr(lang, "Wrong password."));
                 }
-                if ui.button(tr(lang, "Cancel")).clicked() {
-                    answer = Some(false);
+                ui.add_space(4.0);
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut prompt.input)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                // 毎フレーム focus を求めると、ボタンのクリックまで取られてしまうので、開いたときだけ。
+                if !prompt.focused {
+                    field.request_focus();
+                    prompt.focused = true;
                 }
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Open")).clicked() || entered {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(open) = answer else {
@@ -1172,34 +1174,35 @@ impl VwApp {
         };
         let lang = self.settings.settings.appearance.language;
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("large_archive")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            let name = prompt
-                .zip
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            ui.label(tr1(
-                lang,
-                "{} is larger than the archive size limit.",
-                &name,
-            ));
-            let size = prompt
-                .size
-                .map_or_else(|| tr(lang, "more than the limit").to_owned(), archive::gib);
-            ui.label(tr1(lang, "Size when extracted: {}", &size));
-            ui.label(tr1(lang, "Limit: {}", &archive::gib(prompt.limit)));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Extract anyway")).clicked() {
-                    answer = Some(true);
-                }
-                if ui.button(tr(lang, "Cancel")).clicked() {
-                    answer = Some(false);
-                }
+        let modal = vw_ui::dialog::Dialog::new("large_archive")
+            .max_width(420.0)
+            .show(ctx, |ui| {
+                let name = prompt
+                    .zip
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ui.label(tr1(
+                    lang,
+                    "{} is larger than the archive size limit.",
+                    &name,
+                ));
+                let size = prompt
+                    .size
+                    .map_or_else(|| tr(lang, "more than the limit").to_owned(), archive::gib);
+                ui.label(tr1(lang, "Size when extracted: {}", &size));
+                ui.label(tr1(lang, "Limit: {}", &archive::gib(prompt.limit)));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Extract anyway")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(extract) = answer else {

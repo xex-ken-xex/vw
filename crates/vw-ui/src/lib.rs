@@ -3,6 +3,7 @@
 //! 部品を画面のコードから分けておくのは、見た目を変えるときに 1 か所を直せば
 //! すべての画面にそろって効くようにするため。
 
+pub mod dialog;
 pub mod menu;
 pub mod panel;
 pub mod text;

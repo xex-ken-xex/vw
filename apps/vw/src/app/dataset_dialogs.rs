@@ -78,28 +78,29 @@ impl VwApp {
             .map(|c| c.name)
             .unwrap_or_else(|_| outer.display().to_string());
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("outer_dataset_update")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
-            ui.label(tr1(
-                lang,
-                "The files were extracted into the dataset \"{}\". Update it now?",
-                &name,
-            ));
-            ui.weak(tr(
-                lang,
-                "Until it is updated, its search catalog does not include the extracted files.",
-            ));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Update")).clicked() {
-                    answer = Some(true);
-                }
-                if ui.button(tr(lang, "Later")).clicked() {
-                    answer = Some(false);
-                }
+        let modal = vw_ui::dialog::Dialog::new("outer_dataset_update")
+            .max_width(480.0)
+            .show(ctx, |ui| {
+                ui.label(tr1(
+                    lang,
+                    "The files were extracted into the dataset \"{}\". Update it now?",
+                    &name,
+                ));
+                ui.weak(tr(
+                    lang,
+                    "Until it is updated, its search catalog does not include the extracted files.",
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Update")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Later")).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         if let Some(update) = answer
@@ -124,8 +125,7 @@ impl VwApp {
         }
         let lang = self.settings().appearance.language;
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("resume_dataset")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
+        let modal = vw_ui::dialog::Dialog::new("resume_dataset").max_width(480.0).show(ctx, |ui| {
             ui.label(tr1(
                 lang,
                 "Registering this folder as a dataset stopped partway ({} files done). Continue from there?",
@@ -141,7 +141,7 @@ impl VwApp {
                 }
             });
         });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         if let Some(resume) = answer

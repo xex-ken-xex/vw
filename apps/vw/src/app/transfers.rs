@@ -22,6 +22,7 @@ impl VwApp {
     pub(super) fn drop_file(&mut self, ctx: &egui::Context, file: PathBuf, dir: PathBuf) {
         // ドロップした瞬間の Ctrl だけで決めないのは、ボタンと Ctrl をほぼ同時に離すと
         // Ctrl を先に離したことになり、コピーと見せていたものが移動になるため。
+        self.drop_taken = true;
         let copy = self.drag_copy || ctx.input(|i| i.modifiers.command);
         let op = if copy { Op::Copy } else { Op::Move };
         let t = Transfer {
@@ -30,6 +31,11 @@ impl VwApp {
             op,
         };
         if t.is_noop() {
+            self.log.info(format!(
+                "Not moved: {} is already in {}",
+                t.file.display(),
+                t.to_dir.display()
+            ));
             return;
         }
         // 展開した ZIP は一時フォルダの写しなので、中へ入れても ZIP には入らず、中から移しても
@@ -45,7 +51,10 @@ impl VwApp {
         }
         match op {
             Op::Copy => self.run_transfer(ctx, t),
-            Op::Move => self.pending_move = Some(t),
+            Op::Move => {
+                self.move_at = ctx.pointer_latest_pos().map(|at| (ctx.viewport_id(), at));
+                self.pending_move = Some(t);
+            }
         }
     }
 
@@ -108,6 +117,7 @@ impl VwApp {
             return;
         }
         self.pending_trash = Some(discard::Pending { dir, files });
+        self.focus_trash_cancel = true;
     }
 
     pub(super) fn trash_dialog(&mut self, ctx: &egui::Context) {
@@ -117,43 +127,58 @@ impl VwApp {
         let lang = self.lang();
         let (names, rest) = pending.preview(10);
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("trash_question")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
-            ui.label(tr1(
-                lang,
-                "Move {} bad images to the trash?",
-                &pending.files.len().to_string(),
-            ));
-            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
-            ui.add_space(4.0);
-            for name in names {
-                ui.label(name);
-            }
-            if rest > 0 {
-                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Move to trash")).clicked() {
-                    answer = Some(true);
+        let modal = vw_ui::dialog::Dialog::new("trash_question")
+            .tone(vw_ui::dialog::Tone::Caution)
+            .max_width(480.0)
+            .show(ctx, |ui| {
+                ui.label(tr1(
+                    lang,
+                    "Move {} bad images to the trash?",
+                    &pending.files.len().to_string(),
+                ));
+                ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+                ui.add_space(4.0);
+                for name in names {
+                    ui.label(name);
                 }
-                if ui.button(tr(lang, "Cancel")).clicked() {
-                    answer = Some(false);
+                if rest > 0 {
+                    ui.label(tr1(lang, "...and {} more", &rest.to_string()));
                 }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    // 取り消しを先に置き、Enter で押されるようにする。うっかり Enter で送らないため。
+                    let cancel = ui.button(tr(lang, "Cancel"));
+                    if std::mem::take(&mut self.focus_trash_cancel) {
+                        cancel.request_focus();
+                    }
+                    if cancel.clicked() {
+                        answer = Some(false);
+                    }
+                    if ui.button(tr(lang, "Move to trash")).clicked() {
+                        answer = Some(true);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {
             return;
         };
-        if let Some(pending) = self.pending_trash.take().filter(|_| yes) {
-            let ctx = ctx.clone();
-            self.trash_job = Some(TrashJob::start(pending.files, move || {
-                ctx.request_repaint()
-            }));
+        let Some(pending) = self.pending_trash.take() else {
+            return;
+        };
+        if !yes {
+            self.log.info(format!(
+                "Did not move the bad images in {} to the trash",
+                pending.dir.display()
+            ));
+            return;
         }
+        let ctx = ctx.clone();
+        self.trash_job = Some(TrashJob::start(pending.files, move || {
+            ctx.request_repaint()
+        }));
     }
 
     /// ごみ箱へ送り終えた画像のラベルを消し、結果をログに出す。スロットは
@@ -163,22 +188,66 @@ impl VwApp {
             return;
         };
         self.trash_job = None;
-        let mut moved = 0;
+        let mut moved = Vec::new();
         for (file, result) in outcomes {
             match result {
                 Ok(()) => {
-                    moved += 1;
+                    // 消す前のラベルを取っておき、元に戻したときに付け直す。
+                    let label = self.labels.get(&file);
                     if let Err(e) = self.labels.set(&file, Label::default()) {
                         self.log.error(format!("{}: {e}", file.display()));
                     }
+                    moved.push((file, label));
                 }
                 Err(e) => self
                     .log
                     .error(format!("Cannot move {} to the trash: {e}", file.display())),
             }
         }
+        let count = moved.len();
+        if discard::CAN_RESTORE && !moved.is_empty() {
+            self.remember_undo(super::undo::Undo::Trashed(moved));
+            self.log.info(format!(
+                "Moved {count} bad images to the trash (Ctrl+Z to undo)"
+            ));
+        } else {
+            self.log
+                .info(format!("Moved {count} bad images to the trash"));
+        }
+    }
+
+    /// ごみ箱から戻し終えた画像にラベルを付け直し、結果をログに出す。
+    pub(super) fn finish_restore_job(&mut self) {
+        let Some((outcomes, labels)) = self.restore_job.as_mut().and_then(|job| {
+            let outcomes = job.job.poll()?;
+            Some((outcomes, std::mem::take(&mut job.labels)))
+        }) else {
+            return;
+        };
+        self.restore_job = None;
+        let mut restored = 0;
+        for (file, result) in outcomes {
+            match result {
+                Ok(()) => {
+                    restored += 1;
+                    let label = labels
+                        .iter()
+                        .find(|(f, _)| *f == file)
+                        .map(|(_, l)| l.clone())
+                        .unwrap_or_default();
+                    if let Err(e) = self.labels.set(&file, label) {
+                        self.log.error(format!("{}: {e}", file.display()));
+                    }
+                }
+                Err(e) => self.log.error(format!(
+                    "Cannot restore {} from the trash: {e}",
+                    file.display()
+                )),
+            }
+        }
         self.log
-            .info(format!("Moved {moved} bad images to the trash"));
+            .info(format!("Restored {restored} images from the trash"));
+        self.apply_filter_to_slots();
     }
 
     /// ドロップした画像を移してよいか尋ねる。
@@ -190,8 +259,14 @@ impl VwApp {
         let name = t.file.file_name().unwrap_or_default().to_string_lossy();
         let message = tr1(lang, "Move \"{}\" to", &name);
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("move_question")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
+        let mut dialog = vw_ui::dialog::Dialog::new("move_question")
+            .tone(vw_ui::dialog::Tone::Caution)
+            .max_width(480.0);
+        // 落とした所の近くに出す。中央だと、落とした所を見ている目に入らず、何も起きなかったように見える。
+        if let Some((viewport, at)) = self.move_at {
+            dialog = dialog.near(viewport, at);
+        }
+        let modal = dialog.show(ctx, |ui| {
             ui.label(message);
             ui.label(egui::RichText::new(t.to_dir.display().to_string()).monospace());
             ui.add_space(8.0);
@@ -204,24 +279,37 @@ impl VwApp {
                 }
             });
         });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {
             return;
         };
-        if let Some(t) = self.pending_move.take().filter(|_| yes) {
+        let Some(t) = self.pending_move.take() else {
+            return;
+        };
+        if yes {
             self.run_transfer(ctx, t);
+        } else {
+            self.log.info(format!("Did not move {}", t.file.display()));
         }
     }
 
     /// ドラッグ中の画像の名前と、移動かコピーかをマウスの横に出す。
     pub(super) fn drag_preview(&mut self, ctx: &egui::Context) {
+        let taken = std::mem::take(&mut self.drop_taken);
         let Some(file) = egui::DragAndDrop::payload::<DraggedFile>(ctx) else {
             self.drag_copy = false;
             self.reorder_hover = false;
             return;
         };
+        if !taken && ctx.input(|i| i.pointer.any_released()) {
+            self.log.info(format!(
+                "Not moved: drop {} on a folder in the tree or a folder slot",
+                file.0.file_name().unwrap_or_default().to_string_lossy()
+            ));
+            return;
+        }
         self.drag_copy = ctx.input(|i| i.modifiers.command);
         let Some(pointer) = ctx.pointer_latest_pos() else {
             return;

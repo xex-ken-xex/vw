@@ -119,7 +119,7 @@ you get one folder per tag such as `mountain/`, `sea/`, `flower/`. Training scri
 
 ## Clear many flags at once
 
-If you flagged by mistake, you can clear flags in bulk instead of one by one. Both show the count and file names before clearing, and **Ctrl+Z** (**Labels → Undo the last position change or flag clearing**) brings the flags back.
+If you flagged by mistake, you can clear flags in bulk instead of one by one. Both show the count and file names before clearing, and **Ctrl+Z** (**Labels → Undo the last position change, flag clearing or trashing**) brings the flags back.
 
 | Menu (Labels) | Key | Flags cleared |
 | --- | --- | --- |
@@ -135,7 +135,8 @@ If you flagged by mistake, you can clear flags in bulk instead of one by one. Bo
 
 - vw shows the count and file names first
 - Images in subfolders are not included
-- They only go to the trash, so you can restore them from there if needed
+- The default button of the confirmation is **Cancel** (Enter does not send them)
+- Right after sending, **Ctrl+Z** puts them back in place with their flags and tags (Windows and Linux). Restoring them from the trash by hand does not bring the flags and tags back
 
 ## Align and compare similar images
 
@@ -170,7 +171,7 @@ If the automatic alignment is off, align by hand with **Fix alignment**. The ima
 
 | Action | Result |
 | --- | --- |
-| Drag a slot header onto a folder in the tree or a folder slot | **Move** the image to that folder (with confirmation). Flags and tags move with it. With the arrow tool, dragging the image itself does the same |
+| Drag a slot header onto a folder in the tree or a folder slot | **Move** the image to that folder (a confirmation appears where you dropped it; cancelling or releasing outside a folder writes one line to the log). Flags and tags move with it. With the arrow tool, dragging the image itself does the same |
 | The same with **Ctrl** held | **Copy** (no confirmation). Flags and tags are copied too |
 
 - If a file with the same name exists at the destination, nothing is done (the log says so)

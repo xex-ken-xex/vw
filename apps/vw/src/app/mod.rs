@@ -343,6 +343,18 @@ pub struct VwApp {
     series: SeriesIndex,
     /// ドロップされ、確認を待っている画像の移動。
     pending_move: Option<Transfer>,
+    /// 移動の確認を出す場所（ドロップしたウインドウと、その中の位置）。
+    move_at: Option<(egui::ViewportId, egui::Pos2)>,
+    /// このフレームで、ドラッグした画像を誰かが受け取った（移動・並べ替え・地図）。
+    /// 受け取られずに離されたら、ログで知らせる。
+    drop_taken: bool,
+    /// ごみ箱の確認を出した最初のフレームで「キャンセル」にフォーカスを置く。毎フレーム置くと
+    /// ほかのボタンを押せなくなるので、1 回だけ。
+    focus_trash_cancel: bool,
+    /// ごみ箱から戻している画像（Ctrl+Z）。
+    restore_job: Option<undo::Restoring>,
+    /// 裏の仕事が終わったら描き直すための口。
+    egui_ctx: egui::Context,
     /// ドラッグ中に Ctrl が押されていた（コピーとして見せていた）か。
     drag_copy: bool,
     /// OS からドロップされた画像。cd した先で読み込まれたら、そのスロットを選ぶ。
@@ -837,6 +849,11 @@ impl VwApp {
             explores: Vec::new(),
             series: SeriesIndex::default(),
             pending_move: None,
+            move_at: None,
+            drop_taken: false,
+            focus_trash_cancel: false,
+            restore_job: None,
+            egui_ctx: cc.egui_ctx.clone(),
             drag_copy: false,
             select_when_loaded: None,
             maximized: None,
@@ -1405,6 +1422,7 @@ impl eframe::App for VwApp {
         self.compose_dialog_ui(&ctx);
         self.compare_dialog_ui(&ctx);
         self.finish_trash_job();
+        self.finish_restore_job();
         self.finish_transfer_jobs();
         self.drag_preview(&ctx);
         self.receive_os_drop(&ctx);

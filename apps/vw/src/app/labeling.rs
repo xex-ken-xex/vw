@@ -253,37 +253,39 @@ impl VwApp {
         let (names, rest) = pending.preview(10);
         let filtered = !whole && self.filter != Filter::All;
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("clear_flags_question")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
-            ui.label(tr1(
-                lang,
-                "Clear the flags of {} images?",
-                &pending.files.len().to_string(),
-            ));
-            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
-            if filtered {
-                ui.label(tr(lang, "Only the images shown by the current filter."));
-            }
-            ui.add_space(4.0);
-            for name in names {
-                ui.label(name);
-            }
-            if rest > 0 {
-                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
-            }
-            ui.add_space(4.0);
-            ui.weak(tr(lang, "Ctrl+Z puts them back."));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Clear flags")).clicked() {
-                    answer = Some(true);
+        let modal = vw_ui::dialog::Dialog::new("clear_flags_question")
+            .tone(vw_ui::dialog::Tone::Caution)
+            .max_width(480.0)
+            .show(ctx, |ui| {
+                ui.label(tr1(
+                    lang,
+                    "Clear the flags of {} images?",
+                    &pending.files.len().to_string(),
+                ));
+                ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+                if filtered {
+                    ui.label(tr(lang, "Only the images shown by the current filter."));
                 }
-                if ui.button(tr(lang, "Cancel")).clicked() {
-                    answer = Some(false);
+                ui.add_space(4.0);
+                for name in names {
+                    ui.label(name);
                 }
+                if rest > 0 {
+                    ui.label(tr1(lang, "...and {} more", &rest.to_string()));
+                }
+                ui.add_space(4.0);
+                ui.weak(tr(lang, "Ctrl+Z puts them back."));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Clear flags")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {

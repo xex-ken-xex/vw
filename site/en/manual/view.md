@@ -49,7 +49,7 @@ The mouse wheel steps through the images one by one, which is handy for comparin
 
 ## Move and zoom
 
-What a left drag on the image does depends on the tool column. **Hand** (the default) moves the image, the **arrow** carries the image to folders or the map, and **Zoom** zooms in and out. **H** switches to the hand and **Z** to zoom (press again for the arrow). The chosen tool is kept for the next start. To always start with one tool, set **Tool at startup** (`viewer.start_tool`). Zooming with a right drag works with every tool.
+What a left drag on the image does depends on the tool column. **Hand** (the default) moves the image, the **arrow** carries the image to folders or the map, and **Zoom** zooms in and out. **H** switches to the hand and **Z** to zoom (press again for the arrow). The chosen tool is kept for the next start. To always start with one tool, set **Tool at startup** (`viewer.start_tool`). Zooming with a right drag works with every tool. If you pull the image out of its slot with the hand, a note next to the pointer tells you to drag the header to carry it.
 
 | Action | Result |
 | --- | --- |

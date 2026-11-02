@@ -570,7 +570,7 @@ impl Action {
             Action::ShowSlotOnMap => "Show the slot's data on the map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
-            Action::UndoPosition => "Undo the last position change or flag clearing",
+            Action::UndoPosition => "Undo the last position change, flag clearing or trashing",
             Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
             Action::ShowGradationTest => "Display gradation test...",

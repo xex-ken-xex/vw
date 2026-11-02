@@ -106,10 +106,14 @@ const JA: &[(&str, &str)] = &[
     ("Remove the position", "位置を消す"),
     ("Placed on the map", "地図で置いた位置"),
     ("Nothing to undo", "元に戻すものがありません"),
+    (
+        "Drag the header to move the image",
+        "画像を運ぶにはヘッダをドラッグします",
+    ),
     ("Position from", "位置の出どころ"),
     (
-        "Undo the last position change or flag clearing",
-        "位置の変更・フラグの消去を元に戻す",
+        "Undo the last position change, flag clearing or trashing",
+        "位置の変更・フラグの消去・ごみ箱送りを元に戻す",
     ),
     (
         "Page opened by clicking the credit.",

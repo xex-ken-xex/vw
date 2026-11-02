@@ -64,6 +64,100 @@ impl TrashJob {
     }
 }
 
+/// OS のごみ箱から元の場所へ戻せるか。macOS のごみ箱は、送った物の一覧を読む口が
+/// trash の部品にないので戻せない。
+pub const CAN_RESTORE: bool = cfg!(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+));
+
+/// ごみ箱から元の場所へ戻す。ごみ箱の一覧を読むのは Windows では数秒かかることがあるので、
+/// 別スレッドで行う。
+pub struct RestoreJob {
+    done: Receiver<Vec<Outcome>>,
+}
+
+impl RestoreJob {
+    pub fn start(files: Vec<PathBuf>, repaint: impl Fn() + Send + 'static) -> Self {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(restore(files));
+            repaint();
+        });
+        Self { done: rx }
+    }
+
+    /// 終わっていれば結果。
+    pub fn poll(&self) -> Option<Vec<Outcome>> {
+        self.done.try_recv().ok()
+    }
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn restore(files: Vec<PathBuf>) -> Vec<Outcome> {
+    use trash::os_limited;
+    let items = match os_limited::list() {
+        Ok(items) => items,
+        Err(e) => {
+            let e = e.to_string();
+            return files.into_iter().map(|f| (f, Err(e.clone()))).collect();
+        }
+    };
+    files
+        .into_iter()
+        .map(|f| {
+            // 同じ場所の同じ名前を何度も送っていることがあるので、最後に送ったものを戻す。
+            let item = items
+                .iter()
+                .filter(|item| item.original_path() == f)
+                .max_by_key(|item| item.time_deleted)
+                .cloned();
+            let result = match item {
+                None => Err("not found in the trash".to_owned()),
+                Some(_) if f.exists() => {
+                    Err("a file with the same name is already there".to_owned())
+                }
+                Some(item) => os_limited::restore_all([item]).map_err(|e| e.to_string()),
+            };
+            (f, result)
+        })
+        .collect()
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+)))]
+fn restore(files: Vec<PathBuf>) -> Vec<Outcome> {
+    files
+        .into_iter()
+        .map(|f| {
+            (
+                f,
+                Err("restoring from the trash is not supported on this OS".to_owned()),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +184,49 @@ mod tests {
         let (names, rest) = pending(7).preview(5);
         assert_eq!(names.len(), 5);
         assert_eq!(rest, 2);
+    }
+
+    fn wait<T>(poll: impl Fn() -> Option<T>) -> T {
+        let started = Instant::now();
+        loop {
+            if let Some(o) = poll() {
+                break o;
+            }
+            assert!(started.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn restore_puts_a_trashed_file_back_in_place() {
+        // ごみ箱はホームの下にあり、別の装置の一時フォルダからは送れないことがあるので、ホームの下で試す。
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let dir = home.join(format!(".vw-test-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("bad.png");
+        std::fs::write(&file, b"png").unwrap();
+        let job = TrashJob::start(vec![file.clone()], || {});
+        let trashed = wait(|| job.poll());
+        assert!(trashed[0].1.is_ok(), "{:?}", trashed[0].1);
+        assert!(!file.exists());
+
+        let job = RestoreJob::start(vec![file.clone()], || {});
+        let restored = wait(|| job.poll());
+        assert!(restored[0].1.is_ok(), "{:?}", restored[0].1);
+        assert_eq!(std::fs::read(&file).unwrap(), b"png");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_reports_a_file_that_is_not_in_the_trash() {
+        let missing = std::env::temp_dir().join("vw-test-never-trashed.png");
+        let job = RestoreJob::start(vec![missing.clone()], || {});
+        let outcomes = wait(|| job.poll());
+        assert_eq!(outcomes[0].0, missing);
+        assert!(outcomes[0].1.is_err());
     }
 
     #[test]
