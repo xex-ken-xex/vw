@@ -726,40 +726,41 @@ impl DatasetDialog {
             return;
         };
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("dataset_password")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            let name = ask
-                .request
-                .archive
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            ui.label(tr1(lang, "{} is encrypted. Enter the password.", &name));
-            if ask.request.wrong {
-                ui.colored_label(ui.visuals().error_fg_color, tr(lang, "Wrong password."));
-            }
-            ui.add_space(4.0);
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut ask.input)
-                    .password(true)
-                    .desired_width(f32::INFINITY),
-            );
-            if !ask.focused {
-                field.request_focus();
-                ask.focused = true;
-            }
-            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr(lang, "Open")).clicked() || entered {
-                    answer = Some(Some(std::mem::take(&mut ask.input)));
+        let modal = vw_ui::dialog::Dialog::new("dataset_password")
+            .max_width(420.0)
+            .show(ctx, |ui| {
+                let name = ask
+                    .request
+                    .archive
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ui.label(tr1(lang, "{} is encrypted. Enter the password.", &name));
+                if ask.request.wrong {
+                    ui.colored_label(ui.visuals().error_fg_color, tr(lang, "Wrong password."));
                 }
-                if ui.button(tr(lang, "Skip")).clicked() {
-                    answer = Some(None);
+                ui.add_space(4.0);
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut ask.input)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                if !ask.focused {
+                    field.request_focus();
+                    ask.focused = true;
                 }
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Open")).clicked() || entered {
+                        answer = Some(Some(std::mem::take(&mut ask.input)));
+                    }
+                    if ui.button(tr(lang, "Skip")).clicked() {
+                        answer = Some(None);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(None);
         }
         if let Some(a) = answer

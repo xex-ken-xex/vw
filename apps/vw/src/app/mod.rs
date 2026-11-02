@@ -343,8 +343,8 @@ pub struct VwApp {
     series: SeriesIndex,
     /// ドロップされ、確認を待っている画像の移動。
     pending_move: Option<Transfer>,
-    /// 移動の確認を出す場所（ドロップした所）。別のウインドウで落としたときは `None` で、中央に出す。
-    move_at: Option<egui::Pos2>,
+    /// 移動の確認を出す場所（ドロップしたウインドウと、その中の位置）。
+    move_at: Option<(egui::ViewportId, egui::Pos2)>,
     /// このフレームで、ドラッグした画像を誰かが受け取った（移動・並べ替え・地図）。
     /// 受け取られずに離されたら、ログで知らせる。
     drop_taken: bool,

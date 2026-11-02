@@ -52,15 +52,7 @@ impl VwApp {
         match op {
             Op::Copy => self.run_transfer(ctx, t),
             Op::Move => {
-                // 別のウインドウに出したツリーへ落としたときは、確認をメインのウインドウの中央に出し、
-                // そのウインドウを前に出す。落としたウインドウに出さないのは、確認の窓を描く場所が
-                // メインのウインドウだけだから。
-                self.move_at = if ctx.viewport_id() == egui::ViewportId::ROOT {
-                    ctx.pointer_latest_pos()
-                } else {
-                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-                    None
-                };
+                self.move_at = ctx.pointer_latest_pos().map(|at| (ctx.viewport_id(), at));
                 self.pending_move = Some(t);
             }
         }
@@ -135,37 +127,39 @@ impl VwApp {
         let lang = self.lang();
         let (names, rest) = pending.preview(10);
         let mut answer = None;
-        let modal = egui::Modal::new(egui::Id::new("trash_question")).show(ctx, |ui| {
-            ui.set_max_width(480.0);
-            ui.label(tr1(
-                lang,
-                "Move {} bad images to the trash?",
-                &pending.files.len().to_string(),
-            ));
-            ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
-            ui.add_space(4.0);
-            for name in names {
-                ui.label(name);
-            }
-            if rest > 0 {
-                ui.label(tr1(lang, "...and {} more", &rest.to_string()));
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                // 取り消しを先に置き、Enter で押されるようにする。うっかり Enter で送らないため。
-                let cancel = ui.button(tr(lang, "Cancel"));
-                if std::mem::take(&mut self.focus_trash_cancel) {
-                    cancel.request_focus();
+        let modal = vw_ui::dialog::Dialog::new("trash_question")
+            .tone(vw_ui::dialog::Tone::Caution)
+            .max_width(480.0)
+            .show(ctx, |ui| {
+                ui.label(tr1(
+                    lang,
+                    "Move {} bad images to the trash?",
+                    &pending.files.len().to_string(),
+                ));
+                ui.label(egui::RichText::new(pending.dir.display().to_string()).monospace());
+                ui.add_space(4.0);
+                for name in names {
+                    ui.label(name);
                 }
-                if cancel.clicked() {
-                    answer = Some(false);
+                if rest > 0 {
+                    ui.label(tr1(lang, "...and {} more", &rest.to_string()));
                 }
-                if ui.button(tr(lang, "Move to trash")).clicked() {
-                    answer = Some(true);
-                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    // 取り消しを先に置き、Enter で押されるようにする。うっかり Enter で送らないため。
+                    let cancel = ui.button(tr(lang, "Cancel"));
+                    if std::mem::take(&mut self.focus_trash_cancel) {
+                        cancel.request_focus();
+                    }
+                    if cancel.clicked() {
+                        answer = Some(false);
+                    }
+                    if ui.button(tr(lang, "Move to trash")).clicked() {
+                        answer = Some(true);
+                    }
+                });
             });
-        });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {
@@ -265,20 +259,14 @@ impl VwApp {
         let name = t.file.file_name().unwrap_or_default().to_string_lossy();
         let message = tr1(lang, "Move \"{}\" to", &name);
         let mut answer = None;
-        let id = egui::Id::new("move_question");
+        let mut dialog = vw_ui::dialog::Dialog::new("move_question")
+            .tone(vw_ui::dialog::Tone::Caution)
+            .max_width(480.0);
         // 落とした所の近くに出す。中央だと、落とした所を見ている目に入らず、何も起きなかったように見える。
-        // 既定の場所は中央に錨を下ろしていて、位置を足しても錨が勝つので、場所は作り直す。
-        let area = match self.move_at {
-            Some(at) => egui::Area::new(id)
-                .kind(egui::UiKind::Modal)
-                .sense(egui::Sense::hover())
-                .order(egui::Order::Foreground)
-                .interactable(true)
-                .fixed_pos(at + vec2(8.0, 8.0)),
-            None => egui::Modal::default_area(id),
-        };
-        let modal = egui::Modal::new(id).area(area).show(ctx, |ui| {
-            ui.set_max_width(480.0);
+        if let Some((viewport, at)) = self.move_at {
+            dialog = dialog.near(viewport, at);
+        }
+        let modal = dialog.show(ctx, |ui| {
             ui.label(message);
             ui.label(egui::RichText::new(t.to_dir.display().to_string()).monospace());
             ui.add_space(8.0);
@@ -291,7 +279,7 @@ impl VwApp {
                 }
             });
         });
-        if modal.should_close() && answer.is_none() {
+        if modal.should_close && answer.is_none() {
             answer = Some(false);
         }
         let Some(yes) = answer else {
