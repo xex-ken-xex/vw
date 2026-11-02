@@ -20,6 +20,7 @@ impl VwApp {
                 .warn(tr(self.lang(), "Finish the open dataset dialog first."));
             return;
         }
+        self.dataset_dialog_viewport = ctx.viewport_id();
         self.dataset_dialog = Some(crate::dataset_ui::DatasetDialog::open(
             request,
             &self.settings().dataset.fields,
@@ -41,7 +42,36 @@ impl VwApp {
             .unwrap_or_default()
     }
 
-    pub(super) fn dataset_window(&mut self, ctx: &egui::Context) {
+    /// データセットの登録・編集・更新・取り出しのダイアログと、取り出した後の確認を `ctx` の
+    /// ウインドウに描く。
+    ///
+    /// データセット画面を浮かせたウインドウからは、そのウインドウの描画の中で呼ぶ（[`Self::datasets_pane`]）。
+    /// egui のウインドウは描いた OS のウインドウの中にしか出ないので、本体から描くと、手前の
+    /// データセット画面のウインドウに隠れるため。本体を手前に出す手もあるが、それではデータセット画面が
+    /// 後ろに回り、見比べながら操作できない。
+    pub(super) fn dataset_dialogs(&mut self, ctx: &egui::Context) {
+        self.next_queued_update(ctx);
+        self.dataset_window(ctx);
+        self.outer_update_dialog(ctx);
+    }
+
+    /// データセット画面のウインドウ `ctx` から、そこで開いたダイアログを描く。
+    pub(super) fn dataset_dialogs_in_pane(&mut self, ctx: &egui::Context) {
+        let here = ctx.viewport_id();
+        let waiting = self.dataset_dialog.is_none()
+            && self.outer_to_update.is_none()
+            && !self.dataset_queue.is_empty();
+        if here == self.dataset_dialog_viewport || waiting {
+            if waiting {
+                // 「すべて更新」はデータセット画面で押すので、その更新もここに出す。
+                self.dataset_dialog_viewport = here;
+            }
+            self.dataset_dialogs(ctx);
+            self.dataset_dialogs_drawn = true;
+        }
+    }
+
+    fn dataset_window(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.dataset_dialog else {
             return;
         };
@@ -66,7 +96,7 @@ impl VwApp {
 
     /// 取り出した先を含むデータセットを更新するか聞く。外側のデータセットは、更新するまで
     /// 取り出したファイルを含まないため。
-    pub(super) fn outer_update_dialog(&mut self, ctx: &egui::Context) {
+    fn outer_update_dialog(&mut self, ctx: &egui::Context) {
         let Some(outer) = &self.outer_to_update else {
             return;
         };

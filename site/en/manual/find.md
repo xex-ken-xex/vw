@@ -16,6 +16,7 @@ In vw, register a coherent folder as a **dataset**, and you can later find it by
 - The search catalog is one file, `vw-search-catalog.json`, directly in the dataset folder.
   Move or copy the folder and the catalog goes with it. Datasets on network drives or external disks can be searched as they are
 - A dataset can carry a **name, memo and tags**, plus **fields** you define (for example source, photographer)
+- Files that are not images (batch files, notes, CSV and so on) are recorded by name and size only. They do not show up in searches but are copied when extracting
 - Nothing is written into image files
 
 ## Setup: choose where to look and which fields
@@ -83,7 +84,8 @@ Type words in the search box at the top to narrow to datasets whose **name, memo
 ![Metadata key suggestions](../../images/en/dataset-key-candidates.png)
 
 **+ Condition** under the search box adds a condition (the **Advanced** button closes and opens the conditions).
-Each line is one condition, and only datasets meeting all of them remain.
+Each line is one condition, and vw looks for **files that meet all the conditions** (the conditions area says so too).
+A line without a value yet is drawn faintly and has no effect until you enter one.
 
 A condition is made of three choices.
 
@@ -108,6 +110,8 @@ Metadata is held as "kind, key, value".
 | `fits` | FITS header. `OBJECT`, `FILTER`, `EXPTIME` (exposure seconds), `DATE-OBS` and more |
 
 ▼ in the key box picks from the keys actually in the search catalogs. Once the key is chosen, ▼ in the value box picks from the actual values.
+The list shows **only the values in files that meet the other lines (and the search words)**, each with its number of files (for example `NIKON Z 9 (36)`).
+When you narrow down one condition at a time, it does not offer values that would leave nothing.
 
 **Group** ▼ → **AI tags** adds "equals" conditions for `person`, `character` and `tag` at once, so you only pick values. **Labels** adds conditions for the flags and tags added by hand.
 
@@ -196,7 +200,10 @@ to bring them from a shared folder to your PC or to hand them to someone.
   That dataset's details show the original dataset under **Extracted from**
 - When extracting into another dataset, vw asks whether to update that outer dataset
 - If stopped midway, the files copied so far stay at the destination
-- When files were narrowed, the dialog opens with **only the files found** checked. Uncheck it to copy all the dataset's files
+- Files that are not images (batch files, notes and so on) are copied too. The dialog shows how many
+- When files were narrowed, the dialog opens with **only the files found** checked. Uncheck it to copy all the dataset's files.
+  Even then, the files that are not images directly in the dataset folder (batch files and notes for the whole dataset) are copied along
+- When the Datasets screen is in its own window, the extract, edit and update dialogs open in that window too
 
 ## Nested datasets
 

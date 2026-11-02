@@ -1,7 +1,7 @@
 //! データセットの取り出しと、表示するときの欠けの確認。
 //!
-//! 取り出しは、検索カタログにあるファイルを、データセットのフォルダからの相対パスのまま
-//! 出力先へ写す。ZIP / 7z の中のファイルは展開し、アーカイブと同じ名前のフォルダの下に置く。
+//! 取り出しは、検索カタログにあるファイル（画像でないファイルも）を、データセットのフォルダからの
+//! 相対パスのまま出力先へ写す。ZIP / 7z の中のファイルは展開し、アーカイブと同じ名前のフォルダの下に置く。
 //! 出力先をデータセットとして登録するのは、頼まれたときだけ。取り出した先は評価などに使う
 //! 作業用のフォルダであることが多く、検索カタログがあると検索の結果に紛れ込むため。
 
@@ -91,10 +91,15 @@ pub fn extract(
 
 /// カタログ `c` のうち、`paths`（カタログのパス）のファイルだけを残したもの。検索で当たった
 /// ファイルだけを取り出すときに、[`extract`] に渡す。
+///
+/// 画像でないファイルは、データセットのフォルダ直下のものだけを残す。直下に置くのは、データセット
+/// 全体に使う道具（バッチなど）や説明書きであることが多いため。当たった画像のあるフォルダの
+/// ものまで写さないのは、何が写るかが当たり方しだいで変わり、見通せないため。
 pub fn only(c: &Catalog, paths: &[String]) -> Catalog {
     let paths: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
     let mut out = c.clone();
     out.files.retain(|f| paths.contains(f.path.as_str()));
+    out.others.retain(|f| !f.path.contains('/'));
     out
 }
 
@@ -106,22 +111,29 @@ fn copy_files(
     progress: &Progress,
     ask_password: &mut dyn FnMut(&Path, bool) -> Option<String>,
 ) -> Result<(usize, Vec<Skipped>), String> {
-    progress.total.store(c.files.len(), Ordering::Relaxed);
+    progress
+        .total
+        .store(c.files.len() + c.others.len(), Ordering::Relaxed);
     let mut failed = Vec::new();
     let mut copied = 0;
     let mut archives: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for f in &c.files {
+    let on_disk = c
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .chain(c.others.iter().map(|f| f.path.as_str()));
+    for path in on_disk {
         if progress.cancelled() {
             return Err("Cancelled".into());
         }
-        if let Some((archive, inner)) = f.path.split_once(IN_ARCHIVE) {
+        if let Some((archive, inner)) = path.split_once(IN_ARCHIVE) {
             archives.entry(archive).or_default().insert(inner);
             continue;
         }
-        progress.step(&f.path);
-        match copy_file(source, dest, &f.path) {
+        progress.step(path);
+        match copy_file(source, dest, path) {
             Ok(()) => copied += 1,
-            Err(e) => failed.push(catalog::skip(&f.path, e)),
+            Err(e) => failed.push(catalog::skip(path, e)),
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
@@ -383,6 +395,63 @@ mod tests {
         assert!(dest.join("z.zip/in.png").is_file());
         assert!(!dest.join("miss.png").exists());
         assert!(!dest.join("z.zip/out.png").exists());
+    }
+
+    #[test]
+    fn files_other_than_images_are_copied_with_the_images() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("docs")).unwrap();
+        write_png(&src.join("top.png"), 2, 2, &[0; 12]);
+        std::fs::write(src.join("run.bat"), "@echo off").unwrap();
+        std::fs::write(src.join("docs/readme.txt"), "read me").unwrap();
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+
+        let x = run(&src, &c, &dest, &mut no_password).unwrap();
+
+        assert_eq!(x.copied, 3);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("run.bat")).unwrap(),
+            "@echo off"
+        );
+        assert!(dest.join("docs/readme.txt").is_file());
+        assert!(!catalog::exists_in(&dest));
+    }
+
+    #[test]
+    fn extracting_only_the_hits_copies_the_other_files_at_the_top_of_the_dataset() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        write_png(&src.join("sub/hit.png"), 2, 2, &[0; 12]);
+        std::fs::write(src.join("run.bat"), "@echo off").unwrap();
+        std::fs::write(src.join("sub/notes.txt"), "notes").unwrap();
+        let c = register(&src, &mut no_password);
+        let dest = tmp.path().join("out");
+
+        let hits = ["sub/hit.png".to_owned()];
+        let x = run(&src, &only(&c, &hits), &dest, &mut no_password).unwrap();
+
+        assert_eq!(x.copied, 2);
+        assert!(dest.join("run.bat").is_file());
+        assert!(!dest.join("sub/notes.txt").exists());
+    }
+
+    #[test]
+    fn other_files_gone_since_registering_are_reported_as_not_copied() {
+        let tmp = TempDir::new();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("run.bat"), "@echo off").unwrap();
+        let c = register(&src, &mut no_password);
+        std::fs::remove_file(src.join("run.bat")).unwrap();
+
+        let x = run(&src, &c, &tmp.path().join("out"), &mut no_password).unwrap();
+
+        assert_eq!(x.copied, 0);
+        assert_eq!(x.failed.len(), 1);
+        assert_eq!(x.failed[0].path, "run.bat");
     }
 
     #[test]

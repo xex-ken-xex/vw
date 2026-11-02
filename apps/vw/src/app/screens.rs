@@ -643,6 +643,7 @@ impl VwApp {
             }
             None => {}
         }
+        self.dataset_dialogs_in_pane(&ctx);
     }
 
     pub(super) fn toggle_settings(&mut self) {

@@ -2224,6 +2224,22 @@ const JA: &[(&str, &str)] = &[
         "検索で当たったファイルだけを取り出す（{}）",
     ),
     ("Extracted from", "取り出し元"),
+    (
+        "Files that meet all the conditions",
+        "すべての条件に合うファイル",
+    ),
+    (
+        "Enter a value to use this condition",
+        "値を入れると効きます",
+    ),
+    (
+        "Files other than images at the top of the dataset are copied too ({}).",
+        "データセットの直下にある画像でないファイルも写します（{}）。",
+    ),
+    (
+        "Files other than images are copied too ({}).",
+        "画像でないファイルも写します（{}）。",
+    ),
     ("Not read ({})", "読めなかったもの ({})"),
     ("Hits / files", "ヒット / ファイル"),
     ("Location", "場所"),
