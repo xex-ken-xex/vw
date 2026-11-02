@@ -63,7 +63,7 @@ HDF5 files that are not NetCDF, such as satellite observations, are shown the sa
 - Latitude and longitude datasets of the same shape (in the same group, or `Latitude` and `Longitude` in the HDF-EOS5 "Geolocation Fields", found by name or `units`) give each pixel its position, so the cross, kilometers along lines, the ROI graph and the map work as in NetCDF. Values out of range, like -999, leave the pixel without a position. The latitude and longitude datasets stay in the list but are not shown first
 - LZF compression (used by h5py) is read
 - Enumerations show their values only, not their names, for now
-- Positions of HDF-EOS5 grids (projections written in StructMetadata) are not read yet
+- HDF-EOS5 grids and swaths get their positions from the structure text (StructMetadata), as in HDF4 (see [HDF-EOS grids and swaths](#hdf-eos-grids-and-swaths))
 
 The extensions are set with **Extensions opened as HDF** (a regular expression). Narrow it in folders with many HDF5 files that are not images, such as machine learning weights.
 
@@ -76,10 +76,18 @@ HDF4 (including HDF-EOS2), the older format used by MODIS and other satellite da
 - `_FillValue` and values outside `valid_range` are missing
 - Latitude and longitude datasets of the same shape (such as `Latitude` and `Longitude`) give each pixel its position
 - deflate, RLE and Huffman compression and chunks are read. szip and N-bit compression are not read yet
-- HDF-EOS2 grids (projections in StructMetadata) and coarser latitudes and longitudes that need interpolation are not read yet
+- HDF-EOS2 grid projections and latitudes and longitudes coarser than the data are read from the structure text (StructMetadata) (see [HDF-EOS grids and swaths](#hdf-eos-grids-and-swaths))
 - When items in different HDF-EOS2 grids share a name, the second and later get a number, like "name_2"
 - Old images (GR, RIS) and tables (Vdata) are not read
 - The whole file is unpacked when it opens, so large files take some time and memory
+
+### HDF-EOS grids and swaths
+
+HDF-EOS2 (HDF4) and HDF-EOS5 (HDF5) files describe grid projections and how latitude and longitude dimensions match the data in their structure text (`StructMetadata.0`). vw reads it to give each pixel its position, so the cross, kilometers along lines, the ROI graph and the map work as in NetCDF.
+
+- Grids: positions come from the projection and the upper-left and lower-right corners. Supported projections are geographic (GEO), sinusoidal (SNSOID, the MODIS land grid), Lambert azimuthal equal area (LAMAZ, EASE-Grid polar), cylindrical equal area (CEA, EASE-Grid global), polar stereographic (PS), UTM, transverse Mercator (TM), Lambert conformal conic (LAMCC), Albers equal area (ALBERS) and Mercator (MERCAT). Grids in other projections are shown without positions
+- Swaths: latitudes and longitudes coarser than the data (such as MODIS 5 km geolocation for 1 km data) are stretched to the data pixels with the Offset and Increment of the dimension map. Values in between come from the four nearest points, and the edges are extended outward. Longitudes continue smoothly across 180°
+- Coordinate variables and latitude and longitude datasets of the same shape as the data are used first. When a grid's size does not match the data, or the structure text cannot be read, the image is shown without positions
 
 ## Metadata and search
 

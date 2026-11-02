@@ -150,6 +150,29 @@ pub enum Projection {
         false_easting: f64,
         false_northing: f64,
     },
+    /// 正弦図法（球）。MODIS の陸の格子のデータが使う。
+    Sinusoidal {
+        radius: f64,
+        central_lon: f64,
+        false_easting: f64,
+        false_northing: f64,
+    },
+    /// ランベルト正積方位図法（球）。EASE-Grid の極の格子が使う。
+    LambertAzimuthalEqualArea {
+        radius: f64,
+        /// 中心の `(緯度, 経度)`。
+        center: (f64, f64),
+        false_easting: f64,
+        false_northing: f64,
+    },
+    /// ランベルト正積円筒図法。EASE-Grid の全球の格子が使う。
+    CylindricalEqualArea {
+        ellipsoid: Ellipsoid,
+        central_lon: f64,
+        true_scale_lat: f64,
+        false_easting: f64,
+        false_northing: f64,
+    },
 }
 
 /// 極の平射図法の縮尺の決め方。
@@ -256,6 +279,70 @@ impl Projection {
                 x - false_easting,
                 y - false_northing,
             )?,
+            Projection::Sinusoidal {
+                radius,
+                central_lon,
+                false_easting,
+                false_northing,
+            } => {
+                let phi = (y - false_northing) / radius;
+                let dlambda = (x - false_easting) / (radius * phi.cos());
+                // 地球の外（正弦の曲線の外側の画素）は位置がない。
+                if phi.abs() > FRAC_PI_2 || dlambda.abs() > std::f64::consts::PI + 1e-9 {
+                    return None;
+                }
+                (phi, central_lon + dlambda)
+            }
+            Projection::LambertAzimuthalEqualArea {
+                radius,
+                center: (phi1, lambda0),
+                false_easting,
+                false_northing,
+            } => {
+                // Snyder (24-16)〜(24-18)。
+                let (x, y) = (x - false_easting, y - false_northing);
+                let rho = x.hypot(y);
+                if rho < 1e-9 {
+                    (phi1, lambda0)
+                } else {
+                    let sin_c_half = rho / (2.0 * radius);
+                    if sin_c_half > 1.0 + 1e-12 {
+                        return None;
+                    }
+                    let c = 2.0 * sin_c_half.min(1.0).asin();
+                    let (sc, cc) = c.sin_cos();
+                    let phi = (cc * phi1.sin() + y * sc * phi1.cos() / rho)
+                        .clamp(-1.0, 1.0)
+                        .asin();
+                    let lambda = lambda0
+                        + if (phi1 - FRAC_PI_2).abs() < 1e-12 {
+                            x.atan2(-y)
+                        } else if (phi1 + FRAC_PI_2).abs() < 1e-12 {
+                            x.atan2(y)
+                        } else {
+                            (x * sc).atan2(rho * phi1.cos() * cc - y * phi1.sin() * sc)
+                        };
+                    (phi, lambda)
+                }
+            }
+            Projection::CylindricalEqualArea {
+                ellipsoid: el,
+                central_lon,
+                true_scale_lat,
+                false_easting,
+                false_northing,
+            } => {
+                // Snyder (10-15)〜(10-19)。k0 は標準緯線での縮尺の補正。
+                let k0 = el.m(true_scale_lat);
+                let q = 2.0 * (y - false_northing) * k0 / el.a;
+                if q.abs() > el.q(FRAC_PI_2) + 1e-12 {
+                    return None;
+                }
+                (
+                    phi_from_q(el, q)?,
+                    central_lon + (x - false_easting) / (el.a * k0),
+                )
+            }
         };
         let (lat, lon) = (phi.to_degrees(), lambda.to_degrees());
         (lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 + 1e-9)
@@ -331,31 +418,38 @@ fn albers(
     let rho = sign * (x * x + (rho0 - y).powi(2)).sqrt();
     let theta = (sign * x).atan2(sign * (rho0 - y));
     let q = (c - (rho * n / el.a).powi(2)) / n;
-    let phi = if el.e == 0.0 {
-        (q / 2.0).clamp(-1.0, 1.0).asin()
-    } else {
-        let e2 = el.e2();
-        let mut phi = (q / 2.0).clamp(-1.0, 1.0).asin();
-        for _ in 0..25 {
-            let s = phi.sin();
-            let es = el.e * s;
-            let w = 1.0 - es * es;
-            let next = phi
-                + w * w / (2.0 * phi.cos())
-                    * (q / (1.0 - e2) - s / w
-                        + (1.0 / (2.0 * el.e)) * ((1.0 - es) / (1.0 + es)).ln());
-            if !next.is_finite() {
-                return None;
-            }
-            if (next - phi).abs() < 1e-12 {
-                phi = next;
-                break;
-            }
-            phi = next;
+    Some((phi_from_q(el, q)?, lambda0 + theta / n))
+}
+
+/// q から緯度（Snyder (3-16) を繰り返す）。
+fn phi_from_q(el: Ellipsoid, q: f64) -> Option<f64> {
+    let start = (q / 2.0).clamp(-1.0, 1.0).asin();
+    if el.e == 0.0 {
+        return Some(start);
+    }
+    // 極では式の分母（cos φ）が 0 になるので、極の q はそのまま極にする。
+    let qp = el.q(FRAC_PI_2);
+    if (q.abs() - qp).abs() < 1e-12 {
+        return Some(FRAC_PI_2.copysign(q));
+    }
+    let e2 = el.e2();
+    let mut phi = start;
+    for _ in 0..25 {
+        let s = phi.sin();
+        let es = el.e * s;
+        let w = 1.0 - es * es;
+        let next = phi
+            + w * w / (2.0 * phi.cos())
+                * (q / (1.0 - e2) - s / w + (1.0 / (2.0 * el.e)) * ((1.0 - es) / (1.0 + es)).ln());
+        if !next.is_finite() {
+            return None;
         }
-        phi
-    };
-    Some((phi, lambda0 + theta / n))
+        if (next - phi).abs() < 1e-12 {
+            return Some(next);
+        }
+        phi = next;
+    }
+    Some(phi)
 }
 
 /// 回転極の格子の `(格子の緯度, 格子の経度)`（度）から、地理の `(緯度, 経度)`（度）。

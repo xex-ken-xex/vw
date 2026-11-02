@@ -16,6 +16,8 @@
 | `geo_cases.nc` | NetCDF-4 | 緯度・経度の読み方。経度 0〜360° の格子、偏差の変数（`t_anomaly`）、2 次元の緯度・経度の表（曲がった格子）、ランベルト正角円錐図法（x / y が km）、回転極 |
 | `hdf5_cases.h5` | HDF5（NetCDF-4 の印なし） | HDF-EOS5 に似せた並び（Data Fields と Geolocation Fields の緯度・経度）、`scale_factor` と `_FillValue`、LZF 圧縮、3 次元、印の変数（`flag_meanings`）、列挙型と構造体（画像にしない）。期待値はテストの中の式 |
 | `hdf4_cases.hdf` | HDF4 | SD の API で書いたデータセット。HDF4 の校正（SDsetcal）と `_FillValue`、deflate・RLE・Huffman の圧縮、チャンク（deflate と、端が半端な圧縮なし）、3 次元、Vgroup に入れた緯度・経度、全体の属性。期待値はテストの中の式 |
+| `hdf_eos2_cases.hdf` | HDF4（HDF-EOS2 に似せる） | 構造の文字 `StructMetadata.0` の読み方。粗い 5 km の緯度・経度を DimensionMap で 1 km へ延ばす swath（180° を越える）、正弦図法の格子、緯度経度の格子（度・分・秒を詰めた値）。期待値はテストの中の値（図法は pyproj の値） |
+| `hdf_eos5_cases.h5` | HDF5（HDF-EOS5 に似せる） | `HDFEOS INFORMATION/StructMetadata.0` の文字のデータセット。ランベルト正積方位図法の格子（北極）、DimensionMap で延ばす swath（データの次元の名前は DataField の DimList にだけある） |
 | `expected-values.txt` | テキスト | 上のファイルを netCDF4 で読んだときの形・欠損の数・最小・最大・平均・角の値 |
 | `geo-expected.txt` | テキスト | `geo_cases.nc` の図法と回転極の格子の、画素（行,列）ごとの緯度・経度。pyproj で逆投影した値 |
 
@@ -85,4 +87,24 @@ python3 make_hdf5_fixtures.py /tmp/h5  # 別のフォルダに作る
 cd crates/vw-netcdf/testdata
 python3 make_hdf4_fixtures.py          # このフォルダに作り直す
 python3 make_hdf4_fixtures.py /tmp/h4  # 別のフォルダに作る
+```
+
+## make_hdf_eos_fixtures.py
+
+### 前提
+
+- Python 3.9 以上
+- `pyhdf`・`h5py`・`numpy`・`pyproj`（`pip install pyhdf h5py numpy pyproj`）。pyproj は、図法の格子の画素の緯度・経度を vw とは別の実装で求めるために使います
+
+### できること
+
+- `hdf_eos2_cases.hdf` と `hdf_eos5_cases.h5` を作ります。値は式で決まります。
+- 最後に、テストで確かめる画素（図法の格子）の緯度・経度を pyproj で出して画面に出します。図法や格子を変えたら、その値をテストの期待値に写してください。
+
+### 使い方
+
+```sh
+cd crates/vw-netcdf/testdata
+python3 make_hdf_eos_fixtures.py           # このフォルダに作り直す
+python3 make_hdf_eos_fixtures.py /tmp/eos  # 別のフォルダに作る
 ```

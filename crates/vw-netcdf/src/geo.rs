@@ -5,6 +5,7 @@ use std::f64::consts::FRAC_PI_2;
 use netcdf_reader::{NcFile, NcGroup, NcVariable};
 use vw_core::geo::{Cells, GeoGrid};
 
+use crate::eos;
 use crate::layout::{self, Variable};
 use crate::projection::{Ellipsoid, PolarScale, Projection, unrotate};
 use crate::values::number;
@@ -136,7 +137,8 @@ pub fn grid(
     let mut cells = axes(file, &scope, rows, cols, w, h)
         .or_else(|| table(file, &scope, var, row_dim, col_dim, w, h))
         .or_else(|| projected(file, &scope, var, rows?, cols?, w, h))
-        .or_else(|| alongside(file, &scope, layout, w, h))?;
+        .or_else(|| alongside(file, &scope, layout, w, h))
+        .or_else(|| hdf_eos(file, &scope, layout, w, h))?;
     if flipped {
         flip(&mut cells, w, h);
     }
@@ -308,6 +310,230 @@ fn alongside(
         });
     }
     None
+}
+
+/// HDF-EOS の構造の文字。HDF-EOS2 は全体の属性 `StructMetadata.0`（長いと `.1`・`.2` … に分かれる）、
+/// HDF-EOS5 は `HDFEOS INFORMATION/StructMetadata.0` の文字のデータセット。
+fn struct_metadata(file: &NcFile) -> Option<String> {
+    if let Ok(attrs) = file.global_attributes() {
+        let mut parts: Vec<(u32, String)> = attrs
+            .iter()
+            .filter_map(|a| {
+                let n = a.name.strip_prefix("StructMetadata.")?.parse().ok()?;
+                Some((n, a.value.as_string()?))
+            })
+            .collect();
+        if !parts.is_empty() {
+            parts.sort_by_key(|(n, _)| *n);
+            return Some(parts.into_iter().map(|(_, t)| t).collect());
+        }
+    }
+    let bytes = file
+        .read_variable_raw_bytes("HDFEOS INFORMATION/StructMetadata.0")
+        .ok()?;
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    Some(String::from_utf8_lossy(&bytes[..end]).into_owned())
+}
+
+/// 次元の名前の `名前:swath`（HDF-EOS2 が付ける、属する swath・格子の名前）を分ける。
+/// HDF4 を読み直すときに、同じ名前で大きさの違う次元には `_大きさ` を足しているので、それも外す。
+fn split_dim(name: &str, size: u64) -> (&str, Option<&str>) {
+    let name = name.strip_suffix(&format!("_{size}")).unwrap_or(name);
+    match name.split_once(':') {
+        Some((base, owner)) => (base, Some(owner)),
+        None => (name, None),
+    }
+}
+
+/// HDF-EOS の構造の文字から、格子の図法か、粗い緯度・経度の補間で画素ごとの緯度・経度を出す。
+fn hdf_eos(
+    file: &NcFile,
+    scope: &[&NcGroup],
+    layout: &Variable,
+    w: usize,
+    h: usize,
+) -> Option<Cells> {
+    let structure = eos::parse(&struct_metadata(file)?);
+    vw_core::limits::check_image(w as u64, h as u64, 8).ok()?;
+    let (row_name, row_size) = &layout.dims[layout.rows];
+    let (col_name, col_size) = &layout.dims[layout.cols];
+    let (row_dim, owner) = split_dim(row_name, *row_size);
+    let (col_dim, _) = split_dim(col_name, *col_size);
+    // HDF-EOS5 は次元の名前に持ち主が入らないので、道筋（HDFEOS/GRIDS/名前/…）から読む。
+    let in_path = |kind: &str| {
+        let mut parts = layout.path.split('/');
+        parts.find(|p| *p == kind)?;
+        parts.next()
+    };
+    let owner_grid = owner.or_else(|| in_path("GRIDS"));
+    let grid = structure.grids.iter().find(|g| {
+        owner_grid.is_none_or(|n| g.name == n)
+            && g.rows == h
+            && g.columns == w
+            && row_dim != "XDim"
+            && col_dim != "YDim"
+    });
+    if let Some(grid) = grid {
+        return grid_cells(grid);
+    }
+    let owner_swath = owner.or_else(|| in_path("SWATHS"));
+    let field_name = layout.path.rsplit('/').next().unwrap_or(&layout.path);
+    structure
+        .swaths
+        .iter()
+        .filter(|s| owner_swath.is_none_or(|n| s.name == n))
+        .find_map(|s| {
+            // HDF-EOS5 のデータセットには次元の名前がない（HDF5 の名前のない次元）ことが多いので、
+            // 構造の文字の DataField の DimList から次元を読む。
+            let listed = s
+                .data_fields
+                .iter()
+                .find(|f| f.name == field_name && f.dims.len() == layout.dims.len());
+            let (rows, cols) = match listed {
+                Some(f) if owner.is_none() => {
+                    (f.dims[layout.rows].as_str(), f.dims[layout.cols].as_str())
+                }
+                _ => (row_dim, col_dim),
+            };
+            swath_cells(file, scope, s, rows, cols, w, h)
+        })
+}
+
+fn grid_cells(grid: &eos::Grid) -> Option<Cells> {
+    let (xs, ys) = grid.pixel_coordinates();
+    if grid.projection == "GEO" {
+        return Some(Cells::Axes {
+            longitudes: xs,
+            latitudes: ys,
+        });
+    }
+    let projection = grid.projection()?;
+    let mut latitudes = Vec::with_capacity(xs.len() * ys.len());
+    let mut longitudes = Vec::with_capacity(xs.len() * ys.len());
+    for &y in &ys {
+        for &x in &xs {
+            let (lat, lon) = projection.inverse(x, y).unwrap_or((f64::NAN, f64::NAN));
+            latitudes.push(lat as f32);
+            longitudes.push(lon as f32);
+        }
+    }
+    Some(Cells::Table {
+        latitudes,
+        longitudes,
+    })
+}
+
+/// swath の緯度・経度（Geolocation Fields）を、次元の対応（DimensionMap）でデータの画素へ延ばす。
+fn swath_cells(
+    file: &NcFile,
+    scope: &[&NcGroup],
+    swath: &eos::Swath,
+    row_dim: &str,
+    col_dim: &str,
+    w: usize,
+    h: usize,
+) -> Option<Cells> {
+    let geo_field = |name: &str| {
+        swath
+            .geo_fields
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(name) && f.dims.len() == 2)
+    };
+    let (lat, lon) = (geo_field("Latitude")?, geo_field("Longitude")?);
+    let map = |data: &str, geo: &str| -> Option<eos::DimensionMap> {
+        if data == geo {
+            return Some(eos::DimensionMap {
+                geo: geo.to_owned(),
+                data: data.to_owned(),
+                offset: 0.0,
+                increment: 1.0,
+            });
+        }
+        swath
+            .maps
+            .iter()
+            .find(|m| m.data == data && m.geo == geo)
+            .cloned()
+    };
+    let rows = map(row_dim, &lat.dims[0])?;
+    let cols = map(col_dim, &lat.dims[1])?;
+    let values = |field: &eos::Field| -> Option<(Vec<f64>, usize, usize)> {
+        let var = swath_variable(file, scope, swath, field)?;
+        let (gh, gw) = (var.1[0] as usize, var.1[1] as usize);
+        let values = file.read_variable_as_f64(&var.0).ok()?;
+        let values: Vec<f64> = values.iter().copied().collect();
+        (values.len() == gw * gh && gw > 0 && gh > 0).then_some((values, gw, gh))
+    };
+    let (lat_values, gw, gh) = values(lat)?;
+    let (lon_values, lw, lh) = values(lon)?;
+    if (lw, lh) != (gw, gh) {
+        return None;
+    }
+    // 衛星のデータは欠損に -999 などを書くので、範囲の外は欠損にしてから延ばす。
+    let clean = |v: Vec<f64>, limit: f64| -> Vec<f64> {
+        v.into_iter()
+            .map(|x| {
+                if x.is_finite() && x.abs() <= limit {
+                    x
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect()
+    };
+    Some(Cells::Table {
+        latitudes: eos::interpolate(
+            &clean(lat_values, 90.0),
+            (gw, gh),
+            (w, h),
+            (&rows, &cols),
+            false,
+        ),
+        longitudes: eos::interpolate(
+            &clean(lon_values, 360.0),
+            (gw, gh),
+            (w, h),
+            (&rows, &cols),
+            true,
+        ),
+    })
+}
+
+/// swath の緯度か経度のデータセットの道筋と大きさ。HDF-EOS5 は決まった場所、HDF-EOS2 は
+/// 名前と次元（`名前:swath`）の合うもの（同じ名前が別の swath にあると、名前に `_2` などが付く）。
+fn swath_variable(
+    file: &NcFile,
+    scope: &[&NcGroup],
+    swath: &eos::Swath,
+    field: &eos::Field,
+) -> Option<(String, Vec<u64>)> {
+    let eos5 = format!(
+        "HDFEOS/SWATHS/{}/Geolocation Fields/{}",
+        swath.name, field.name
+    );
+    if let Ok(var) = file.variable(&eos5) {
+        return (var.ndim() == 2).then(|| (eos5, var.dimensions.iter().map(|d| d.size).collect()));
+    }
+    let root = scope.first()?;
+    root.variables.iter().find_map(|var| {
+        let same_name = var.name == field.name
+            || var
+                .name
+                .strip_prefix(&field.name)
+                .and_then(|rest| rest.strip_prefix('_'))
+                .is_some_and(|n| n.parse::<u32>().is_ok());
+        let dims_match = var.ndim() == 2
+            && var.dimensions.iter().zip(&field.dims).all(|(d, f)| {
+                let (base, owner) = split_dim(&d.name, d.size);
+                base == f && owner.is_none_or(|o| o == swath.name)
+            });
+        (same_name && dims_match).then(|| {
+            (
+                var.name.clone(),
+                var.dimensions.iter().map(|d| d.size).collect(),
+            )
+        })
+    })
 }
 
 /// x・y（座標の変数の値）から `(緯度, 経度)`。
