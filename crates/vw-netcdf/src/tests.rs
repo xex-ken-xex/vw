@@ -110,11 +110,122 @@ fn netcdf3_and_netcdf4_headers_are_recognised() {
 }
 
 #[test]
-fn hdf5_without_a_netcdf_extension_is_not_opened() {
+fn hdf5_with_neither_a_netcdf_nor_an_hdf5_extension_is_not_opened() {
     let data = fixture("era5_like.nc");
     let plugin = NetcdfPlugin::default();
-    assert!(plugin.decode_frame_at(Path::new("a.h5"), &data, 0).is_err());
+    assert!(
+        plugin
+            .decode_frame_at(Path::new("model.weights"), &data, 0)
+            .is_err()
+    );
     assert!(plugin.decode_frame_at(Path::new("a.NC"), &data, 0).is_ok());
+    assert!(plugin.decode_frame_at(Path::new("a.H5"), &data, 0).is_ok());
+}
+
+#[test]
+fn hdf5_extensions_follow_the_setting() {
+    let extensions = Hdf5Extensions::default();
+    let plugin = NetcdfPlugin::default().with_hdf5_extensions(extensions.clone());
+    for name in ["a.h5", "a.HDF5", "swath.he5"] {
+        assert!(plugin.claims_path(Path::new(name)), "{name}");
+    }
+    assert!(!plugin.claims_path(Path::new("a.hdf")));
+    assert!(!plugin.claims_path(Path::new("h5")));
+    extensions.set(vw_core::ProbeExtensions::new("^hdf$").unwrap());
+    assert!(plugin.claims_path(Path::new("a.hdf")));
+    assert!(!plugin.claims_path(Path::new("a.h5")));
+    let data = fixture("hdf5_cases.h5");
+    assert!(plugin.decode_frame_at(Path::new("a.h5"), &data, 0).is_err());
+}
+
+#[test]
+fn plain_hdf5_is_labelled_hdf5_and_netcdf4_stays_netcdf4() {
+    let plugin = NetcdfPlugin::default();
+    let h5 = plugin.decode(&fixture("hdf5_cases.h5")).unwrap();
+    assert_eq!(h5.metadata.get(GROUP, FORMAT), Some(FORMAT_HDF5));
+    let nc = plugin.decode(&fixture("era5_like.nc")).unwrap();
+    assert_eq!(nc.metadata.get(GROUP, FORMAT), Some("NetCDF-4"));
+}
+
+const SWATH: &str = "HDFEOS/SWATHS/S/Data Fields/Radiance";
+
+#[test]
+fn hdf5_datasets_in_groups_are_images_and_enums_and_compounds_are_not() {
+    let paths: Vec<String> = variables(&fixture("hdf5_cases.h5"))
+        .unwrap()
+        .into_iter()
+        .map(|v| v.path)
+        .collect();
+    assert!(paths.contains(&SWATH.to_owned()));
+    assert!(paths.contains(&"cube".to_owned()));
+    assert!(!paths.iter().any(|p| p == "kind" || p == "obs"));
+}
+
+#[test]
+fn hdf5_values_are_scaled_and_the_fill_value_is_missing() {
+    let data = fixture("hdf5_cases.h5");
+    let img = plugin_for(&data, SWATH).decode(&data).unwrap();
+    let v = values(&img);
+    assert!(v[0].is_nan());
+    // 1 行 2 列: (1000 + 10 + 2) × 0.01
+    assert!((v[5 + 2] - 10.12).abs() < 1e-4, "{}", v[7]);
+}
+
+#[test]
+fn lzf_compressed_datasets_are_read() {
+    let data = fixture("hdf5_cases.h5");
+    let img = plugin_for(&data, "lzf_flags").decode(&data).unwrap();
+    let want: Vec<f32> = (0..256).map(|i| (i % 7) as f32).collect();
+    assert_eq!(values(&img), want.as_slice());
+}
+
+#[test]
+fn three_dimensional_hdf5_datasets_are_planes() {
+    let data = fixture("hdf5_cases.h5");
+    let plugin = plugin_for(&data, "cube");
+    assert_eq!(plugin.frame_count(&data).unwrap(), 3);
+    let img = plugin.decode_frame(&data, 2).unwrap();
+    assert_eq!(values(&img)[0], 200.0);
+}
+
+#[test]
+fn latitude_and_longitude_in_the_geolocation_fields_give_each_pixel_its_position() {
+    let data = fixture("hdf5_cases.h5");
+    let img = geo_of(&data, SWATH, Options::default());
+    let geo = img.geo.as_ref().expect("geo");
+    assert_eq!(geo.at(0.0, 0.0), Some((30.0, 130.0)));
+    assert_eq!(geo.at(2.0, 3.0), Some((33.0, 132.0)));
+    // 経度の -999 は欠損。
+    assert_eq!(geo.at(4.0, 3.0), None);
+}
+
+#[test]
+fn a_measured_dataset_is_shown_before_a_flag_dataset_of_the_same_size() {
+    // CloudFlag（flag_meanings あり）は Radiance より先に並ぶ。
+    let swath: Vec<Variable> = variables(&fixture("hdf5_cases.h5"))
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.path.starts_with("HDFEOS/"))
+        .collect();
+    assert_eq!(layout::default_variable(&swath).unwrap().path, SWATH);
+}
+
+#[test]
+fn latitude_and_longitude_datasets_are_not_shown_first() {
+    let data = fixture("hdf5_cases.h5");
+    let variables = variables(&data).unwrap();
+    let auxiliary: Vec<&str> = variables
+        .iter()
+        .filter(|v| v.auxiliary)
+        .map(|v| v.path.as_str())
+        .collect();
+    assert_eq!(
+        auxiliary,
+        [
+            "HDFEOS/SWATHS/S/Geolocation Fields/Latitude",
+            "HDFEOS/SWATHS/S/Geolocation Fields/Longitude"
+        ]
+    );
 }
 
 #[test]

@@ -50,6 +50,24 @@ fn role(var: &NcVariable) -> Role {
     }
 }
 
+/// 緯度か経度の変数。CF の属性のほか、名前（`Latitude`・`lon` など）も見る。HDF5 の衛星の
+/// データ（HDF-EOS5 の Geolocation Fields）は、`units` が `degrees` だけのことが多いため。
+fn named_role(var: &NcVariable) -> Role {
+    match role(var) {
+        r @ (Role::Latitude | Role::Longitude) => r,
+        _ => match var.name.to_ascii_lowercase().as_str() {
+            "lat" | "latitude" => Role::Latitude,
+            "lon" | "long" | "longitude" => Role::Longitude,
+            _ => Role::Other,
+        },
+    }
+}
+
+/// 画素ごとの緯度・経度の表として使える、2 次元の緯度か経度の変数か。最初に見せる変数から外す。
+pub(crate) fn is_lat_lon_table(var: &NcVariable) -> bool {
+    var.ndim() == 2 && named_role(var) != Role::Other
+}
+
 /// x・y の値を m にする倍率。
 fn meters(var: &NcVariable) -> f64 {
     match text(var, "units").unwrap_or_default().trim() {
@@ -117,7 +135,8 @@ pub fn grid(
     let cols = layout::coordinate(col_dim, &scope);
     let mut cells = axes(file, &scope, rows, cols, w, h)
         .or_else(|| table(file, &scope, var, row_dim, col_dim, w, h))
-        .or_else(|| projected(file, &scope, var, rows?, cols?, w, h))?;
+        .or_else(|| projected(file, &scope, var, rows?, cols?, w, h))
+        .or_else(|| alongside(file, &scope, layout, w, h))?;
     if flipped {
         flip(&mut cells, w, h);
     }
@@ -201,6 +220,94 @@ fn table(
         latitudes: as_rows(read(file, scope, lat)?, lat_t)?,
         longitudes: as_rows(read(file, scope, lon)?, lon_t)?,
     })
+}
+
+/// 同じグループか、隣のグループ（HDF-EOS5 の Data Fields に対する Geolocation Fields）にある、
+/// 同じ形の緯度・経度の表。CF の `coordinates` 属性を書かない HDF5 のため。
+fn alongside(
+    file: &NcFile,
+    scope: &[&NcGroup],
+    layout: &Variable,
+    w: usize,
+    h: usize,
+) -> Option<Cells> {
+    let (h_size, w_size) = (layout.height(), layout.width());
+    let dir = |path: &str| path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+    let join = |dir: &str, name: &str| {
+        if dir.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{dir}/{name}")
+        }
+    };
+    let here = dir(&layout.path);
+    let mut groups: Vec<(&NcGroup, String)> = vec![(*scope.last()?, here.clone())];
+    if scope.len() >= 2 {
+        let parent = dir(&here);
+        for g in &scope[scope.len() - 2].groups {
+            if !std::ptr::eq(g, *scope.last()?) {
+                groups.push((g, join(&parent, &g.name)));
+            }
+        }
+    }
+    for (group, prefix) in groups {
+        let mut lat = None;
+        let mut lon = None;
+        for c in &group.variables {
+            if !is_lat_lon_table(c) {
+                continue;
+            }
+            let sizes = (c.dimensions[0].size, c.dimensions[1].size);
+            let transposed = if sizes == (h_size, w_size) {
+                false
+            } else if sizes == (w_size, h_size) {
+                true
+            } else {
+                continue;
+            };
+            let found = Some((join(&prefix, &c.name), transposed));
+            match named_role(c) {
+                Role::Latitude if lat.is_none() => lat = found,
+                Role::Longitude if lon.is_none() => lon = found,
+                _ => {}
+            }
+        }
+        let (Some((lat, lat_t)), Some((lon, lon_t))) = (lat, lon) else {
+            continue;
+        };
+        vw_core::limits::check_image(w as u64, h as u64, 8).ok()?;
+        let as_rows = |path: &str, transposed: bool, limit: f64| -> Option<Vec<f32>> {
+            let values: Vec<f64> = file
+                .read_variable_as_f64(path)
+                .ok()?
+                .iter()
+                .copied()
+                .collect();
+            if values.len() != w * h {
+                return None;
+            }
+            // 衛星のデータは欠損に -999 などを書き、`_FillValue` のないこともある。範囲の外は欠損にする。
+            let cell = |v: f64| {
+                if v.is_finite() && v.abs() <= limit {
+                    v as f32
+                } else {
+                    f32::NAN
+                }
+            };
+            Some(if transposed {
+                (0..w * h)
+                    .map(|i| cell(values[(i % w) * h + i / w]))
+                    .collect()
+            } else {
+                values.into_iter().map(cell).collect()
+            })
+        };
+        return Some(Cells::Table {
+            latitudes: as_rows(&lat, lat_t, 90.0)?,
+            longitudes: as_rows(&lon, lon_t, 360.0)?,
+        });
+    }
+    None
 }
 
 /// x・y（座標の変数の値）から `(緯度, 経度)`。

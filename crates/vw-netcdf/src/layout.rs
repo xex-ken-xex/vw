@@ -14,9 +14,13 @@ pub struct Variable {
     /// 縦（行）と横（列）にする次元の添字。
     pub rows: usize,
     pub cols: usize,
-    /// ほかの変数の `coordinates` 属性に名前がある、2 次元の緯度・経度などの補助の座標。
+    /// ほかの変数の `coordinates` 属性に名前がある、2 次元の緯度・経度などの補助の座標
+    /// （HDF5 の `Latitude`・`Longitude` のように、名前で緯度・経度と分かるものも）。
     /// 一覧には残すが（中身を見たいこともある）、最初には見せない。
     pub auxiliary: bool,
+    /// 印の変数（`flag_values`・`flag_masks`・`flag_meanings` のあるもの。雲の印など）。
+    /// 同じ大きさの計測の変数があれば、そちらを先に見せる。
+    pub flags: bool,
 }
 
 impl Variable {
@@ -76,12 +80,13 @@ pub fn variables(file: &NcFile) -> Vec<Variable> {
     out
 }
 
-/// 最初に見せる変数。補助の座標でないもののうち、面の画素がいちばん多い変数（同じなら先のもの）。
+/// 最初に見せる変数。補助の座標でないもののうち、面の画素がいちばん多い変数。同じなら印の
+/// 変数でないもの、それも同じなら先のもの。
 pub fn default_variable(variables: &[Variable]) -> Option<&Variable> {
     variables
         .iter()
         .rev()
-        .max_by_key(|v| (!v.auxiliary, v.plane_pixels()))
+        .max_by_key(|v| (!v.auxiliary, v.plane_pixels(), !v.flags))
 }
 
 fn collect<'a>(group: &'a NcGroup, parents: &[&'a NcGroup], prefix: &str, out: &mut Vec<Variable>) {
@@ -118,7 +123,11 @@ fn collect<'a>(group: &'a NcGroup, parents: &[&'a NcGroup], prefix: &str, out: &
             dtype: var.dtype.clone(),
             rows,
             cols,
-            auxiliary: coordinates.iter().any(|c| c == &var.name),
+            auxiliary: coordinates.iter().any(|c| c == &var.name)
+                || crate::geo::is_lat_lon_table(var),
+            flags: ["flag_values", "flag_masks", "flag_meanings"]
+                .iter()
+                .any(|a| var.attribute(a).is_some()),
         });
     }
     for child in &group.groups {

@@ -49,6 +49,12 @@ pub trait DecoderPlugin: Send + Sync {
     /// 対応する拡張子。小文字、ドットなし（`["png"]` など）。
     fn extensions(&self) -> &[&str];
 
+    /// [`Self::extensions`] のほかに、拡張子で受け持つファイルか。設定で拡張子を変えられる形式
+    /// （HDF5）だけが上書きする。静的な一覧では、設定を変えたときに差し替えられないため。
+    fn claims_path(&self, _path: &Path) -> bool {
+        false
+    }
+
     /// ファイル先頭のバイト列がこの形式に見えるか。
     /// `header` はファイル全体のこともあるが、先頭数十バイトしか来ない前提で判定する。
     fn probe(&self, header: &[u8]) -> bool;
@@ -216,11 +222,12 @@ impl Registry {
         path.extension()?;
         let name = path.file_name()?.to_str()?.to_ascii_lowercase();
         self.plugins.iter().find(|p| {
-            p.extensions().iter().any(|ext| {
-                name.len() > ext.len() + 1
-                    && name.ends_with(ext)
-                    && name.as_bytes()[name.len() - ext.len() - 1] == b'.'
-            })
+            p.claims_path(path)
+                || p.extensions().iter().any(|ext| {
+                    name.len() > ext.len() + 1
+                        && name.ends_with(ext)
+                        && name.as_bytes()[name.len() - ext.len() - 1] == b'.'
+                })
         })
     }
 
@@ -479,6 +486,36 @@ mod tests {
             assert!(!p.matches(Path::new(no)), "{no}");
         }
         assert!(ProbeExtensions::new("(").is_err());
+    }
+
+    /// 設定の正規表現のように、静的な一覧にない拡張子を受け持つテスト用プラグイン。
+    struct Claims;
+
+    impl DecoderPlugin for Claims {
+        fn name(&self) -> &str {
+            "CLAIMS"
+        }
+        fn extensions(&self) -> &[&str] {
+            &[]
+        }
+        fn claims_path(&self, path: &Path) -> bool {
+            path.extension().is_some_and(|e| e == "h5")
+        }
+        fn probe(&self, _header: &[u8]) -> bool {
+            false
+        }
+        fn decode(&self, _data: &[u8]) -> Result<VwImage, DecodeError> {
+            Err(DecodeError::Unsupported("test".into()))
+        }
+    }
+
+    #[test]
+    fn plugins_can_claim_extensions_outside_their_static_list() {
+        let mut r = Registry::new();
+        r.register(Arc::new(Claims));
+        assert!(r.supports_path(Path::new("swath.h5")));
+        assert!(!r.supports_path(Path::new("swath.h6")));
+        assert_eq!(r.find(Path::new("a.h5"), b"").unwrap().name(), "CLAIMS");
     }
 
     #[test]

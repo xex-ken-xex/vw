@@ -1,12 +1,12 @@
 ---
-title: "Weather and ocean data (NetCDF)"
+title: "Weather and ocean data (NetCDF, HDF5)"
 ---
 
 See and measure grids of weather, climate and ocean data with their values and units.
 
 ## Formats
 
-NetCDF files (`.nc` `.nc4` `.cdf` `.netcdf`) open from a folder just like photos. vw reads NetCDF-3 (classic, 64-bit offset, 64-bit data) and NetCDF-4. HDF5 files that are not NetCDF, and HDF4 files, do not open yet.
+NetCDF files (`.nc` `.nc4` `.cdf` `.netcdf`) open from a folder just like photos. vw reads NetCDF-3 (classic, 64-bit offset, 64-bit data) and NetCDF-4. HDF5 files (`.h5` `.hdf5` `.he5`) open too (see [HDF5 files](#hdf5-files)). HDF4 files do not open yet.
 
 Each numeric variable with two or more dimensions becomes an image. The variable with the largest plane is shown first.
 
@@ -52,13 +52,28 @@ The positions are shown here:
 
 Grids with longitudes from 0 to 360 degrees (Japan on the left, America on the right) can be turned with **Longitudes from -180 to 180** so the left edge is 180 degrees west. Pixel positions in graphs and CSV follow the turned grid.
 
+## HDF5 files
+
+HDF5 files that are not NetCDF, such as satellite observations, are shown the same way as NetCDF. Files that are NetCDF-4 inside are read as NetCDF even with the `.h5` extension. **Format** in the metadata is "HDF5" for HDF5 that is not NetCDF, and "NetCDF-4" for NetCDF.
+
+- Every numeric dataset with two or more dimensions, also inside groups, becomes an image, switched with **N** / **Shift+N** or right-click **Variable**. One-dimensional datasets, strings, compounds and references are not images; they appear only in the metadata
+- Datasets with three or more dimensions are stepped with the wheel over the leading dimensions. Bands stored as separate datasets (such as `B01` to `B07`) are switched with N
+- HDF5 has no dimension names, so dimensions are named by their size, like "dim_400"
+- The attributes `scale_factor`, `add_offset`, `_FillValue`, `missing_value` and `valid_range` are applied as in NetCDF. Attributes with other names (such as `ScaleFactor`) are not applied; the stored values are shown
+- Latitude and longitude datasets of the same shape (in the same group, or `Latitude` and `Longitude` in the HDF-EOS5 "Geolocation Fields", found by name or `units`) give each pixel its position, so the cross, kilometers along lines, the ROI graph and the map work as in NetCDF. Values out of range, like -999, leave the pixel without a position. The latitude and longitude datasets stay in the list but are not shown first
+- LZF compression (used by h5py) is read
+- Enumerations show their values only, not their names, for now
+- Positions of HDF-EOS5 grids (projections written in StructMetadata) are not read yet
+
+The extensions are set with **Extensions opened as HDF5** (a regular expression). Narrow it in folders with many HDF5 files that are not images, such as machine learning weights.
+
 ## Metadata and search
 
 The metadata pane shows the attributes of the current variable ("NetCDF variable"), all variables of the file ("NetCDF variables") and the file's global attributes ("NetCDF global attributes"). They are also stored in the [dataset](find.html) search catalog, so you can search by variable names and attributes.
 
 ## Settings
 
-All settings are under **Earth science grids (NetCDF)**.
+All settings are under **Earth science data (NetCDF, HDF5)**. HDF5 files use the same settings.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -71,3 +86,4 @@ All settings are under **Earth science grids (NetCDF)**.
 | Show coordinates | Show latitude, longitude and the plane's time or level at the cross, the line profile, the ROI graph and the map | On |
 | Longitudes from -180 to 180 | Make the left edge of 0 to 360 degree grids 180 degrees west | Off |
 | Anomalies around zero | Give anomaly variables black and white symmetric around zero and coolwarm | On |
+| Extensions opened as HDF5 | Regular expression for the extensions of files opened as HDF5. `.nc` and the like always open | `^(h5\|hdf5\|he5)$` |

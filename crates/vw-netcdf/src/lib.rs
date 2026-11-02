@@ -1,5 +1,7 @@
-//! NetCDF（NetCDF-3 と NetCDF-4）のデコーダプラグイン。読むだけ。
+//! NetCDF（NetCDF-3 と NetCDF-4）と HDF5 のデコーダプラグイン。読むだけ。
 //!
+//! - HDF5 は NetCDF-4 の入れ物なので、NetCDF-4 の印のない HDF5 も同じ読み方で開く
+//!   （次元には大きさから名前が付く）。開く拡張子は [`Hdf5Extensions`] で決める
 //! - 数値で 2 次元以上の変数を画像にする（座標の変数と `bounds` の変数は除く）。見せる変数は
 //!   [`Choices`] で選び、選んでいなければ面のいちばん大きい変数
 //! - 縦と横は座標の変数の CF の軸（`axis`・`standard_name`・`units`）で決め、他の次元
@@ -14,6 +16,7 @@
 
 pub mod geo;
 mod layout;
+pub mod lzf;
 mod meta;
 pub mod projection;
 mod values;
@@ -59,8 +62,39 @@ pub const LONGITUDES_ROTATED: &str = "Rotated to -180..180";
 pub const COLOR_MAP: &str = "Suggested color map";
 pub const SUGGESTED_PALETTE: &str = "coolwarm";
 
-/// 対応する拡張子。HDF5 の拡張子（`.h5`）は、NetCDF でない HDF5 を開かないよう入れない。
+/// 対応する拡張子。HDF5 の拡張子は設定で変えるので、ここには入れず [`Hdf5Extensions`] で当てる。
 pub const EXTENSIONS: [&str; 4] = ["nc", "nc4", "cdf", "netcdf"];
+/// NetCDF-4 の印のない HDF5 のファイルの [`FORMAT`] の値。
+pub const FORMAT_HDF5: &str = "HDF5";
+
+/// HDF5 として開く拡張子。プラグインとアプリで共有し、設定を変えたらすぐ効かせる。
+#[derive(Debug, Clone)]
+pub struct Hdf5Extensions(Arc<RwLock<vw_core::ProbeExtensions>>);
+
+impl Hdf5Extensions {
+    /// 既定。HDF5 と HDF-EOS5 のよく使う拡張子。
+    pub const DEFAULT: &'static str = "^(h5|hdf5|he5)$";
+
+    pub fn set(&self, pattern: vw_core::ProbeExtensions) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = pattern;
+    }
+
+    pub fn matches(&self, path: &Path) -> bool {
+        path.extension().is_some()
+            && self
+                .0
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .matches(path)
+    }
+}
+
+impl Default for Hdf5Extensions {
+    fn default() -> Self {
+        let pattern = vw_core::ProbeExtensions::new(Self::DEFAULT).expect("valid pattern");
+        Self(Arc::new(RwLock::new(pattern)))
+    }
+}
 
 /// 表示の決め方。設定画面で変える。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -179,6 +213,9 @@ pub struct NetcdfPlugin {
     windows: Memo<Window>,
     /// 画素ごとの緯度・経度は、図法から作ると大きな格子で数十 MB になるので、少しだけ覚える。
     grids: Memo<Option<Arc<vw_core::geo::GeoGrid>>>,
+    hdf5_extensions: Hdf5Extensions,
+    /// ファイルが NetCDF-4 の印のない HDF5 か（[`is_plain_hdf5`]）。
+    plain: Memo<bool>,
 }
 
 impl Default for NetcdfPlugin {
@@ -194,7 +231,15 @@ impl NetcdfPlugin {
             choices,
             windows: Memo::new(64),
             grids: Memo::new(4),
+            hdf5_extensions: Hdf5Extensions::default(),
+            plain: Memo::new(64),
         }
+    }
+
+    /// HDF5 として開く拡張子を、アプリの設定と共有する。
+    pub fn with_hdf5_extensions(mut self, extensions: Hdf5Extensions) -> Self {
+        self.hdf5_extensions = extensions;
+        self
     }
 }
 
@@ -207,10 +252,35 @@ pub fn is_netcdf(header: &[u8]) -> bool {
 fn open(data: &[u8]) -> Result<NcFile, DecodeError> {
     let options = NcOpenOptions {
         max_read_bytes: vw_core::limits::max_image_bytes(),
+        filter_registry: Some(lzf::registry()),
         ..NcOpenOptions::default()
     };
     NcFile::from_bytes_with_options(data, options)
         .map_err(|e| DecodeError::Invalid(format!("NetCDF: {e}")))
+}
+
+/// NetCDF-4 の印（ルートの `_NCProperties` か、ルートの次元のデータセット）がない HDF5 か。
+/// 読み込みのクレートも同じ見分け方で次元に仮の名前を付けるが、その結果を外へ出していない。
+/// 古い NetCDF-4（`_NCProperties` がない）でも、次元のデータセットがあれば NetCDF と見る。
+fn is_plain_hdf5(data: &[u8]) -> bool {
+    let Ok(file) = hdf5_reader::Hdf5File::from_bytes(data) else {
+        return false;
+    };
+    let Ok(root) = file.root_group() else {
+        return false;
+    };
+    if root.attribute("_NCProperties").is_ok() {
+        return false;
+    }
+    let Ok(datasets) = root.datasets() else {
+        return false;
+    };
+    !datasets.iter().any(|ds| {
+        ds.attribute("CLASS")
+            .ok()
+            .and_then(|a| a.read_string().ok())
+            .is_some_and(|c| c == "DIMENSION_SCALE")
+    })
 }
 
 /// 画像にできる変数（[`Variable::path`]）の一覧。変数を切り替えるメニューとキーに使う。
@@ -246,6 +316,18 @@ pub fn extent(data: &[u8]) -> Option<Extent> {
 }
 
 impl NetcdfPlugin {
+    /// [`FORMAT`] の値。NetCDF-4 の印のない HDF5 は [`FORMAT_HDF5`]。見分けるのにファイルを
+    /// もう一度開く（中身を写す）ので、ファイルごとに覚える。
+    fn format_name(&self, data: &[u8], file: &NcFile) -> &'static str {
+        let plain = file.format() == netcdf_reader::NcFormat::Nc4
+            && self.plain.get_or(file_key(data), || is_plain_hdf5(data));
+        if plain {
+            FORMAT_HDF5
+        } else {
+            meta::format_name(file.format())
+        }
+    }
+
     /// 見せる変数。選んだものがなければ（別のファイルの鍵とぶつかったときも）既定の変数。
     fn chosen<'a>(
         &self,
@@ -316,7 +398,7 @@ impl NetcdfPlugin {
         }
         .or_else(|| window(&img.data, &options));
         img.missing = options.missing;
-        img.metadata = meta::metadata(&file, &variables, chosen);
+        img.metadata = meta::metadata(&file, self.format_name(data, &file), &variables, chosen);
         if let Some(label) = meta::plane_label(&file, chosen, frame) {
             img.metadata.push(GROUP, vw_fits::PLANE, label);
         }
@@ -424,6 +506,10 @@ impl DecoderPlugin for NetcdfPlugin {
         &EXTENSIONS
     }
 
+    fn claims_path(&self, path: &Path) -> bool {
+        self.hdf5_extensions.matches(path)
+    }
+
     fn probe(&self, header: &[u8]) -> bool {
         is_netcdf(header)
     }
@@ -447,10 +533,13 @@ impl DecoderPlugin for NetcdfPlugin {
         data: &[u8],
         frame: usize,
     ) -> Result<VwImage, DecodeError> {
-        // HDF5 の頭は NetCDF でない HDF5（`.h5`）にもある。拡張子が NetCDF でないものは開かない。
-        if data.starts_with(b"\x89HDF") && !has_netcdf_extension(path) {
+        // HDF5 の頭は、画像でない HDF5（機械学習の重みなど）にもある。拡張子で決めたものだけ開く。
+        if data.starts_with(b"\x89HDF")
+            && !has_netcdf_extension(path)
+            && !self.hdf5_extensions.matches(path)
+        {
             return Err(DecodeError::Unsupported(format!(
-                "HDF5 file {} is not opened as NetCDF",
+                "HDF5 file {} has none of the NetCDF or HDF5 extensions",
                 path.display()
             )));
         }
@@ -461,12 +550,21 @@ impl DecoderPlugin for NetcdfPlugin {
         let file = open(data)?;
         let variables = layout::variables(&file);
         let chosen = self.chosen(data, &variables)?;
-        Ok(meta::metadata(&file, &variables, chosen))
+        Ok(meta::metadata(
+            &file,
+            self.format_name(data, &file),
+            &variables,
+            chosen,
+        ))
     }
 
     fn read_all_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         let file = open(data)?;
-        Ok(meta::catalog(&file, &layout::variables(&file)))
+        Ok(meta::catalog(
+            &file,
+            self.format_name(data, &file),
+            &layout::variables(&file),
+        ))
     }
 }
 
