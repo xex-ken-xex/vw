@@ -82,11 +82,9 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleRoiGraph, Some(roi_graph)) {
                     chosen = Some(Action::ToggleRoiGraph);
                 }
-                if self.settings().map.enabled {
-                    let map = self.map.open;
-                    if self.menu_item(ui, Action::ToggleMap, Some(map)) {
-                        chosen = Some(Action::ToggleMap);
-                    }
+                let map = self.map.open;
+                if self.menu_item(ui, Action::ToggleMap, Some(map)) {
+                    chosen = Some(Action::ToggleMap);
                 }
                 if self.settings().sky.enabled {
                     let sky = self.sky.open;

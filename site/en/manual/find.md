@@ -214,7 +214,7 @@ A dataset can be registered inside another (for example `trip2026/flowers` insid
 
 ## See photo locations on a map
 
-Turn on **Map → Use the map** in the settings, and **View → Map** (**Ctrl+M**) opens the map window. Photos with GPS in EXIF show as red dots where they were taken.
+**View → Map** (**Ctrl+M**) opens the map window. The first time, vw asks whether it may download map pictures from an outside server; **Use the map** turns on **Map → Use the map** in the settings and opens it. You can turn it off again in the settings. Photos with GPS in EXIF show as red dots where they were taken.
 
 - At the top right, switch between **This folder** (photos of the open folder) and **All datasets** (photos in the search catalogs of registered datasets). Dataset photos get their location when the catalog is **updated**
 - Drag to move, wheel to zoom, double-click to zoom in one step. East-west scrolls endlessly and stays connected across the date line

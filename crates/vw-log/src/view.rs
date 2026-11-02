@@ -116,7 +116,7 @@ fn terminal_line(ui: &Ui, line: &Line, wrap: bool) -> egui::Label {
     };
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let text = line.terminal();
-    let body = text.len() - line.text.len();
+    let body = text.len() - line.body().0.len();
     let mut job = LayoutJob::default();
     job.append(&text[..body], 0.0, TextFormat::simple(font.clone(), color));
     append_body(&mut job, line, font, color);
@@ -143,7 +143,8 @@ fn normal_line(ui: &Ui, line: &Line, wrap: bool) -> egui::Label {
 }
 
 fn append_body(job: &mut LayoutJob, line: &Line, font: FontId, color: Color32) {
-    let (verb, rest) = line.text.split_at(line.verb);
+    let (body, verb) = line.body();
+    let (verb, rest) = body.split_at(verb);
     if !verb.is_empty() {
         job.append(verb, 0.0, TextFormat::simple(font.clone(), DONE));
     }
