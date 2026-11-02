@@ -67,6 +67,29 @@ const JA: &[(&str, &str)] = &[
     ("Map", "地図"),
     ("Use the map", "地図を使う"),
     ("Use the map?", "地図を使いますか？"),
+    ("e.g. cat, dog, bird", "例: cat, dog, bird"),
+    ("e.g. cat", "例: cat"),
+    (
+        "No tag is set for key {}.",
+        "キー {} にはタグがありません。",
+    ),
+    (
+        "Name a new tag to put on this image:",
+        "新しいタグの名前を入れてください。この画像に付けます:",
+    ),
+    (
+        "Name a new tag for key {} and put it on this image:",
+        "キー {} の新しいタグの名前を入れてください。この画像に付けます:",
+    ),
+    (
+        "A tag name cannot contain a comma.",
+        "タグの名前にカンマは使えません。",
+    ),
+    (
+        "Tags can also be edited in Settings > Flags and tags.",
+        "タグは設定の「フラグとタグ」でも直せます。",
+    ),
+    ("Add tag", "タグを足す"),
     (
         "The map pictures are downloaded from {} while the map is open.",
         "地図を開いている間、地図の絵を {} から取ります。",

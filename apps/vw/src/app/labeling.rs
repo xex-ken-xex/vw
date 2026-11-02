@@ -12,7 +12,7 @@ use crate::labels::Flag;
 use crate::settings::{Language, LoadInto};
 use crate::theme;
 use crate::tree::{self};
-use crate::viewer::{Content, Origin, Slot};
+use crate::viewer::{Content, Origin, SequenceKind, Slot};
 
 use super::*;
 
@@ -20,6 +20,13 @@ use super::*;
 pub(super) struct ClearFlags {
     pending: discard::Pending,
     whole: bool,
+}
+
+/// `slot` が `file` のコマを送るスロットか。
+fn shows_frames_of(slot: &Slot, file: &Path) -> bool {
+    slot.sequence
+        .as_ref()
+        .is_some_and(|seq| seq.kind == SequenceKind::Frames && seq.folder == file)
 }
 
 impl VwApp {
@@ -45,6 +52,8 @@ impl VwApp {
     /// 絞り込みを変えたときに、フォルダの読み込みで並べたスロットを条件に合わせる。
     /// 自分で開いた画像のスロットはそのままにする。
     pub(super) fn apply_filter_to_slots(&mut self) {
+        // 外しておいた連なりのスロットも、新しい条件で合う画像を探し直すため、いったん戻す。
+        self.show_hidden_slots();
         let registry = self.loader.registry().clone();
         let order = self.settings().tree.order();
         let roots: Vec<PathBuf> = self
@@ -70,8 +79,8 @@ impl VwApp {
             let matcher = self.matcher();
             let target = nearest_match(&seq.paths, seq.index, |p| matcher.matches(p));
             let Some(target) = target else {
-                // 合う画像がなければ空にする。条件に合わない画像を出したままにすると、
-                // 絞り込みが効いていないように見えるため。並びは残して、条件を戻したら出し直す。
+                // 合う画像がなければ空にする。空のスロットは [`VwApp::keep_filter_hiding`] が並びから外す。
+                // 閉じずに取っておくのは、条件を戻したら出し直すため。
                 self.cancel_requests(&self.slots[index]);
                 let slot = &mut self.slots[index];
                 slot.path = None;
@@ -89,6 +98,7 @@ impl VwApp {
             }
             self.start_load(index, path, full);
         }
+        self.keep_filter_hiding();
     }
 
     /// `root` の画像を 1 枚 1 スロットに並べたスロットを、`wanted` の画像に並べ直す。
@@ -123,6 +133,9 @@ impl VwApp {
         for path in wanted {
             match kept.remove(&path) {
                 Some(slot) => new.push(slot),
+                // コマのある画像（GIF など）は、読んだときにそのコマを送るスロットになって
+                // 1 枚 1 スロットの並びから外れる。そのスロットが残っていれば、もう 1 つ作らない。
+                None if rest.iter().any(|s| shows_frames_of(s, &path)) => {}
                 None => {
                     let mut slot = Slot::new(self.next_id);
                     self.next_id += 1;
@@ -320,10 +333,12 @@ impl VwApp {
     /// 設定の `index` 番目のタグを付ける・外す。
     pub(super) fn tag(&mut self, index: usize) {
         let Some(tag) = self.settings().labels.tags.get(index).cloned() else {
-            self.log.warn(format!(
-                "No tag for key {} (add tags in Settings > Flags and tags)",
-                index + 1
-            ));
+            // 付けられない画像（ZIP の中など）では、名前を聞いても付けられないので聞かない。
+            if let Some(path) = self.active_image().filter(|p| !p.is_dir())
+                && self.labelable(&path)
+            {
+                self.tag_name_prompt = Some(super::tag_name::TagNamePrompt::new(index + 1));
+            }
             return;
         };
         let Some(path) = self.active_image().filter(|p| !p.is_dir()) else {

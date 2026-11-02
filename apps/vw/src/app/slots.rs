@@ -33,6 +33,7 @@ impl VwApp {
     /// すべてのスロットを閉じ、空のスロットを 1 つ残す。
     pub(super) fn close_all_slots(&mut self) {
         self.maximized = None;
+        self.hidden_slots.clear();
         self.loaded_folders.clear();
         self.explores.clear();
         for s in std::mem::take(&mut self.slots) {

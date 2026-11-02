@@ -2766,7 +2766,7 @@ fn tags_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
         .unwrap_or_else(|| joined.clone());
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
-            .hint_text("cat, dog, bird")
+            .hint_text(tr(lang, "e.g. cat, dog, bird"))
             .desired_width(320.0),
     );
     let parsed: Vec<String> = text

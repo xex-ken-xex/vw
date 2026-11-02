@@ -47,6 +47,7 @@ mod dataset_dialogs;
 pub(crate) mod display_ui;
 mod docking;
 mod export_dialog;
+mod filter_hide;
 mod folders;
 mod labeling;
 mod line_profile_pane;
@@ -67,6 +68,7 @@ mod screens;
 mod send;
 mod similar;
 mod slots;
+mod tag_name;
 mod transfers;
 mod undo;
 
@@ -421,6 +423,10 @@ pub struct VwApp {
     pending_clear_flags: Option<labeling::ClearFlags>,
     /// 地図を使うかを聞いている途中。
     map_ask: Option<map_consent::MapAsk>,
+    /// タグのないキーを押して、名前を聞いている途中。
+    tag_name_prompt: Option<tag_name::TagNamePrompt>,
+    /// 絞り込みの間、並びから外しておいたスロット。
+    hidden_slots: filter_hide::HiddenSlots,
     /// パスワードを尋ねている暗号化された ZIP / 7z。
     password_prompt: Option<PasswordPrompt>,
     large_archive_prompt: Option<LargeArchivePrompt>,
@@ -903,6 +909,8 @@ impl VwApp {
             pending_trash: None,
             pending_clear_flags: None,
             map_ask: None,
+            tag_name_prompt: None,
+            hidden_slots: filter_hide::HiddenSlots::default(),
             password_prompt: None,
             large_archive_prompt: None,
             dataset_dialog: None,
@@ -1330,6 +1338,7 @@ impl eframe::App for VwApp {
             self.group_series();
         }
         self.watch_folders(&ctx);
+        self.keep_filter_hiding();
         for problem in self.labels.take_problems() {
             self.log.error(problem);
         }
@@ -1450,6 +1459,7 @@ impl eframe::App for VwApp {
         self.trash_dialog(&ctx);
         self.clear_flags_dialog(&ctx);
         self.map_ask_dialog(&ctx);
+        self.tag_name_dialog(&ctx);
         self.password_dialog(&ctx);
         self.folder_picker_ui(&ctx);
         self.large_archive_dialog(&ctx);
