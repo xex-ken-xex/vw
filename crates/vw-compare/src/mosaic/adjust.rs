@@ -118,7 +118,13 @@ pub fn adjust(
                 })
                 .collect()
         }
-        _ => (0..n)
+        Kind::Projective => recentred(
+            sizes,
+            (0..n)
+                .map(|i| tree[i].map(|_| model.warp(i, &params)))
+                .collect(),
+        ),
+        Kind::Affine => (0..n)
             .map(|i| tree[i].map(|_| model.warp(i, &params)))
             .collect(),
     };
@@ -135,6 +141,40 @@ pub fn adjust(
             _ => None,
         },
     })
+}
+
+/// 射影で置いた画像を、全体がいちばん小さくなる 1 枚を正面にして置き直す。基準の 1 枚は
+/// 組の確かさで選ぶので、端の画像が基準になると、反対の端が遠近で大きく引き伸ばされるため。
+fn recentred(sizes: &[[usize; 2]], placed: Vec<Option<Warp>>) -> Vec<Option<Warp>> {
+    let homography = |w: &Option<Warp>| match w {
+        Some(Warp::Projective(h)) => Some(*h),
+        Some(Warp::Affine(t)) => Some(Homography::from_affine(t)),
+        _ => None,
+    };
+    let area = |p: &[Option<Warp>]| {
+        let whole = p
+            .iter()
+            .zip(sizes)
+            .all(|(w, s)| w.as_ref().is_none_or(|w| w.outline(*s, 8).len() == 32));
+        super::bounds(sizes, p)
+            .filter(|_| whole)
+            .map(|b| (b[2] - b[0]) * (b[3] - b[1]))
+    };
+    let mut best = (area(&placed), placed.clone());
+    for centre in placed.iter().filter_map(homography) {
+        let Some(back) = centre.inverse() else {
+            continue;
+        };
+        let moved: Vec<Option<Warp>> = placed
+            .iter()
+            .map(|w| homography(w).map(|h| Warp::Projective(h.then(&back).normalized())))
+            .collect();
+        let a = area(&moved);
+        if a.is_some_and(|a| best.0.is_none_or(|b| a < b)) {
+            best = (a, moved);
+        }
+    }
+    best.1
 }
 
 /// 写した画像がどれも、縁を全部写せて、ありえない大きさに伸びていないか。

@@ -1247,37 +1247,68 @@ struct Placing {
     note: Option<&'static str>,
 }
 
-/// 組の点を、特徴点の組があればそれに替えたもの。射影と円筒は、遠近のゆがみを持つ特徴点の
-/// 組で直し、つなぎ目もそれで測る（相関で見つけた組の点は、アフィンで写した格子の点なので）。
-fn with_feature_points(found: &Found, links: &[Link]) -> Vec<Link> {
+/// 組の特徴点の組（[`with_feature_points`] で使えるだけあれば）。
+fn feature_points_of<'a>(found: &'a Found, l: &Link) -> Option<&'a Vec<Pair>> {
+    found
+        .features
+        .get(&(l.a.min(l.b), l.a.max(l.b)))
+        .filter(|points| points.len() >= 12 && l.kind != LinkKind::Wcs)
+}
+
+/// 特徴点の組のある組を先にたどるように、相関を上げたもの。遠近の強い重なりでは、相関の組
+/// （アフィン）より特徴点の組のほうが確かなため。
+fn preferring_feature_points(found: &Found, links: &[Link]) -> Vec<Link> {
     links
         .iter()
-        .map(|l| {
-            let key = (l.a.min(l.b), l.a.max(l.b));
-            match found.features.get(&key) {
-                Some(points) if points.len() >= 12 && l.kind != LinkKind::Wcs => {
-                    let points = if l.a < l.b {
+        .map(|l| Link {
+            correlation: l.correlation + f64::from(u8::from(feature_points_of(found, l).is_some())),
+            ..l.clone()
+        })
+        .collect()
+}
+
+/// 組の点を、特徴点の組があればそれに替えたもの。射影と円筒は、遠近のゆがみを持つ特徴点の
+/// 組で直し、つなぎ目もそれで測る（相関で見つけた組の点は、アフィンで写した格子の点なので）。
+/// 特徴点の組のない相関の組は、置き方をたどった組でなければ点を外す（遠近の強い重なりでは、
+/// アフィンの格子の点が特徴点の組と食い違い、全体の直しを引っ張るため）。組そのものは消さない
+/// （`tree` は組の番号で組を指すので）。
+fn with_feature_points(
+    found: &Found,
+    links: &[Link],
+    tree: &[Option<(Affine, Option<usize>)>],
+) -> Vec<Link> {
+    let in_tree: Vec<usize> = tree.iter().flatten().filter_map(|(_, via)| *via).collect();
+    links
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let points = match feature_points_of(found, l) {
+                Some(points) => {
+                    if l.a < l.b {
                         points.clone()
                     } else {
                         points.iter().map(|[p, q]| [*q, *p]).collect()
-                    };
-                    Link {
-                        points,
-                        ..l.clone()
                     }
                 }
-                _ => l.clone(),
+                _ if l.kind == LinkKind::Overlap && !in_tree.contains(&i) => Vec::new(),
+                _ => l.points.clone(),
+            };
+            Link {
+                points,
+                ..l.clone()
             }
         })
         .collect()
 }
 
-/// 全体の写し方を決めて、組をたどった置き方を直す。`warped` は [`with_feature_points`]。
+/// 全体の写し方を決めて、組をたどった置き方を直す。`warped` は [`with_feature_points`]、
+/// `warped_tree` はそれを特徴点のある組を優先してたどった置き方（射影と円筒で使う）。
 fn place(
     found: &Found,
     links: &[Link],
     warped: &[Link],
     tree: &[Option<(Affine, Option<usize>)>],
+    warped_tree: &[Option<(Affine, Option<usize>)>],
     wanted: StitchProjection,
 ) -> Placing {
     let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
@@ -1291,19 +1322,19 @@ fn place(
         }
         let span = focal
             .or_else(|| adjust::estimate_focal(&sizes, warped))
-            .and_then(|f| adjust::cylinder_span(&sizes, warped, tree, f));
+            .and_then(|f| adjust::cylinder_span(&sizes, warped, warped_tree, f));
         if span.is_some_and(|s| s > CYLINDER_DEGREES) {
             Projection::Cylinder
         } else {
             Projection::Projective
         }
     });
-    let used = if projection == Projection::Affine {
-        links
+    let (used, start) = if projection == Projection::Affine {
+        (links, tree)
     } else {
-        warped
+        (warped, warped_tree)
     };
-    let tried = adjust::adjust(&sizes, used, tree, projection, focal);
+    let tried = adjust::adjust(&sizes, used, start, projection, focal);
     let (result, note) = match tried {
         Ok(a) => (Ok(a), None),
         Err(e) => {
@@ -1350,13 +1381,19 @@ fn arrange(
 ) -> Arranged {
     let n = found.images.len();
     let tree = mosaic::tree(n, links);
-    let warped = with_feature_points(found, links);
+    let warped_tree = mosaic::tree(n, &preferring_feature_points(found, links));
+    let warped = with_feature_points(found, links, &warped_tree);
     let Placing {
         placed,
         projection: chosen,
         fit,
         note,
-    } = place(found, links, &warped, &tree, projection);
+    } = place(found, links, &warped, &tree, &warped_tree, projection);
+    let tree = if chosen == Projection::Affine {
+        tree
+    } else {
+        warped_tree
+    };
     let seam_links = if chosen == Projection::Affine {
         links
     } else {
@@ -1536,6 +1573,7 @@ fn start_job(paths: Vec<PathBuf>, registry: Registry, feature_use: StitchFeature
         }
         let stars: Vec<more::Stars> = ready.iter().map(|r| r.4.clone()).collect();
         more::link_more(&pieces, &stars, &features, usage, &mut links);
+        mosaic::without_disagreeing(pieces.len(), &mut links);
         let _ = tx.send(Message::Done(links, features));
     });
     Job {

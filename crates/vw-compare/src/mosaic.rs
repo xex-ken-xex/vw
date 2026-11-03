@@ -445,6 +445,57 @@ pub fn place(count: usize, links: &[Link]) -> Vec<Option<Affine>> {
         .collect()
 }
 
+/// [`tree`] の置き方と食い違う組を外す。繰り返しの多い絵（草地や空）では、重なっていない
+/// 2 枚が相関で結ばれることがあり、そのまま全体の直しに入れると、正しい組まで引っ張られるため。
+/// 置き方をたどった組は残す（どれが誤りかは、ほかの組との食い違いでしか分からないので）。
+pub fn without_disagreeing(count: usize, links: &mut Vec<Link>) {
+    let placed = tree(count, links);
+    let in_tree: Vec<usize> = placed
+        .iter()
+        .flatten()
+        .filter_map(|(_, via)| *via)
+        .collect();
+    let mut index = 0;
+    links.retain(|l| {
+        let i = index;
+        index += 1;
+        if in_tree.contains(&i) {
+            return true;
+        }
+        let (Some((pa, _)), Some((pb, _))) = (placed[l.a], placed[l.b]) else {
+            return true;
+        };
+        disagreement(l, &pa, &pb).is_none_or(|(off, extent)| off <= (0.25 * extent).max(30.0))
+    });
+}
+
+/// 組の点を置き方で写したずれの中央値と、点の広がり（a の画素の対角）。点がなければ `None`。
+fn disagreement(l: &Link, pa: &Affine, pb: &Affine) -> Option<(f64, f64)> {
+    let mut offsets: Vec<f64> = l
+        .points
+        .iter()
+        .map(|[p, q]| {
+            let (x, y) = (pa.apply(*p), pb.apply(*q));
+            (x[0] - y[0]).hypot(x[1] - y[1])
+        })
+        .collect();
+    if offsets.is_empty() {
+        return None;
+    }
+    offsets.sort_by(f64::total_cmp);
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for [p, _] in &l.points {
+        for k in 0..2 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    Some((
+        offsets[offsets.len() / 2],
+        (hi[0] - lo[0]).hypot(hi[1] - lo[1]),
+    ))
+}
+
 /// [`place`] と同じ置き方と、それぞれを置くのにたどった組（`links` の番号。基準は `None`）。
 pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>> {
     let mut placed: Vec<Option<(Affine, Option<usize>)>> = vec![None; count];

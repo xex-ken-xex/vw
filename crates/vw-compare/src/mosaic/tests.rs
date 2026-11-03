@@ -375,3 +375,28 @@ fn the_brightness_left_after_matching_is_what_the_seam_reports() {
     let seam = seams(&pieces, &warps(&placed), &[], &[true, true], &[1.0, 1.25])[0];
     assert!(seam.brightness < 0.01, "{seam:?}");
 }
+
+#[test]
+fn a_link_between_tiles_that_do_not_overlap_is_dropped_when_the_others_disagree() {
+    let size = [800, 600];
+    let link = |a, b, map: Affine, correlation| Link {
+        a,
+        b,
+        map,
+        correlation,
+        overlap: 0.3,
+        kind: LinkKind::Overlap,
+        points: grid_pairs(size, size, &map),
+    };
+    // 0 1 2 が横に並ぶ。0 と 2 は重なっていないのに、草地の繰り返しで結ばれてしまった。
+    let mut links = vec![
+        link(0, 1, shift(-560.0, 0.0), 0.99),
+        link(1, 2, shift(-560.0, 1.0), 0.5),
+        link(1, 2, shift(-560.0, 0.0), 0.99),
+        link(0, 2, shift(-580.0, 20.0), 0.86),
+    ];
+    without_disagreeing(3, &mut links);
+    let kept: Vec<f64> = links.iter().map(|l| l.correlation).collect();
+    // 少しずれただけの組は、食い違いとみなさず残す。
+    assert_eq!(kept, [0.99, 0.5, 0.99]);
+}
