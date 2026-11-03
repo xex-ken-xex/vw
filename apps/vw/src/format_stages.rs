@@ -271,6 +271,29 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
             levels.levels = info.look.is_some();
             out.push(levels);
         }
+        crate::stitch::PLUGIN => {
+            use crate::stitch::{BLEND, BRIGHTNESS, IMAGES, SCALE, SIZE, WCS};
+            out.push(stored);
+            let mut align = Stage::new("Alignment");
+            if let Some(v) = get(IMAGES) {
+                align = align.line(IMAGES, v);
+            }
+            if let Some(v) = get(WCS) {
+                align = align.line("WCS from", v);
+            }
+            out.push(align.note(
+                "Each image is placed by the WCS in its header, or by matching the overlap with a neighbour. The metadata lists where each one went.",
+            ));
+            let mut stitch = Stage::new("Stitching");
+            for key in [BLEND, BRIGHTNESS, SIZE, SCALE] {
+                if let Some(v) = get(key) {
+                    stitch = stitch.line(key, v);
+                }
+            }
+            out.push(stitch.note(
+                "The values of the files are laid on one grid. Where nothing was taken, the image is transparent (or NaN for real numbers).",
+            ));
+        }
         _ => out.push(stored),
     }
     if info.look.is_some() && info.plugin != "FITS" {

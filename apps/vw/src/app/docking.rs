@@ -30,10 +30,11 @@ pub(super) const COMPARE: &str = "compare_images";
 pub(super) const SUBFRAMES: &str = "subframes";
 pub(super) const LINE_PROFILE: &str = "line_profile";
 pub(super) const ROI_GRAPH: &str = "roi_graph";
+pub(super) const STITCH: &str = "stitch_images";
 /// 出し入れする道具の欄（データセットのほかは、もとは別ウインドウだった）。開いているか
 /// どうかは各道具の `open` が持ち、欄の出し入れをそれに合わせる（道具を開く操作があちこちに
 /// あり、閉じるときの後始末も道具ごとに違うため）。
-pub(super) const TOOLS: [&str; 11] = [
+pub(super) const TOOLS: [&str; 12] = [
     ANALYSIS,
     ZOOM_MAP,
     PIPELINE,
@@ -45,6 +46,7 @@ pub(super) const TOOLS: [&str; 11] = [
     SUBFRAMES,
     LINE_PROFILE,
     ROI_GRAPH,
+    STITCH,
 ];
 
 /// 道具を初めて出すときの大きさ（前の別ウインドウの既定の大きさ）と、前の位置を残した鍵。
@@ -57,7 +59,7 @@ fn first_float(tool: &str) -> ([f32; 2], Option<&'static str>) {
         DATASETS => ([1100.0, 700.0], None),
         SKY => ([900.0, 640.0], None),
         COMPARE => ([1280.0, 800.0], None),
-        SUBFRAMES => ([1000.0, 700.0], None),
+        SUBFRAMES | STITCH => ([1000.0, 700.0], None),
         LINE_PROFILE | ROI_GRAPH => ([820.0, 700.0], None),
         _ => ([900.0, 640.0], Some("map")),
     }
@@ -142,6 +144,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         SKY => "Sky chart",
         COMPARE => "Compare images",
         SUBFRAMES => "Subframes",
+        STITCH => "Stitching images",
         LINE_PROFILE => "Line profile",
         ROI_GRAPH => "ROI graph",
         DATASETS => "Datasets",
@@ -265,6 +268,7 @@ impl Panes for AppPanes<'_> {
             SKY => self.app.sky_pane(ui),
             COMPARE => self.app.compare_pane(ui),
             SUBFRAMES => self.app.subframes_pane(ui),
+            STITCH => self.app.stitch_pane(ui),
             LINE_PROFILE => {
                 content_frame().show(ui, |ui| self.app.line_profile_pane(ui));
             }
@@ -342,6 +346,7 @@ impl VwApp {
             SKY => &mut self.sky.open,
             COMPARE => &mut self.compare.open,
             SUBFRAMES => &mut self.subframes.open,
+            STITCH => &mut self.stitch.open,
             LINE_PROFILE => &mut self.line_profile.open,
             ROI_GRAPH => &mut self.roi_graph.open,
             _ => &mut self.map.open,

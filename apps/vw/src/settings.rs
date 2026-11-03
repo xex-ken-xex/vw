@@ -2696,6 +2696,82 @@ impl SubframesSettings {
     }
 }
 
+/// 貼り合わせの重なった所の混ぜ方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StitchBlend {
+    /// 縁に近いほど薄くして重ねる。
+    #[default]
+    Feather,
+    /// 後の画像を上に置くだけ。
+    Top,
+}
+
+impl StitchBlend {
+    pub const ALL: [StitchBlend; 2] = [StitchBlend::Feather, StitchBlend::Top];
+
+    pub fn blend(self) -> vw_compare::mosaic::Blend {
+        match self {
+            StitchBlend::Feather => vw_compare::mosaic::Blend::Feather,
+            StitchBlend::Top => vw_compare::mosaic::Blend::Top,
+        }
+    }
+}
+
+/// 画像の貼り合わせ（`[stitch]`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StitchSettings {
+    pub blend: StitchBlend,
+    /// 写真（8bit）の明るさを重なった所でそろえる。計測の値（FITS や 16bit）はそろえない。
+    pub match_brightness: bool,
+    /// 小さいほうの画像の面積のこの割合（%）以上が重なる画像を、同じ所を写したものとみなす。
+    pub same_area_percent: f32,
+    /// 出す画像の画素の数の上限（百万画素）。超えたら縮めて出す。
+    pub max_megapixels: f32,
+}
+
+impl Default for StitchSettings {
+    fn default() -> Self {
+        Self {
+            blend: StitchBlend::Feather,
+            match_brightness: true,
+            same_area_percent: 80.0,
+            max_megapixels: 100.0,
+        }
+    }
+}
+
+impl StitchSettings {
+    pub const SAME_AREA_RANGE: std::ops::RangeInclusive<f32> = 50.0..=100.0;
+    pub const MEGAPIXELS_RANGE: std::ops::RangeInclusive<f32> = 1.0..=2000.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("stitch");
+        let mut within = |key: &str, range: std::ops::RangeInclusive<f32>, default: f32| {
+            let message = format!("must be {} to {}", range.start(), range.end());
+            r.get_valid(key, |v: &f32| range.contains(v), &message)
+                .unwrap_or(default)
+        };
+        let same_area_percent = within(
+            "same_area_percent",
+            Self::SAME_AREA_RANGE,
+            d.same_area_percent,
+        );
+        let max_megapixels = within("max_megapixels", Self::MEGAPIXELS_RANGE, d.max_megapixels);
+        Self {
+            blend: r.get("blend").unwrap_or(d.blend),
+            match_brightness: r.get("match_brightness").unwrap_or(d.match_brightness),
+            same_area_percent,
+            max_megapixels,
+        }
+    }
+
+    pub fn max_pixels(&self) -> usize {
+        (f64::from(self.max_megapixels) * 1e6) as usize
+    }
+}
+
 /// 形式に反したファイルを、分かる範囲で補って読む。既定はすべて OFF。
 /// 読めないときはログに、どの項目を ON にすれば読めるかを出す。
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -2745,6 +2821,7 @@ pub struct Settings {
     pub map: MapSettings,
     pub sky: SkySettings,
     pub subframes: SubframesSettings,
+    pub stitch: StitchSettings,
     pub repair: Repair,
     pub slot_bar: SlotBar,
     pub keys: Keymap,
@@ -2818,6 +2895,7 @@ impl Settings {
         let map = MapSettings::read(&mut r);
         let sky = SkySettings::read(&mut r);
         let subframes = SubframesSettings::read(&mut r);
+        let stitch = StitchSettings::read(&mut r);
         let repair = Repair::read(&mut r);
         let slot_bar = read_slot_bar(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
@@ -2858,6 +2936,7 @@ impl Settings {
                 map,
                 sky,
                 subframes,
+                stitch,
                 repair,
                 slot_bar,
                 keys,

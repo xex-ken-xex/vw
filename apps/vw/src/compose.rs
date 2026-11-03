@@ -68,7 +68,11 @@ pub fn split(path: &Path) -> Option<Files> {
 }
 
 /// 合成を指すパスの、画面に出す名前（「R 1-SII + G 2-Ha + B 3-OIII」）。合成でなければ `None`。
+/// 貼り合わせた画像（[`crate::stitch`]）の名前もここで返す（名前を出す所が 1 つで済むように）。
 pub fn title(path: &Path) -> Option<String> {
+    if let Some(t) = crate::stitch::title(path) {
+        return Some(t);
+    }
     let files = split(path)?;
     let parts: Vec<String> = files
         .iter()
@@ -392,12 +396,12 @@ fn wcs_placement(reference: &VwImage, other: &VwImage) -> Option<Placement> {
     ]))
 }
 
-fn flipped(m: &Metadata) -> bool {
+pub(crate) fn flipped(m: &Metadata) -> bool {
     m.get(vw_fits::GROUP, vw_fits::ROWS) == Some(vw_fits::ROWS_FLIPPED)
 }
 
 /// FITS のカードを引く。画像の HDU のもの（後ろの見出し）を先に見る。
-fn lookup(m: &Metadata) -> impl Fn(&str) -> Option<String> + '_ {
+pub(crate) fn lookup(m: &Metadata) -> impl Fn(&str) -> Option<String> + '_ {
     move |key| {
         m.entries
             .iter()

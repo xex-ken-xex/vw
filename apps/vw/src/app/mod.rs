@@ -237,6 +237,7 @@ pub struct VwApp {
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
     subframes: crate::subframes_window::SubframesWindow,
+    stitch: crate::stitch_window::StitchWindow,
     compare: crate::compare::CompareWindow,
     compare_dialog: Option<compare_dialog::CompareDialog>,
     similar: similar::Similar,
@@ -839,6 +840,7 @@ impl VwApp {
             map: Default::default(),
             sky: Default::default(),
             subframes: Default::default(),
+            stitch: Default::default(),
             compare: Default::default(),
             compare_dialog: None,
             similar: Default::default(),
@@ -1132,6 +1134,7 @@ impl VwApp {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
             }
             Action::ToggleSubframes => self.subframes.open = !self.subframes.open,
+            Action::StitchImages => self.stitch.open = !self.stitch.open,
             Action::UndoPosition => self.undo(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowSystemInfo => self.display.info_open = true,
@@ -1384,6 +1387,7 @@ impl eframe::App for VwApp {
         self.sky_tick();
         self.compare.forget_while_closed();
         self.subframes.forget_while_closed();
+        self.stitch.forget_while_closed();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         self.qr_ui();
@@ -1566,6 +1570,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
         Action::ToggleSubframes => "Subframes",
+        Action::StitchImages => "Stitch images...",
         other => other.title(),
     }
 }

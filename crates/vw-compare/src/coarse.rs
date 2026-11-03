@@ -190,26 +190,9 @@ fn phase_correlate(fft: &Fft2, a: &[f32], b: &[f32]) -> (f64, f64, f64) {
     correlate_spectra(fft, &fa, &fb)
 }
 
-fn correlate_spectra(fft: &Fft2, fa: &[Complex32], fb: &[Complex32]) -> (f64, f64, f64) {
-    let cross: Vec<Complex32> = fa
-        .iter()
-        .zip(fb)
-        .map(|(a, b)| {
-            let c = b * a.conj();
-            let norm = c.norm();
-            if norm > 1e-12 {
-                c / norm
-            } else {
-                Complex32::new(0.0, 0.0)
-            }
-        })
-        .collect();
+pub(crate) fn correlate_spectra(fft: &Fft2, fa: &[Complex32], fb: &[Complex32]) -> (f64, f64, f64) {
+    let surface = correlation_surface(fft, fa, fb);
     let (w, h) = (fft.width, fft.height);
-    let surface: Vec<f32> = fft
-        .inverse(&cross)
-        .iter()
-        .map(|c| c.re / (w * h) as f32)
-        .collect();
     let (best, &peak) = surface
         .iter()
         .enumerate()
@@ -247,10 +230,32 @@ fn correlate_spectra(fft: &Fft2, fa: &[Complex32], fb: &[Complex32]) -> (f64, f6
     )
 }
 
+/// 位相相関の面（`fft` の大きさ）。山の位置がずれ、高さが確かさ（1 で完全に一致）。
+fn correlation_surface(fft: &Fft2, fa: &[Complex32], fb: &[Complex32]) -> Vec<f32> {
+    let cross: Vec<Complex32> = fa
+        .iter()
+        .zip(fb)
+        .map(|(a, b)| {
+            let c = b * a.conj();
+            let norm = c.norm();
+            if norm > 1e-12 {
+                c / norm
+            } else {
+                Complex32::new(0.0, 0.0)
+            }
+        })
+        .collect();
+    let (w, h) = (fft.width, fft.height);
+    fft.inverse(&cross)
+        .iter()
+        .map(|c| c.re / (w * h) as f32)
+        .collect()
+}
+
 /// 2 次元の FFT（行ごと、列ごと）。
-struct Fft2 {
-    width: usize,
-    height: usize,
+pub(crate) struct Fft2 {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
     rows: Arc<dyn Fft<f32>>,
     cols: Arc<dyn Fft<f32>>,
     rows_inv: Arc<dyn Fft<f32>>,
@@ -258,7 +263,7 @@ struct Fft2 {
 }
 
 impl Fft2 {
-    fn new(width: usize, height: usize) -> Self {
+    pub(crate) fn new(width: usize, height: usize) -> Self {
         let mut planner = FftPlanner::new();
         Self {
             width,
@@ -270,12 +275,12 @@ impl Fft2 {
         }
     }
 
-    fn forward(&self, data: &[f32]) -> Vec<Complex32> {
+    pub(crate) fn forward(&self, data: &[f32]) -> Vec<Complex32> {
         let c: Vec<Complex32> = data.iter().map(|&v| Complex32::new(v, 0.0)).collect();
         self.run(c, false)
     }
 
-    fn inverse(&self, data: &[Complex32]) -> Vec<Complex32> {
+    pub(crate) fn inverse(&self, data: &[Complex32]) -> Vec<Complex32> {
         self.run(data.to_vec(), true)
     }
 

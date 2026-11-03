@@ -36,6 +36,18 @@ pub struct Item {
     pub object: Option<String>,
     /// `DATE-OBS`（撮った日時）。
     pub taken: Option<String>,
+    pub kind: Kind,
+}
+
+/// 何の枠か。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// フォルダの中のファイル。
+    File,
+    /// 貼り合わせた画像の外枠。
+    Stitched,
+    /// 貼り合わせに使った 1 枚（外枠の中に細い線で出す）。
+    Part,
 }
 
 impl Item {
@@ -51,6 +63,7 @@ impl Item {
             object: text("OBJECT"),
             taken: text("DATE-OBS"),
             path,
+            kind: Kind::File,
         })
     }
 }
@@ -93,6 +106,8 @@ enum Selected {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Open(PathBuf),
+    /// 貼り合わせた画像をスロットに出す。
+    ShowStitched(PathBuf),
 }
 
 /// 星図を描くのに要るもの。
@@ -106,6 +121,8 @@ pub struct Inputs<'a> {
     pub order: SortOrder,
     /// アクティブなスロットの画像。
     pub active: Option<&'a Path>,
+    /// フォルダのほかに出す枠（貼り合わせた画像）。
+    pub extra: &'a [Item],
 }
 
 pub struct SkyWindow {
@@ -115,6 +132,8 @@ pub struct SkyWindow {
     /// 背景の星と星座。初めて開いたときに読む。
     background: Option<Background>,
     items: Vec<Item>,
+    /// `items` と、フォルダのほかに出す枠。描くたびに作り直す。
+    shown: Vec<Item>,
     source: Option<Source>,
     scan: Option<Scan>,
     /// 読み終えたら、枠が全部入るように合わせる。
@@ -132,6 +151,7 @@ impl Default for SkyWindow {
             view: None,
             background: None,
             items: Vec::new(),
+            shown: Vec::new(),
             source: None,
             scan: None,
             fit_when_done: true,
@@ -172,6 +192,10 @@ impl SkyWindow {
         let ctx = ui.ctx().clone();
         self.follow_source(&ctx, inputs);
         self.receive_scan();
+        if self.shown.len() != self.items.len() + inputs.extra.len() && !inputs.extra.is_empty() {
+            self.fit_when_done = true;
+        }
+        self.shown = self.items.iter().chain(inputs.extra).cloned().collect();
         egui::Panel::top("sky_bar").show(ui, |ui| self.bar(ui, inputs));
         let rest = ui.available_rect_before_wrap();
         ui.scope_builder(egui::UiBuilder::new().max_rect(rest), |ui| {
@@ -261,7 +285,7 @@ impl SkyWindow {
         let view = self.view.get_or_insert_with(View::default);
         if self.fit_when_done && self.scan.is_none() {
             let points: Vec<Radec> = self
-                .items
+                .shown
                 .iter()
                 .flat_map(|i| std::iter::once(i.sky.center).chain(i.sky.outline.iter().copied()))
                 .collect();
@@ -280,13 +304,13 @@ impl SkyWindow {
 
         let active = inputs.active.map(crate::frames::file_of);
         let shapes: Vec<Shape> = self
-            .items
+            .shown
             .iter()
             .map(|item| Shape::of(item, &view, rect))
             .collect();
         let hover = response.hover_pos();
         let hits: Vec<usize> = hover.map(|p| hits_at(&shapes, p)).unwrap_or_default();
-        for (i, (item, shape)) in self.items.iter().zip(&shapes).enumerate() {
+        for (i, (item, shape)) in self.shown.iter().zip(&shapes).enumerate() {
             let chosen = match &self.selected {
                 Some(Selected::One(s)) => *s == i,
                 Some(Selected::Many(v)) => v.contains(&i),
@@ -311,7 +335,7 @@ impl SkyWindow {
         if let Some(&first) = hits.first() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             let tip = match hits.as_slice() {
-                [_] => file_name(&self.items[first].path),
+                [_] => file_name(&self.shown[first].path),
                 many => tr1(inputs.lang, "{} images", &many.len().to_string()),
             };
             response.clone().on_hover_text_at_pointer(tip);
@@ -353,7 +377,7 @@ impl SkyWindow {
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| match &selected {
                     Selected::One(i) => {
-                        let item = self.items[*i].clone();
+                        let item = self.shown[*i].clone();
                         command = self.card(ui, inputs, &item);
                     }
                     Selected::Many(members) => {
@@ -363,7 +387,7 @@ impl SkyWindow {
                             .show(ui, |ui| {
                                 for &i in members {
                                     if ui
-                                        .selectable_label(false, file_name(&self.items[i].path))
+                                        .selectable_label(false, file_name(&self.shown[i].path))
                                         .clicked()
                                     {
                                         choose = Some(i);
@@ -381,6 +405,17 @@ impl SkyWindow {
 
     fn card(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>, item: &Item) -> Option<Command> {
         let lang = inputs.lang;
+        if item.kind == Kind::Stitched {
+            // ほかの札は縮めた絵の幅（180）で広がるので、絵のないこの札も同じ幅にそろえる。
+            ui.set_min_width(180.0);
+            ui.strong(file_name(&item.path));
+            ui.weak(sky_chart::radec_text(item.sky.center));
+            ui.weak(tr(lang, "Range of the stitched image"));
+            return ui
+                .button(tr(lang, "Show in a slot"))
+                .clicked()
+                .then(|| Command::ShowStitched(item.path.clone()));
+        }
         self.thumb
             .show(ui, lang, inputs.registry, &item.path, 180.0);
         ui.strong(file_name(&item.path));
@@ -496,18 +531,28 @@ fn draw_shape(
     hovered: bool,
     rect: Rect,
 ) {
+    // 貼り合わせた画像の外枠は太く、使った 1 枚ずつはその中に細く描く。
+    let base = match item.kind {
+        Kind::File => 1.5,
+        Kind::Stitched => 2.5,
+        Kind::Part => 0.8,
+    };
     let width = if emphasized {
-        3.0
+        base + 1.5
     } else if hovered {
-        2.0
+        base + 0.5
     } else {
-        1.5
+        base
     };
     match shape {
         Shape::Outline(points) => {
             marks::outline(painter, points, true, color, width, !item.sky.certain);
             let b = bounds(points);
-            if emphasized || hovered || b.width().max(b.height()) >= TAGGED_SIDE {
+            let tagged = match item.kind {
+                Kind::Part => false,
+                _ => b.width().max(b.height()) >= TAGGED_SIDE,
+            };
+            if emphasized || hovered || tagged {
                 marks::name_tag(painter, b, rect, &file_name(&item.path), color);
             }
         }
@@ -707,6 +752,9 @@ fn draw_cursor_position(painter: &egui::Painter, rect: Rect, at: Radec) {
 }
 
 fn file_name(path: &Path) -> String {
+    if let Some(t) = crate::stitch::title(path) {
+        return t;
+    }
     let file = crate::frames::file_of(path);
     file.file_name()
         .unwrap_or_default()

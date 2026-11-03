@@ -86,6 +86,8 @@ mod slideshow;
 mod sort;
 mod spectrum_view;
 mod state;
+mod stitch;
+mod stitch_window;
 mod strip_location;
 mod subframes_window;
 use vw_log::status;

@@ -7,6 +7,7 @@ pub mod align;
 pub mod analysis;
 pub mod coarse;
 pub mod color;
+pub mod mosaic;
 pub mod pairs;
 pub mod plane;
 pub mod refine;

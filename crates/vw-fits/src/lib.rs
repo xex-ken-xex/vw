@@ -19,6 +19,7 @@ mod sky;
 pub mod spectrum;
 pub mod stretch;
 mod tile;
+mod write;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -33,8 +34,9 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 pub use calibration::Calibration;
 use header::Hdu;
 pub use header::is_fits;
-pub use sky::{ImageHeader, Sky, header_of_file, pixel_map, sky};
+pub use sky::{ImageHeader, Sky, header_of_file, pixel_map, sky, wcs_through};
 pub use stretch::Stretch;
+pub use write::encode;
 
 /// 表示の決め方。設定画面で変える。
 #[derive(Debug, Clone, Copy, PartialEq)]

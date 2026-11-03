@@ -104,6 +104,61 @@ pub fn pixel_map(
     ])
 }
 
+/// `lookup` の WCS を、別の画素の並びに置き直したカード（名前, 値）。値は `lookup` と同じく、
+/// 文字のカードも引用符を付けない。
+/// 新しい画素 (x, y)（1 始まり）が、`lookup` の画像の画素 `map · (x, y, 1)`（1 始まり）に当たるとき。
+/// WCS がなければ `None`。
+///
+/// 何枚かを貼り合わせた画像に、もとの 1 枚の WCS を引き継ぐのに使う。画素の並びを 1 次の式で
+/// 動かしただけなら、投影はそのままで CRPIX と CD を書き換えれば同じ空の点を指す。
+pub fn wcs_through(
+    lookup: &dyn Fn(&str) -> Option<String>,
+    map: [[f64; 3]; 2],
+) -> Option<Vec<(String, String)>> {
+    let wcs = Wcs::read(lookup)?;
+    let [[a, b, c], [d, e, f]] = map;
+    let det = a * e - b * d;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    // CRPIX = map · CRPIX'、CD' = CD · M。
+    let (px, py) = (wcs.crpix[0] - c, wcs.crpix[1] - f);
+    let crpix = [(e * px - b * py) / det, (a * py - d * px) / det];
+    let cd = [
+        [
+            wcs.cd[0][0] * a + wcs.cd[0][1] * d,
+            wcs.cd[0][0] * b + wcs.cd[0][1] * e,
+        ],
+        [
+            wcs.cd[1][0] * a + wcs.cd[1][1] * d,
+            wcs.cd[1][0] * b + wcs.cd[1][1] * e,
+        ],
+    ];
+    let code = wcs.projection.code();
+    let number = |v: f64| format!("{v:.15E}");
+    let mut cards = vec![
+        ("CTYPE1".to_owned(), format!("RA---{code}")),
+        ("CTYPE2".to_owned(), format!("DEC--{code}")),
+        ("CRVAL1".to_owned(), number(wcs.crval[0])),
+        ("CRVAL2".to_owned(), number(wcs.crval[1])),
+        ("CRPIX1".to_owned(), number(crpix[0])),
+        ("CRPIX2".to_owned(), number(crpix[1])),
+        ("CD1_1".to_owned(), number(cd[0][0])),
+        ("CD1_2".to_owned(), number(cd[0][1])),
+        ("CD2_1".to_owned(), number(cd[1][0])),
+        ("CD2_2".to_owned(), number(cd[1][1])),
+    ];
+    if wcs.lonpole != 180.0 {
+        cards.push(("LONPOLE".to_owned(), number(wcs.lonpole)));
+    }
+    for key in ["RADESYS", "EQUINOX"] {
+        if let Some(v) = lookup(key) {
+            cards.push((key.to_owned(), v.trim().to_owned()));
+        }
+    }
+    Some(cards)
+}
+
 /// 空の点 `target`（赤経・赤緯、度）が `wcs` の画像で写る画素。`guess` から探す。
 fn pixel_of(wcs: &Wcs, target: [f64; 2], guess: [f64; 2]) -> Option<[f64; 2]> {
     // 空の座標の差を、赤緯の cos を掛けて度の平面にしたもの。
@@ -319,6 +374,19 @@ enum Projection {
     Zea,
 }
 
+impl Projection {
+    /// `CTYPE` の後ろの 3 文字。
+    fn code(self) -> &'static str {
+        match self {
+            Projection::Tan => "TAN",
+            Projection::Sin => "SIN",
+            Projection::Arc => "ARC",
+            Projection::Stg => "STG",
+            Projection::Zea => "ZEA",
+        }
+    }
+}
+
 /// 天頂投影の WCS（論文 Calabretta & Greisen 2002 の式）。
 #[derive(Debug, Clone, PartialEq)]
 struct Wcs {
@@ -460,6 +528,27 @@ mod tests {
             m[0][0] * x + m[0][1] * y + m[0][2],
             m[1][0] * x + m[1][1] * y + m[1][2],
         ]
+    }
+
+    #[test]
+    fn a_wcs_carried_through_a_turn_and_shift_points_at_the_same_sky() {
+        // 新しい画素 (x, y) は、元の画像の (y + 20, −x + 300) に当たる（回して、ずらした並び）。
+        let map = [[0.0, 1.0, 20.0], [-1.0, 0.0, 300.0]];
+        let cards = wcs_through(&lookup(&ORION), map).unwrap();
+        let carried: Vec<(&str, &str)> = cards
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let (old, new) = (
+            Wcs::read(&lookup(&ORION)).unwrap(),
+            Wcs::read(&lookup(&carried)).unwrap(),
+        );
+        for (x, y) in [(1.0, 1.0), (250.0, 30.0), (120.5, 77.0)] {
+            let o = apply(map, x, y);
+            let (want, got) = (old.to_sky(o[0], o[1]).unwrap(), new.to_sky(x, y).unwrap());
+            assert!(close(got, want, 1e-9), "{got:?} {want:?}");
+        }
+        assert!(wcs_through(&lookup(&ORION[..4]), map).is_none());
     }
 
     #[test]

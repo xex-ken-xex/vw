@@ -63,6 +63,10 @@ title: "設定とキーの一覧"
 | | 地図の絵の URL（`map.tile_url`） | 地図の絵（タイル）の取得元。`{z}`・`{x}`・`{y}` をタイルの番号に置き換える | OpenStreetMap |
 | | 地図の出典（`map.attribution`）・リンク（`map.attribution_url`） | 地図の右下に出す出典 | © OpenStreetMap contributors |
 | 表示 | モニタ（`display.monitors`） | モニタごとに描く深さ（8bit・10bit・12bit 以上）と、ディザをかけるか（[8bit より深く表示する](view.html#8bit-より深く表示する10bit12bit-以上)） | 8bit、ディザは切 |
+| 画像の貼り合わせ | 重なりの混ぜ方（`stitch.blend`） | 縁に向けてぼかして重ねる / 後の画像を上に置く（[画像を貼り合わせる](view.html#画像を貼り合わせる)） | 縁に向けてぼかして重ねる |
+| | 写真の明るさをそろえる（`stitch.match_brightness`） | 8bit の写真ごとに明るさに係数を掛け、重なった所でそろえる。16bit や FITS の値は変えない | 有効 |
+| | 同じ所を写した画像（`stitch.same_area_percent`） | 小さいほうの画像のこの割合以上が重なれば同じ所とみなし、1 枚だけ使う | 80 % |
+| | 貼り合わせた画像の上限（`stitch.max_megapixels`） | 超えるときは縮めて出す | 100 百万画素 |
 | キーボードショートカット | 操作ごと（`keys.*`） | [キー操作の一覧](reference.html) を参照 | |
 
 ### キーの割り当てを変える

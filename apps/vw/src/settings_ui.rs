@@ -50,12 +50,13 @@ enum Section {
     Ai,
     Map,
     Sky,
+    Stitch,
     Repair,
     Keys,
 }
 
 impl Section {
-    const ALL: [Section; 23] = [
+    const ALL: [Section; 24] = [
         Section::Appearance,
         Section::Viewer,
         Section::Display,
@@ -77,6 +78,7 @@ impl Section {
         Section::Ai,
         Section::Map,
         Section::Sky,
+        Section::Stitch,
         Section::Repair,
         Section::Keys,
     ];
@@ -104,6 +106,7 @@ impl Section {
             Section::Ai => "AI tags",
             Section::Map => "Map",
             Section::Sky => "Sky chart",
+            Section::Stitch => "Stitching images",
             Section::Repair => "Read files with format errors",
             Section::Keys => "Keyboard shortcuts",
         }
@@ -1109,6 +1112,34 @@ const ITEMS: &[Item] = &[
         widget: sky_approximate_color_widget,
     },
     Item {
+        section: Section::Stitch,
+        key: "stitch.blend",
+        title: "Blending the overlaps",
+        description: "How overlapping images are joined. Feather: each image fades out toward its edges, so seams and small brightness steps do not show. Top: the later image simply covers the earlier one, keeping every pixel as it was taken.",
+        widget: stitch_blend_widget,
+    },
+    Item {
+        section: Section::Stitch,
+        key: "stitch.match_brightness",
+        title: "Match the brightness of photos",
+        description: "Scale the brightness of each 8-bit photo so overlapping images agree (exposure differences between shots). Measured values (16-bit images, FITS) are never changed.",
+        widget: stitch_match_brightness_widget,
+    },
+    Item {
+        section: Section::Stitch,
+        key: "stitch.same_area_percent",
+        title: "Shots of the same area",
+        description: "Images that overlap by at least this share of the smaller image count as shots of the same area. Only one of them is used, and the window lets you choose which (the sharpest is chosen first).",
+        widget: stitch_same_area_widget,
+    },
+    Item {
+        section: Section::Stitch,
+        key: "stitch.max_megapixels",
+        title: "Largest stitched image",
+        description: "Pixel count limit of the stitched image, in megapixels. A larger result is scaled down to fit; it is never scaled up.",
+        widget: stitch_max_megapixels_widget,
+    },
+    Item {
         section: Section::Repair,
         key: "repair.tiff_strip_byte_counts",
         title: "TIFF: missing StripByteCounts",
@@ -1290,6 +1321,46 @@ fn face_known_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language)
 
 fn face_unknown_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     hex_color_widget(&mut s.ai.face_unknown_color, Color32::YELLOW, ui)
+}
+
+fn stitch_blend_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.stitch.blend;
+    ui.horizontal(|ui| {
+        for blend in crate::settings::StitchBlend::ALL {
+            ui.radio_value(
+                &mut s.stitch.blend,
+                blend,
+                tr(lang, crate::stitch::blend_title(blend.blend())),
+            );
+        }
+    });
+    s.stitch.blend != before
+}
+
+fn stitch_match_brightness_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.stitch.match_brightness, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn stitch_same_area_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    use crate::settings::StitchSettings as S;
+    percent_widget(&mut s.stitch.same_area_percent, S::SAME_AREA_RANGE, ui)
+}
+
+fn stitch_max_megapixels_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::settings::StitchSettings as S;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::DragValue::new(&mut s.stitch.max_megapixels)
+                .range(S::MEGAPIXELS_RANGE)
+                .speed(1.0)
+                .max_decimals(0),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "megapixels"));
+    });
+    changed
 }
 
 fn repair_tiff_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

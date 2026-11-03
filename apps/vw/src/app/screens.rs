@@ -487,6 +487,7 @@ impl VwApp {
             registry: &registry,
             order: settings.tree.order(),
             active: active.as_deref(),
+            extra: self.stitch.sky_items(),
         };
         let commands = self.sky.ui(ui, &inputs);
         for problem in self.sky.take_problems() {
@@ -495,6 +496,7 @@ impl VwApp {
         for command in commands {
             match command {
                 crate::sky_window::Command::Open(path) => self.open_and_select(&ctx, path),
+                crate::sky_window::Command::ShowStitched(path) => self.show_stitched(path),
             }
         }
     }
@@ -522,6 +524,51 @@ impl VwApp {
                 crate::subframes_window::Command::FlagBad(paths) => self.flag_rejected(&paths),
             }
         }
+    }
+
+    /// 貼り合わせの欄。
+    pub(super) fn stitch_pane(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let settings = &self.settings.settings;
+        let registry = self.loader.registry().clone();
+        let shown: Vec<PathBuf> = self
+            .slots
+            .iter()
+            .filter_map(|s| s.shown().map(|s| s.path.clone()))
+            .collect();
+        let inputs = crate::stitch_window::Inputs {
+            lang: self.lang(),
+            folder: self.current.as_deref(),
+            registry: &registry,
+            order: settings.tree.order(),
+            settings: &settings.stitch,
+            shown: &shown,
+        };
+        let commands = self.stitch.ui(ui, &inputs);
+        for problem in self.stitch.take_problems() {
+            self.log.error(format!("Stitching: {problem}"));
+        }
+        for note in self.stitch.take_notes() {
+            self.log.info(note);
+        }
+        for command in commands {
+            match command {
+                crate::stitch_window::Command::Open(path) => self.open_and_select(&ctx, path),
+                crate::stitch_window::Command::Show(path) => self.show_stitched(path),
+            }
+        }
+    }
+
+    /// 貼り合わせた画像を、空いたスロット（なければ新しいスロット）に出す。今のスロットの画像を
+    /// 置き換えないのは、貼り合わせる前の画像と見比べたいことが多いため。
+    fn show_stitched(&mut self, path: PathBuf) {
+        let index = self.push_slot();
+        let slot = &mut self.slots[index];
+        slot.sequence = None;
+        slot.origin = crate::viewer::Origin::Free;
+        self.active = index;
+        let full = self.cell_needs_full();
+        self.start_load(index, path, full);
     }
 
     fn flag_rejected(&mut self, paths: &[PathBuf]) {

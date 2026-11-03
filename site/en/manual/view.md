@@ -157,6 +157,20 @@ ZIP, 7z and tar files open like folders. These kinds are supported:
 - RAR, LZH, CAB, ISO and split archives (`.7z.001` etc.) cannot be opened. If a folder has one, the log shows it in yellow with its full path
 - Links inside tar files (symbolic and hard links) are not extracted
 
+## Stitch images
+
+Join several overlapping images (a landscape shot in steps, a mosaic of the sky, microscope tiles) into one. Open the window with **Tools → Stitch images...**.
+
+- **What to stitch**: with **Chosen images**, tick images in the list or press **Choose the images in the slots**, then **Align**. With **All images in the folder**, every image of the folder is stitched automatically each time you open a folder
+- **How images are placed**: the overlapping parts are matched for shift, rotation and scale. FITS images that both have a WCS (sky coordinates) are placed by it, so frames taken turned by 180° also fit
+- **Shots of the same area**: images of nearly the same area share one row, where you choose which to use. The best one (sharpness for photos, star size FWHM for astronomy) is chosen first, and the preview follows your choice at once
+- **Seam check**: the table at the bottom shows, for each seam, the overlap, correlation, offset in pixels, brightness difference, sharpness ratio and a verdict (Clean / Seam may show / Misaligned)
+- **Images that were not placed**: images with no overlap found are listed at the bottom. Drag one onto the preview where it roughly belongs and it is matched from there
+- **Result**: **Show in a slot** lets you view and measure it like any image. The **Stitching** group of the metadata lists where each source went (position, rotation, scale, how it was placed). With a WCS, the range appears on the [sky chart](astro.html#see-what-you-captured-on-a-sky-chart)
+- **Saving**: a file is written only when you pick a place with **Save as...**. PNG, TIFF and FITS keep the original bit depth. The placements go into the PNG Description, the TIFF ImageDescription or the FITS HISTORY, and FITS also gets the WCS
+
+The brightness of photos is matched in the overlaps (16-bit and FITS values are never changed). Blending and the other options are under **Stitching images** in the settings.
+
 ## Show more than 8 bits (10-bit, 12-bit or more)
 
 On a monitor that can show deep gradation, 16-bit images (PNG, TIFF, FITS, developed RAW...) can be drawn with 10-bit or 12-bit or more gradation.

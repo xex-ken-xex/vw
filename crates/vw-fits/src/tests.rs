@@ -758,3 +758,53 @@ fn velocity_and_wavelength_axes_are_kept_in_base_units() {
     let other = axis("PIXEL", "");
     assert!(matches!(other.kind, AxisKind::Other { .. }));
 }
+
+#[test]
+fn a_written_image_reads_back_with_its_values_wcs_and_history() {
+    let img = VwImage::new(
+        2,
+        2,
+        ColorModel::GrayAlpha,
+        PixelData::U16(vec![10, 65535, 4095, 65535, 7, 0, 1, 65535]),
+    )
+    .unwrap();
+    let cards = vec![
+        ("CTYPE1".to_owned(), "RA---TAN".to_owned()),
+        ("CRPIX1".to_owned(), "1.5E0".to_owned()),
+    ];
+    let bytes = crate::encode(&img, &cards, &["made from a.fits and b.fits".to_owned()]).unwrap();
+    assert_eq!(bytes.len() % crate::header::BLOCK, 0);
+    let back = decode(&bytes);
+    assert_eq!(
+        (back.width, back.height, back.color),
+        (2, 2, ColorModel::Gray)
+    );
+    let PixelData::F32(v) = &back.data else {
+        panic!("not float: {:?}", back.color);
+    };
+    // 3 つ目の画素はアルファが 0 なので写っていない。
+    assert_eq!(&v[..2], &[10.0, 4095.0]);
+    assert!(v[2].is_nan());
+    assert_eq!(v[3], 1.0);
+    let lookup = |key: &str| {
+        back.metadata
+            .entries
+            .iter()
+            .find(|(_, k, _)| k == key)
+            .map(|e| e.2.clone())
+    };
+    assert_eq!(
+        lookup("CTYPE1")
+            .as_deref()
+            .map(|v| v.trim_matches('\'').trim()),
+        Some("RA---TAN")
+    );
+    assert!(
+        back.metadata
+            .entries
+            .iter()
+            .any(|(_, _, v)| v.contains("made from a.fits")),
+        "{:?}",
+        back.metadata
+    );
+}

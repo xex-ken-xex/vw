@@ -43,18 +43,21 @@ impl VwApp {
             |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
         let frame = frames::split(&shown.path);
         let mut file_rows = vec![
-            // 合成は元のファイルが色ごとにあるので、それぞれの名前はメタデータの合成の見出しに出し、
-            // ここにはフォルダを出す。
+            // 合成と貼り合わせは元のファイルが何枚もあるので、それぞれの名前はメタデータの
+            // 見出しに出し、ここにはフォルダを出す。
             row(
                 PATH,
-                match crate::compose::split(&shown.path) {
-                    Some(_) => shown
+                if crate::compose::split(&shown.path).is_some()
+                    || crate::stitch::is_stitched(&shown.path)
+                {
+                    shown
                         .path
                         .parent()
                         .unwrap_or(&shown.path)
                         .display()
-                        .to_string(),
-                    None => frames::file_of(&shown.path).display().to_string(),
+                        .to_string()
+                } else {
+                    frames::file_of(&shown.path).display().to_string()
                 },
             ),
             row("Size", format!("{} bytes", info.file_size)),
@@ -477,7 +480,10 @@ const PATH_ID: &str = "File/Path";
 /// 形式のメタデータの名前は、ファイルに書かれたとおり英語で出す。訳すのは vw が作る
 /// 撮影地点のグループだけ（EXIF の Color などを、ほかの訳語で置き換えてしまわないため）。
 fn shown_name(lang: crate::settings::Language, group: &str, name: &str) -> String {
-    if group == vw_core::exif::LOCATION {
+    if group == crate::stitch::GROUP {
+        // 元のファイルの名前は訳の表にないので、そのまま出る。
+        crate::i18n::tr_text(lang, name)
+    } else if group == vw_core::exif::LOCATION {
         // 英語の "Location" はデータセットの一覧で「場所（フォルダ）」に訳しているので、
         // 訳の表を引かずにここで決める。
         match (lang, name == group) {
@@ -493,6 +499,15 @@ fn shown_name(lang: crate::settings::Language, group: &str, name: &str) -> Strin
 fn shown_value(lang: crate::settings::Language, group: &str, name: &str, value: &str) -> String {
     if group == vw_core::exif::LOCATION && name == crate::labels::POSITION_FROM {
         crate::i18n::tr_text(lang, value)
+    } else if group == crate::stitch::GROUP {
+        match value.split_once(crate::stitch::HOW_MARK) {
+            Some((numbers, how)) => format!(
+                "{numbers}{}{}",
+                crate::stitch::HOW_MARK,
+                crate::i18n::tr_text(lang, how)
+            ),
+            None => crate::i18n::tr_text(lang, value),
+        }
     } else {
         value.to_owned()
     }
