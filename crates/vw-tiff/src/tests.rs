@@ -702,3 +702,50 @@ fn twelve_bit_gray_metadata_says_twelve_bits() {
     let img = decode(&fixture("gray12_strips_le.tif"));
     assert_eq!(img.metadata.get("TIFF", "Bits per sample"), Some("12"));
 }
+
+#[test]
+fn written_images_read_back_with_their_values_and_description() {
+    let gray16 =
+        VwImage::new(3, 1, ColorModel::Gray, PixelData::U16(vec![0, 4095, 65535])).unwrap();
+    let rgba8 = VwImage::new(1, 1, ColorModel::Rgba, PixelData::U8(vec![1, 2, 3, 0])).unwrap();
+    let float = VwImage::new(2, 1, ColorModel::Gray, PixelData::F32(vec![-1.5, f32::NAN])).unwrap();
+    let gray_alpha =
+        VwImage::new(1, 1, ColorModel::GrayAlpha, PixelData::U8(vec![9, 255])).unwrap();
+    for (img, color) in [
+        (&gray16, ColorModel::Gray),
+        (&rgba8, ColorModel::Rgba),
+        (&float, ColorModel::Gray),
+        (&gray_alpha, ColorModel::Rgba),
+    ] {
+        let bytes = crate::encode(img, "made by a test").unwrap();
+        let back = TiffPlugin.decode(&bytes).unwrap();
+        assert_eq!(
+            (back.width, back.height, back.color),
+            (img.width, img.height, color)
+        );
+        assert!(
+            back.metadata
+                .entries
+                .iter()
+                .any(|(_, _, v)| v == "made by a test"),
+            "{:?}",
+            back.metadata
+        );
+    }
+    let back = TiffPlugin
+        .decode(&crate::encode(&gray16, "").unwrap())
+        .unwrap();
+    assert!(matches!(&back.data, PixelData::U16(v) if v == &[0, 4095, 65535]));
+    let back = TiffPlugin
+        .decode(&crate::encode(&float, "").unwrap())
+        .unwrap();
+    let PixelData::F32(v) = back.data else {
+        panic!("not float");
+    };
+    assert_eq!(v[0], -1.5);
+    assert!(v[1].is_nan());
+    let back = TiffPlugin
+        .decode(&crate::encode(&gray_alpha, "").unwrap())
+        .unwrap();
+    assert!(matches!(&back.data, PixelData::U8(v) if v == &[9, 9, 9, 255]));
+}

@@ -12,6 +12,9 @@
 
 mod layout;
 mod odd_bits;
+mod write;
+
+pub use write::encode;
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
