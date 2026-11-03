@@ -3,7 +3,8 @@
 //! WCS は天頂投影のうち、撮影と公開データでほぼすべてを占める TAN と、SIN・ARC・STG・ZEA を
 //! 読む。光学系の歪みの多項式（`-SIP` と `TPV`）も当てる。星図の枠では差が見えないほど小さいが、
 //! 十字で画素の空の座標を出すと、画像の端で数画素ずれるため。
-//! CAR や AIT のような全天の投影は、1 枚の写真には使われないので読まない。
+//! 全天図の投影 CAR・AIT・MOL と、銀河座標（GLON・GLAT）も読む。座標は内側で赤経・赤緯（ICRS）に
+//! 直すので、星図・色の合成・貼り合わせは座標系を気にしなくてよい。
 
 use std::f64::consts::PI;
 use std::io::{BufRead, BufReader, Read};
@@ -19,6 +20,9 @@ pub struct Sky {
     pub outline: Vec<[f64; 2]>,
     /// ヘッダの WCS から求めたか。`false` なら架台の向きと焦点距離からの見積もり。
     pub certain: bool,
+    /// 半球より広い範囲（全天図や、天球を一周する帯）。縁を一回りしても枠にならないので、
+    /// `outline` は空。
+    pub wide: bool,
 }
 
 /// 縁の 1 辺を何等分して点を取るか。広い画角で縁が曲がって見えるように。
@@ -39,11 +43,14 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
     if let Some(wcs) = Wcs::read(&lookup) {
         let outline = outline(size, &|x, y| wcs.to_sky(x, y));
         let center = wcs.to_sky((size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0)?;
-        if outline.len() == 4 * EDGE_STEPS {
+        let whole = outline.len() == 4 * EDGE_STEPS;
+        if whole || wcs.projection.theta0() == 0.0 {
+            let wide = !whole || spans_more_than_a_hemisphere(size, center, &wcs);
             return Some(Sky {
                 center,
-                outline,
+                outline: if wide { Vec::new() } else { outline },
                 certain: true,
+                wide,
             });
         }
     }
@@ -51,15 +58,18 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
     let outline = match field_scale(&lookup) {
         Some([sx, sy]) => {
             // 回転は分からないので北を上（赤経は左が東）にする。
-            let wcs = Wcs {
-                crpix: [(size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0],
-                crval: center,
-                cd: [[-sx, 0.0], [0.0, sy]],
-                projection: Projection::Tan,
-                lonpole: 180.0,
-                distortion: Distortion::None,
-            };
-            outline(size, &|x, y| wcs.to_sky(x, y))
+            match Wcs::new(
+                [(size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0],
+                center,
+                [[-sx, 0.0], [0.0, sy]],
+                Projection::Tan,
+                (180.0, 90.0),
+                Distortion::None,
+                Frame::Equatorial,
+            ) {
+                Some(wcs) => outline(size, &|x, y| wcs.to_sky(x, y)),
+                None => Vec::new(),
+            }
         }
         None => Vec::new(),
     };
@@ -67,6 +77,19 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
         center,
         outline,
         certain: false,
+        wide: false,
+    })
+}
+
+/// 画像の中に、中心から 90° より離れた点があるか。縁と中を 16 x 16 の格子で調べる。
+fn spans_more_than_a_hemisphere(size: [f64; 2], center: [f64; 2], wcs: &Wcs) -> bool {
+    const STEPS: usize = 16;
+    (0..=STEPS).any(|i| {
+        (0..=STEPS).any(|j| {
+            let x = 0.5 + size[0] * i as f64 / STEPS as f64;
+            let y = 0.5 + size[1] * j as f64 / STEPS as f64;
+            wcs.to_sky(x, y).is_some_and(|p| angle(center, p) > 90.0)
+        })
     })
 }
 
@@ -87,6 +110,17 @@ pub fn pixel_map(
         .find_map(|prefix| Some([num(&format!("{prefix}1"))?, num(&format!("{prefix}2"))?]))?;
     let center = [(size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0];
     let (from, to) = (Wcs::read(reference)?, Wcs::read(other)?);
+    if from == to {
+        // 同じ格子（全天図を同じ WCS で作った組など）。式を解かずにそのまま重ねる。
+        return Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+    }
+    if [reference, other]
+        .iter()
+        .any(|lookup| sky(lookup).is_some_and(|s| s.wide))
+    {
+        // 全天図では 1 次の式に近づけられない（画素ごとに解くと重い）ので、位置合わせをしない。
+        return None;
+    }
     // 中心から縦横に画像の 4 分の 1 ずつ離れた点で、1 次の式の傾きを決める。
     let step = (size[0].max(size[1]) / 4.0).max(1.0);
     let mut guess = center;
@@ -139,10 +173,12 @@ pub fn wcs_through(
     // 歪みの多項式は引き継がない。SIP は元の画素の並びの CRPIX からの式なので、貼り合わせで
     // 動かした画素には書き直せない。1 枚の写真の範囲では、星図の枠や重ね合わせには差が見えない。
     let code = wcs.projection.code();
+    let (lon, lat) = wcs.frame.prefixes();
+    let dashes = |prefix: &str| format!("{prefix:-<5}{code}");
     let number = |v: f64| format!("{v:.15E}");
     let mut cards = vec![
-        ("CTYPE1".to_owned(), format!("RA---{code}")),
-        ("CTYPE2".to_owned(), format!("DEC--{code}")),
+        ("CTYPE1".to_owned(), dashes(lon)),
+        ("CTYPE2".to_owned(), dashes(lat)),
         ("CRVAL1".to_owned(), number(wcs.crval[0])),
         ("CRVAL2".to_owned(), number(wcs.crval[1])),
         ("CRPIX1".to_owned(), number(crpix[0])),
@@ -152,9 +188,9 @@ pub fn wcs_through(
         ("CD2_1".to_owned(), number(cd[1][0])),
         ("CD2_2".to_owned(), number(cd[1][1])),
     ];
-    if wcs.lonpole != 180.0 {
-        cards.push(("LONPOLE".to_owned(), number(wcs.lonpole)));
-    }
+    // 既定の値は投影と基準点で変わるので、いつも書く。
+    cards.push(("LONPOLE".to_owned(), number(wcs.lonpole)));
+    cards.push(("LATPOLE".to_owned(), number(wcs.latpole)));
     for key in ["RADESYS", "EQUINOX"] {
         if let Some(v) = lookup(key) {
             cards.push((key.to_owned(), v.trim().to_owned()));
@@ -188,15 +224,30 @@ impl ImageSky {
     }
 }
 
-impl vw_core::sky::SkyMap for ImageSky {
-    fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
-        // 表示の画素（0 始まり、上が 0）を FITS の画素（1 始まり、最初の行が y = 1）にする。
+impl ImageSky {
+    /// 表示の画素（0 始まり、上が 0）を FITS の画素（1 始まり、最初の行が y = 1）にする。
+    fn fits_pixel(&self, x: f64, y: f64) -> (f64, f64) {
         let fits_y = if self.flipped {
             self.height - y
         } else {
             y + 1.0
         };
-        self.wcs.to_sky(x + 1.0, fits_y)
+        (x + 1.0, fits_y)
+    }
+}
+
+impl vw_core::sky::SkyMap for ImageSky {
+    fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        let (x, y) = self.fits_pixel(x, y);
+        self.wcs.to_sky(x, y)
+    }
+
+    fn galactic(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        if self.wcs.frame != Frame::Galactic {
+            return None;
+        }
+        let (x, y) = self.fits_pixel(x, y);
+        self.wcs.to_frame(x, y)
     }
 }
 
@@ -450,9 +501,29 @@ enum Projection {
     Arc,
     Stg,
     Zea,
+    /// 緯度経度の格子（plate carrée）。
+    Car,
+    /// ハンメル・エイトフ。
+    Ait,
+    /// モルワイデ。
+    Mol,
 }
 
 impl Projection {
+    fn read(code: &str) -> Option<Self> {
+        Some(match code {
+            "TAN" | "TPV" => Projection::Tan,
+            "SIN" => Projection::Sin,
+            "ARC" => Projection::Arc,
+            "STG" => Projection::Stg,
+            "ZEA" => Projection::Zea,
+            "CAR" => Projection::Car,
+            "AIT" => Projection::Ait,
+            "MOL" => Projection::Mol,
+            _ => return None,
+        })
+    }
+
     /// `CTYPE` の後ろの 3 文字。
     fn code(self) -> &'static str {
         match self {
@@ -461,8 +532,129 @@ impl Projection {
             Projection::Arc => "ARC",
             Projection::Stg => "STG",
             Projection::Zea => "ZEA",
+            Projection::Car => "CAR",
+            Projection::Ait => "AIT",
+            Projection::Mol => "MOL",
         }
     }
+
+    /// 基準点の投影の球の上の緯度 θ0（度）。天頂投影は極（90°）、円筒・擬円筒は赤道（0°）。
+    fn theta0(self) -> f64 {
+        match self {
+            Projection::Car | Projection::Ait | Projection::Mol => 0.0,
+            _ => 90.0,
+        }
+    }
+
+    /// 投影面の座標 (x, y)（度）→ 投影の球の経度・緯度 (φ, θ)（ラジアン）。投影の外なら `None`。
+    fn native(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let (xr, yr) = (x.to_radians(), y.to_radians());
+        let zenithal = |theta: f64| Some((x.atan2(-y), theta));
+        let r = xr.hypot(yr);
+        match self {
+            Projection::Tan => zenithal(1.0f64.atan2(r)),
+            Projection::Sin => (r <= 1.0).then(|| r.acos()).and_then(zenithal),
+            Projection::Arc => zenithal(PI / 2.0 - r),
+            Projection::Stg => zenithal(PI / 2.0 - 2.0 * (r / 2.0).atan()),
+            Projection::Zea => (r <= 2.0)
+                .then(|| PI / 2.0 - 2.0 * (r / 2.0).asin())
+                .and_then(zenithal),
+            Projection::Car => (yr.abs() <= PI / 2.0 && xr.abs() <= PI + 1e-9).then_some((xr, yr)),
+            Projection::Ait => {
+                let zz = 1.0 - (xr / 4.0).powi(2) - (yr / 2.0).powi(2);
+                if zz < 0.5 {
+                    return None;
+                }
+                let z = zz.sqrt();
+                let phi = 2.0 * (z * xr / 2.0).atan2(2.0 * zz - 1.0);
+                Some((phi, (yr * z).clamp(-1.0, 1.0).asin()))
+            }
+            Projection::Mol => {
+                let s = yr / 2f64.sqrt();
+                if s.abs() > 1.0 {
+                    return None;
+                }
+                let gamma = s.asin();
+                let phi = if gamma.cos() < 1e-12 {
+                    0.0
+                } else {
+                    PI * xr / (2.0 * 2f64.sqrt() * gamma.cos())
+                };
+                if phi.abs() > PI + 1e-9 {
+                    return None;
+                }
+                let t = (2.0 * gamma + (2.0 * gamma).sin()) / PI;
+                Some((phi, t.clamp(-1.0, 1.0).asin()))
+            }
+        }
+    }
+}
+
+/// 座標系。内側では赤道座標（ICRS）に直して持つ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Frame {
+    Equatorial,
+    Galactic,
+}
+
+impl Frame {
+    /// `CTYPE` の頭（経度・緯度の 4 文字ずつ）。
+    fn prefixes(self) -> (&'static str, &'static str) {
+        match self {
+            Frame::Equatorial => ("RA--", "DEC-"),
+            Frame::Galactic => ("GLON", "GLAT"),
+        }
+    }
+
+    /// この座標系の経度・緯度（度）を、赤経・赤緯（ICRS、度）にする。
+    fn to_icrs(self, lon_lat: [f64; 2]) -> [f64; 2] {
+        match self {
+            Frame::Equatorial => lon_lat,
+            Frame::Galactic => rotate(&GALACTIC_TO_ICRS, lon_lat),
+        }
+    }
+}
+
+/// 銀河座標の単位ベクトル → ICRS の単位ベクトル。astropy 8.0.2 の Galactic → ICRS の変換から求めた。
+const GALACTIC_TO_ICRS: [[f64; 3]; 3] = [
+    [
+        -0.054_875_657_712_592_2,
+        0.494_109_437_192_726_7,
+        -0.867_666_137_559_658_5,
+    ],
+    [
+        -0.873_437_051_955_616_2,
+        -0.444_829_721_223_295_7,
+        -0.198_076_337_273_000_6,
+    ],
+    [
+        -0.483_835_073_616_715_6,
+        0.746_982_183_986_667_7,
+        0.455_983_813_687_302_1,
+    ],
+];
+
+fn rotate(m: &[[f64; 3]; 3], lon_lat: [f64; 2]) -> [f64; 2] {
+    let (l, b) = (lon_lat[0].to_radians(), lon_lat[1].to_radians());
+    let v = [b.cos() * l.cos(), b.cos() * l.sin(), b.sin()];
+    let w = [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2]);
+    [
+        w[1].atan2(w[0]).to_degrees().rem_euclid(360.0),
+        w[2].clamp(-1.0, 1.0).asin().to_degrees(),
+    ]
+}
+
+/// 2 点の間の角度（度）。
+fn angle(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let unit = |p: [f64; 2]| {
+        let (l, b) = (p[0].to_radians(), p[1].to_radians());
+        [b.cos() * l.cos(), b.cos() * l.sin(), b.sin()]
+    };
+    let (u, v) = (unit(a), unit(b));
+    (u[0] * v[0] + u[1] * v[1] + u[2] * v[2])
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
 }
 
 /// 光学系の歪みの多項式。
@@ -569,17 +761,21 @@ fn tpv(c: &[f64; 40], x: f64, y: f64) -> f64 {
     sum
 }
 
-/// 天頂投影の WCS（論文 Calabretta & Greisen 2002 の式）。
+/// WCS（論文 Calabretta & Greisen 2002 の式）。
 #[derive(Debug, Clone, PartialEq)]
 struct Wcs {
     crpix: [f64; 2],
-    /// 基準点の赤経・赤緯（度）。
+    /// 基準点の経度・緯度（[`Wcs::frame`] の座標系、度）。
     crval: [f64; 2],
     /// 画素のずれ → 投影面の座標（度）。
     cd: [[f64; 2]; 2],
     projection: Projection,
     lonpole: f64,
+    latpole: f64,
     distortion: Distortion,
+    frame: Frame,
+    /// 投影の球の北極の、座標系での経度・緯度（ラジアン）。`crval` と `lonpole` から決まる。
+    pole: [f64; 2],
 }
 
 impl Wcs {
@@ -587,45 +783,75 @@ impl Wcs {
         let num = |key: &str| number(&lookup(key)?);
         let ctype = |i: u32| lookup(&format!("CTYPE{i}")).map(|v| v.trim().to_uppercase());
         let (c1, c2) = (ctype(1)?, ctype(2)?);
-        // 赤経が 2 軸目に書かれたファイルは、軸を入れ替えて読む。
-        let swapped = match (&c1[..c1.len().min(4)], &c2[..c2.len().min(4)]) {
-            ("RA--", "DEC-") => false,
-            ("DEC-", "RA--") => true,
-            _ => return None,
-        };
+        // 経度が 2 軸目に書かれたファイルは、軸を入れ替えて読む。
+        let (frame, swapped) =
+            [Frame::Equatorial, Frame::Galactic]
+                .into_iter()
+                .find_map(|frame| {
+                    let (lon, lat) = frame.prefixes();
+                    match (&c1[..c1.len().min(4)], &c2[..c2.len().min(4)]) {
+                        (a, b) if a == lon && b == lat => Some((frame, false)),
+                        (a, b) if a == lat && b == lon => Some((frame, true)),
+                        _ => None,
+                    }
+                })?;
         let code = c1.get(5..8)?;
-        let projection = match code {
-            "TAN" | "TPV" => Projection::Tan,
-            "SIN" => Projection::Sin,
-            "ARC" => Projection::Arc,
-            "STG" => Projection::Stg,
-            "ZEA" => Projection::Zea,
-            _ => return None,
-        };
+        let projection = Projection::read(code)?;
         let cd = cd_matrix(&num)?;
-        let (ra_axis, dec_axis) = if swapped { (2, 1) } else { (1, 2) };
+        let (lon_axis, lat_axis) = if swapped { (2, 1) } else { (1, 2) };
         let cd = if swapped { [cd[1], cd[0]] } else { cd };
         let sip = c1.get(8..).is_some_and(|rest| rest.trim() == "-SIP");
         let mut distortion = Distortion::read(&num, sip, code == "TPV");
         if swapped && let Distortion::Tpv { pv1, pv2 } = &mut distortion {
-            // PV1 は 1 本目の軸（ここでは赤緯）の式なので、赤経・赤緯の順に入れ替える。
+            // PV1 は 1 本目の軸（ここでは緯度）の式なので、経度・緯度の順に入れ替える。
             std::mem::swap(pv1, pv2);
         }
-        Some(Self {
-            crpix: [num("CRPIX1")?, num("CRPIX2")?],
-            crval: [
-                num(&format!("CRVAL{ra_axis}"))?,
-                num(&format!("CRVAL{dec_axis}"))?,
-            ],
+        let crval = [
+            num(&format!("CRVAL{lon_axis}"))?,
+            num(&format!("CRVAL{lat_axis}"))?,
+        ];
+        // 書いていなければ、基準点が投影の球の極より北なら 0°、そうでなければ 180°（論文の既定）。
+        let lonpole = num("LONPOLE").unwrap_or(if crval[1] >= projection.theta0() {
+            0.0
+        } else {
+            180.0
+        });
+        Self::new(
+            [num("CRPIX1")?, num("CRPIX2")?],
+            crval,
             cd,
             projection,
-            lonpole: num("LONPOLE").unwrap_or(180.0),
+            (lonpole, num("LATPOLE").unwrap_or(90.0)),
             distortion,
+            frame,
+        )
+    }
+
+    fn new(
+        crpix: [f64; 2],
+        crval: [f64; 2],
+        cd: [[f64; 2]; 2],
+        projection: Projection,
+        (lonpole, latpole): (f64, f64),
+        distortion: Distortion,
+        frame: Frame,
+    ) -> Option<Self> {
+        let pole = native_pole(crval, projection.theta0(), lonpole, latpole)?;
+        Some(Self {
+            crpix,
+            crval,
+            cd,
+            projection,
+            lonpole,
+            latpole,
+            distortion,
+            frame,
+            pole,
         })
     }
 
-    /// 画素 `(x, y)`（1 始まり）の赤経・赤緯（度）。
-    fn to_sky(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+    /// 画素 `(x, y)`（1 始まり）の、画像の座標系での経度・緯度（度）。
+    fn to_frame(&self, x: f64, y: f64) -> Option<[f64; 2]> {
         let (dx, dy) = self
             .distortion
             .before_cd(x - self.crpix[0], y - self.crpix[1]);
@@ -633,27 +859,67 @@ impl Wcs {
             self.cd[0][0] * dx + self.cd[0][1] * dy,
             self.cd[1][0] * dx + self.cd[1][1] * dy,
         );
-        let r = px.hypot(py);
-        let phi = px.atan2(-py);
-        let r_rad = r.to_radians();
-        let theta = match self.projection {
-            Projection::Tan => (1.0f64).atan2(r_rad),
-            Projection::Sin if r_rad <= 1.0 => r_rad.acos(),
-            Projection::Sin => return None,
-            Projection::Arc => PI / 2.0 - r_rad,
-            Projection::Stg => PI / 2.0 - 2.0 * (r_rad / 2.0).atan(),
-            Projection::Zea if r_rad <= 2.0 => PI / 2.0 - 2.0 * (r_rad / 2.0).asin(),
-            Projection::Zea => return None,
-        };
-        let (ra0, dec0) = (self.crval[0].to_radians(), self.crval[1].to_radians());
+        let (phi, theta) = self.projection.native(px, py)?;
+        let [lon_p, lat_p] = self.pole;
         let dphi = phi - self.lonpole.to_radians();
-        let dec = (theta.sin() * dec0.sin() + theta.cos() * dec0.cos() * dphi.cos()).asin();
-        let ra = ra0
+        let lat = (theta.sin() * lat_p.sin() + theta.cos() * lat_p.cos() * dphi.cos())
+            .clamp(-1.0, 1.0)
+            .asin();
+        let lon = lon_p
             + (-theta.cos() * dphi.sin())
-                .atan2(theta.sin() * dec0.cos() - theta.cos() * dec0.sin() * dphi.cos());
-        let sky = [ra.to_degrees().rem_euclid(360.0), dec.to_degrees()];
-        sky.iter().all(|v| v.is_finite()).then_some(sky)
+                .atan2(theta.sin() * lat_p.cos() - theta.cos() * lat_p.sin() * dphi.cos());
+        let p = [lon.to_degrees().rem_euclid(360.0), lat.to_degrees()];
+        p.iter().all(|v| v.is_finite()).then_some(p)
     }
+
+    /// 画素 `(x, y)`（1 始まり）の赤経・赤緯（ICRS、度）。
+    fn to_sky(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        Some(self.frame.to_icrs(self.to_frame(x, y)?))
+    }
+}
+
+/// 投影の球の北極の、座標系での経度・緯度（ラジアン）。論文の式 (8)〜(10)。
+/// 基準点 `crval`（度）が投影の球の (0, θ0) に来て、北極が投影の球の経度 `lonpole` の向きにある。
+/// 解が 2 つあるときは `latpole` に近い方。
+fn native_pole(crval: [f64; 2], theta0: f64, lonpole: f64, latpole: f64) -> Option<[f64; 2]> {
+    let (a0, d0) = (crval[0].to_radians(), crval[1].to_radians());
+    if theta0 == 90.0 {
+        return Some([a0, d0]);
+    }
+    let t0 = theta0.to_radians();
+    let dp = lonpole.to_radians(); // φp − φ0（φ0 = 0）
+    let base = t0.sin().atan2(t0.cos() * dp.cos());
+    let denom = (1.0 - (t0.cos() * dp.sin()).powi(2)).sqrt();
+    if denom < 1e-12 {
+        return None;
+    }
+    let ratio = d0.sin() / denom;
+    if ratio.abs() > 1.0 + 1e-12 {
+        return None;
+    }
+    let spread = ratio.clamp(-1.0, 1.0).acos();
+    // 角度は 2π の幅で同じなので、-π〜π に直してから緯度になれるものを選ぶ。
+    let candidates = [base + spread, base - spread]
+        .into_iter()
+        .map(|d| (d + PI).rem_euclid(2.0 * PI) - PI)
+        .filter(|d| d.abs() <= PI / 2.0 + 1e-12)
+        .map(|d| d.clamp(-PI / 2.0, PI / 2.0));
+    let lat_p = candidates.min_by(|a, b| {
+        let near = |d: &f64| (d.to_degrees() - latpole).abs();
+        near(a).total_cmp(&near(b))
+    })?;
+    let lon_p = if (d0.abs() - PI / 2.0).abs() < 1e-12 {
+        a0
+    } else if (lat_p - PI / 2.0).abs() < 1e-12 {
+        a0 + dp - PI
+    } else if (lat_p + PI / 2.0).abs() < 1e-12 {
+        a0 - dp
+    } else {
+        let y = dp.sin() * t0.cos() / d0.cos();
+        let x = (t0.sin() - lat_p.sin() * d0.sin()) / (d0.cos() * lat_p.cos());
+        a0 - y.atan2(x)
+    };
+    Some([lon_p, lat_p])
 }
 
 /// 画素のずれを投影面の度にする行列。`CDi_j` があればそれ、なければ `PCi_j`（省略は単位行列）
@@ -930,6 +1196,244 @@ mod tests {
         }
     }
 
+    /// 銀河座標の全天図（800 x 400、0.45°）。
+    fn all_sky(code: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("NAXIS1", "800".into()),
+            ("NAXIS2", "400".into()),
+            ("CTYPE1", format!("GLON-{code}")),
+            ("CTYPE2", format!("GLAT-{code}")),
+            ("CRPIX1", "400.5".into()),
+            ("CRPIX2", "200.5".into()),
+            ("CRVAL1", "0.0".into()),
+            ("CRVAL2", "0.0".into()),
+            ("CDELT1", "-0.45".into()),
+            ("CDELT2", "0.45".into()),
+        ]
+    }
+
+    fn owned(cards: &[(&'static str, String)]) -> impl Fn(&str) -> Option<String> {
+        let cards = cards.to_vec();
+        move |key| {
+            cards
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    #[test]
+    fn aitoff_and_mollweide_match_astropy_in_galactic_and_icrs() {
+        // astropy 8.0.2 の all_pix2world（銀河座標）と、SkyCoord で ICRS にした値。
+        let expected = [
+            (
+                "AIT",
+                [
+                    (
+                        [100.0, 200.0],
+                        [144.637_397_357_8, -0.181_660_503_7],
+                        [53.791_022_822_8, 55.632_677_977_1],
+                    ),
+                    (
+                        [700.0, 300.0],
+                        [180.413_581_718, 33.601_510_271],
+                        [125.182_040_382, 40.604_629_888_9],
+                    ),
+                    (
+                        [250.5, 120.25],
+                        [80.488_278_365_8, -34.654_907_976_2],
+                        [337.518_754_819, 16.317_360_656_4],
+                    ),
+                ],
+            ),
+            (
+                "MOL",
+                [
+                    (
+                        [100.0, 200.0],
+                        [150.197_790_388_9, -0.202_571_332_8],
+                        [61.138_839_530_5, 52.137_381_266_7],
+                    ),
+                    (
+                        [700.0, 300.0],
+                        [180.389_897_366_8, 41.752_509_253_7],
+                        [135.939_913_133, 41.360_931_442_6],
+                    ),
+                    (
+                        [250.5, 120.25],
+                        [83.751_287_687_4, -33.234_305_990_1],
+                        [338.858_885_013, 19.094_881_075_3],
+                    ),
+                ],
+            ),
+        ];
+        for (code, points) in expected {
+            let wcs = Wcs::read(&owned(&all_sky(code))).unwrap();
+            for ([x, y], galactic, icrs) in points {
+                let g = wcs.to_frame(x, y).unwrap();
+                assert!(close(g, galactic, 1e-8), "{code} ({x}, {y}): {g:?}");
+                let p = wcs.to_sky(x, y).unwrap();
+                assert!(close(p, icrs, 2e-7), "{code} ({x}, {y}): {p:?}");
+            }
+            // 楕円の外（上の端の真ん中より上）は空の外。
+            assert_eq!(wcs.to_sky(400.5, 390.0), None, "{code}");
+        }
+    }
+
+    #[test]
+    fn car_in_galactic_puts_the_centre_at_the_galactic_centre() {
+        let mut cards = all_sky("CAR");
+        cards[0].1 = "360".into();
+        cards[1].1 = "180".into();
+        cards[4].1 = "180.5".into();
+        cards[5].1 = "90.5".into();
+        cards[8].1 = "-1.0".into();
+        cards[9].1 = "1.0".into();
+        let wcs = Wcs::read(&owned(&cards)).unwrap();
+        let expected = [
+            (
+                [1.0, 1.0],
+                [179.5, -89.5],
+                [13.327_176_806_8, -26.852_005_36],
+            ),
+            (
+                [100.25, 40.75],
+                [80.25, -49.75],
+                [346.803_252_525_7, 4.284_477_720_1],
+            ),
+            (
+                [180.5, 90.5],
+                [0.0, 0.0],
+                [266.404_988_286_5, -28.936_177_761_8],
+            ),
+        ];
+        for ([x, y], galactic, icrs) in expected {
+            assert!(
+                close(wcs.to_frame(x, y).unwrap(), galactic, 1e-8),
+                "({x}, {y})"
+            );
+            let p = wcs.to_sky(x, y).unwrap();
+            assert!(close(p, icrs, 2e-7), "({x}, {y}): {p:?}");
+        }
+    }
+
+    #[test]
+    fn cylindrical_and_pseudocylindrical_away_from_the_equator_match_astropy() {
+        let car = [
+            ("CTYPE1", "RA---CAR"),
+            ("CTYPE2", "DEC--CAR"),
+            ("CRPIX1", "50.5"),
+            ("CRPIX2", "20.5"),
+            ("CRVAL1", "120.0"),
+            ("CRVAL2", "30.0"),
+            ("CDELT1", "-0.5"),
+            ("CDELT2", "0.5"),
+        ];
+        let wcs = Wcs::read(&lookup(&car)).unwrap();
+        for ([x, y], sky) in [
+            ([1.0, 1.0], [145.636_317_251_6, 17.508_785_275_3]),
+            ([100.0, 40.0], [89.137_130_925_8, 36.453_769_111_1]),
+            ([10.0, 35.0], [144.805_139_959_7, 35.074_196_682_8]),
+        ] {
+            let p = wcs.to_sky(x, y).unwrap();
+            assert!(close(p, sky, 1e-8), "CAR ({x}, {y}): {p:?}");
+        }
+        // 南の基準点と LATPOLE（極の解を南の方に選ぶ）。
+        let ait = [
+            ("CTYPE1", "RA---AIT"),
+            ("CTYPE2", "DEC--AIT"),
+            ("CRPIX1", "100.5"),
+            ("CRPIX2", "50.5"),
+            ("CRVAL1", "266.4"),
+            ("CRVAL2", "-28.9"),
+            ("CDELT1", "-0.2"),
+            ("CDELT2", "0.2"),
+            ("LATPOLE", "-50.0"),
+        ];
+        let wcs = Wcs::read(&lookup(&ait)).unwrap();
+        for ([x, y], sky) in [
+            ([1.0, 1.0], [245.581_452_924_9, -17.268_443_715_6]),
+            ([200.0, 100.0], [291.430_107_124_7, -36.663_172_922_6]),
+            ([100.5, 50.5], [266.4, -28.9]),
+            ([30.0, 80.0], [249.370_666_230_2, -33.777_736_159_2]),
+        ] {
+            let p = wcs.to_sky(x, y).unwrap();
+            assert!(close(p, sky, 1e-8), "AIT ({x}, {y}): {p:?}");
+        }
+    }
+
+    #[test]
+    fn galactic_tan_images_are_placed_in_icrs() {
+        let cards = [
+            ("CTYPE1", "GLON-TAN"),
+            ("CTYPE2", "GLAT-TAN"),
+            ("CRPIX1", "50.5"),
+            ("CRPIX2", "50.5"),
+            ("CRVAL1", "184.557"),
+            ("CRVAL2", "-5.784"),
+            ("CDELT1", "-0.01"),
+            ("CDELT2", "0.01"),
+        ];
+        let wcs = Wcs::read(&lookup(&cards)).unwrap();
+        // かに星雲のあたり。astropy の SkyCoord（galactic → icrs）。
+        assert!(close(
+            wcs.to_sky(50.5, 50.5).unwrap(),
+            [83.633_145_275_2, 22.015_075_728_1],
+            2e-7
+        ));
+        assert!(close(
+            wcs.to_sky(1.0, 1.0).unwrap(),
+            [83.468_777_441_2, 21.331_943_369_4],
+            2e-7
+        ));
+    }
+
+    #[test]
+    fn all_sky_maps_are_known_but_have_no_outline() {
+        for code in ["CAR", "AIT", "MOL"] {
+            let s = sky(&owned(&all_sky(code))).unwrap();
+            assert!(s.certain && s.wide, "{code}");
+            assert!(s.outline.is_empty(), "{code}");
+            assert!(
+                close(s.center, [266.404_988_286_5, -28.936_177_761_8], 1e-5),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn maps_on_the_same_grid_line_up_without_solving() {
+        let cards = all_sky("AIT");
+        assert_eq!(
+            pixel_map(&owned(&cards), &owned(&cards)),
+            Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        );
+        let mut moved = cards.clone();
+        moved[6].1 = "10.0".into();
+        assert_eq!(pixel_map(&owned(&cards), &owned(&moved)), None);
+    }
+
+    #[test]
+    fn a_galactic_wcs_carried_through_a_shift_stays_galactic() {
+        let cards = all_sky("CAR");
+        let map = [[1.0, 0.0, 10.0], [0.0, 1.0, 5.0]];
+        let carried = wcs_through(&owned(&cards), map).unwrap();
+        let carried: Vec<(&str, &str)> = carried
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let (old, new) = (
+            Wcs::read(&owned(&cards)).unwrap(),
+            Wcs::read(&lookup(&carried)).unwrap(),
+        );
+        assert_eq!(new.frame, Frame::Galactic);
+        for (x, y) in [(1.0, 1.0), (300.0, 150.0)] {
+            let o = apply(map, x, y);
+            let (want, got) = (old.to_sky(o[0], o[1]).unwrap(), new.to_sky(x, y).unwrap());
+            assert!(close(got, want, 1e-9), "{got:?} {want:?}");
+        }
+    }
+
     #[test]
     fn sin_arc_stg_and_zea_match_astropy() {
         let expected = [
@@ -1003,8 +1507,8 @@ mod tests {
     #[test]
     fn unsupported_projection_falls_back_to_the_pointing() {
         let mut cards = ORION.to_vec();
-        cards[2] = ("CTYPE1", "RA---CAR");
-        cards[3] = ("CTYPE2", "DEC--CAR");
+        cards[2] = ("CTYPE1", "RA---HPX");
+        cards[3] = ("CTYPE2", "DEC--HPX");
         assert_eq!(sky(&lookup(&cards)), None);
         cards.push(("RA", "83.8"));
         cards.push(("DEC", "-5.4"));

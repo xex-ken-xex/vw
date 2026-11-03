@@ -105,6 +105,7 @@ pub fn file_items(path: &Path, headers: &[vw_fits::ImageHeader]) -> Vec<Item> {
                 center,
                 outline,
                 certain: true,
+                wide: false,
             },
             object: parts[0].object.clone(),
             taken: parts[0].taken.clone(),
@@ -515,6 +516,7 @@ impl SkyWindow {
         }
         ui.weak(sky_chart::radec_text(item.sky.center));
         let how = match (item.sky.certain, item.sky.outline.is_empty()) {
+            _ if item.sky.wide => "All sky or a wide band (no outline; the cross is the centre)",
             (true, _) => "Range from the WCS in the header",
             (false, false) => "Range estimated from the mount position and focal length",
             (false, true) => "Only the mount position is known",

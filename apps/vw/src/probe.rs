@@ -99,11 +99,13 @@ pub struct Place {
 pub enum Where {
     /// 気象・海洋の格子のデータの緯度・経度（度）。
     Earth { lat: f64, lon: f64 },
-    /// WCS のある天体の画像の赤経・赤緯（度）と、その書き方。
+    /// WCS のある天体の画像の赤経・赤緯（度）と、その書き方。銀河座標で書かれた画像は、
+    /// 銀河経度・銀河緯度（度）も。
     Sky {
         ra: f64,
         dec: f64,
         format: SkyFormat,
+        galactic: Option<[f64; 2]>,
     },
 }
 
@@ -125,7 +127,12 @@ impl Place {
             }
             (None, Some(sky)) => {
                 let [ra, dec] = sky.at(px, py)?;
-                Where::Sky { ra, dec, format }
+                Where::Sky {
+                    ra,
+                    dec,
+                    format,
+                    galactic: sky.galactic(px, py),
+                }
             }
             (None, None) => return None,
         };
@@ -140,7 +147,19 @@ impl Place {
     pub fn label(&self) -> String {
         let at = match self.at {
             Where::Earth { lat, lon } => vw_core::geo::format_lat_lon(lat, lon),
-            Where::Sky { ra, dec, format } => vw_core::sky::format_radec(ra, dec, format),
+            Where::Sky {
+                ra,
+                dec,
+                format,
+                galactic,
+            } => {
+                let radec = vw_core::sky::format_radec(ra, dec, format);
+                // 画像の座標系（銀河座標）を先に、星図やほかの画像と照らすための赤経・赤緯を後に。
+                match galactic {
+                    Some([l, b]) => format!("{}  ({radec})", vw_core::sky::format_galactic(l, b)),
+                    None => radec,
+                }
+            }
         };
         match &self.plane {
             Some(plane) => format!("{at}  {plane}"),
@@ -148,11 +167,19 @@ impl Place {
         }
     }
 
-    /// 計算に使える、符号付きの度の小数 2 つ（緯度・経度、または赤経・赤緯）。
-    fn degrees(&self) -> [f64; 2] {
+    /// 計算に使える、符号付きの度の小数（緯度・経度、または赤経・赤緯と、あれば銀河経度・銀河緯度）。
+    fn degrees(&self) -> Vec<f64> {
         match self.at {
-            Where::Earth { lat, lon } => [lat, lon],
-            Where::Sky { ra, dec, .. } => [ra.rem_euclid(360.0), dec],
+            Where::Earth { lat, lon } => vec![lat, lon],
+            Where::Sky {
+                ra, dec, galactic, ..
+            } => {
+                let mut v = vec![ra.rem_euclid(360.0), dec];
+                if let Some([l, b]) = galactic {
+                    v.extend([l.rem_euclid(360.0), b]);
+                }
+                v
+            }
         }
     }
 }
@@ -177,8 +204,9 @@ pub fn clipboard_text(x: u32, y: u32, value: Option<&str>, place: Option<&Place>
         None => format!("{x}, {y}"),
     };
     if let Some(place) = place {
-        let [a, b] = place.degrees();
-        text += &format!(", {a:.6}, {b:.6}");
+        for v in place.degrees() {
+            text += &format!(", {v:.6}");
+        }
         if let Some(plane) = &place.plane {
             text += &format!(", {plane}");
         }
@@ -403,6 +431,42 @@ mod tests {
                 .unwrap()
                 .label(),
             "α 83.820000°  δ -5.390000°"
+        );
+    }
+
+    /// (0, 0) が銀河中心の、銀河座標の画像。
+    #[derive(Debug)]
+    struct GalacticCentre;
+
+    impl SkyMap for GalacticCentre {
+        fn at(&self, _x: f64, _y: f64) -> Option<[f64; 2]> {
+            Some([266.404_988, -28.936_178])
+        }
+
+        fn galactic(&self, _x: f64, _y: f64) -> Option<[f64; 2]> {
+            Some([0.0, 0.0])
+        }
+    }
+
+    #[test]
+    fn galactic_images_show_their_own_coordinates_first() {
+        let m = meta(&[]);
+        let place = Place::at(
+            None,
+            Some(&GalacticCentre),
+            SkyFormat::Sexagesimal,
+            &m,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            place.label(),
+            "l 0.000000°  b +0.000000°  (α 17h45m37.20s  δ -28°56′10.2″)"
+        );
+        assert_eq!(
+            clipboard_text(0, 0, None, Some(&place)),
+            "0, 0, 266.404988, -28.936178, 0.000000, 0.000000"
         );
     }
 

@@ -1193,6 +1193,10 @@ const JA: &[(&str, &str)] = &[
         "ヘッダの WCS から求めた範囲",
     ),
     (
+        "All sky or a wide band (no outline; the cross is the centre)",
+        "全天か、半球より広い帯（枠は描かず、十字が中心）",
+    ),
+    (
         "Range estimated from the mount position and focal length",
         "架台の向きと焦点距離から見積もった範囲",
     ),
