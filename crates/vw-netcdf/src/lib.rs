@@ -152,37 +152,10 @@ impl SharedOptions {
     }
 }
 
-/// ファイルごとに選んだ変数。起動している間だけ覚える。
-///
-/// 鍵はファイルの中身から作る（[`file_key`]）。デコーダにはファイルの場所が届かないことがあり、
-/// フレームの数（[`DecoderPlugin::frame_count`]）も中身だけから答えるため。
-#[derive(Debug, Clone, Default)]
-pub struct Choices(Arc<Mutex<HashMap<u64, String>>>);
+/// ファイルごとに選んだ変数（[`Variable::path`]）。
+pub type Choices = vw_core::choice::Choices<String>;
 
-impl Choices {
-    pub fn get(&self, data: &[u8]) -> Option<String> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&file_key(data))
-            .cloned()
-    }
-
-    pub fn set(&self, data: &[u8], variable: &str) {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(file_key(data), variable.to_owned());
-    }
-}
-
-/// ファイルの中身の鍵。先頭 64 KiB（見出しとヘッダ）と長さ。全体を読むと大きなファイルで遅いため。
-pub fn file_key(data: &[u8]) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data[..data.len().min(64 << 10)].hash(&mut h);
-    data.len().hash(&mut h);
-    h.finish()
-}
+pub use vw_core::choice::file_key;
 
 /// 面を送るたびに作り直すと重いもの（全部の面の黒と白、画素ごとの緯度・経度）を覚える。
 /// 作れなかったことも覚える。

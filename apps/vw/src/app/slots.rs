@@ -600,35 +600,38 @@ impl VwApp {
     }
 
     pub(super) fn step_variable(&mut self, index: usize, step: isize) {
-        self.choose_variable(index, |variables| {
-            let current = variables.iter().position(|v| v.current).unwrap_or(0);
-            let next = (current as isize + step).rem_euclid(variables.len() as isize) as usize;
-            Some(variables[next].path.clone())
+        self.choose_variable(index, |parts| {
+            let current = parts.iter().position(|v| v.current).unwrap_or(0);
+            let next = (current as isize + step).rem_euclid(parts.len() as isize) as usize;
+            Some(parts[next].name.clone())
         });
     }
 
-    /// スロット `index` の NetCDF の変数を、`pick` が選んだもの（[`Variable::path`]）にして読み直す。
-    /// 時刻や高さの面は、同じ番号の面を出す（同じ次元の変数なら同じ時刻）。
-    ///
-    /// [`Variable::path`]: vw_netcdf::Variable::path
+    /// スロット `index` のファイルの中で見るもの（NetCDF の変数、FITS の HDU）を、`pick` が選んだもの
+    /// （[`PartChoice::name`]）にして読み直す。
+    /// NetCDF の時刻や高さの面は、同じ番号の面を出す（同じ次元の変数なら同じ時刻）。FITS の HDU は
+    /// 面の意味が HDU ごとに違うので、1 枚目から出す。
     pub(super) fn choose_variable(
         &mut self,
         index: usize,
-        pick: impl FnOnce(&[VariableChoice]) -> Option<String>,
+        pick: impl FnOnce(&[PartChoice]) -> Option<String>,
     ) {
         let Some(shown) = self.slots.get(index).and_then(|s| s.shown()) else {
             return;
         };
-        if shown.info.plugin != vw_netcdf::NAME {
+        let Some(kind) = PartKind::of(&shown.info.plugin) else {
             return;
-        }
+        };
         let current = shown
             .info
             .metadata
-            .get(vw_netcdf::GROUP, vw_netcdf::VARIABLE)
+            .get(kind.group(), kind.key())
             .map(str::to_owned);
         let file = frames::file_of(&shown.path);
-        let frame = frames::split(&shown.path).map_or(0, |(_, i)| i);
+        let frame = match kind {
+            PartKind::Variable => frames::split(&shown.path).map_or(0, |(_, i)| i),
+            PartKind::Hdu => 0,
+        };
         let bytes = match std::fs::read(&file) {
             Ok(b) => b,
             Err(e) => {
@@ -636,7 +639,7 @@ impl VwApp {
                 return;
             }
         };
-        let variables = match vw_netcdf::variables(&bytes) {
+        let parts = match kind.parts(&bytes) {
             Ok(v) if !v.is_empty() => v,
             Ok(_) => return,
             Err(e) => {
@@ -644,29 +647,34 @@ impl VwApp {
                 return;
             }
         };
-        let choices: Vec<VariableChoice> = variables
+        let choices: Vec<PartChoice> = parts
             .iter()
-            .map(|v| VariableChoice {
-                path: v.path.clone(),
-                current: current.as_deref() == Some(v.path.as_str()),
+            .map(|p| PartChoice {
+                name: p.name.clone(),
+                current: current.as_deref() == Some(p.name.as_str()),
             })
             .collect();
         let Some(name) = pick(&choices) else {
             return;
         };
-        let Some(variable) = variables.iter().find(|v| v.path == name) else {
+        let Some(part) = parts.iter().find(|p| p.name == name) else {
             return;
         };
-        self.netcdf_choices.set(&bytes, &variable.path);
+        match kind {
+            PartKind::Variable => self.netcdf_choices.set(&bytes, part.name.as_str()),
+            PartKind::Hdu => self.fits_choices.set(&bytes, part.index),
+        }
         self.log.info(format!(
-            "NetCDF variable {} in {}",
-            variable.path,
+            "{} {} in {}",
+            kind.log_name(),
+            part.name,
             file.display()
         ));
-        let planes = variable.planes();
+        let planes = part.planes;
+        let changed = current.as_deref() != Some(part.name.as_str());
         let slot = &mut self.slots[index];
-        if current.as_deref() != Some(variable.path.as_str()) {
-            // 手で変えた黒と白は前の変数の単位の値なので、次の変数には持ち越さない。
+        if changed {
+            // 手で変えた黒と白は前の変数（HDU）の単位の値なので、次には持ち越さない。
             slot.color.window = None;
         }
         let in_frames = slot
@@ -1586,9 +1594,95 @@ fn stretch_look(
     }
 }
 
-/// 変数を選ぶときの 1 つの候補。
-pub(super) struct VariableChoice {
-    pub path: String,
-    /// 表示中の変数。
+/// ファイルの中で見るものを選ぶときの 1 つの候補。
+pub(super) struct PartChoice {
+    pub name: String,
+    /// 表示中のもの。
     pub current: bool,
+}
+
+/// ファイルの中で見るものの種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PartKind {
+    /// NetCDF の変数。
+    Variable,
+    /// FITS の画像の HDU。
+    Hdu,
+}
+
+/// ファイルの中で見られるもの 1 つ。
+struct Part {
+    name: String,
+    /// FITS の HDU の番号（NetCDF では使わない）。
+    index: usize,
+    planes: usize,
+}
+
+impl PartKind {
+    pub(super) fn of(plugin: &str) -> Option<Self> {
+        match plugin {
+            vw_netcdf::NAME => Some(Self::Variable),
+            vw_fits::NAME => Some(Self::Hdu),
+            _ => None,
+        }
+    }
+
+    /// 見ているものの名前を書いたメタデータの見出しと鍵。
+    pub(super) fn group(self) -> &'static str {
+        match self {
+            Self::Variable => vw_netcdf::GROUP,
+            Self::Hdu => vw_fits::GROUP,
+        }
+    }
+
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Variable => vw_netcdf::VARIABLE,
+            Self::Hdu => vw_fits::HDU,
+        }
+    }
+
+    /// 選べるものの一覧を書いたメタデータの見出し（鍵が名前、値が説明）。
+    pub(super) fn list_group(self) -> &'static str {
+        match self {
+            Self::Variable => vw_netcdf::VARIABLES_GROUP,
+            Self::Hdu => vw_fits::PARTS_GROUP,
+        }
+    }
+
+    /// 右クリックのメニューの見出し（翻訳前）。
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Variable => "Variable",
+            Self::Hdu => "HDU",
+        }
+    }
+
+    fn log_name(self) -> &'static str {
+        match self {
+            Self::Variable => "NetCDF variable",
+            Self::Hdu => "FITS HDU",
+        }
+    }
+
+    fn parts(self, bytes: &[u8]) -> Result<Vec<Part>, vw_core::DecodeError> {
+        Ok(match self {
+            Self::Variable => vw_netcdf::variables(bytes)?
+                .into_iter()
+                .map(|v| Part {
+                    planes: v.planes(),
+                    name: v.path,
+                    index: 0,
+                })
+                .collect(),
+            Self::Hdu => vw_fits::parts(bytes)?
+                .into_iter()
+                .map(|p| Part {
+                    name: p.name,
+                    index: p.index,
+                    planes: p.planes,
+                })
+                .collect(),
+        })
+    }
 }

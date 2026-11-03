@@ -3281,8 +3281,8 @@ const JA: &[(&str, &str)] = &[
     ("ROI graph", "ROI のグラフ"),
     ("Reading frames", "フレームを読んでいます"),
     ("Show/hide ROI graph", "ROI のグラフの表示/非表示"),
-    ("Next variable", "次の変数"),
-    ("Previous variable", "前の変数"),
+    ("Next variable or HDU", "次の変数・HDU"),
+    ("Previous variable or HDU", "前の変数・HDU"),
     ("Variable", "変数"),
     (
         "Earth science data (NetCDF, HDF)",

@@ -13,6 +13,7 @@
 //! このクレートは GUI ライブラリに依存しない。
 //! GUI を差し替えたり、コマンドライン変換ツールから使ったりできるようにするため。
 
+pub mod choice;
 pub mod display;
 pub mod exif;
 pub mod geo;

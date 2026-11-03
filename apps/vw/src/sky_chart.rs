@@ -124,7 +124,7 @@ pub fn angle(a: Radec, b: Radec) -> f64 {
 }
 
 /// 点の向きの平均。全部が打ち消し合う（反対側にある）ときは最初の点。
-fn mean_direction(points: &[Radec]) -> Option<Radec> {
+pub fn mean_direction(points: &[Radec]) -> Option<Radec> {
     let first = *points.first()?;
     let sum = points
         .iter()

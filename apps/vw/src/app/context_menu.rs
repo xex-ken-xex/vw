@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 
 use super::VwApp;
+use super::slots::PartKind;
 use crate::faces::FaceMark;
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, KeyCombo, Keymap};
@@ -376,16 +377,17 @@ fn entry_shows(entry: Entry, target: &Target, cx: &MenuContext) -> bool {
         Entry::Variable => target
             .slot()
             .and_then(|s| s.shown())
-            .is_some_and(|s| netcdf_variables(&s.info.metadata).len() > 1),
+            .and_then(|s| Some(parts(PartKind::of(&s.info.plugin)?, &s.info.metadata).len()))
+            .is_some_and(|n| n > 1),
         Entry::Send => true,
     }
 }
 
-/// NetCDF の画像にできる変数（メタデータの一覧）と、表示中の変数。
-fn netcdf_variables(meta: &vw_core::Metadata) -> Vec<&str> {
+/// ファイルの中で見られるもの（NetCDF の変数、FITS の HDU）の名前。メタデータの一覧から。
+fn parts(kind: PartKind, meta: &vw_core::Metadata) -> Vec<&str> {
     meta.entries
         .iter()
-        .filter(|(g, _, _)| g == vw_netcdf::VARIABLES_GROUP)
+        .filter(|(g, _, _)| g == kind.list_group())
         .map(|(_, k, _)| k.as_str())
         .collect()
 }
@@ -397,14 +399,21 @@ fn variable_item(ui: &mut egui::Ui, cx: &MenuContext, target: &Target, out: &mut
     let Some(shown) = slot.shown() else {
         return;
     };
+    let Some(kind) = PartKind::of(&shown.info.plugin) else {
+        return;
+    };
     let meta = &shown.info.metadata;
-    let current = meta.get(vw_netcdf::GROUP, vw_netcdf::VARIABLE);
-    ui.menu_button(tr(cx.lang, "Variable"), |ui| {
-        for name in netcdf_variables(meta) {
-            let detail = meta
-                .get(vw_netcdf::VARIABLES_GROUP, name)
-                .unwrap_or_default();
-            let item = vw_ui::menu::item(current == Some(name), name, "");
+    let current = meta.get(kind.group(), kind.key());
+    ui.menu_button(tr(cx.lang, kind.title()), |ui| {
+        for name in parts(kind, meta) {
+            let detail = meta.get(kind.list_group(), name).unwrap_or_default();
+            // HDU は名前だけでは見分けにくい（SCI と ERR は同じ大きさ、モザイクは同じ名前が並ぶ）ので、
+            // 大きさと型を右に添える。NetCDF の変数の説明は長いので、指したときだけ出す。
+            let right = match kind {
+                PartKind::Hdu => detail,
+                PartKind::Variable => "",
+            };
+            let item = vw_ui::menu::item(current == Some(name), name, right);
             if ui.add(item).on_hover_text(detail).clicked() {
                 out.push(Picked::Variable(*index, name.to_owned()));
                 ui.close();
