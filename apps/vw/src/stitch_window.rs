@@ -1247,17 +1247,10 @@ struct Placing {
     note: Option<&'static str>,
 }
 
-/// 全体の写し方を決めて、組をたどった置き方を直す。
-fn place(
-    found: &Found,
-    links: &[Link],
-    tree: &[Option<(Affine, Option<usize>)>],
-    wanted: StitchProjection,
-) -> Placing {
-    let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
-    // 射影と円筒は、遠近のゆがみを持つ特徴点の組で直す（相関で見つけた組の点は、アフィンで
-    // 写した格子の点なので）。
-    let warped: Vec<Link> = links
+/// 組の点を、特徴点の組があればそれに替えたもの。射影と円筒は、遠近のゆがみを持つ特徴点の
+/// 組で直し、つなぎ目もそれで測る（相関で見つけた組の点は、アフィンで写した格子の点なので）。
+fn with_feature_points(found: &Found, links: &[Link]) -> Vec<Link> {
+    links
         .iter()
         .map(|l| {
             let key = (l.a.min(l.b), l.a.max(l.b));
@@ -1276,7 +1269,18 @@ fn place(
                 _ => l.clone(),
             }
         })
-        .collect();
+        .collect()
+}
+
+/// 全体の写し方を決めて、組をたどった置き方を直す。`warped` は [`with_feature_points`]。
+fn place(
+    found: &Found,
+    links: &[Link],
+    warped: &[Link],
+    tree: &[Option<(Affine, Option<usize>)>],
+    wanted: StitchProjection,
+) -> Placing {
+    let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
     let mut focals: Vec<f64> = found.images.iter().filter_map(|i| i.focal).collect();
     focals.sort_by(f64::total_cmp);
     let focal = focals.get(focals.len() / 2).copied();
@@ -1286,8 +1290,8 @@ fn place(
             return Projection::Affine;
         }
         let span = focal
-            .or_else(|| adjust::estimate_focal(&sizes, &warped))
-            .and_then(|f| adjust::cylinder_span(&sizes, &warped, tree, f));
+            .or_else(|| adjust::estimate_focal(&sizes, warped))
+            .and_then(|f| adjust::cylinder_span(&sizes, warped, tree, f));
         if span.is_some_and(|s| s > CYLINDER_DEGREES) {
             Projection::Cylinder
         } else {
@@ -1297,7 +1301,7 @@ fn place(
     let used = if projection == Projection::Affine {
         links
     } else {
-        &warped
+        warped
     };
     let tried = adjust::adjust(&sizes, used, tree, projection, focal);
     let (result, note) = match tried {
@@ -1346,12 +1350,18 @@ fn arrange(
 ) -> Arranged {
     let n = found.images.len();
     let tree = mosaic::tree(n, links);
+    let warped = with_feature_points(found, links);
     let Placing {
         placed,
         projection: chosen,
         fit,
         note,
-    } = place(found, links, &tree, projection);
+    } = place(found, links, &warped, &tree, projection);
+    let seam_links = if chosen == Projection::Affine {
+        links
+    } else {
+        &warped
+    };
     let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
     let groups = mosaic::same_area(
         &sizes,
@@ -1375,7 +1385,7 @@ fn arrange(
     } else {
         vec![1.0; n]
     };
-    let seams = mosaic::seams(&found.measured, &placed, links, &used, &gains);
+    let seams = mosaic::seams(&found.measured, &placed, seam_links, &used, &gains);
     let preview = preview_image(found, &placed, &used, &gains, settings.blend.blend());
     Arranged {
         tree,

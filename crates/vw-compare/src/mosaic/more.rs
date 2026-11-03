@@ -60,7 +60,7 @@ pub fn feature_pairs(
     pairs
         .par_iter()
         .filter_map(|&(a, b)| {
-            let found = consistent(&pieces[b], &keypoints[a], &keypoints[b]);
+            let found = consistent(&pieces[a], &pieces[b], &keypoints[a], &keypoints[b]);
             progress();
             found.map(|p| ((a, b), p))
         })
@@ -72,7 +72,7 @@ pub fn feature_steps(pieces: usize) -> usize {
     pieces * pieces.saturating_sub(1) / 2
 }
 
-fn consistent(pb: &Piece, ka: &[Keypoint], kb: &[Keypoint]) -> Option<Vec<Pair>> {
+fn consistent(pa: &Piece, pb: &Piece, ka: &[Keypoint], kb: &[Keypoint]) -> Option<Vec<Pair>> {
     let candidates = features::matches(ka, kb);
     if candidates.len() < MIN_FEATURES {
         return None;
@@ -88,7 +88,106 @@ fn consistent(pb: &Piece, ka: &[Keypoint], kb: &[Keypoint]) -> Option<Vec<Pair>>
     if !(0.1..10.0).contains(&det) || h.as_affine().is_none() && h.inverse().is_none() {
         return None;
     }
-    Some(inliers.into_iter().map(|i| candidates[i]).collect())
+    let refined: Vec<Pair> = inliers
+        .into_iter()
+        .filter_map(|i| sharpen(pa, pb, &h, candidates[i]))
+        .collect();
+    (refined.len() >= MIN_FEATURES).then_some(refined)
+}
+
+/// 模様を比べる窓の半径（縮めた画像の画素）。
+const PATCH: isize = 8;
+
+/// 特徴点の対応 `[p, q]` の `q` を、`p` のまわりの模様が `b` でいちばんよく重なる所へ、画素より
+/// 細かく動かす（Lucas–Kanade のずらしだけ。窓の形は `h` で写す）。特徴点は縮めた段の画素の上で
+/// 見つけるので、そのままでは数画素の誤差があり、全体を直してもつなぎ目にずれが残るため。
+/// 合わない点は `None`。
+fn sharpen(pa: &Piece, pb: &Piece, h: &crate::warp::Homography, [p, _]: Pair) -> Option<Pair> {
+    let (sa, sb) = (pa.scale(), pb.scale());
+    let small = |v: [f64; 2], s: f64| [(v[0] + 0.5) * s - 0.5, (v[1] + 0.5) * s - 0.5];
+    let pa_small = small(p, sa);
+    // 窓の 1 画素（a の縮めた画素）が、b の縮めた画素でどう伸びるか（h の微分）。
+    let step = 1.0 / sa;
+    let at = |dx: f64, dy: f64| {
+        h.apply([p[0] + dx * step, p[1] + dy * step])
+            .map(|v| small(v, sb))
+    };
+    let (centre, right, down) = (at(0.0, 0.0)?, at(1.0, 0.0)?, at(0.0, 1.0)?);
+    let jx = [right[0] - centre[0], right[1] - centre[1]];
+    let jy = [down[0] - centre[0], down[1] - centre[1]];
+    // RANSAC で残った点は h のそばにあるので、見つけた点ではなく h の予想から始める
+    // （見つけた点は縮めた段の画素に丸まっている）。
+    let mut offset = centre;
+    let template: Vec<(f64, f64, f32)> = (-PATCH..=PATCH)
+        .flat_map(|v| (-PATCH..=PATCH).map(move |u| (u as f64, v as f64)))
+        .filter_map(|(u, v)| {
+            let t = pa.plane.sample(pa_small[0] + u, pa_small[1] + v)?;
+            Some((u, v, t))
+        })
+        .collect();
+    if template.len() < ((2 * PATCH + 1) * (2 * PATCH + 1)) as usize {
+        return None;
+    }
+    let mean_t = template.iter().map(|t| f64::from(t.2)).sum::<f64>() / template.len() as f64;
+    for _ in 0..10 {
+        let (mut hxx, mut hxy, mut hyy, mut gx, mut gy) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut values = Vec::with_capacity(template.len());
+        for &(u, v, _) in &template {
+            let x = offset[0] + jx[0] * u + jy[0] * v;
+            let y = offset[1] + jx[1] * u + jy[1] * v;
+            values.push((x, y, pb.plane.sample(x, y)?));
+        }
+        let mean_b = values.iter().map(|v| f64::from(v.2)).sum::<f64>() / values.len() as f64;
+        for (&(_, _, t), &(x, y, b)) in template.iter().zip(&values) {
+            let dx = f64::from(pb.plane.sample(x + 0.5, y)? - pb.plane.sample(x - 0.5, y)?);
+            let dy = f64::from(pb.plane.sample(x, y + 0.5)? - pb.plane.sample(x, y - 0.5)?);
+            let e = (f64::from(b) - mean_b) - (f64::from(t) - mean_t);
+            hxx += dx * dx;
+            hxy += dx * dy;
+            hyy += dy * dy;
+            gx += dx * e;
+            gy += dy * e;
+        }
+        let det = hxx * hyy - hxy * hxy;
+        if det.abs() < 1e-9 {
+            return None;
+        }
+        let ddx = -(hyy * gx - hxy * gy) / det;
+        let ddy = -(hxx * gy - hxy * gx) / det;
+        offset = [offset[0] + ddx, offset[1] + ddy];
+        if (offset[0] - centre[0]).hypot(offset[1] - centre[1]) > 3.0 {
+            return None;
+        }
+        if ddx.hypot(ddy) < 0.01 {
+            break;
+        }
+    }
+    // 重ねた窓の相関が低ければ、模様が違う（遠近で隠れた所など）。
+    let mut values = Vec::with_capacity(template.len());
+    for &(u, v, _) in &template {
+        let x = offset[0] + jx[0] * u + jy[0] * v;
+        let y = offset[1] + jx[1] * u + jy[1] * v;
+        values.push(f64::from(pb.plane.sample(x, y)?));
+    }
+    let t: Vec<f64> = template.iter().map(|t| f64::from(t.2)).collect();
+    if pearson(&t, &values) < 0.8 {
+        return None;
+    }
+    let full = [(offset[0] + 0.5) / sb - 0.5, (offset[1] + 0.5) / sb - 0.5];
+    Some([p, full])
+}
+
+fn pearson(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len() as f64;
+    let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n);
+    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (x, y) in a.iter().zip(b) {
+        ab += (x - ma) * (y - mb);
+        aa += (x - ma) * (x - ma);
+        bb += (y - mb) * (y - mb);
+    }
+    let den = (aa * bb).sqrt();
+    if den > 1e-12 { ab / den } else { 0.0 }
 }
 
 /// 星の写真の、画像ごとの星の位置（明るい順、元の画素）。星の写真でなければ `None`。
