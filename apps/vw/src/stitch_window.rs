@@ -91,7 +91,7 @@ impl Quality {
     fn text(&self, lang: Language) -> String {
         match (self.fwhm, self.sharpness) {
             (Some(f), _) => format!("FWHM {f:.2}"),
-            (None, Some(s)) => format!("{} {s:.1}", tr(lang, "Sharpness")),
+            (None, Some(s)) => format!("{} {}", tr(lang, "Sharpness"), significant(s)),
             _ => "-".into(),
         }
     }
@@ -109,15 +109,45 @@ pub struct Prepared {
     pub window: Option<(f32, f32)>,
     pub curve: Curve,
     pub fits: bool,
+    /// 計測の値の明るさ（`Piece` と同じ大きさ）。写真は `None`。
+    pub measured: Option<vw_compare::plane::Plane>,
 }
 
 /// 下ごしらえと重なりの探索の結果。
 struct Found {
     images: Vec<Prepared>,
     pieces: Vec<Piece>,
+    /// つなぎ目の明るさと鮮鋭度を測る絵。写真は `pieces` と同じ。計測の値（16bit・実数）は、
+    /// 画像ごとに伸ばし方の違う表示ではなく、値そのもの（伸ばし方が違うと、同じ星空でも
+    /// 明るさが何割も違って見えるため）。
+    measured: Vec<Piece>,
     links: Vec<Link>,
     /// WCS で置いた組（`links` の番号）。
     wcs_links: HashSet<usize>,
+}
+
+impl Found {
+    fn new(ready: Vec<(Prepared, Piece)>, links: Vec<Link>, wcs_links: HashSet<usize>) -> Self {
+        let (mut images, pieces): (Vec<Prepared>, Vec<Piece>) = ready.into_iter().unzip();
+        let measured = images
+            .iter_mut()
+            .zip(&pieces)
+            .map(|(image, piece)| match image.measured.take() {
+                Some(plane) => Piece {
+                    plane,
+                    full: piece.full,
+                },
+                None => piece.clone(),
+            })
+            .collect();
+        Self {
+            images,
+            pieces,
+            measured,
+            links,
+            wcs_links,
+        }
+    }
 }
 
 enum Message {
@@ -343,14 +373,11 @@ impl StitchWindow {
                 Ok(Message::Problem(e)) => self.problems.push(e),
                 Ok(Message::Linking(steps)) => job.linking = Some(steps),
                 Ok(Message::Done(links, wcs_links)) => {
-                    let (images, pieces): (Vec<Prepared>, Vec<Piece>) =
-                        std::mem::take(&mut job.ready).into_iter().flatten().unzip();
-                    self.found = Some(Arc::new(Found {
-                        images,
-                        pieces,
-                        links,
-                        wcs_links,
-                    }));
+                    let ready = std::mem::take(&mut job.ready)
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    self.found = Some(Arc::new(Found::new(ready, links, wcs_links)));
                     self.job = None;
                     return;
                 }
@@ -562,7 +589,8 @@ impl StitchWindow {
             .show(ui, |ui| match (&self.found, &self.arranged) {
                 (Some(found), Some((_, arranged))) => {
                     let found = found.clone();
-                    self.arranged_list(ui, lang, &found, arranged_view(arranged), commands);
+                    let view = arranged_view(arranged, &found.wcs_links, &self.by_hand);
+                    self.arranged_list(ui, lang, &found, view, commands);
                 }
                 _ => self.choice_list(ui, inputs),
             });
@@ -979,23 +1007,25 @@ struct ArrangedView {
     how: Vec<Option<How>>,
 }
 
-fn arranged_view(a: &Arranged) -> ArrangedView {
+fn arranged_view(a: &Arranged, wcs: &HashSet<usize>, by_hand: &HashSet<usize>) -> ArrangedView {
     ArrangedView {
         groups: a.groups.clone(),
         how: a
             .tree
             .iter()
-            .map(|p| {
-                p.map(|(_, via)| {
-                    if via.is_none() {
-                        How::Reference
-                    } else {
-                        How::Matched
-                    }
-                })
-            })
+            .enumerate()
+            .map(|(i, p)| p.map(|(_, via)| how_of(i, via, wcs, by_hand)))
             .collect(),
     }
+}
+
+/// 有効数字 3 桁（鮮鋭度は画像によって桁が大きく違うため、小数点以下の桁を決めない）。
+fn significant(v: f64) -> String {
+    if v <= 0.0 || !v.is_finite() {
+        return format!("{v}");
+    }
+    let digits = (2 - v.log10().floor() as i32).max(0) as usize;
+    format!("{v:.digits$}")
 }
 
 fn how_of(i: usize, via: Option<usize>, wcs: &HashSet<usize>, by_hand: &HashSet<usize>) -> How {
@@ -1136,13 +1166,13 @@ fn arrange(
             used[m] = m == pick;
         }
     }
-    let seams = mosaic::seams(&found.pieces, &placed, links, &used);
     let photos = found.images.iter().all(|i| i.depth == Depth::U8);
     let gains = if settings.match_brightness && photos {
         mosaic::gains(&found.pieces, &placed, &used)
     } else {
         vec![1.0; n]
     };
+    let seams = mosaic::seams(&found.measured, &placed, links, &used, &gains);
     let preview = preview_image(found, &placed, &used, &gains, settings.blend.blend());
     Arranged {
         tree,
@@ -1380,12 +1410,21 @@ fn prepare(path: &Path, registry: &Registry) -> Result<(Prepared, Piece), String
     let thumb = fit(THUMB_SIDE);
     drop(rgb);
     let sharpness = vw_compare::pairs::sharpness(align.width, align.height, &align.to_rgba8());
-    let fwhm = fits
-        .then(|| {
-            let (linear, _) = vw_pipeline::pixel::linear_of_display(&image);
-            vw_pipeline::subframes::evaluate(&linear).fwhm
-        })
-        .flatten();
+    let linear = (fits || !matches!(image.data, PixelData::U8(_)))
+        .then(|| vw_pipeline::pixel::linear_of_display(&image).0);
+    let fwhm = linear
+        .as_ref()
+        .filter(|_| fits)
+        .and_then(|l| vw_pipeline::subframes::evaluate(l).fwhm);
+    let measured = linear.map(|l| {
+        let values = (0..l.width * l.height)
+            .map(|i| match l.channels {
+                3 => vw_compare::plane::luma([l.data[i * 3], l.data[i * 3 + 1], l.data[i * 3 + 2]]),
+                _ => l.data[i],
+            })
+            .collect();
+        vw_compare::plane::Plane::new(l.width, l.height, values).resized(align.width, align.height)
+    });
     let wcs = wcs_of(&image);
     let depth = match &image.data {
         PixelData::U8(_) => Depth::U8,
@@ -1405,6 +1444,7 @@ fn prepare(path: &Path, registry: &Registry) -> Result<(Prepared, Piece), String
         window: image.window,
         curve: image.curve,
         fits,
+        measured,
     };
     let piece = Piece {
         plane: align.luma(),

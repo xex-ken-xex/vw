@@ -285,7 +285,7 @@ impl SkyWindow {
         let view = self.view.get_or_insert_with(View::default);
         if self.fit_when_done && self.scan.is_none() {
             let points: Vec<Radec> = self
-                .items
+                .shown
                 .iter()
                 .flat_map(|i| std::iter::once(i.sky.center).chain(i.sky.outline.iter().copied()))
                 .collect();
@@ -304,7 +304,7 @@ impl SkyWindow {
 
         let active = inputs.active.map(crate::frames::file_of);
         let shapes: Vec<Shape> = self
-            .items
+            .shown
             .iter()
             .map(|item| Shape::of(item, &view, rect))
             .collect();
@@ -406,6 +406,8 @@ impl SkyWindow {
     fn card(&mut self, ui: &mut egui::Ui, inputs: &Inputs<'_>, item: &Item) -> Option<Command> {
         let lang = inputs.lang;
         if item.kind == Kind::Stitched {
+            // ほかの札は縮めた絵の幅（180）で広がるので、絵のないこの札も同じ幅にそろえる。
+            ui.set_min_width(180.0);
             ui.strong(file_name(&item.path));
             ui.weak(sky_chart::radec_text(item.sky.center));
             ui.weak(tr(lang, "Range of the stitched image"));

@@ -210,3 +210,10 @@ fn without_any_wcs_nothing_goes_on_the_sky_chart() {
     let p = two_halves(&tmp);
     assert!(sky_items(&p, Path::new("a.png?stitch=0")).is_empty());
 }
+
+#[test]
+fn a_tiny_negative_angle_is_written_as_zero() {
+    assert_eq!(fixed(-0.001, 2), "0.00");
+    assert_eq!(fixed(-0.2, 0), "0");
+    assert_eq!(fixed(-1.5, 2), "-1.50");
+}

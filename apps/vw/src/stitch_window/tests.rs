@@ -17,6 +17,7 @@ fn prepared(quality: Quality) -> Prepared {
         window: None,
         curve: Curve::default(),
         fits: false,
+        measured: None,
     }
 }
 
@@ -117,13 +118,7 @@ fn wait(job: Job) -> Found {
             Message::Problem(e) => panic!("{e}"),
             Message::Linking(_) => {}
             Message::Done(links, wcs_links) => {
-                let (images, pieces) = ready.into_iter().flatten().unzip();
-                return Found {
-                    images,
-                    pieces,
-                    links,
-                    wcs_links,
-                };
+                return Found::new(ready.into_iter().flatten().collect(), links, wcs_links);
             }
         }
     }
@@ -209,4 +204,59 @@ fn a_saved_png_does_not_overwrite_an_existing_file() {
     assert!(text.contains("a.png: x 0, y 0"), "{text}");
     let err = save(&plan, &png_registry(), &out).unwrap_err();
     assert!(err.contains("not overwritten"), "{err}");
+}
+
+fn tan_cards(crpix: [f64; 2]) -> Vec<(String, String)> {
+    [
+        ("NAXIS1", "800".to_owned()),
+        ("NAXIS2", "600".to_owned()),
+        ("CTYPE1", "RA---TAN".to_owned()),
+        ("CTYPE2", "DEC--TAN".to_owned()),
+        ("CRPIX1", crpix[0].to_string()),
+        ("CRPIX2", crpix[1].to_string()),
+        ("CRVAL1", "83.82".to_owned()),
+        ("CRVAL2", "-5.39".to_owned()),
+        ("CD1_1", "-0.000556".to_owned()),
+        ("CD1_2", "0".to_owned()),
+        ("CD2_1", "0".to_owned()),
+        ("CD2_2", "0.000556".to_owned()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect()
+}
+
+#[test]
+fn tiles_with_a_wcs_are_placed_by_it_instead_of_by_the_picture() {
+    let piece = || Piece {
+        plane: vw_compare::plane::Plane::new(8, 6, vec![0.0; 48]),
+        full: [800, 600],
+    };
+    let to_fits = Affine {
+        c: 1.0,
+        f: 1.0,
+        ..Affine::IDENTITY
+    };
+    // b は a の 600 画素右を写している（参照の画素が 600 左にある）。
+    let wcs = [
+        Some((tan_cards([1000.5, 525.5]), to_fits)),
+        Some((tan_cards([400.5, 525.5]), to_fits)),
+        None,
+    ];
+    let mut links = vec![Link {
+        a: 0,
+        b: 1,
+        map: Affine::IDENTITY,
+        correlation: 0.7,
+        overlap: 0.25,
+    }];
+    let by_wcs = add_wcs_links(&[piece(), piece(), piece()], &wcs, &mut links);
+    assert_eq!(links.len(), 1, "the picture's link is replaced: {links:?}");
+    assert_eq!(by_wcs, HashSet::from([0]));
+    let [x, y] = links[0].map.apply([700.0, 300.0]);
+    assert!(
+        (x - 100.0).abs() < 0.01 && (y - 300.0).abs() < 0.01,
+        "{links:?}"
+    );
+    assert_eq!(how_of(1, Some(0), &by_wcs, &HashSet::new()), How::Wcs);
 }

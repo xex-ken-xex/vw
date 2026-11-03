@@ -273,7 +273,7 @@ fn a_seam_placed_right_is_clean_and_one_placed_wrong_is_misaligned() {
     let pieces = [crop(&s, 0, 0, 400, 300), crop(&s, 260, 40, 400, 300)].map(piece);
     let links = link_all(&pieces, Search::default(), &|| {});
     let right = place(2, &links);
-    let seams_right = seams(&pieces, &right, &links, &[true, true]);
+    let seams_right = seams(&pieces, &right, &links, &[true, true], &[1.0, 1.0]);
     assert_eq!(seams_right.len(), 1);
     assert_eq!(seams_right[0].verdict(), Verdict::Clean, "{seams_right:?}");
     let first = right
@@ -283,7 +283,7 @@ fn a_seam_placed_right_is_clean_and_one_placed_wrong_is_misaligned() {
     let mut wrong = right;
     let other = 1 - first;
     wrong[other] = wrong[other].map(|p| p.then(&shift(12.0, -7.0)));
-    let seams_wrong = seams(&pieces, &wrong, &links, &[true, true]);
+    let seams_wrong = seams(&pieces, &wrong, &links, &[true, true], &[1.0, 1.0]);
     assert_eq!(
         seams_wrong[0].verdict(),
         Verdict::Misaligned,
@@ -299,7 +299,71 @@ fn a_blurred_tile_makes_its_seam_visible() {
     let blurred = b.resized(50, 37).resized(400, 300);
     let pieces = [piece(a), piece(blurred)];
     let placed = [Some(Affine::IDENTITY), Some(shift(260.0, 40.0))];
-    let seam = seams(&pieces, &placed, &[], &[true, true])[0];
+    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.0])[0];
     assert!(seam.sharpness < 0.7, "{seam:?}");
     assert_ne!(seam.verdict(), Verdict::Clean);
+}
+
+#[test]
+fn a_mosaic_anchored_on_a_tilted_shot_is_turned_upright() {
+    let turn = |deg: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Affine {
+            a: c,
+            b: -s,
+            c: 0.0,
+            d: s,
+            e: c,
+            f: 0.0,
+        }
+    };
+    let link = |a, b, map, correlation| Link {
+        a,
+        b,
+        map,
+        correlation,
+        overlap: 0.3,
+    };
+    // 2 だけが 3° 傾いて撮れていて、いちばん多くの組を持つので基準になる。
+    let links = [
+        link(0, 2, turn(3.0), 0.9),
+        link(1, 2, shift(-300.0, 0.0).then(&turn(3.0)), 0.9),
+        link(0, 1, shift(-300.0, 0.0), 0.5),
+    ];
+    let placed = tree(3, &links);
+    let angle = |i: usize| {
+        let (p, _) = placed[i].unwrap();
+        p.d.atan2(p.a).to_degrees()
+    };
+    assert!(angle(0).abs() < 1e-6 && angle(1).abs() < 1e-6, "{placed:?}");
+    assert!((angle(2).abs() - 3.0).abs() < 1e-6, "{placed:?}");
+}
+
+#[test]
+fn a_darker_but_equally_sharp_tile_is_not_called_blurred() {
+    let s = scene(500, 300);
+    let a = crop(&s, 0, 0, 300, 300);
+    let mut b = crop(&s, 200, 0, 300, 300);
+    for v in &mut b.data {
+        *v *= 0.75;
+    }
+    let pieces = [piece(a), piece(b)];
+    let placed = [Some(Affine::IDENTITY), Some(shift(200.0, 0.0))];
+    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.0])[0];
+    assert!(seam.sharpness > 0.9, "{seam:?}");
+    assert!((seam.brightness - 0.25).abs() < 0.02, "{seam:?}");
+}
+
+#[test]
+fn the_brightness_left_after_matching_is_what_the_seam_reports() {
+    let s = scene(500, 300);
+    let a = crop(&s, 0, 0, 300, 300);
+    let mut b = crop(&s, 200, 0, 300, 300);
+    for v in &mut b.data {
+        *v *= 0.8;
+    }
+    let pieces = [piece(a), piece(b)];
+    let placed = [Some(Affine::IDENTITY), Some(shift(200.0, 0.0))];
+    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.25])[0];
+    assert!(seam.brightness < 0.01, "{seam:?}");
 }

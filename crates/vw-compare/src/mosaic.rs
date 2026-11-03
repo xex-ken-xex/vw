@@ -397,7 +397,47 @@ pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>
             _ => break,
         }
     }
+    level(&mut placed);
     placed
+}
+
+/// 置いた画像の多くがまっすぐ・等倍に見えるように、全体を回して縮める。基準の 1 枚が
+/// 傾いて撮れていると、そのままでは全体が傾くため（回転と倍率の中央値を打ち消す）。
+fn level(placed: &mut [Option<(Affine, Option<usize>)>]) {
+    let mut angles: Vec<f64> = placed
+        .iter()
+        .flatten()
+        .map(|(p, _)| p.d.atan2(p.a))
+        .collect();
+    let mut scales: Vec<f64> = placed
+        .iter()
+        .flatten()
+        .map(|(p, _)| (p.a * p.e - p.b * p.d).abs().sqrt())
+        .collect();
+    if angles.len() < 3 {
+        return;
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let (angle, scale) = (median(&mut angles), median(&mut scales));
+    // ほぼまっすぐなら触らない（基準の 1 枚を元の画素のまま残すため）。
+    if scale <= 0.0 || (angle.abs().to_degrees() < 0.05 && (scale - 1.0).abs() < 1e-3) {
+        return;
+    }
+    let (c, s) = (angle.cos() / scale, angle.sin() / scale);
+    let undo = Affine {
+        a: c,
+        b: s,
+        c: 0.0,
+        d: -s,
+        e: c,
+        f: 0.0,
+    };
+    for (p, _) in placed.iter_mut().flatten() {
+        *p = p.then(&undo);
+    }
 }
 
 /// 置いた画像の 4 隅を含む範囲 `[左, 上, 右, 下]`（貼り合わせの座標）。
@@ -494,7 +534,7 @@ pub struct Seam {
     /// 2 枚を直接合わせた写し方と、置いた所との食い違い（元の画素、重なりの中でいちばん大きい所）。
     /// 2 枚を直接合わせられなかったときは `None`。
     pub mismatch: Option<f64>,
-    /// 重なった所の明るさの差（明るいほうに対する割合、0〜1）。
+    /// 重なった所の明るさの差（明るいほうに対する割合、0〜1）。明るさをそろえたときは、そろえたあとの差。
     pub brightness: f64,
     /// 重なった所の鮮鋭度の比（ぼけたほう / くっきりしたほう、0〜1）。
     pub sharpness: f64,
@@ -544,6 +584,7 @@ pub fn seams(
     placed: &[Option<Affine>],
     links: &[Link],
     used: &[bool],
+    gains: &[f64],
 ) -> Vec<Seam> {
     let n = pieces.len();
     let pairs: Vec<(usize, usize)> = (0..n)
@@ -560,12 +601,26 @@ pub fn seams(
             }
             // a の元の座標 → b の元の座標。
             let implied = pa.then(&pb.inverse()?);
-            Some(seam(pieces, links, a, b, implied, share))
+            Some(seam(
+                pieces,
+                links,
+                [a, b],
+                implied,
+                share,
+                [gains[a], gains[b]],
+            ))
         })
         .collect()
 }
 
-fn seam(pieces: &[Piece], links: &[Link], a: usize, b: usize, implied: Affine, share: f64) -> Seam {
+fn seam(
+    pieces: &[Piece],
+    links: &[Link],
+    [a, b]: [usize; 2],
+    implied: Affine,
+    share: f64,
+    gains: [f64; 2],
+) -> Seam {
     let (pa, pb) = (&pieces[a], &pieces[b]);
     let small = implied.between_scales(pa.scale(), pb.scale());
     let (correlation, _) = refine::score(&pa.plane, &pb.plane, &small);
@@ -583,7 +638,7 @@ fn seam(pieces: &[Piece], links: &[Link], a: usize, b: usize, implied: Affine, s
             })
             .fold(0.0, f64::max)
     });
-    let (brightness, sharpness) = looks(pa, pb, &small);
+    let (brightness, sharpness) = looks(pa, pb, &small, gains);
     Seam {
         a,
         b,
@@ -615,44 +670,65 @@ fn overlap_points(pa: &Piece, pb: &Piece, implied: &Affine) -> Vec<[f64; 2]> {
     out
 }
 
-/// 重なった所の明るさの差と、鮮鋭度の比。`small` は縮めた画像どうしの写し方。
-fn looks(pa: &Piece, pb: &Piece, small: &Affine) -> (f64, f64) {
+/// 重なった所の明るさの差と、鮮鋭度の比。`small` は縮めた画像どうしの写し方（a → b）。
+/// 明るさは、それぞれ `gains` を掛けたあとの差（そろえたあとに残る段差）。
+fn looks(pa: &Piece, pb: &Piece, small: &Affine, gains: [f64; 2]) -> (f64, f64) {
     let (a, b) = (&pa.plane, &pb.plane);
-    let (mut sum_a, mut sum_b, mut grad_a, mut grad_b, mut count) = (0.0, 0.0, 0.0, 0.0, 0usize);
-    // b の勾配は、a の 1 画素ぶん離れた点との差で測る。縮めた倍率が違っても、同じ広さで比べるため。
-    for y in 1..a.height.saturating_sub(1) {
-        for x in 1..a.width.saturating_sub(1) {
+    let (mut sum_a, mut sum_b, mut count) = (0.0, 0.0, 0usize);
+    for y in 0..a.height {
+        for x in 0..a.width {
             let [u, v] = small.apply([x as f64, y as f64]);
-            let (Some(vb), Some(vbx), Some(vby)) = (
-                b.sample(u, v),
-                b.sample(u + small.a, v + small.d),
-                b.sample(u + small.b, v + small.e),
-            ) else {
-                continue;
-            };
-            let va = a.at(x, y);
-            sum_a += f64::from(va);
-            sum_b += f64::from(vb);
-            grad_a += f64::from((a.at(x + 1, y) - va).powi(2) + (a.at(x, y + 1) - va).powi(2));
-            grad_b += f64::from((vbx - vb).powi(2) + (vby - vb).powi(2));
-            count += 1;
+            if let Some(vb) = b.sample(u, v) {
+                sum_a += f64::from(a.at(x, y));
+                sum_b += f64::from(vb);
+                count += 1;
+            }
         }
     }
     if count == 0 {
         return (0.0, 1.0);
     }
     let (ma, mb) = (sum_a / count as f64, sum_b / count as f64);
-    let brightness = if ma.max(mb) > 0.0 {
-        (ma - mb).abs() / ma.max(mb)
+    let (ga, gb) = (ma * gains[0], mb * gains[1]);
+    let brightness = if ga.max(gb) > 0.0 {
+        (ga - gb).abs() / ga.max(gb)
     } else {
         0.0
     };
-    let sharpness = if grad_a.max(grad_b) > 0.0 {
-        grad_a.min(grad_b) / grad_a.max(grad_b)
-    } else {
-        1.0
+    // 勾配はそれぞれ自分の画素の上で測る。相手の格子へ写して測ると、1 画素より細かいずれの
+    // 補間でぼけて、同じくっきりさの画像でも鋭さが半分ほどに見えてしまうため。
+    let sharpness = match (small.inverse(), small.parts([1.0, 1.0], [1.0, 1.0]).scale) {
+        (Some(back), k) if k > 0.0 => {
+            // 明るさで割る。露出が暗いだけの写真は勾配も暗さの 2 乗だけ小さく、ぼけて見えてしまうため。
+            let ga = gradient_energy(a, b, small) / (ma * ma).max(1e-12);
+            // 縮めた倍率が違えば、同じ広さの勾配は倍率の 2 乗だけ違って見えるので、そろえる。
+            let gb = gradient_energy(b, a, &back) * k * k / (mb * mb).max(1e-12);
+            if ga.max(gb) > 0.0 {
+                ga.min(gb) / ga.max(gb)
+            } else {
+                1.0
+            }
+        }
+        _ => 1.0,
     };
     (brightness, sharpness)
+}
+
+/// `own` の画素のうち、`to_other` で写して `other` にも写る所の、勾配の 2 乗の平均。
+fn gradient_energy(own: &Plane, other: &Plane, to_other: &Affine) -> f64 {
+    let (mut sum, mut count) = (0.0f64, 0usize);
+    for y in 0..own.height.saturating_sub(1) {
+        for x in 0..own.width.saturating_sub(1) {
+            let [u, v] = to_other.apply([x as f64, y as f64]);
+            if other.sample(u, v).is_none() {
+                continue;
+            }
+            let c = own.at(x, y);
+            sum += f64::from((own.at(x + 1, y) - c).powi(2) + (own.at(x, y + 1) - c).powi(2));
+            count += 1;
+        }
+    }
+    if count == 0 { 0.0 } else { sum / count as f64 }
 }
 
 /// 重なった所の明るさがそろうように、画像ごとに掛ける比（使わない画像と置けなかった画像は 1）。

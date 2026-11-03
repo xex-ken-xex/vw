@@ -420,12 +420,12 @@ pub fn placement_text(s: &Source, grid: &Grid) -> String {
     let size = [s.size[0] as f64, s.size[1] as f64];
     let parts = t.parts(size, size);
     let mut text = format!(
-        "x {}, y {}, {} x {}, {:.2}°, ×{:.3}",
-        left.round(),
-        top.round(),
+        "x {}, y {}, {} x {}, {}°, ×{:.3}",
+        fixed(left, 0),
+        fixed(top, 0),
         s.size[0],
         s.size[1],
-        parts.rotation,
+        fixed(parts.rotation, 2),
         parts.scale,
     );
     if let Some(c) = s.correlation {
@@ -434,6 +434,16 @@ pub fn placement_text(s: &Source, grid: &Grid) -> String {
     text.push_str(HOW_MARK);
     text.push_str(s.how.title());
     text
+}
+
+/// 小数点以下 `decimals` 桁。丸めると 0 になる負の数を「-0」と書かない。
+fn fixed(v: f64, decimals: usize) -> String {
+    let text = format!("{v:.decimals$}");
+    if text.starts_with('-') && text[1..].chars().all(|c| c == '0' || c == '.') {
+        text[1..].to_owned()
+    } else {
+        text
+    }
 }
 
 /// 星図に出す、貼り合わせた範囲（外枠）と、元の画像ごとの枠。出した画像に WCS がなければ空。
