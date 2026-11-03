@@ -357,7 +357,15 @@ fn turn_map(k: usize, [w, h]: [usize; 2]) -> Affine {
 /// たどる組は、相関の高い順に木を作って選ぶ（全部の組の食い違いを最小二乗でならす方法は、
 /// 1 組の取り違えが全体をゆがめるので、まずは確かな組だけをつなぐ）。
 pub fn place(count: usize, links: &[Link]) -> Vec<Option<Affine>> {
-    let mut placed: Vec<Option<Affine>> = vec![None; count];
+    tree(count, links)
+        .into_iter()
+        .map(|p| p.map(|(t, _)| t))
+        .collect()
+}
+
+/// [`place`] と同じ置き方と、それぞれを置くのにたどった組（`links` の番号。基準は `None`）。
+pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>> {
+    let mut placed: Vec<Option<(Affine, Option<usize>)>> = vec![None; count];
     if count == 0 {
         return placed;
     }
@@ -369,22 +377,23 @@ pub fn place(count: usize, links: &[Link]) -> Vec<Option<Affine>> {
     let anchor = (0..count)
         .max_by(|&x, &y| weight[x].total_cmp(&weight[y]).then(y.cmp(&x)))
         .unwrap_or(0);
-    placed[anchor] = Some(Affine::IDENTITY);
+    placed[anchor] = Some((Affine::IDENTITY, None));
     loop {
         // 置いた画像と置いていない画像をつなぐ組のうち、いちばん確かなもの（Prim の方法）。
         let next = links
             .iter()
-            .filter(|l| placed[l.a].is_some() != placed[l.b].is_some())
-            .max_by(|x, y| x.correlation.total_cmp(&y.correlation));
-        let Some(l) = next else {
+            .enumerate()
+            .filter(|(_, l)| placed[l.a].is_some() != placed[l.b].is_some())
+            .max_by(|x, y| x.1.correlation.total_cmp(&y.1.correlation));
+        let Some((i, l)) = next else {
             break;
         };
         let Some(to_b) = l.map.inverse() else {
             break;
         };
         match (placed[l.a], placed[l.b]) {
-            (Some(pa), None) => placed[l.b] = Some(to_b.then(&pa)),
-            (None, Some(pb)) => placed[l.a] = Some(l.map.then(&pb)),
+            (Some((pa, _)), None) => placed[l.b] = Some((to_b.then(&pa), Some(i))),
+            (None, Some((pb, _))) => placed[l.a] = Some((l.map.then(&pb), Some(i))),
             _ => break,
         }
     }

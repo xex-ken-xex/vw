@@ -367,6 +367,12 @@ fn load_look(
     if let Some(files) = compose::split(path) {
         return load_composite(registry, &files, (thumb, full), fit_side, look);
     }
+    if crate::stitch::is_stitched(path) {
+        let plan = crate::stitch::split(path).ok_or_else(|| {
+            "the stitched image is gone since vw restarted: stitch the images again".to_owned()
+        })?;
+        return load_stitched(registry, &plan, (thumb, full), fit_side, look);
+    }
     let t0 = Instant::now();
     let (file, frame) =
         frames::split(path).map_or((path.to_path_buf(), None), |(f, i)| (f, Some(i)));
@@ -454,6 +460,30 @@ fn load_composite(
     );
     loaded.info.compose = Some(Arc::new(composite));
     Ok(loaded)
+}
+
+/// 何枚かを読んで貼り合わせる。
+fn load_stitched(
+    registry: &Registry,
+    plan: &crate::stitch::Plan,
+    (thumb, full): (bool, bool),
+    fit_side: Option<u32>,
+    look: Option<&Look>,
+) -> Result<Loaded, String> {
+    let t0 = Instant::now();
+    let (image, size) = crate::stitch::render(plan, registry)?;
+    let decode = t0.elapsed();
+    Ok(finish(
+        image,
+        crate::stitch::PLUGIN,
+        1,
+        size,
+        (Duration::ZERO, decode),
+        thumb,
+        full,
+        fit_side,
+        look,
+    ))
 }
 
 /// 1 枚を [`vw_core::DecoderPlugin::develop`] で作り直す。縮小画像とフル解像度の画像を返す。

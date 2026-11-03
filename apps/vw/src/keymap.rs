@@ -116,6 +116,7 @@ pub enum Action {
     ShowSlotOnMap,
     ToggleSkyChart,
     ToggleSubframes,
+    StitchImages,
     UndoPosition,
     ShowAbout,
     ShowSystemInfo,
@@ -284,6 +285,7 @@ impl Action {
         Action::ShowSlotOnMap,
         Action::ToggleSkyChart,
         Action::ToggleSubframes,
+        Action::StitchImages,
         Action::UndoPosition,
         Action::ToggleTagging,
         Action::FlagGood,
@@ -444,6 +446,7 @@ impl Action {
             Action::ShowSlotOnMap => "show_slot_on_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::ToggleSubframes => "toggle_subframes",
+            Action::StitchImages => "stitch_images",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
             Action::ShowSystemInfo => "show_system_info",
@@ -584,6 +587,7 @@ impl Action {
             Action::ShowSlotOnMap => "Show the slot's data on the map",
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
+            Action::StitchImages => "Stitch images...",
             Action::UndoPosition => "Undo the last position change, flag clearing or trashing",
             Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
@@ -753,7 +757,8 @@ impl Action {
             | Action::ToggleMap
             | Action::ShowSlotOnMap
             | Action::ToggleSkyChart
-            | Action::ToggleSubframes => KeyGroup::Windows,
+            | Action::ToggleSubframes
+            | Action::StitchImages => KeyGroup::Windows,
             Action::ToggleSettings
             | Action::OpenSettingsFolder
             | Action::ShowAbout
@@ -975,6 +980,7 @@ impl Action {
             Action::ShowSlotOnMap => vec![],
             Action::ToggleSkyChart => vec![],
             Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],
+            Action::StitchImages => vec![],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
             Action::ShowSystemInfo => vec![],

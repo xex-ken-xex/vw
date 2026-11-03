@@ -2141,6 +2141,12 @@ fn plain_body(
                     .show(ui, |ui| {
                         for (name, value) in &stage.lines {
                             ui.weak(tr_text(lang, name));
+                            // 値はファイルの中身なので訳さない。貼り合わせの値だけは vw の文言。
+                            let value = if info.plugin == crate::stitch::PLUGIN {
+                                tr_text(lang, value)
+                            } else {
+                                value.clone()
+                            };
                             // 長い値（EXIF の文など）でノードが横に伸びないよう切り詰める。
                             ui.add(egui::Label::new(value).truncate());
                             ui.end_row();

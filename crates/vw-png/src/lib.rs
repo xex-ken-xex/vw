@@ -11,6 +11,9 @@ use std::io::Cursor;
 use png::{BitDepth, ColorType, Transformations};
 use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwImage};
 
+mod write;
+pub use write::encode;
+
 /// PNG ファイルの先頭 8 バイト。
 const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
@@ -396,5 +399,24 @@ mod tests {
         let data = header_only(200_000, 200_000);
         let err = PngPlugin.decode(&data).unwrap_err().to_string();
         assert!(err.contains("image size limit"), "{err}");
+    }
+
+    #[test]
+    fn a_written_16bit_image_reads_back_with_its_values_and_description() {
+        let mut img = VwImage::new(2, 1, ColorModel::Gray, PixelData::U16(vec![0, 65535])).unwrap();
+        img.significant_bits = 16;
+        let png = super::encode(&img, "from 2 images").unwrap();
+        let back = PngPlugin.decode(&png).unwrap();
+        assert!(matches!(&back.data, PixelData::U16(v) if v == &[0, 65535]));
+        assert_eq!(
+            back.metadata.get("Text", "Description"),
+            Some("from 2 images")
+        );
+    }
+
+    #[test]
+    fn a_real_valued_image_is_refused() {
+        let img = VwImage::new(1, 1, ColorModel::Gray, PixelData::F32(vec![0.5])).unwrap();
+        assert!(super::encode(&img, "").is_err());
     }
 }

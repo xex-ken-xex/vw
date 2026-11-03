@@ -168,6 +168,12 @@ impl VwApp {
                     }
                 }
             });
+            vw_ui::menu::bar_menu(ui, tr(lang, "Tools"), |ui| {
+                let stitch = self.stitch.open;
+                if self.menu_item(ui, Action::StitchImages, Some(stitch)) {
+                    chosen = Some(Action::StitchImages);
+                }
+            });
             vw_ui::menu::bar_menu(ui, tr(lang, "Settings"), |ui| {
                 if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
                     chosen = Some(Action::ToggleSettings);
