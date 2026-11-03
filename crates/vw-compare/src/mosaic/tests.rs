@@ -1,5 +1,9 @@
 use super::*;
 
+fn warps(p: &[Option<Affine>]) -> Vec<Option<Warp>> {
+    p.iter().map(|p| p.map(Warp::Affine)).collect()
+}
+
 /// 全体に散らした、ぼけた点の模様（0〜255）。どこを切り出しても似た所のない絵にする。
 fn scene(width: usize, height: usize) -> Plane {
     let mut seed = 0x9e37_79b9_u32;
@@ -72,7 +76,7 @@ fn two_crops_sharing_a_third_are_linked_by_their_offset() {
     let pieces = [crop(&s, 0, 0, 400, 300), crop(&s, 260, 40, 400, 300)].map(piece);
     let links = link_all(&pieces, Search::default(), &|| {});
     assert_eq!(links.len(), 1, "{links:?}");
-    let l = links[0];
+    let l = &links[0];
     assert!(l.correlation > 0.9, "{l:?}");
     // a の (300, 100) は、b では (40, 60)。
     assert!(
@@ -134,7 +138,7 @@ fn a_grid_of_tiles_is_placed_where_it_was_cut_from() {
         ];
         assert!(near(p.apply([0.0, 0.0]), want, 0.5), "{i}: {p:?}");
     }
-    let b = bounds(&[[420, 300]; 4], &placed).unwrap();
+    let b = bounds(&[[420, 300]; 4], &warps(&placed)).unwrap();
     assert!(
         (b[2] - b[0] - 760.0).abs() < 1.0 && (b[3] - b[1] - 562.0).abs() < 1.0,
         "{b:?}"
@@ -151,6 +155,8 @@ fn a_tile_with_no_partner_is_left_unplaced() {
             map: shift(-100.0, 0.0),
             correlation: 0.9,
             overlap: 0.5,
+            kind: LinkKind::Overlap,
+            points: Vec::new(),
         }],
     );
     assert!(placed[0].is_some() && placed[1].is_some());
@@ -166,24 +172,24 @@ fn shots_of_the_same_area_are_grouped() {
         Some(shift(300.0, 0.0)),
         None,
     ];
-    assert_eq!(same_area(&sizes, &placed, 0.8), vec![vec![0, 1]]);
-    assert!(same_area(&sizes, &placed, 0.95).is_empty());
+    assert_eq!(same_area(&sizes, &warps(&placed), 0.8), vec![vec![0, 1]]);
+    assert!(same_area(&sizes, &warps(&placed), 0.95).is_empty());
 }
 
 #[test]
 fn the_share_is_measured_against_the_smaller_image() {
     let inner = shared(
         [100, 100],
-        &shift(50.0, 50.0),
+        &shift(50.0, 50.0).into(),
         [400, 400],
-        &Affine::IDENTITY,
+        &Affine::IDENTITY.into(),
     );
     assert!((inner - 1.0).abs() < 1e-9);
     let half = shared(
         [200, 100],
-        &Affine::IDENTITY,
+        &Affine::IDENTITY.into(),
         [200, 100],
-        &shift(100.0, 0.0),
+        &shift(100.0, 0.0).into(),
     );
     assert!((half - 0.5).abs() < 0.05, "{half}");
 }
@@ -201,7 +207,7 @@ fn feathered_tiles_rebuild_the_scene_without_a_step() {
             height: p.height,
             channels: 1,
             data: &p.data,
-            placed: shift(x, 0.0),
+            placed: shift(x, 0.0).into(),
             gain: 1.0,
         });
     }
@@ -221,7 +227,7 @@ fn the_last_tile_covers_the_overlap_when_blending_is_off() {
             height: 1,
             channels: 1,
             data: &[value; 3],
-            placed: shift(x, 0.0),
+            placed: shift(x, 0.0).into(),
             gain: 1.0,
         });
     }
@@ -237,7 +243,7 @@ fn what_no_tile_covers_is_left_empty() {
         height: 1,
         channels: 1,
         data: &[5.0, 5.0],
-        placed: Affine::IDENTITY,
+        placed: Affine::IDENTITY.into(),
         gain: 1.0,
     });
     let out = canvas.finish();
@@ -262,7 +268,7 @@ fn a_darker_tile_gets_a_gain_that_matches_its_neighbour() {
     }
     let pieces = [piece(a), piece(b)];
     let placed = [Some(Affine::IDENTITY), Some(shift(200.0, 0.0))];
-    let g = gains(&pieces, &placed, &[true, true]);
+    let g = gains(&pieces, &warps(&placed), &[true, true]);
     let ratio = g[1] / g[0];
     assert!((ratio - 1.25).abs() < 0.03, "{g:?}");
 }
@@ -273,7 +279,7 @@ fn a_seam_placed_right_is_clean_and_one_placed_wrong_is_misaligned() {
     let pieces = [crop(&s, 0, 0, 400, 300), crop(&s, 260, 40, 400, 300)].map(piece);
     let links = link_all(&pieces, Search::default(), &|| {});
     let right = place(2, &links);
-    let seams_right = seams(&pieces, &right, &links, &[true, true], &[1.0, 1.0]);
+    let seams_right = seams(&pieces, &warps(&right), &links, &[true, true], &[1.0, 1.0]);
     assert_eq!(seams_right.len(), 1);
     assert_eq!(seams_right[0].verdict(), Verdict::Clean, "{seams_right:?}");
     let first = right
@@ -283,7 +289,7 @@ fn a_seam_placed_right_is_clean_and_one_placed_wrong_is_misaligned() {
     let mut wrong = right;
     let other = 1 - first;
     wrong[other] = wrong[other].map(|p| p.then(&shift(12.0, -7.0)));
-    let seams_wrong = seams(&pieces, &wrong, &links, &[true, true], &[1.0, 1.0]);
+    let seams_wrong = seams(&pieces, &warps(&wrong), &links, &[true, true], &[1.0, 1.0]);
     assert_eq!(
         seams_wrong[0].verdict(),
         Verdict::Misaligned,
@@ -299,7 +305,7 @@ fn a_blurred_tile_makes_its_seam_visible() {
     let blurred = b.resized(50, 37).resized(400, 300);
     let pieces = [piece(a), piece(blurred)];
     let placed = [Some(Affine::IDENTITY), Some(shift(260.0, 40.0))];
-    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.0])[0];
+    let seam = seams(&pieces, &warps(&placed), &[], &[true, true], &[1.0, 1.0])[0];
     assert!(seam.sharpness < 0.7, "{seam:?}");
     assert_ne!(seam.verdict(), Verdict::Clean);
 }
@@ -323,6 +329,8 @@ fn a_mosaic_anchored_on_a_tilted_shot_is_turned_upright() {
         map,
         correlation,
         overlap: 0.3,
+        kind: LinkKind::Overlap,
+        points: Vec::new(),
     };
     // 2 だけが 3° 傾いて撮れていて、いちばん多くの組を持つので基準になる。
     let links = [
@@ -349,7 +357,7 @@ fn a_darker_but_equally_sharp_tile_is_not_called_blurred() {
     }
     let pieces = [piece(a), piece(b)];
     let placed = [Some(Affine::IDENTITY), Some(shift(200.0, 0.0))];
-    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.0])[0];
+    let seam = seams(&pieces, &warps(&placed), &[], &[true, true], &[1.0, 1.0])[0];
     assert!(seam.sharpness > 0.9, "{seam:?}");
     assert!((seam.brightness - 0.25).abs() < 0.02, "{seam:?}");
 }
@@ -364,6 +372,31 @@ fn the_brightness_left_after_matching_is_what_the_seam_reports() {
     }
     let pieces = [piece(a), piece(b)];
     let placed = [Some(Affine::IDENTITY), Some(shift(200.0, 0.0))];
-    let seam = seams(&pieces, &placed, &[], &[true, true], &[1.0, 1.25])[0];
+    let seam = seams(&pieces, &warps(&placed), &[], &[true, true], &[1.0, 1.25])[0];
     assert!(seam.brightness < 0.01, "{seam:?}");
+}
+
+#[test]
+fn a_link_between_tiles_that_do_not_overlap_is_dropped_when_the_others_disagree() {
+    let size = [800, 600];
+    let link = |a, b, map: Affine, correlation| Link {
+        a,
+        b,
+        map,
+        correlation,
+        overlap: 0.3,
+        kind: LinkKind::Overlap,
+        points: grid_pairs(size, size, &map),
+    };
+    // 0 1 2 が横に並ぶ。0 と 2 は重なっていないのに、草地の繰り返しで結ばれてしまった。
+    let mut links = vec![
+        link(0, 1, shift(-560.0, 0.0), 0.99),
+        link(1, 2, shift(-560.0, 1.0), 0.5),
+        link(1, 2, shift(-560.0, 0.0), 0.99),
+        link(0, 2, shift(-580.0, 20.0), 0.86),
+    ];
+    without_disagreeing(3, &mut links);
+    let kept: Vec<f64> = links.iter().map(|l| l.correlation).collect();
+    // 少しずれただけの組は、食い違いとみなさず残す。
+    assert_eq!(kept, [0.99, 0.5, 0.99]);
 }

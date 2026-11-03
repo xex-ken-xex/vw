@@ -18,6 +18,8 @@ fn prepared(quality: Quality) -> Prepared {
         curve: Curve::default(),
         fits: false,
         measured: None,
+        stars: None,
+        focal: None,
     }
 }
 
@@ -117,8 +119,13 @@ fn wait(job: Job) -> Found {
             Message::Ready(i, p) => ready[i] = Some(*p),
             Message::Problem(e) => panic!("{e}"),
             Message::Linking(_) => {}
-            Message::Done(links, wcs_links) => {
-                return Found::new(ready.into_iter().flatten().collect(), links, wcs_links);
+            Message::Done(links, features) => {
+                return Found::new(
+                    ready.into_iter().flatten().collect(),
+                    links,
+                    features,
+                    StitchFeatures::Fallback,
+                );
             }
         }
     }
@@ -134,14 +141,24 @@ fn three_overlapping_photos_are_found_placed_and_planned() {
         .zip(at)
         .map(|(name, at)| crop(&s, 700, tmp.path(), name, at, [400, 300]))
         .collect();
-    let found = wait(start_job(paths.clone(), png_registry()));
+    let found = wait(start_job(
+        paths.clone(),
+        png_registry(),
+        StitchFeatures::Fallback,
+    ));
     assert_eq!(found.images.len(), 3);
     let settings = StitchSettings::default();
-    let arranged = arrange(&found, &found.links, &HashMap::new(), &settings);
+    let arranged = arrange(
+        &found,
+        &found.links,
+        &HashMap::new(),
+        StitchProjection::Auto,
+        &settings,
+    );
     // b と c は 8 割以上（86 %）重なるので、同じ所を写した 1 組になり、どちらか 1 枚だけを使う。
     assert_eq!(arranged.groups, vec![vec![1, 2]]);
     assert_eq!(arranged.used.iter().filter(|u| **u).count(), 2);
-    let plan = plan_of(&found, &found.links, &arranged, &HashSet::new(), &settings).unwrap();
+    let plan = plan_of(&found, &found.links, &arranged, &settings).unwrap();
     assert_eq!(plan.sources.len(), 2);
     let a = plan.sources.iter().find(|s| s.path == paths[0]).unwrap();
     let other = plan.sources.iter().find(|s| s.path != paths[0]).unwrap();
@@ -150,8 +167,8 @@ fn three_overlapping_photos_are_found_placed_and_planned() {
         at[i][0] as f64 - at[0][0] as f64,
         at[i][1] as f64 - at[0][1] as f64,
     ];
-    let a_origin = a.placed.apply([0.0, 0.0]);
-    let got = other.placed.apply([0.0, 0.0]);
+    let a_origin = a.placed.apply([0.0, 0.0]).unwrap();
+    let got = other.placed.apply([0.0, 0.0]).unwrap();
     let offset = [got[0] - a_origin[0], got[1] - a_origin[1]];
     assert!(
         (offset[0] - want[0]).hypot(offset[1] - want[1]) < 0.5,
@@ -172,12 +189,24 @@ fn choosing_another_shot_of_the_same_area_uses_it_instead() {
         .zip(at)
         .map(|(name, at)| crop(&s, 700, tmp.path(), name, at, [400, 300]))
         .collect();
-    let found = wait(start_job(paths, png_registry()));
+    let found = wait(start_job(paths, png_registry(), StitchFeatures::Fallback));
     let settings = StitchSettings::default();
-    let first = arrange(&found, &found.links, &HashMap::new(), &settings);
+    let first = arrange(
+        &found,
+        &found.links,
+        &HashMap::new(),
+        StitchProjection::Auto,
+        &settings,
+    );
     let chosen = if first.used[1] { 2 } else { 1 };
     let choices = HashMap::from([(1, chosen)]);
-    let again = arrange(&found, &found.links, &choices, &settings);
+    let again = arrange(
+        &found,
+        &found.links,
+        &choices,
+        StitchProjection::Auto,
+        &settings,
+    );
     assert!(again.used[chosen]);
     assert!(!again.used[3 - chosen]);
 }
@@ -188,10 +217,20 @@ fn a_saved_png_does_not_overwrite_an_existing_file() {
     let s = scene(700, 400);
     let a = crop(&s, 700, tmp.path(), "a.png", [0, 0], [400, 300]);
     let b = crop(&s, 700, tmp.path(), "b.png", [260, 40], [400, 300]);
-    let found = wait(start_job(vec![a, b], png_registry()));
+    let found = wait(start_job(
+        vec![a, b],
+        png_registry(),
+        StitchFeatures::Fallback,
+    ));
     let settings = StitchSettings::default();
-    let arranged = arrange(&found, &found.links, &HashMap::new(), &settings);
-    let plan = plan_of(&found, &found.links, &arranged, &HashSet::new(), &settings).unwrap();
+    let arranged = arrange(
+        &found,
+        &found.links,
+        &HashMap::new(),
+        StitchProjection::Auto,
+        &settings,
+    );
+    let plan = plan_of(&found, &found.links, &arranged, &settings).unwrap();
     let out = tmp.path().join("out.png");
     let note = save(&plan, &png_registry(), &out).unwrap();
     assert!(note.contains("660 x 34"), "{note}");
@@ -243,20 +282,190 @@ fn tiles_with_a_wcs_are_placed_by_it_instead_of_by_the_picture() {
         Some((tan_cards([400.5, 525.5]), to_fits)),
         None,
     ];
-    let mut links = vec![Link {
-        a: 0,
-        b: 1,
-        map: Affine::IDENTITY,
-        correlation: 0.7,
-        overlap: 0.25,
-    }];
-    let by_wcs = add_wcs_links(&[piece(), piece(), piece()], &wcs, &mut links);
+    let mut links = vec![Link::by_map(
+        (0, [800, 600]),
+        (1, [800, 600]),
+        Affine::IDENTITY,
+        0.7,
+        0.25,
+        LinkKind::Overlap,
+    )];
+    add_wcs_links(&[piece(), piece(), piece()], &wcs, &mut links);
     assert_eq!(links.len(), 1, "the picture's link is replaced: {links:?}");
-    assert_eq!(by_wcs, HashSet::from([0]));
+    assert_eq!(links[0].kind, LinkKind::Wcs);
     let [x, y] = links[0].map.apply([700.0, 300.0]);
     assert!(
         (x - 100.0).abs() < 0.01 && (y - 300.0).abs() < 0.01,
         "{links:?}"
     );
-    assert_eq!(how_of(1, Some(0), &by_wcs, &HashSet::new()), How::Wcs);
+    assert_eq!(how_of(Some(0), &links), How::Wcs);
+}
+
+/// 球に散らしたぼけた点の模様を、正距円筒の絵（横 `w`、縦 `w / 2`）にしたもの。
+fn sky_sphere(w: usize) -> Vec<f32> {
+    let h = w / 2;
+    let mut seed = 0x6a09_e667_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        f64::from(seed) / f64::from(u32::MAX)
+    };
+    let mut v = vec![110.0f32; w * h];
+    for _ in 0..w * h / 250 {
+        let (bx, by, r, amp) = (
+            next() * w as f64,
+            next() * h as f64,
+            1.5 + next() * 4.0,
+            (next() * 2.0 - 1.0) * 110.0,
+        );
+        let reach = (r * 3.0) as isize;
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (x, y) = ((bx as isize + dx).rem_euclid(w as isize), by as isize + dy);
+                if y < 0 || y >= h as isize {
+                    continue;
+                }
+                let d2 = (dx as f64).powi(2) + (dy as f64).powi(2);
+                v[y as usize * w + x as usize] += (amp * (-d2 / (2.0 * r * r)).exp()) as f32;
+            }
+        }
+    }
+    v
+}
+
+/// その場で右へ `yaw` ラジアン回したカメラ（焦点距離 `f` 画素）で `sphere` を撮った絵（RGB）。
+fn shot(sphere: &[f32], sw: usize, yaw: f64, f: f64, size: [usize; 2]) -> Vec<u8> {
+    let sh = sw / 2;
+    let (cx, cy) = ((size[0] as f64 - 1.0) / 2.0, (size[1] as f64 - 1.0) / 2.0);
+    (0..size[0] * size[1])
+        .flat_map(|i| {
+            let (x, y) = ((i % size[0]) as f64, (i / size[0]) as f64);
+            let (dx, dy, dz) = ((x - cx) / f, (y - cy) / f, 1.0);
+            // カメラの向きを右へ yaw 回す。
+            let (s, c) = yaw.sin_cos();
+            let (wx, wz) = (c * dx + s * dz, -s * dx + c * dz);
+            let theta = wx.atan2(wz);
+            let phi = dy.atan2(wx.hypot(wz));
+            let u = (theta / std::f64::consts::TAU + 0.5) * sw as f64;
+            let v = (phi / std::f64::consts::PI + 0.5) * sh as f64;
+            let (u0, v0) = (u.floor() as isize, v.floor() as isize);
+            let (fu, fv) = ((u - u0 as f64) as f32, (v - v0 as f64) as f32);
+            let at = |x: isize, y: isize| {
+                sphere[(y.clamp(0, sh as isize - 1) as usize) * sw
+                    + x.rem_euclid(sw as isize) as usize]
+            };
+            let g = (at(u0, v0) * (1.0 - fu) + at(u0 + 1, v0) * fu) * (1.0 - fv)
+                + (at(u0, v0 + 1) * (1.0 - fu) + at(u0 + 1, v0 + 1) * fu) * fv;
+            let g = g.clamp(0.0, 255.0) as u8;
+            [g, g, g]
+        })
+        .collect()
+}
+
+#[test]
+fn a_panorama_turned_through_two_hundred_degrees_is_put_on_a_cylinder() {
+    let tmp = TempDir::new();
+    let sphere = sky_sphere(4096);
+    let size = [480, 360];
+    let paths: Vec<PathBuf> = (0..5)
+        .map(|k| {
+            let rgb = shot(&sphere, 4096, k as f64 * 0.6, 400.0, size);
+            let path = tmp.path().join(format!("p{k}.png"));
+            write_png(&path, size[0] as u32, size[1] as u32, &rgb);
+            path
+        })
+        .collect();
+    let found = wait(start_job(paths, png_registry(), StitchFeatures::Fallback));
+    let settings = StitchSettings::default();
+    let arranged = arrange(
+        &found,
+        &found.links,
+        &HashMap::new(),
+        StitchProjection::Auto,
+        &settings,
+    );
+    assert_eq!(
+        arranged.projection,
+        Projection::Cylinder,
+        "{:?}",
+        arranged.note
+    );
+    assert!(arranged.placed.iter().all(Option::is_some));
+    let (_, after) = arranged.fit.unwrap();
+    assert!(after < 1.5, "{:?}", arranged.fit);
+    assert!(
+        arranged
+            .seams
+            .iter()
+            .all(|s| s.verdict() != Verdict::Misaligned),
+        "{:?}",
+        arranged.seams
+    );
+    let plan = plan_of(&found, &found.links, &arranged, &settings).unwrap();
+    let grid = plan.grid().unwrap();
+    // 横に約 200°、縦は 1 枚の画角ほど。
+    assert!(
+        grid.width > 3 * grid.height,
+        "{} x {}",
+        grid.width,
+        grid.height
+    );
+    let text = stitch::placement_text(&plan.sources[0], &grid);
+    assert!(text.contains("heading") && text.contains("f "), "{text}");
+}
+
+#[test]
+fn a_photo_turned_too_far_for_the_overlap_search_is_found_by_its_feature_points() {
+    let tmp = TempDir::new();
+    // 細かい模様の絵（1400 × 700 の左上 700 × 500 を使う）。
+    let texture = sky_sphere(1400);
+    let gray =
+        |x: usize, y: usize| texture[y.min(699) * 1400 + x.min(1399)].clamp(0.0, 255.0) as u8;
+    let cut = |at: [f64; 2], angle: f64| -> Vec<u8> {
+        let (sn, cs) = angle.to_radians().sin_cos();
+        (0..400 * 300)
+            .flat_map(|i| {
+                let (x, y) = ((i % 400) as f64 - 199.5, (i / 400) as f64 - 149.5);
+                let (u, v) = (cs * x - sn * y + at[0], sn * x + cs * y + at[1]);
+                let g = gray(u.round().max(0.0) as usize, v.round().max(0.0) as usize);
+                [g, g, g]
+            })
+            .collect()
+    };
+    let a = tmp.path().join("a.png");
+    write_png(&a, 400, 300, &cut([199.5, 149.5], 0.0));
+    // b は真ん中が (450, 300) の所を、35° 回して切り出した。
+    let b = tmp.path().join("b.png");
+    write_png(&b, 400, 300, &cut([450.0, 300.0], 35.0));
+    let found = wait(start_job(
+        vec![a, b],
+        png_registry(),
+        StitchFeatures::Fallback,
+    ));
+    assert_eq!(found.links.len(), 1, "{:?}", found.links);
+    let settings = StitchSettings::default();
+    let arranged = arrange(
+        &found,
+        &found.links,
+        &HashMap::new(),
+        StitchProjection::Auto,
+        &settings,
+    );
+    let view = arranged_view(&arranged, &found.links);
+    assert!(view.how.contains(&Some(How::Features)), "{:?}", view.how);
+    let plan = plan_of(&found, &found.links, &arranged, &settings).unwrap();
+    let turned = plan
+        .sources
+        .iter()
+        .find(|s| s.how == How::Features)
+        .unwrap();
+    let grid = plan.grid().unwrap();
+    let text = stitch::placement_text(turned, &grid);
+    let angle: f64 = text
+        .split(", ")
+        .find_map(|part| part.strip_suffix('°'))
+        .and_then(|v| v.parse().ok())
+        .expect("an angle");
+    assert!((angle.abs() - 35.0).abs() < 0.1, "{text}");
 }

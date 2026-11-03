@@ -272,17 +272,20 @@ pub fn stages(info: &ImageInfo) -> Vec<Stage> {
             out.push(levels);
         }
         crate::stitch::PLUGIN => {
-            use crate::stitch::{BLEND, BRIGHTNESS, IMAGES, SCALE, SIZE, WCS};
+            use crate::stitch::{BLEND, BRIGHTNESS, IMAGES, PROJECTION, SCALE, SIZE, WCS};
             out.push(stored);
             let mut align = Stage::new("Alignment");
             if let Some(v) = get(IMAGES) {
                 align = align.line(IMAGES, v);
             }
+            if let Some(v) = get(PROJECTION) {
+                align = align.line(PROJECTION, v);
+            }
             if let Some(v) = get(WCS) {
                 align = align.line("WCS from", v);
             }
             out.push(align.note(
-                "Each image is placed by the WCS in its header, or by matching the overlap with a neighbour. The metadata lists where each one went.",
+                "Each image is placed by the WCS in its header, or by matching the overlap, feature points or star patterns with a neighbour, then all are adjusted together. The metadata lists where each one went.",
             ));
             let mut stitch = Stage::new("Stitching");
             for key in [BLEND, BRIGHTNESS, SIZE, SCALE] {

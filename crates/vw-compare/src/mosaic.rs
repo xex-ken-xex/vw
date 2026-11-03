@@ -4,16 +4,23 @@
 //! 2 枚ずつ重なりを探し（[`link_all`]）、確かな組をたどって全部を 1 つの座標に置き（[`place`]）、
 //! 置いた所に画素を重ねる（[`Canvas`]）。座標は、置く基準にした 1 枚の元の画素。
 //!
-//! 写し方はアフィン（ずらす・回す・大きさを変える）まで。カメラをその場で回したパノラマの
-//! 遠近の歪みは扱わない。
+//! 2 枚ずつの組はアフィン（ずらす・回す・大きさを変える）で見つけ、対応する点を残す。
+//! 全体の置き方は、その点を使って [`adjust`] でアフィン・射影・円筒のどれかに直す。
 
 use rayon::prelude::*;
 use rustfft::num_complex::Complex32;
 
 use crate::affine::Affine;
 use crate::coarse::Fft2;
+use crate::estimate::Pair;
+use crate::linalg::solve;
 use crate::plane::Plane;
 use crate::refine;
+pub use crate::warp::corners;
+use crate::warp::{Warp, local_affine};
+
+pub mod adjust;
+pub mod more;
 
 /// 位置合わせに使う 1 枚。
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +39,7 @@ impl Piece {
 }
 
 /// 重なりの見つかった 2 枚。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Link {
     pub a: usize,
     pub b: usize,
@@ -42,6 +49,78 @@ pub struct Link {
     pub correlation: f64,
     /// 重なった所の、`a` の面積に対する割合。
     pub overlap: f64,
+    pub kind: LinkKind,
+    /// 対応する点（a の元の画素, b の元の画素）。全体を直す（[`adjust`]）のに使う。
+    /// 重なりの絵や WCS で合わせた組は、写し方で重なりの中の格子の点を写したもの。
+    pub points: Vec<Pair>,
+}
+
+/// どうやって組を見つけたか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// 重なった所の絵の相関で。
+    Overlap,
+    /// 特徴点（角）の対応で。
+    Features,
+    /// 星の並びで。
+    Stars,
+    /// ヘッダの WCS で。
+    Wcs,
+    /// 利用者が大まかに置いた所から。
+    ByHand,
+}
+
+impl Link {
+    /// 写し方 `map` で決まる組（対応する点は、重なりの中の格子の点を写したもの）。
+    pub fn by_map(
+        a: (usize, [usize; 2]),
+        b: (usize, [usize; 2]),
+        map: Affine,
+        correlation: f64,
+        overlap: f64,
+        kind: LinkKind,
+    ) -> Link {
+        Link {
+            a: a.0,
+            b: b.0,
+            map,
+            correlation,
+            overlap,
+            kind,
+            points: grid_pairs(a.1, b.1, &map),
+        }
+    }
+}
+
+/// `a` の中で `b` にも写る、格子の点と写した先（全体を直すときの 1 組の重みをそろえるため、
+/// どの組も同じくらいの数にする）。
+pub fn grid_pairs(sa: [usize; 2], sb: [usize; 2], map: &Affine) -> Vec<Pair> {
+    const STEPS: usize = 6;
+    let mut out = Vec::new();
+    // 重なりが狭くても点が残るように、細かい格子から重なりの中の点を間引く。
+    let fine = STEPS * 4;
+    for j in 0..=fine {
+        for i in 0..=fine {
+            let p = [
+                i as f64 / fine as f64 * (sa[0] - 1) as f64,
+                j as f64 / fine as f64 * (sa[1] - 1) as f64,
+            ];
+            let q = map.apply(p);
+            if q[0] >= 0.0
+                && q[1] >= 0.0
+                && q[0] <= (sb[0] - 1) as f64
+                && q[1] <= (sb[1] - 1) as f64
+            {
+                out.push([p, q]);
+            }
+        }
+    }
+    let keep = (STEPS + 1) * (STEPS + 1);
+    if out.len() > keep {
+        let step = out.len() as f64 / keep as f64;
+        out = (0..keep).map(|k| out[(k as f64 * step) as usize]).collect();
+    }
+    out
 }
 
 /// 大まかに探すときの、いちばん大きな画像の長辺。
@@ -194,12 +273,15 @@ pub fn link_from(pieces: &[Piece], a: usize, b: usize, start: Affine) -> Option<
     (fitted.correlation >= MIN_CORRELATION
         && fitted.overlap >= MIN_OVERLAP
         && plausible(&start, &map, pa.full, pb.full))
-    .then_some(Link {
-        a,
-        b,
-        map,
-        correlation: fitted.correlation,
-        overlap: fitted.overlap,
+    .then(|| {
+        Link::by_map(
+            (a, pa.full),
+            (b, pb.full),
+            map,
+            fitted.correlation,
+            fitted.overlap,
+            LinkKind::Overlap,
+        )
     })
 }
 
@@ -363,6 +445,57 @@ pub fn place(count: usize, links: &[Link]) -> Vec<Option<Affine>> {
         .collect()
 }
 
+/// [`tree`] の置き方と食い違う組を外す。繰り返しの多い絵（草地や空）では、重なっていない
+/// 2 枚が相関で結ばれることがあり、そのまま全体の直しに入れると、正しい組まで引っ張られるため。
+/// 置き方をたどった組は残す（どれが誤りかは、ほかの組との食い違いでしか分からないので）。
+pub fn without_disagreeing(count: usize, links: &mut Vec<Link>) {
+    let placed = tree(count, links);
+    let in_tree: Vec<usize> = placed
+        .iter()
+        .flatten()
+        .filter_map(|(_, via)| *via)
+        .collect();
+    let mut index = 0;
+    links.retain(|l| {
+        let i = index;
+        index += 1;
+        if in_tree.contains(&i) {
+            return true;
+        }
+        let (Some((pa, _)), Some((pb, _))) = (placed[l.a], placed[l.b]) else {
+            return true;
+        };
+        disagreement(l, &pa, &pb).is_none_or(|(off, extent)| off <= (0.25 * extent).max(30.0))
+    });
+}
+
+/// 組の点を置き方で写したずれの中央値と、点の広がり（a の画素の対角）。点がなければ `None`。
+fn disagreement(l: &Link, pa: &Affine, pb: &Affine) -> Option<(f64, f64)> {
+    let mut offsets: Vec<f64> = l
+        .points
+        .iter()
+        .map(|[p, q]| {
+            let (x, y) = (pa.apply(*p), pb.apply(*q));
+            (x[0] - y[0]).hypot(x[1] - y[1])
+        })
+        .collect();
+    if offsets.is_empty() {
+        return None;
+    }
+    offsets.sort_by(f64::total_cmp);
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for [p, _] in &l.points {
+        for k in 0..2 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    Some((
+        offsets[offsets.len() / 2],
+        (hi[0] - lo[0]).hypot(hi[1] - lo[1]),
+    ))
+}
+
 /// [`place`] と同じ置き方と、それぞれを置くのにたどった組（`links` の番号。基準は `None`）。
 pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>> {
     let mut placed: Vec<Option<(Affine, Option<usize>)>> = vec![None; count];
@@ -440,15 +573,17 @@ fn level(placed: &mut [Option<(Affine, Option<usize>)>]) {
     }
 }
 
-/// 置いた画像の 4 隅を含む範囲 `[左, 上, 右, 下]`（貼り合わせの座標）。
-pub fn bounds(sizes: &[[usize; 2]], placed: &[Option<Affine>]) -> Option<[f64; 4]> {
+/// 縁を写して範囲を測るときの、辺ごとの点の数（射影や円筒では縁が曲がって写るため）。
+const OUTLINE_STEPS: usize = 16;
+
+/// 置いた画像の縁を含む範囲 `[左, 上, 右, 下]`（貼り合わせの座標）。
+pub fn bounds(sizes: &[[usize; 2]], placed: &[Option<Warp>]) -> Option<[f64; 4]> {
     let mut out: Option<[f64; 4]> = None;
     for (size, p) in sizes.iter().zip(placed) {
         let Some(p) = p else {
             continue;
         };
-        for corner in corners(*size) {
-            let [x, y] = p.apply(corner);
+        for [x, y] in p.outline(*size, OUTLINE_STEPS) {
             let b = out.get_or_insert([x, y, x, y]);
             *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
         }
@@ -456,20 +591,14 @@ pub fn bounds(sizes: &[[usize; 2]], placed: &[Option<Affine>]) -> Option<[f64; 4
     out
 }
 
-/// 画素の外側の縁の 4 隅（画素の中心を整数にとるので、左上は (−0.5, −0.5)）。
-pub fn corners([w, h]: [usize; 2]) -> [[f64; 2]; 4] {
-    let (r, b) = (w as f64 - 0.5, h as f64 - 0.5);
-    [[-0.5, -0.5], [r, -0.5], [r, b], [-0.5, b]]
-}
-
 /// 2 枚の重なりの、小さいほうの画像の面積に対する割合（0〜1）。格子の点で数える。
-pub fn shared(sa: [usize; 2], pa: &Affine, sb: [usize; 2], pb: &Affine) -> f64 {
+pub fn shared(sa: [usize; 2], pa: &Warp, sb: [usize; 2], pb: &Warp) -> f64 {
     let (small, ps, big, pg) = if sa[0] * sa[1] <= sb[0] * sb[1] {
         (sa, pa, sb, pb)
     } else {
         (sb, pb, sa, pa)
     };
-    let Some(to_big) = pg.inverse() else {
+    let Some(to_big) = pg.back() else {
         return 0.0;
     };
     const STEPS: usize = 24;
@@ -478,7 +607,9 @@ pub fn shared(sa: [usize; 2], pa: &Affine, sb: [usize; 2], pb: &Affine) -> f64 {
         for i in 0..STEPS {
             let x = (i as f64 + 0.5) / STEPS as f64 * small[0] as f64 - 0.5;
             let y = (j as f64 + 0.5) / STEPS as f64 * small[1] as f64 - 0.5;
-            let [u, v] = to_big.apply(ps.apply([x, y]));
+            let Some([u, v]) = ps.apply([x, y]).and_then(|m| to_big.apply(m)) else {
+                continue;
+            };
             if u >= -0.5 && v >= -0.5 && u <= big[0] as f64 - 0.5 && v <= big[1] as f64 - 0.5 {
                 inside += 1;
             }
@@ -489,7 +620,7 @@ pub fn shared(sa: [usize; 2], pa: &Affine, sb: [usize; 2], pb: &Affine) -> f64 {
 
 /// 同じ所を写した画像のまとまり（小さいほうの面積の `share` 以上が重なる画像どうしをつないだもの）。
 /// どのまとまりも 2 枚以上。並びは、まとまりの中も外も画像の番号の順。
-pub fn same_area(sizes: &[[usize; 2]], placed: &[Option<Affine>], share: f64) -> Vec<Vec<usize>> {
+pub fn same_area(sizes: &[[usize; 2]], placed: &[Option<Warp>], share: f64) -> Vec<Vec<usize>> {
     let n = sizes.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
@@ -531,7 +662,8 @@ pub struct Seam {
     pub shared: f64,
     /// 置いたとおりに重ねたときの、重なった所の相関。
     pub correlation: f64,
-    /// 2 枚を直接合わせた写し方と、置いた所との食い違い（元の画素、重なりの中でいちばん大きい所）。
+    /// 2 枚を直接合わせた組の対応する点と、置いた所との食い違い（元の画素、大きいほうから 1 割の所。
+    /// 特徴点の位置のわずかな誤差で、いちばん大きな 1 点が目立ちすぎないように）。
     /// 2 枚を直接合わせられなかったときは `None`。
     pub mismatch: Option<f64>,
     /// 重なった所の明るさの差（明るいほうに対する割合、0〜1）。明るさをそろえたときは、そろえたあとの差。
@@ -581,7 +713,7 @@ const SEAM_SHARE: f64 = 0.02;
 /// 使う画像（`used`）どうしの、重なったつなぎ目を調べる。
 pub fn seams(
     pieces: &[Piece],
-    placed: &[Option<Affine>],
+    placed: &[Option<Warp>],
     links: &[Link],
     used: &[bool],
     gains: &[f64],
@@ -599,13 +731,18 @@ pub fn seams(
             if share < SEAM_SHARE {
                 return None;
             }
-            // a の元の座標 → b の元の座標。
-            let implied = pa.then(&pb.inverse()?);
+            // a の元の座標 → b の元の座標（重なりの中でいちばん近いアフィン）。
+            let implied = local_affine(&pa, pieces[a].full, &pb, pieces[b].full)?;
+            let back = pb.back()?;
+            let through = |p: [f64; 2]| pa.apply(p).and_then(|m| back.apply(m));
+            let mismatch = direct_mismatch(links, [a, b], &through);
+            let correlation = correlation_through(&pieces[a], &pieces[b], &through);
             Some(seam(
                 pieces,
-                links,
                 [a, b],
                 implied,
+                correlation,
+                mismatch,
                 share,
                 [gains[a], gains[b]],
             ))
@@ -613,31 +750,87 @@ pub fn seams(
         .collect()
 }
 
-fn seam(
-    pieces: &[Piece],
+/// 2 枚を直接合わせた組（`links` のうち、`a` と `b` の組でいちばん確かなもの）の対応する点が、
+/// 置いた所（`implied`: a の元の座標 → b の元の座標）でどれだけ食い違うか。
+fn direct_mismatch(
     links: &[Link],
     [a, b]: [usize; 2],
+    implied: &dyn Fn([f64; 2]) -> Option<[f64; 2]>,
+) -> Option<f64> {
+    let direct = links
+        .iter()
+        .filter(|l| (l.a, l.b) == (a, b) || (l.a, l.b) == (b, a))
+        .filter(|l| l.kind != LinkKind::ByHand || l.correlation > 0.0)
+        .max_by(|x, y| x.correlation.total_cmp(&y.correlation))?;
+    let mut off: Vec<f64> = direct
+        .points
+        .iter()
+        .filter_map(|&[p, q]| {
+            let (p, q) = if direct.a == a { (p, q) } else { (q, p) };
+            let u = implied(p)?;
+            Some((u[0] - q[0]).hypot(u[1] - q[1]))
+        })
+        .collect();
+    if off.is_empty() {
+        return None;
+    }
+    off.sort_by(f64::total_cmp);
+    Some(off[(off.len() * 9 / 10).min(off.len() - 1)])
+}
+
+/// 重なった所の相関。`through` は a の元の画素から b の元の画素へ（射影や円筒でも、置いたとおり
+/// に写す。重なりの中でアフィンに近づけると、広い重なりの端で数画素ずれて相関が下がるため）。
+fn correlation_through(
+    pa: &Piece,
+    pb: &Piece,
+    through: &dyn Fn([f64; 2]) -> Option<[f64; 2]>,
+) -> f64 {
+    let (sa, sb) = (pa.scale(), pb.scale());
+    let (a, b) = (&pa.plane, &pb.plane);
+    const SAMPLES: usize = 40_000;
+    let stride = ((a.width * a.height) as f64 / SAMPLES as f64)
+        .sqrt()
+        .ceil()
+        .max(1.0) as usize;
+    let (mut n, mut sx, mut sy, mut sxx, mut syy, mut sxy) = (0.0f64, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for y in (0..a.height).step_by(stride) {
+        for x in (0..a.width).step_by(stride) {
+            let full = [(x as f64 + 0.5) / sa - 0.5, (y as f64 + 0.5) / sa - 0.5];
+            let Some(q) = through(full) else {
+                continue;
+            };
+            let Some(vb) = b.sample((q[0] + 0.5) * sb - 0.5, (q[1] + 0.5) * sb - 0.5) else {
+                continue;
+            };
+            let (va, vb) = (f64::from(a.at(x, y)), f64::from(vb));
+            n += 1.0;
+            sx += va;
+            sy += vb;
+            sxx += va * va;
+            syy += vb * vb;
+            sxy += va * vb;
+        }
+    }
+    if n < 16.0 {
+        return 0.0;
+    }
+    let cov = sxy - sx * sy / n;
+    let den = ((sxx - sx * sx / n) * (syy - sy * sy / n)).max(0.0).sqrt();
+    if den > 1e-9 { cov / den } else { 0.0 }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seam(
+    pieces: &[Piece],
+    [a, b]: [usize; 2],
     implied: Affine,
+    correlation: f64,
+    mismatch: Option<f64>,
     share: f64,
     gains: [f64; 2],
 ) -> Seam {
     let (pa, pb) = (&pieces[a], &pieces[b]);
     let small = implied.between_scales(pa.scale(), pb.scale());
-    let (correlation, _) = refine::score(&pa.plane, &pb.plane, &small);
-    let direct = links.iter().find_map(|l| match (l.a, l.b) {
-        (x, y) if x == a && y == b => Some(l.map),
-        (x, y) if x == b && y == a => l.map.inverse(),
-        _ => None,
-    });
-    let mismatch = direct.map(|d| {
-        overlap_points(pa, pb, &implied)
-            .into_iter()
-            .map(|p| {
-                let (u, v) = (implied.apply(p), d.apply(p));
-                (u[0] - v[0]).hypot(u[1] - v[1])
-            })
-            .fold(0.0, f64::max)
-    });
     let (brightness, sharpness) = looks(pa, pb, &small, gains);
     Seam {
         a,
@@ -648,26 +841,6 @@ fn seam(
         brightness,
         sharpness,
     }
-}
-
-/// `a` の元の座標で、`b` にも写る格子の点。
-fn overlap_points(pa: &Piece, pb: &Piece, implied: &Affine) -> Vec<[f64; 2]> {
-    const STEPS: usize = 16;
-    let mut out = Vec::new();
-    for j in 0..=STEPS {
-        for i in 0..=STEPS {
-            let p = [
-                i as f64 / STEPS as f64 * (pa.full[0] - 1) as f64,
-                j as f64 / STEPS as f64 * (pa.full[1] - 1) as f64,
-            ];
-            let [u, v] = implied.apply(p);
-            if u >= 0.0 && v >= 0.0 && u <= (pb.full[0] - 1) as f64 && v <= (pb.full[1] - 1) as f64
-            {
-                out.push(p);
-            }
-        }
-    }
-    out
 }
 
 /// 重なった所の明るさの差と、鮮鋭度の比。`small` は縮めた画像どうしの写し方（a → b）。
@@ -735,7 +908,7 @@ fn gradient_energy(own: &Plane, other: &Plane, to_other: &Affine) -> f64 {
 ///
 /// つなぎ目ごとの明るさの差の 2 乗と、比の 1 からの離れの 2 乗の和を最小にする
 /// （比をすべて 0 にすれば差は消えるので、1 から離れることにも重みを付ける）。
-pub fn gains(pieces: &[Piece], placed: &[Option<Affine>], used: &[bool]) -> Vec<f64> {
+pub fn gains(pieces: &[Piece], placed: &[Option<Warp>], used: &[bool]) -> Vec<f64> {
     let n = pieces.len();
     // 差の重みに対する、1 から離れることの重み（明るさは 0〜255 の目盛り）。
     const NOISE: f64 = 10.0;
@@ -751,7 +924,7 @@ pub fn gains(pieces: &[Piece], placed: &[Option<Affine>], used: &[bool]) -> Vec<
             let (Some(pa), Some(pb)) = (placed[a], placed[b]) else {
                 continue;
             };
-            let Some(implied) = pb.inverse().map(|inv| pa.then(&inv)) else {
+            let Some(implied) = local_affine(&pa, pieces[a].full, &pb, pieces[b].full) else {
                 continue;
             };
             let Some((ma, mb, count)) = means(&pieces[a], &pieces[b], &implied) else {
@@ -797,34 +970,6 @@ fn means(pa: &Piece, pb: &Piece, implied: &Affine) -> Option<(f64, f64, usize)> 
         }
     }
     (n >= 16).then(|| (sa / n as f64, sb / n as f64, n))
-}
-
-/// 連立 1 次方程式（ガウスの消去法、部分ピボット）。
-fn solve(mut h: Vec<Vec<f64>>, mut g: Vec<f64>) -> Option<Vec<f64>> {
-    let n = g.len();
-    for col in 0..n {
-        let pivot = (col..n).max_by(|&x, &y| h[x][col].abs().total_cmp(&h[y][col].abs()))?;
-        if h[pivot][col].abs() < 1e-12 {
-            return None;
-        }
-        h.swap(col, pivot);
-        g.swap(col, pivot);
-        let (top, below) = h.split_at_mut(col + 1);
-        let pivot_row = &top[col];
-        for (row, r) in below.iter_mut().enumerate() {
-            let k = r[col] / pivot_row[col];
-            for (v, p) in r[col..].iter_mut().zip(&pivot_row[col..]) {
-                *v -= k * p;
-            }
-            g[col + 1 + row] -= k * g[col];
-        }
-    }
-    let mut x = vec![0.0; n];
-    for row in (0..n).rev() {
-        let s: f64 = (row + 1..n).map(|c| h[row][c] * x[c]).sum();
-        x[row] = (g[row] - s) / h[row][row];
-    }
-    x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
 /// 重なった所の混ぜ方。
@@ -885,7 +1030,7 @@ pub struct Layer<'a> {
     pub channels: usize,
     pub data: &'a [f32],
     /// 元の座標から貼り合わせの座標への写し方。
-    pub placed: Affine,
+    pub placed: Warp,
     /// 値に掛ける比。
     pub gain: f32,
 }
@@ -913,17 +1058,16 @@ impl Canvas {
 
     /// 1 枚を重ねる。
     pub fn add(&mut self, layer: &Layer<'_>) {
-        let Some(to_layer) = layer.placed.inverse() else {
+        let Some(to_grid) = self.grid.to_mosaic.inverse() else {
             return;
         };
-        let back = self.grid.to_mosaic.then(&to_layer);
-        let Some(forward) = back.inverse() else {
+        let forward = layer.placed.then(&to_grid);
+        let Some(back) = forward.back() else {
             return;
         };
-        // 重ねる画像の 4 隅を囲む、出す画像の行と列だけを回る。
+        // 重ねる画像の縁を囲む、出す画像の行と列だけを回る。
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for c in corners([layer.width, layer.height]) {
-            let [x, y] = forward.apply(c);
+        for [x, y] in forward.outline([layer.width, layer.height], OUTLINE_STEPS) {
             (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
         }
         let (gw, gh) = (self.grid.width, self.grid.height);
@@ -947,7 +1091,9 @@ impl Canvas {
                 let y = (y_start + j) as f64;
                 let mut value = vec![0.0f32; ch];
                 for i in cols.clone() {
-                    let [u, v] = back.apply([i as f64, y]);
+                    let Some([u, v]) = back.apply([i as f64, y]) else {
+                        continue;
+                    };
                     if !sample(layer, u, v, &mut value) {
                         continue;
                     }

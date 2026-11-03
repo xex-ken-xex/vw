@@ -1120,6 +1120,20 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Stitch,
+        key: "stitch.projection",
+        title: "Projection",
+        description: "How the whole mosaic is laid out. Automatic: flat tiles and sky images are placed by shifting, turning and scaling (affine); photos with perspective from turning the camera are put on a plane (projective), or on a cylinder when they span more than 120 degrees. A cylinder needs the focal length, from the EXIF 35 mm equivalent or estimated from the overlaps.",
+        widget: stitch_projection_widget,
+    },
+    Item {
+        section: Section::Stitch,
+        key: "stitch.features",
+        title: "Matching feature points",
+        description: "When to look for corners that look alike in both images. They find pairs that overlap only a little or are turned a lot. When the overlap does not match: only pairs the overlap search missed (pairs already found keep their result). Always: both ways for every pair, keeping the surer one (slower). Never: only the overlap search. Images of stars without a WCS are matched by star patterns either way.",
+        widget: stitch_features_widget,
+    },
+    Item {
+        section: Section::Stitch,
         key: "stitch.match_brightness",
         title: "Match the brightness of photos",
         description: "Scale the brightness of each 8-bit photo so overlapping images agree (exposure differences between shots). Measured values (16-bit images, FITS) are never changed.",
@@ -1335,6 +1349,26 @@ fn stitch_blend_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
         }
     });
     s.stitch.blend != before
+}
+
+fn stitch_projection_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.stitch.projection;
+    ui.horizontal_wrapped(|ui| {
+        for p in crate::settings::StitchProjection::ALL {
+            ui.radio_value(&mut s.stitch.projection, p, tr(lang, p.title()));
+        }
+    });
+    s.stitch.projection != before
+}
+
+fn stitch_features_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.stitch.features;
+    ui.horizontal_wrapped(|ui| {
+        for f in crate::settings::StitchFeatures::ALL {
+            ui.radio_value(&mut s.stitch.features, f, tr(lang, f.title()));
+        }
+    });
+    s.stitch.features != before
 }
 
 fn stitch_match_brightness_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

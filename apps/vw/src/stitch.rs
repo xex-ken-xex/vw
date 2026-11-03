@@ -9,8 +9,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use vw_compare::Affine;
+use vw_compare::mosaic::adjust::Projection;
 use vw_compare::mosaic::{self, Blend, Canvas, Grid, Layer};
+use vw_compare::{Affine, Warp};
 use vw_core::{ColorModel, Curve, Metadata, PixelData, Registry, VwImage};
 
 /// メタデータの見出しと、読み込みの結果に付けるプラグインの名前。
@@ -29,6 +30,10 @@ pub enum How {
     Wcs,
     /// 重なった所の絵を合わせて。
     Matched,
+    /// 特徴点（角）の対応で。
+    Features,
+    /// 星の並びで。
+    Stars,
     /// 利用者が大まかに置いた所から、絵を合わせて。
     ByHand,
 }
@@ -39,6 +44,8 @@ impl How {
             How::Reference => "Reference",
             How::Wcs => "By WCS",
             How::Matched => "By matching the overlap",
+            How::Features => "By feature points",
+            How::Stars => "By star patterns",
             How::ByHand => "Placed by hand",
         }
     }
@@ -62,7 +69,7 @@ pub struct Source {
     pub path: PathBuf,
     pub size: [usize; 2],
     /// 元の画素の座標（0 始まり、画面の向き）から、貼り合わせの座標への写し方。
-    pub placed: Affine,
+    pub placed: Warp,
     pub how: How,
     /// 置くのに使った組の相関（WCS や基準なら `None`）。
     pub correlation: Option<f64>,
@@ -77,6 +84,7 @@ pub struct Source {
 pub struct Plan {
     /// 使う画像を、重ねる順に。
     pub sources: Vec<Source>,
+    pub projection: Projection,
     pub blend: Blend,
     /// 明るさをそろえたか。
     pub matched_brightness: bool,
@@ -93,12 +101,16 @@ pub struct Plan {
 impl Plan {
     pub fn grid(&self) -> Option<Grid> {
         let sizes: Vec<[usize; 2]> = self.sources.iter().map(|s| s.size).collect();
-        let placed: Vec<Option<Affine>> = self.sources.iter().map(|s| Some(s.placed)).collect();
+        let placed: Vec<Option<Warp>> = self.sources.iter().map(|s| Some(s.placed)).collect();
         Grid::covering(mosaic::bounds(&sizes, &placed)?, self.max_pixels)
     }
 
     /// 出す画像の WCS のカード。WCS のある元の画像から引き継ぐ（基準の 1 枚を先に見る）。
+    /// 射影や円筒にした画像は、空の座標とアフィンでは結べないので持たない。
     pub fn wcs(&self, grid: &Grid) -> Option<(Vec<(String, String)>, &Source)> {
+        if self.projection != Projection::Affine {
+            return None;
+        }
         let mut order: Vec<&Source> = self.sources.iter().collect();
         order.sort_by_key(|s| s.how != How::Reference);
         order.into_iter().find_map(|s| {
@@ -112,7 +124,7 @@ impl Plan {
             };
             let map = one_based
                 .then(&grid.to_mosaic)
-                .then(&s.placed.inverse()?)
+                .then(&s.placed.as_affine()?.inverse()?)
                 .then(to_fits);
             let lookup = lookup(cards);
             Some((vw_fits::wcs_through(&lookup, rows(&map))?, s))
@@ -209,7 +221,7 @@ pub fn render(plan: &Plan, registry: &Registry) -> Result<(VwImage, usize), Stri
                 e: k,
                 f: 0.5 * k - 0.5,
             };
-            (d, lw, lh, from_small.then(&s.placed))
+            (d, lw, lh, s.placed.after(&from_small))
         } else {
             (values, w, h, s.placed)
         };
@@ -357,6 +369,15 @@ pub const SCALE: &str = "Scale";
 pub const BLEND: &str = "Blend";
 pub const BRIGHTNESS: &str = "Brightness";
 pub const WCS: &str = "WCS";
+pub const PROJECTION: &str = "Projection";
+
+pub fn projection_title(p: Projection) -> &'static str {
+    match p {
+        Projection::Affine => "Flat (affine)",
+        Projection::Projective => "Flat (projective)",
+        Projection::Cylinder => "Cylinder",
+    }
+}
 
 pub fn blend_title(blend: Blend) -> &'static str {
     match blend {
@@ -381,6 +402,7 @@ pub fn metadata(plan: &Plan, grid: &Grid) -> Metadata {
             format!("1/{step:.2}")
         },
     );
+    m.push(GROUP, PROJECTION, projection_title(plan.projection));
     m.push(GROUP, BLEND, blend_title(plan.blend));
     m.push(
         GROUP,
@@ -408,25 +430,49 @@ pub fn metadata(plan: &Plan, grid: &Grid) -> Metadata {
 pub const HOW_MARK: &str = " · ";
 
 /// 「x 120, y 40, 1024 x 768, 0.30°, ×1.003, r 0.93 · By matching the overlap」。位置は出した画像の
-/// 画素で左上の角、角度は時計回り、r は重なった所の相関。
+/// 画素で左上の角、角度は時計回り、r は重なった所の相関。射影なら回転と倍率の代わりに 4 隅の
+/// 写る所（左上から時計回り）、円筒ならカメラの向き（右と上が正）と焦点距離（画素）。
 pub fn placement_text(s: &Source, grid: &Grid) -> String {
     let Some(to_out) = grid.to_mosaic.inverse() else {
         return String::new();
     };
     let t = s.placed.then(&to_out);
-    let corners = mosaic::corners(s.size).map(|c| t.apply(c));
-    let left = corners.iter().map(|c| c[0]).fold(f64::MAX, f64::min) + 0.5;
-    let top = corners.iter().map(|c| c[1]).fold(f64::MAX, f64::min) + 0.5;
-    let size = [s.size[0] as f64, s.size[1] as f64];
-    let parts = t.parts(size, size);
+    let outline = t.outline(s.size, 16);
+    let left = outline.iter().map(|c| c[0]).fold(f64::MAX, f64::min) + 0.5;
+    let top = outline.iter().map(|c| c[1]).fold(f64::MAX, f64::min) + 0.5;
+    let shape = match t {
+        Warp::Affine(t) => {
+            let size = [s.size[0] as f64, s.size[1] as f64];
+            let parts = t.parts(size, size);
+            format!("{}°, ×{:.3}", fixed(parts.rotation, 2), parts.scale)
+        }
+        Warp::Projective(_) => {
+            let corners: Vec<String> = mosaic::corners(s.size)
+                .iter()
+                .filter_map(|c| t.apply(*c))
+                .map(|[x, y]| format!("({} {})", fixed(x + 0.5, 0), fixed(y + 0.5, 0)))
+                .collect();
+            format!("corners {}", corners.join(" "))
+        }
+        Warp::Cylinder(c) => {
+            // カメラの前の向き（世界の座標）は回転の 3 行目。世界の y は下向き。
+            let [x, y, z] = c.rotation[2];
+            let heading = x.atan2(z).to_degrees();
+            let pitch = (-y).clamp(-1.0, 1.0).asin().to_degrees();
+            format!(
+                "heading {}°, pitch {}°, f {}",
+                fixed(heading, 1),
+                fixed(pitch, 1),
+                fixed(1.0 / c.to_camera.a, 0)
+            )
+        }
+    };
     let mut text = format!(
-        "x {}, y {}, {} x {}, {}°, ×{:.3}",
+        "x {}, y {}, {} x {}, {shape}",
         fixed(left, 0),
         fixed(top, 0),
         s.size[0],
         s.size[1],
-        fixed(parts.rotation, 2),
-        parts.scale,
     );
     if let Some(c) = s.correlation {
         text.push_str(&format!(", r {c:.2}"));
@@ -481,7 +527,10 @@ pub fn sky_items(plan: &Plan, path: &Path) -> Vec<crate::sky_window::Item> {
             f: v,
             ..Affine::IDENTITY
         };
-        let map = shift(-1.0).then(&s.placed).then(&to_out).then(&shift(1.0));
+        let Some(placed) = s.placed.as_affine() else {
+            continue;
+        };
+        let map = shift(-1.0).then(&placed).then(&to_out).then(&shift(1.0));
         let Some(own) = vw_fits::wcs_through(&lookup(&cards), rows(&map)) else {
             continue;
         };
