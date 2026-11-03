@@ -6,6 +6,28 @@
 - 対応予定形式: BMP, JPEG, PNG, Nikon RAW (NEF), Sony RAW (ARW)
 - 形式ごとの対応はプラグインとして追加する（PNG、JPEG、WebP、GIF、BMP、カメラ RAW に対応済み）
 
+## 構成図
+
+図は draw.io の `.drawio.svg` で、`docs/diagrams/` に置く。GitHub ではそのまま画像として見え、
+draw.io（Web 版、デスクトップ版、VS Code の拡張）で開けば直せる。直したら同じ名前で保存し、
+図の表題にある版を、そのときの版に書き換える。
+
+### crate の構成
+
+![crate の構成](diagrams/crates.drawio.svg)
+
+### 画像を開いてから画面に出るまで
+
+![データの流れ](diagrams/dataflow.drawio.svg)
+
+### ビューアの主なモジュール
+
+![ビューアのモジュール](diagrams/modules.drawio.svg)
+
+### 外とのつながり
+
+![外とのつながり](diagrams/external.drawio.svg)
+
 ## 技術選定
 
 | 項目 | 選択 | 理由 |
