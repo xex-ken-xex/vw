@@ -7,12 +7,17 @@ pub mod align;
 pub mod analysis;
 pub mod coarse;
 pub mod color;
+pub mod estimate;
+pub mod features;
+pub mod linalg;
 pub mod mosaic;
 pub mod pairs;
 pub mod plane;
 pub mod refine;
 pub mod render;
 pub mod report;
+pub mod stars;
+pub mod warp;
 
 #[cfg(test)]
 mod test_util;
@@ -21,6 +26,7 @@ pub use affine::{Affine, Parts};
 pub use align::{Alignment, Warped, align, warp};
 pub use analysis::{Analysis, Options, Rect, analyse};
 pub use plane::{Plane, Rgb};
+pub use warp::{Homography, Warp};
 
 /// 違いを測る格子の長辺。元の大きさで測らないのは、2400 万画素の画像を何枚も
 /// 浮動小数で持つとメモリを食い、計算も遅くなるため。鮮鋭度とノイズは 2 枚の比で見るので、

@@ -37,7 +37,7 @@ fn source(path: PathBuf, size: [usize; 2], placed: Affine, how: How) -> Source {
     Source {
         path,
         size,
-        placed,
+        placed: placed.into(),
         how,
         correlation: (how == How::Matched).then_some(0.97),
         gain: 1.0,
@@ -48,6 +48,7 @@ fn source(path: PathBuf, size: [usize; 2], placed: Affine, how: How) -> Source {
 fn plan(sources: Vec<Source>) -> Plan {
     Plan {
         sources,
+        projection: Projection::Affine,
         blend: Blend::Feather,
         matched_brightness: false,
         max_pixels: 1_000_000,

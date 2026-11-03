@@ -15,13 +15,16 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use egui_phosphor::regular as icon;
-use vw_compare::Affine;
-use vw_compare::mosaic::{self, Canvas, Grid, Layer, Link, Piece, Seam, Search, Verdict};
+use vw_compare::estimate::Pair;
+use vw_compare::mosaic::adjust::{self, Projection};
+use vw_compare::mosaic::more::{self, FeatureUse};
+use vw_compare::mosaic::{self, Canvas, Grid, Layer, Link, LinkKind, Piece, Seam, Search, Verdict};
 use vw_compare::plane::Rgb;
+use vw_compare::{Affine, Warp};
 use vw_core::{Curve, DisplayParams, PixelData, Registry, VwImage};
 
 use crate::i18n::{tr, tr1};
-use crate::settings::{Language, StitchBlend, StitchSettings};
+use crate::settings::{Language, StitchBlend, StitchFeatures, StitchProjection, StitchSettings};
 use crate::sort::SortOrder;
 use crate::stitch::{self, Depth, How, Plan, Source};
 
@@ -111,6 +114,10 @@ pub struct Prepared {
     pub fits: bool,
     /// 計測の値の明るさ（`Piece` と同じ大きさ）。写真は `None`。
     pub measured: Option<vw_compare::plane::Plane>,
+    /// 星の位置（明るい順、元の画素）。FITS でなければ `None`。
+    pub stars: Option<Vec<[f64; 2]>>,
+    /// EXIF の 35mm 換算の焦点距離から求めた焦点距離（画素）。
+    pub focal: Option<f64>,
 }
 
 /// 下ごしらえと重なりの探索の結果。
@@ -122,12 +129,19 @@ struct Found {
     /// 明るさが何割も違って見えるため）。
     measured: Vec<Piece>,
     links: Vec<Link>,
-    /// WCS で置いた組（`links` の番号）。
-    wcs_links: HashSet<usize>,
+    /// どの 2 枚についても、外れを除いた特徴点の組（射影や円筒で全体を直すのに使う）。
+    features: HashMap<(usize, usize), Vec<Pair>>,
+    /// 組を探したときの、特徴点の使い方。
+    feature_use: StitchFeatures,
 }
 
 impl Found {
-    fn new(ready: Vec<(Prepared, Piece)>, links: Vec<Link>, wcs_links: HashSet<usize>) -> Self {
+    fn new(
+        ready: Vec<(Prepared, Piece)>,
+        links: Vec<Link>,
+        features: HashMap<(usize, usize), Vec<Pair>>,
+        feature_use: StitchFeatures,
+    ) -> Self {
         let (mut images, pieces): (Vec<Prepared>, Vec<Piece>) = ready.into_iter().unzip();
         let measured = images
             .iter_mut()
@@ -145,7 +159,8 @@ impl Found {
             pieces,
             measured,
             links,
-            wcs_links,
+            features,
+            feature_use,
         }
     }
 }
@@ -155,7 +170,7 @@ enum Message {
     Ready(usize, Box<(Prepared, Piece)>),
     Problem(String),
     Linking(usize),
-    Done(Vec<Link>, HashSet<usize>),
+    Done(Vec<Link>, HashMap<(usize, usize), Vec<Pair>>),
 }
 
 struct Job {
@@ -165,6 +180,7 @@ struct Job {
     total: usize,
     linking: Option<usize>,
     ready: Vec<Option<(Prepared, Piece)>>,
+    feature_use: StitchFeatures,
 }
 
 impl Drop for Job {
@@ -175,8 +191,15 @@ impl Drop for Job {
 
 /// 並べた結果（どれを使い、どこに置き、つなぎ目がどうか）。
 pub struct Arranged {
-    /// 画像ごとの置き場所と、置くのにたどった組。
+    /// 画像ごとの、組をたどって置いた所と、たどった組（基準は `None`）。
     pub tree: Vec<Option<(Affine, Option<usize>)>>,
+    /// 全体を直したあとの置き場所。
+    pub placed: Vec<Option<Warp>>,
+    pub projection: Projection,
+    /// 全体を直す前と後の、対応する点のずれの平均（画素）。
+    pub fit: Option<(f64, f64)>,
+    /// 選んだ写し方にできなかったわけ。
+    pub note: Option<&'static str>,
     pub groups: Vec<Vec<usize>>,
     pub used: Vec<bool>,
     pub seams: Vec<Seam>,
@@ -188,6 +211,7 @@ pub struct Arranged {
 #[derive(Debug, Clone, PartialEq)]
 struct Arrangement {
     links: usize,
+    projection: StitchProjection,
     choices: Vec<(usize, usize)>,
     blend: StitchBlend,
     match_brightness: bool,
@@ -208,9 +232,10 @@ pub struct StitchWindow {
     chosen: HashSet<PathBuf>,
     job: Option<Job>,
     found: Option<Arc<Found>>,
-    /// 手で置いて足した組と、手で置いた画像。
+    /// 手で置いて足した組。
     extra_links: Vec<Link>,
-    by_hand: HashSet<usize>,
+    /// 画面で選んだ写し方（初めは設定の値）。
+    projection: Option<StitchProjection>,
     /// 同じ所のまとまり（先頭の画像の番号）ごとに使う画像。
     choices: HashMap<usize, usize>,
     arranging: Option<(Arrangement, Receiver<Arranged>)>,
@@ -235,7 +260,7 @@ impl Default for StitchWindow {
             job: None,
             found: None,
             extra_links: Vec::new(),
-            by_hand: HashSet::new(),
+            projection: None,
             choices: HashMap::new(),
             arranging: None,
             arranged: None,
@@ -285,7 +310,7 @@ impl StitchWindow {
         self.receive_job();
         self.receive_arranged(&ctx);
         self.receive_saved();
-        self.arrange_if_needed(&ctx, inputs.settings);
+        self.arrange_if_needed(inputs, &ctx);
         let mut commands = Vec::new();
         egui::Panel::top("stitch_bar").show(ui, |ui| self.bar(ui, inputs, &mut commands));
         egui::Panel::left("stitch_list")
@@ -347,12 +372,12 @@ impl StitchWindow {
     fn start(&mut self, inputs: &Inputs<'_>, paths: Vec<PathBuf>) {
         self.found = None;
         self.extra_links.clear();
-        self.by_hand.clear();
         self.choices.clear();
         self.arranging = None;
         self.arranged = None;
         self.texture = None;
-        self.job = (paths.len() >= 2).then(|| start_job(paths, inputs.registry.clone()));
+        self.job = (paths.len() >= 2)
+            .then(|| start_job(paths, inputs.registry.clone(), inputs.settings.features));
     }
 
     fn receive_job(&mut self) {
@@ -372,12 +397,17 @@ impl StitchWindow {
                 }
                 Ok(Message::Problem(e)) => self.problems.push(e),
                 Ok(Message::Linking(steps)) => job.linking = Some(steps),
-                Ok(Message::Done(links, wcs_links)) => {
+                Ok(Message::Done(links, features)) => {
                     let ready = std::mem::take(&mut job.ready)
                         .into_iter()
                         .flatten()
                         .collect();
-                    self.found = Some(Arc::new(Found::new(ready, links, wcs_links)));
+                    self.found = Some(Arc::new(Found::new(
+                        ready,
+                        links,
+                        features,
+                        job.feature_use,
+                    )));
                     self.job = None;
                     return;
                 }
@@ -396,7 +426,7 @@ impl StitchWindow {
             .as_ref()
             .map(|f| f.links.clone())
             .unwrap_or_default();
-        links.extend(self.extra_links.iter().copied());
+        links.extend(self.extra_links.iter().cloned());
         links
     }
 
@@ -405,6 +435,7 @@ impl StitchWindow {
         choices.sort_unstable();
         Arrangement {
             links: self.all_links().len(),
+            projection: self.projection.unwrap_or(settings.projection),
             choices,
             blend: settings.blend,
             match_brightness: settings.match_brightness,
@@ -412,10 +443,17 @@ impl StitchWindow {
         }
     }
 
-    fn arrange_if_needed(&mut self, ctx: &egui::Context, settings: &StitchSettings) {
+    fn arrange_if_needed(&mut self, inputs: &Inputs<'_>, ctx: &egui::Context) {
+        let settings = inputs.settings;
         let Some(found) = self.found.clone() else {
             return;
         };
+        // 特徴点の使い方を変えたら、組を探し直す。
+        if found.feature_use != settings.features && self.job.is_none() {
+            let paths = found.images.iter().map(|i| i.path.clone()).collect();
+            self.start(inputs, paths);
+            return;
+        }
         let wanted = self.wanted(settings);
         let current = self
             .arranging
@@ -428,10 +466,11 @@ impl StitchWindow {
         let (tx, rx) = channel();
         let links = self.all_links();
         let choices = self.choices.clone();
+        let projection = wanted.projection;
         let settings = settings.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let arranged = arrange(&found, &links, &choices, &settings);
+            let arranged = arrange(&found, &links, &choices, projection, &settings);
             let _ = tx.send(arranged);
             ctx.request_repaint();
         });
@@ -531,6 +570,36 @@ impl StitchWindow {
                 self.start(inputs, targets);
             }
             ui.separator();
+            let mut projection = self.projection.unwrap_or(inputs.settings.projection);
+            let automatic = self
+                .arranged
+                .as_ref()
+                .filter(|(a, _)| a.projection == StitchProjection::Auto)
+                .map(|(_, a)| a.projection);
+            let selected = match automatic {
+                Some(p) => format!(
+                    "{} ({})",
+                    tr(lang, StitchProjection::Auto.title()),
+                    tr(lang, stitch::projection_title(p))
+                ),
+                None => tr(lang, projection.title()).to_owned(),
+            };
+            egui::ComboBox::from_id_salt("stitch_projection")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for p in StitchProjection::ALL {
+                        ui.selectable_value(&mut projection, p, tr(lang, p.title()));
+                    }
+                })
+                .response
+                .on_hover_text(tr(
+                    lang,
+                    "How the whole mosaic is laid out: flat (affine), flat with perspective (projective), or on a cylinder for wide panoramas.",
+                ));
+            if projection != self.projection.unwrap_or(inputs.settings.projection) {
+                self.projection = Some(projection);
+            }
+            ui.separator();
             let ready = self.plan(inputs.settings).is_some();
             if ui
                 .add_enabled(ready, egui::Button::new(tr(lang, "Show in a slot")))
@@ -589,7 +658,8 @@ impl StitchWindow {
             .show(ui, |ui| match (&self.found, &self.arranged) {
                 (Some(found), Some((_, arranged))) => {
                     let found = found.clone();
-                    let view = arranged_view(arranged, &found.wcs_links, &self.by_hand);
+                    let links = self.all_links();
+                    let view = arranged_view(arranged, &links);
                     self.arranged_list(ui, lang, &found, view, commands);
                 }
                 _ => self.choice_list(ui, inputs),
@@ -738,6 +808,18 @@ impl StitchWindow {
             ));
             return;
         };
+        if let Some(note) = arranged.note {
+            ui.colored_label(ui.visuals().warn_fg_color, tr(lang, note));
+        }
+        if let Some((before, after)) = arranged.fit {
+            ui.weak(format!(
+                "{} {before:.2} → {after:.2} px",
+                tr(
+                    lang,
+                    "Matched points off by, before and after adjusting all together:"
+                )
+            ));
+        }
         let mut seams = arranged.seams.clone();
         seams.sort_by_key(|s| std::cmp::Reverse(s.verdict()));
         if seams.is_empty() {
@@ -825,14 +907,21 @@ impl StitchWindow {
         let hover = response.hover_pos();
         let accent = ui.visuals().selection.stroke.color;
         let mut tip: Option<String> = None;
+        let links = self.all_links();
         for (i, image) in found.images.iter().enumerate() {
-            let (Some((placed, via)), true) = (arranged.tree[i], arranged.used[i]) else {
+            let (Some(placed), Some((_, via)), true) =
+                (arranged.placed[i], arranged.tree[i], arranged.used[i])
+            else {
                 continue;
             };
-            let outline: Vec<Pos2> = mosaic::corners(found.pieces[i].full)
-                .iter()
-                .map(|c| to_screen(placed.apply(*c)))
+            let outline: Vec<Pos2> = placed
+                .outline(found.pieces[i].full, 16)
+                .into_iter()
+                .map(to_screen)
                 .collect();
+            if outline.len() < 3 {
+                continue;
+            }
             let inside = hover.is_some_and(|p| inside_polygon(p, &outline));
             let stroke = Stroke::new(if inside { 2.0 } else { 1.0 }, accent);
             let mut closed = outline.clone();
@@ -847,7 +936,7 @@ impl StitchWindow {
                 accent,
             );
             if inside {
-                let how = how_of(i, via, &found.wcs_links, &self.by_hand);
+                let how = how_of(via, &links);
                 let partners: Vec<String> = arranged
                     .seams
                     .iter()
@@ -894,25 +983,25 @@ impl StitchWindow {
             return;
         };
         let full = found.pieces[i].full;
-        let dropped = Affine {
+        let dropped = Warp::Affine(Affine {
             c: center[0] - (full[0] as f64 - 1.0) / 2.0,
             f: center[1] - (full[1] as f64 - 1.0) / 2.0,
             ..Affine::IDENTITY
-        };
+        });
         let mut best: Option<Link> = None;
         let mut nearest: Option<(f64, usize, Affine)> = None;
-        for (j, p) in arranged.tree.iter().enumerate() {
-            let (Some((pj, _)), true) = (p, arranged.used[j]) else {
+        for (j, p) in arranged.placed.iter().enumerate() {
+            let (Some(pj), true) = (p, arranged.used[j]) else {
                 continue;
             };
             if j == i {
                 continue;
             }
-            let Some(to_j) = pj.inverse() else {
+            let full_j = found.pieces[j].full;
+            let Some(start) = vw_compare::warp::local_affine(&dropped, full, pj, full_j) else {
                 continue;
             };
-            let start = dropped.then(&to_j);
-            let share = mosaic::shared(full, &dropped, found.pieces[j].full, pj);
+            let share = mosaic::shared(full, &dropped, full_j, pj);
             if nearest.is_none_or(|(s, ..)| share > s) {
                 nearest = Some((share, j, start));
             }
@@ -920,26 +1009,28 @@ impl StitchWindow {
                 continue;
             }
             if let Some(l) = mosaic::link_from(&found.pieces, i, j, start)
-                && best.is_none_or(|b| l.correlation > b.correlation)
+                && best.as_ref().is_none_or(|b| l.correlation > b.correlation)
             {
                 best = Some(l);
             }
         }
         let link = match (best, nearest) {
-            (Some(l), _) => l,
-            // 合わなかったら、いちばん重なる画像との組を、確かさ 0 で足す（ほかの組より後にたどる）。
-            (None, Some((_, j, start))) => Link {
-                a: i,
-                b: j,
-                map: start,
-                correlation: 0.0,
-                overlap: 0.0,
+            (Some(l), _) => Link {
+                kind: LinkKind::ByHand,
+                ..l
             },
+            // 合わなかったら、いちばん重なる画像との組を、確かさ 0 で足す（ほかの組より後にたどる）。
+            (None, Some((_, j, start))) => Link::by_map(
+                (i, full),
+                (j, found.pieces[j].full),
+                start,
+                0.0,
+                0.0,
+                LinkKind::ByHand,
+            ),
             (None, None) => return,
         };
-        let index = found.links.len() + self.extra_links.len();
         self.extra_links.push(link);
-        self.by_hand.insert(index);
     }
 
     /// 今の並べ方から、スロットに出す・保存する置き方。2 枚以上置けていなければ `None`。
@@ -947,7 +1038,7 @@ impl StitchWindow {
         let found = self.found.as_ref()?;
         let (_, arranged) = self.arranged.as_ref()?;
         let links = self.all_links();
-        plan_of(found, &links, arranged, &self.by_hand, settings)
+        plan_of(found, &links, arranged, settings)
     }
 
     fn open_picker(&mut self, lang: Language) {
@@ -1007,14 +1098,13 @@ struct ArrangedView {
     how: Vec<Option<How>>,
 }
 
-fn arranged_view(a: &Arranged, wcs: &HashSet<usize>, by_hand: &HashSet<usize>) -> ArrangedView {
+fn arranged_view(a: &Arranged, links: &[Link]) -> ArrangedView {
     ArrangedView {
         groups: a.groups.clone(),
         how: a
             .tree
             .iter()
-            .enumerate()
-            .map(|(i, p)| p.map(|(_, via)| how_of(i, via, wcs, by_hand)))
+            .map(|p| p.map(|(_, via)| how_of(via, links)))
             .collect(),
     }
 }
@@ -1028,13 +1118,16 @@ fn significant(v: f64) -> String {
     format!("{v:.digits$}")
 }
 
-fn how_of(i: usize, via: Option<usize>, wcs: &HashSet<usize>, by_hand: &HashSet<usize>) -> How {
-    let _ = i;
-    match via {
-        None => How::Reference,
-        Some(l) if wcs.contains(&l) => How::Wcs,
-        Some(l) if by_hand.contains(&l) => How::ByHand,
-        Some(_) => How::Matched,
+fn how_of(via: Option<usize>, links: &[Link]) -> How {
+    let Some(l) = via.and_then(|l| links.get(l)) else {
+        return How::Reference;
+    };
+    match l.kind {
+        LinkKind::Overlap => How::Matched,
+        LinkKind::Features => How::Features,
+        LinkKind::Stars => How::Stars,
+        LinkKind::Wcs => How::Wcs,
+        LinkKind::ByHand => How::ByHand,
     }
 }
 
@@ -1092,7 +1185,6 @@ fn plan_of(
     found: &Found,
     links: &[Link],
     arranged: &Arranged,
-    by_hand: &HashSet<usize>,
     settings: &StitchSettings,
 ) -> Option<Plan> {
     let mut sources = Vec::new();
@@ -1100,16 +1192,18 @@ fn plan_of(
     let mut color = false;
     let mut reference: Option<&Prepared> = None;
     for (i, image) in found.images.iter().enumerate() {
-        let (Some((placed, via)), true) = (arranged.tree[i], arranged.used[i]) else {
+        let (Some(placed), Some((_, via)), true) =
+            (arranged.placed[i], arranged.tree[i], arranged.used[i])
+        else {
             continue;
         };
-        let how = how_of(i, via, &found.wcs_links, by_hand);
+        let how = how_of(via, links);
         if how == How::Reference {
             reference = Some(image);
         }
         let correlation = match how {
-            How::Matched | How::ByHand => via.and_then(|l| links.get(l)).map(|l| l.correlation),
-            _ => None,
+            How::Reference | How::Wcs => None,
+            _ => via.and_then(|l| links.get(l)).map(|l| l.correlation),
         };
         depths.push(image.depth);
         color |= image.color;
@@ -1129,6 +1223,7 @@ fn plan_of(
     let reference = reference.or(found.images.first())?;
     Some(Plan {
         sources,
+        projection: arranged.projection,
         blend: settings.blend.blend(),
         matched_brightness: arranged.gains.iter().any(|g| (g - 1.0).abs() > 1e-9),
         max_pixels: settings.max_pixels(),
@@ -1139,16 +1234,124 @@ fn plan_of(
     })
 }
 
+/// 自動のとき、遠近のゆがみがこれより大きければ射影にする（画素）。
+const PERSPECTIVE_PIXELS: f64 = 1.0;
+/// 自動のとき、横にこれより広く広がれば円筒にする（度）。
+const CYLINDER_DEGREES: f64 = 120.0;
+
+/// 全体を直した置き方（[`Arranged`] の同じ名前の欄）。
+struct Placing {
+    placed: Vec<Option<Warp>>,
+    projection: Projection,
+    fit: Option<(f64, f64)>,
+    note: Option<&'static str>,
+}
+
+/// 全体の写し方を決めて、組をたどった置き方を直す。
+fn place(
+    found: &Found,
+    links: &[Link],
+    tree: &[Option<(Affine, Option<usize>)>],
+    wanted: StitchProjection,
+) -> Placing {
+    let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
+    // 射影と円筒は、遠近のゆがみを持つ特徴点の組で直す（相関で見つけた組の点は、アフィンで
+    // 写した格子の点なので）。
+    let warped: Vec<Link> = links
+        .iter()
+        .map(|l| {
+            let key = (l.a.min(l.b), l.a.max(l.b));
+            match found.features.get(&key) {
+                Some(points) if points.len() >= 12 && l.kind != LinkKind::Wcs => {
+                    let points = if l.a < l.b {
+                        points.clone()
+                    } else {
+                        points.iter().map(|[p, q]| [*q, *p]).collect()
+                    };
+                    Link {
+                        points,
+                        ..l.clone()
+                    }
+                }
+                _ => l.clone(),
+            }
+        })
+        .collect();
+    let mut focals: Vec<f64> = found.images.iter().filter_map(|i| i.focal).collect();
+    focals.sort_by(f64::total_cmp);
+    let focal = focals.get(focals.len() / 2).copied();
+    let astro = found.images.iter().all(|i| i.fits);
+    let projection = wanted.fixed().unwrap_or_else(|| {
+        if astro || adjust::perspective(&found.features).is_none_or(|d| d <= PERSPECTIVE_PIXELS) {
+            return Projection::Affine;
+        }
+        let span = focal
+            .or_else(|| adjust::estimate_focal(&sizes, &warped))
+            .and_then(|f| adjust::cylinder_span(&sizes, &warped, tree, f));
+        if span.is_some_and(|s| s > CYLINDER_DEGREES) {
+            Projection::Cylinder
+        } else {
+            Projection::Projective
+        }
+    });
+    let used = if projection == Projection::Affine {
+        links
+    } else {
+        &warped
+    };
+    let tried = adjust::adjust(&sizes, used, tree, projection, focal);
+    let (result, note) = match tried {
+        Ok(a) => (Ok(a), None),
+        Err(e) => {
+            let note = match e {
+                adjust::Failure::NoFocal => {
+                    "The focal length is unknown, so the images were not put on a cylinder."
+                }
+                adjust::Failure::Unstable => {
+                    "The perspective could not be fitted, so the images were placed flat."
+                }
+            };
+            (
+                adjust::adjust(&sizes, links, tree, Projection::Affine, None),
+                Some(note),
+            )
+        }
+    };
+    match result {
+        Ok(a) => Placing {
+            placed: a.placed,
+            projection: a.projection,
+            fit: Some((a.before, a.after)),
+            note,
+        },
+        Err(_) => Placing {
+            placed: tree
+                .iter()
+                .map(|p| p.map(|(t, _)| Warp::Affine(t)))
+                .collect(),
+            projection: Projection::Affine,
+            fit: None,
+            note,
+        },
+    }
+}
+
 /// 並べる。使う画像を決め、置き、つなぎ目を調べ、明るさの比とプレビューを作る。
 fn arrange(
     found: &Found,
     links: &[Link],
     choices: &HashMap<usize, usize>,
+    projection: StitchProjection,
     settings: &StitchSettings,
 ) -> Arranged {
     let n = found.images.len();
     let tree = mosaic::tree(n, links);
-    let placed: Vec<Option<Affine>> = tree.iter().map(|p| p.map(|(t, _)| t)).collect();
+    let Placing {
+        placed,
+        projection: chosen,
+        fit,
+        note,
+    } = place(found, links, &tree, projection);
     let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
     let groups = mosaic::same_area(
         &sizes,
@@ -1176,6 +1379,10 @@ fn arrange(
     let preview = preview_image(found, &placed, &used, &gains, settings.blend.blend());
     Arranged {
         tree,
+        placed,
+        projection: chosen,
+        fit,
+        note,
         groups,
         used,
         seams,
@@ -1186,13 +1393,13 @@ fn arrange(
 
 fn preview_image(
     found: &Found,
-    placed: &[Option<Affine>],
+    placed: &[Option<Warp>],
     used: &[bool],
     gains: &[f64],
     blend: mosaic::Blend,
 ) -> Option<(egui::ColorImage, Grid)> {
     let sizes: Vec<[usize; 2]> = found.pieces.iter().map(|p| p.full).collect();
-    let shown: Vec<Option<Affine>> = placed
+    let shown: Vec<Option<Warp>> = placed
         .iter()
         .zip(used)
         .map(|(p, u)| p.filter(|_| *u))
@@ -1219,7 +1426,7 @@ fn preview_image(
             height: t.height,
             channels: 3,
             data: &data,
-            placed: from_thumb.then(&p),
+            placed: p.after(&from_thumb),
             gain: gains[i] as f32,
         });
     }
@@ -1243,10 +1450,10 @@ fn preview_image(
     ))
 }
 
-/// 重なりを探すのに要る、1 枚ぶんのもの（番号、縮めた絵、WCS、FITS か）。
-type Linkable = (usize, Piece, Option<stitch::Wcs>, bool);
+/// 重なりを探すのに要る、1 枚ぶんのもの（番号、縮めた絵、WCS、FITS か、星）。
+type Linkable = (usize, Piece, Option<stitch::Wcs>, bool, more::Stars);
 
-fn start_job(paths: Vec<PathBuf>, registry: Registry) -> Job {
+fn start_job(paths: Vec<PathBuf>, registry: Registry, feature_use: StitchFeatures) -> Job {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(AtomicUsize::new(0));
@@ -1268,8 +1475,9 @@ fn start_job(paths: Vec<PathBuf>, registry: Registry) -> Job {
                             Ok((prepared, piece)) => {
                                 let fits = prepared.fits;
                                 let wcs = prepared.wcs.clone();
+                                let stars = prepared.stars.clone();
                                 if let Ok(mut r) = ready.lock() {
-                                    r[i] = Some((i, piece.clone(), wcs, fits));
+                                    r[i] = Some((i, piece.clone(), wcs, fits, stars));
                                 }
                                 let _ = tx.send(Message::Ready(i, Box::new((prepared, piece))));
                             }
@@ -1294,7 +1502,8 @@ fn start_job(paths: Vec<PathBuf>, registry: Registry) -> Job {
             .collect();
         let pieces: Vec<Piece> = ready.iter().map(|r| r.1.clone()).collect();
         counter.store(0, Ordering::Relaxed);
-        let _ = tx.send(Message::Linking(mosaic::link_steps(pieces.len())));
+        let steps = mosaic::link_steps(pieces.len()) + more::feature_steps(pieces.len());
+        let _ = tx.send(Message::Linking(steps));
         let search = Search {
             quarter_turns: !ready.is_empty() && ready.iter().all(|r| r.3),
         };
@@ -1302,8 +1511,22 @@ fn start_job(paths: Vec<PathBuf>, registry: Registry) -> Job {
             counter.fetch_add(1, Ordering::Relaxed);
         });
         let wcs: Vec<Option<stitch::Wcs>> = ready.iter().map(|r| r.2.clone()).collect();
-        let wcs_links = add_wcs_links(&pieces, &wcs, &mut links);
-        let _ = tx.send(Message::Done(links, wcs_links));
+        add_wcs_links(&pieces, &wcs, &mut links);
+        let usage = feature_use.usage();
+        let features = if usage == FeatureUse::Never {
+            HashMap::new()
+        } else {
+            let keypoints = more::keypoints(&pieces);
+            more::feature_pairs(&pieces, &keypoints, &|| {
+                counter.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let stars: Vec<more::Stars> = ready.iter().map(|r| r.4.clone()).collect();
+        more::link_more(&pieces, &stars, &features, usage, &mut links);
+        let _ = tx.send(Message::Done(links, features));
     });
     Job {
         rx,
@@ -1312,17 +1535,12 @@ fn start_job(paths: Vec<PathBuf>, registry: Registry) -> Job {
         total: 0,
         linking: None,
         ready: Vec::new(),
+        feature_use,
     }
 }
 
 /// どちらにも WCS のある組を、絵を合わせた組の代わりに WCS で置く（星の少ない所でも確か）。
-/// 足した組の番号を返す。
-fn add_wcs_links(
-    pieces: &[Piece],
-    wcs: &[Option<stitch::Wcs>],
-    links: &mut Vec<Link>,
-) -> HashSet<usize> {
-    let mut out = HashSet::new();
+fn add_wcs_links(pieces: &[Piece], wcs: &[Option<stitch::Wcs>], links: &mut Vec<Link>) {
     for a in 0..pieces.len() {
         for b in a + 1..pieces.len() {
             let (Some((ca, fa)), Some((cb, fb))) = (&wcs[a], &wcs[b]) else {
@@ -1346,27 +1564,26 @@ fn add_wcs_links(
             let Some(b_in_a) = map.inverse() else {
                 continue;
             };
-            let share = mosaic::shared(pieces[a].full, &Affine::IDENTITY, pieces[b].full, &b_in_a);
+            let share = mosaic::shared(
+                pieces[a].full,
+                &Affine::IDENTITY.into(),
+                pieces[b].full,
+                &b_in_a.into(),
+            );
             if share < WCS_OVERLAP {
                 continue;
             }
             links.retain(|l| !(l.a == a && l.b == b));
-            links.push(Link {
-                a,
-                b,
+            links.push(Link::by_map(
+                (a, pieces[a].full),
+                (b, pieces[b].full),
                 map,
-                correlation: 1.0,
-                overlap: share,
-            });
+                1.0,
+                share,
+                LinkKind::Wcs,
+            ));
         }
     }
-    // retain で番号がずれるので、最後にまとめて数える。
-    for (i, l) in links.iter().enumerate() {
-        if l.correlation == 1.0 && wcs[l.a].is_some() && wcs[l.b].is_some() {
-            out.insert(i);
-        }
-    }
-    out
 }
 
 /// WCS を読むのに要るカード。
@@ -1416,6 +1633,17 @@ fn prepare(path: &Path, registry: &Registry) -> Result<(Prepared, Piece), String
         .as_ref()
         .filter(|_| fits)
         .and_then(|l| vw_pipeline::subframes::evaluate(l).fwhm);
+    let stars = linear.as_ref().filter(|_| fits).and_then(|l| {
+        let mut found = vw_pipeline::deconv::find_stars(l)?;
+        found.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+        Some(
+            found
+                .iter()
+                .map(|s| [f64::from(s.x), f64::from(s.y)])
+                .collect::<Vec<_>>(),
+        )
+    });
+    let focal = focal_of(&image.metadata, w, h);
     let measured = linear.map(|l| {
         let values = (0..l.width * l.height)
             .map(|i| match l.channels {
@@ -1445,12 +1673,30 @@ fn prepare(path: &Path, registry: &Registry) -> Result<(Prepared, Piece), String
         curve: image.curve,
         fits,
         measured,
+        stars,
+        focal,
     };
     let piece = Piece {
         plane: align.luma(),
         full: [w, h],
     };
     Ok((prepared, piece))
+}
+
+/// 35mm 判の対角線（mm）。
+const FULL_FRAME_DIAGONAL: f64 = 43.27;
+
+/// EXIF の 35mm 換算の焦点距離から、焦点距離（画素）。35mm 判の対角線と画像の対角線を
+/// 同じ画角とみなす（縦横の比が 3:2 でなくても、対角線どうしなら比べられる）。
+fn focal_of(metadata: &vw_core::Metadata, w: usize, h: usize) -> Option<f64> {
+    let text = metadata.get("EXIF", "FocalLengthIn35mmFilm")?;
+    let number: String = text
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let f35: f64 = number.parse().ok()?;
+    (f35 > 0.0).then(|| f35 / FULL_FRAME_DIAGONAL * (w as f64).hypot(h as f64))
 }
 
 /// FITS の WCS のカードと、画面の画素（0 始まり）から FITS の画素（1 始まり、y は下から上。

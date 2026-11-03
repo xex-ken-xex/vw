@@ -64,6 +64,8 @@ The main settings. Find all of them with the search box of the settings screen.
 | | Map credit (`map.attribution`), link (`map.attribution_url`) | Credit shown at the bottom right of the map | © OpenStreetMap contributors |
 | Display | Monitors (`display.monitors`) | Drawing depth per monitor (8-bit, 10-bit, 12-bit or more) and dithering ([Show more than 8 bits](view.html#show-more-than-8-bits-10-bit-12-bit-or-more)) | 8-bit, dithering off |
 | Stitching images | Blending the overlaps (`stitch.blend`) | Feathered toward the edges / Later images on top ([Stitch images](view.html#stitch-images)) | Feathered toward the edges |
+| | Projection (`stitch.projection`) | Automatic / Flat (affine) / Flat (projective) / Cylinder. Automatic uses projective only for photos with perspective, and a cylinder when they span more than 120° | Automatic |
+| | Matching feature points (`stitch.features`) | When the overlap does not match / Always / Never. Star images without a WCS are matched by star patterns either way | When the overlap does not match |
 | | Match the brightness of photos (`stitch.match_brightness`) | Scale each 8-bit photo so overlapping images agree. 16-bit and FITS values are never changed | On |
 | | Shots of the same area (`stitch.same_area_percent`) | Images overlapping by at least this share of the smaller one count as the same area; only one is used | 80 % |
 | | Largest stitched image (`stitch.max_megapixels`) | A larger result is scaled down to fit | 100 megapixels |

@@ -2718,10 +2718,94 @@ impl StitchBlend {
     }
 }
 
+/// 貼り合わせの全体の写し方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StitchProjection {
+    /// 写真の遠近のゆがみが大きいときだけ射影、横に広いときは円筒。天体はアフィン。
+    #[default]
+    Auto,
+    Affine,
+    Projective,
+    Cylinder,
+}
+
+impl StitchProjection {
+    pub const ALL: [StitchProjection; 4] = [
+        StitchProjection::Auto,
+        StitchProjection::Affine,
+        StitchProjection::Projective,
+        StitchProjection::Cylinder,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            StitchProjection::Auto => "Automatic",
+            StitchProjection::Affine => crate::stitch::projection_title(Projection::Affine),
+            StitchProjection::Projective => crate::stitch::projection_title(Projection::Projective),
+            StitchProjection::Cylinder => crate::stitch::projection_title(Projection::Cylinder),
+        }
+    }
+
+    /// 決まった写し方（自動なら `None`）。
+    pub fn fixed(self) -> Option<Projection> {
+        match self {
+            StitchProjection::Auto => None,
+            StitchProjection::Affine => Some(Projection::Affine),
+            StitchProjection::Projective => Some(Projection::Projective),
+            StitchProjection::Cylinder => Some(Projection::Cylinder),
+        }
+    }
+}
+
+use vw_compare::mosaic::adjust::Projection;
+
+/// 特徴点の対応で組を探す場面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StitchFeatures {
+    /// 重なりの相関で見つからなかった組だけ。
+    #[default]
+    Fallback,
+    /// どの組も両方で探し、確かなほうを使う。
+    Always,
+    /// 使わない。
+    Never,
+}
+
+impl StitchFeatures {
+    pub const ALL: [StitchFeatures; 3] = [
+        StitchFeatures::Fallback,
+        StitchFeatures::Always,
+        StitchFeatures::Never,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            StitchFeatures::Fallback => "When the overlap does not match",
+            StitchFeatures::Always => "Always",
+            StitchFeatures::Never => "Never",
+        }
+    }
+
+    pub fn usage(self) -> vw_compare::mosaic::more::FeatureUse {
+        use vw_compare::mosaic::more::FeatureUse;
+        match self {
+            StitchFeatures::Fallback => FeatureUse::Fallback,
+            StitchFeatures::Always => FeatureUse::Always,
+            StitchFeatures::Never => FeatureUse::Never,
+        }
+    }
+}
+
 /// 画像の貼り合わせ（`[stitch]`）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StitchSettings {
     pub blend: StitchBlend,
+    /// 全体の写し方。
+    pub projection: StitchProjection,
+    /// 特徴点の対応で組を探す場面。
+    pub features: StitchFeatures,
     /// 写真（8bit）の明るさを重なった所でそろえる。計測の値（FITS や 16bit）はそろえない。
     pub match_brightness: bool,
     /// 小さいほうの画像の面積のこの割合（%）以上が重なる画像を、同じ所を写したものとみなす。
@@ -2734,6 +2818,8 @@ impl Default for StitchSettings {
     fn default() -> Self {
         Self {
             blend: StitchBlend::Feather,
+            projection: StitchProjection::Auto,
+            features: StitchFeatures::Fallback,
             match_brightness: true,
             same_area_percent: 80.0,
             max_megapixels: 100.0,
@@ -2761,6 +2847,8 @@ impl StitchSettings {
         let max_megapixels = within("max_megapixels", Self::MEGAPIXELS_RANGE, d.max_megapixels);
         Self {
             blend: r.get("blend").unwrap_or(d.blend),
+            projection: r.get("projection").unwrap_or(d.projection),
+            features: r.get("features").unwrap_or(d.features),
             match_brightness: r.get("match_brightness").unwrap_or(d.match_brightness),
             same_area_percent,
             max_megapixels,
