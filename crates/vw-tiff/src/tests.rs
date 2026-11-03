@@ -536,3 +536,169 @@ fn a_strip_running_past_the_end_of_the_file_is_not_repaired() {
     tiff = drop_tag(&tiff, 279);
     assert!(with_repair_on(|| TiffPlugin.decode(&tiff)).is_err());
 }
+
+/// testdata/make_odd_bits_fixtures.py と同じ式の値（画素ごとにサンプルを並べた順）。
+fn formula(width: u32, height: u32, samples: u32, bits: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..samples {
+                out.push((x * 37 + y * 101 + c * 13 + 5) % (1 << bits));
+            }
+        }
+    }
+    out
+}
+
+fn fixture(name: &str) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join(name);
+    std::fs::read(path).unwrap()
+}
+
+fn assert_u16(img: &VwImage, want: &[u32]) {
+    let PixelData::U16(v) = &img.data else {
+        panic!("not 16-bit: {:?}", img.data.bits_per_sample());
+    };
+    let want: Vec<u16> = want.iter().map(|&x| x as u16).collect();
+    assert_eq!(v, &want);
+}
+
+#[test]
+fn twelve_bit_gray_keeps_its_values_and_twelve_significant_bits() {
+    let img = decode(&fixture("gray12_strips_le.tif"));
+    assert_eq!(
+        (img.width, img.height, img.color),
+        (13, 7, ColorModel::Gray)
+    );
+    assert_eq!(img.significant_bits, 12);
+    assert_u16(&img, &formula(13, 7, 1, 12));
+}
+
+#[test]
+fn twelve_bit_gray_in_lzw_and_big_endian_is_read() {
+    let img = decode(&fixture("gray12_lzw_be.tif"));
+    assert_u16(&img, &formula(13, 7, 1, 12));
+}
+
+#[test]
+fn ten_bit_gray_in_deflate_tiles_is_cropped_to_the_image() {
+    let img = decode(&fixture("gray10_deflate_tiles.tif"));
+    assert_eq!((img.width, img.height), (21, 18));
+    assert_eq!(img.significant_bits, 10);
+    assert_u16(&img, &formula(21, 18, 1, 10));
+}
+
+#[test]
+fn fourteen_bit_gray_in_packbits_is_read() {
+    let img = decode(&fixture("gray14_packbits.tif"));
+    assert_eq!(img.significant_bits, 14);
+    assert_u16(&img, &formula(9, 5, 1, 14));
+}
+
+#[test]
+fn twenty_four_bit_gray_becomes_exact_real_numbers() {
+    let img = decode(&fixture("gray24_deflate.tif"));
+    let PixelData::F32(v) = &img.data else {
+        panic!("not real numbers");
+    };
+    let want: Vec<f32> = formula(11, 4, 1, 24).iter().map(|&x| x as f32).collect();
+    assert_eq!(v, &want);
+}
+
+#[test]
+fn twelve_bit_white_is_zero_is_inverted_within_twelve_bits() {
+    let img = decode(&fixture("gray12_white_is_zero.tif"));
+    let want: Vec<u32> = formula(5, 3, 1, 12).iter().map(|&x| 4095 - x).collect();
+    assert_u16(&img, &want);
+}
+
+#[test]
+fn twelve_bit_rgb_in_lzw_is_read() {
+    let img = decode(&fixture("rgb12_lzw.tif"));
+    assert_eq!(img.color, ColorModel::Rgb);
+    assert_eq!(img.significant_bits, 12);
+    assert_u16(&img, &formula(7, 5, 3, 12));
+}
+
+#[test]
+fn twelve_bit_rgb_in_separate_planes_is_interleaved() {
+    let img = decode(&fixture("rgb12_planar_deflate.tif"));
+    assert_eq!(img.color, ColorModel::Rgb);
+    assert_u16(&img, &formula(7, 5, 3, 12));
+}
+
+#[test]
+fn ten_bit_rgba_in_separate_plane_tiles_is_interleaved_and_cropped() {
+    let img = decode(&fixture("rgba10_planar_tiles.tif"));
+    assert_eq!(
+        (img.width, img.height, img.color),
+        (19, 17, ColorModel::Rgba)
+    );
+    assert_u16(&img, &with_alpha_stretched(formula(19, 17, 4, 10), 4, 10));
+}
+
+#[test]
+fn fourteen_bit_rgba_in_big_endian_is_read() {
+    let img = decode(&fixture("rgba14_be.tif"));
+    assert_eq!(img.color, ColorModel::Rgba);
+    assert_u16(&img, &with_alpha_stretched(formula(6, 3, 4, 14), 4, 14));
+}
+
+/// アルファ（各画素の最後のサンプル）だけを 16bit の全範囲に引き伸ばしたもの。表示は 16bit の
+/// アルファの最大を不透明とみなすため。色の値はそのまま。
+fn with_alpha_stretched(mut values: Vec<u32>, samples: usize, bits: u32) -> Vec<u32> {
+    let max = (1u64 << bits) - 1;
+    for px in values.chunks_mut(samples) {
+        let a = &mut px[samples - 1];
+        *a = (u64::from(*a) * 65535 / max) as u32;
+    }
+    values
+}
+
+/// 値を上位ビットから `bits` ビットずつ詰めた 1 行（末尾は 1 バイトに切り上げ）。
+fn pack_bits(values: &[u32], bits: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut acc, mut have) = (0u64, 0u32);
+    for &v in values {
+        acc = (acc << bits) | u64::from(v & ((1 << bits) - 1));
+        have += bits;
+        while have >= 8 {
+            have -= 8;
+            out.push((acc >> have) as u8);
+        }
+    }
+    if have > 0 {
+        out.push((acc << (8 - have)) as u8);
+    }
+    out
+}
+
+#[test]
+fn signed_twelve_bit_gray_becomes_real_numbers_with_its_sign() {
+    let mut tags = basic(&[12], 1);
+    tags.push((339, V::Short(vec![2])));
+    let raw = [0xFFF, 0x000, 0x7FF, 0x800]; // -1, 0, 2047, -2048
+    let img = decode(&build(&[page(4, 1, tags, pack_bits(&raw, 12))]));
+    assert!(matches!(&img.data, PixelData::F32(v) if v == &[-1.0, 0.0, 2047.0, -2048.0]));
+}
+
+#[test]
+fn odd_bits_with_a_predictor_are_refused_by_name() {
+    let mut tags = basic(&[12], 1);
+    tags.push((317, V::Short(vec![2])));
+    let err = TiffPlugin
+        .decode(&build(&[page(2, 1, tags, pack_bits(&[1, 2], 12))]))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("12-bit samples and a predictor"),
+        "{err}"
+    );
+}
+
+#[test]
+fn twelve_bit_gray_metadata_says_twelve_bits() {
+    let img = decode(&fixture("gray12_strips_le.tif"));
+    assert_eq!(img.metadata.get("TIFF", "Bits per sample"), Some("12"));
+}
