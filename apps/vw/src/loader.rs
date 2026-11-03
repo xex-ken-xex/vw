@@ -77,6 +77,8 @@ pub struct ImageInfo {
     pub spectrum: Option<Arc<vw_core::spectrum::Spectrum>>,
     /// 画素ごとの緯度・経度（気象・海洋の格子のデータ）。
     pub geo: Option<Arc<vw_core::geo::GeoGrid>>,
+    /// 画素ごとの空の位置（WCS のある天体の画像）。
+    pub sky: Option<Arc<dyn vw_core::sky::SkyMap>>,
 }
 
 impl ImageInfo {
@@ -564,6 +566,7 @@ fn finish(
         frame_delays: None,
         spectrum: image.spectrum.clone(),
         geo: image.geo.clone(),
+        sky: image.sky.clone(),
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),

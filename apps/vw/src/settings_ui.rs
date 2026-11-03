@@ -19,8 +19,8 @@ use crate::settings::{
     CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling, FitsCalibration,
     FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode, GaugeSide,
     HeaderClick, HeadingStyle, Labels, Language, LoadInto, LoadModifier, LogSettings, LogStyle,
-    MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, StartTool, ThemeChoice, Tree,
-    Viewer, parse_hex_color,
+    MonitorSettings, OutputDepth, PathDisplay, SearchGroup, Settings, SkyCoordinates, StartTool,
+    ThemeChoice, Tree, Viewer, parse_hex_color,
 };
 use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::SortKey;
@@ -858,6 +858,13 @@ const ITEMS: &[Item] = &[
         title: "Spectra as graphs",
         description: "Draw data with only one axis (spectra) as a line graph against frequency, velocity or wavelength. When off, they are shown as an image one pixel high.",
         widget: fits_spectrum_graph_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.sky_coordinates",
+        title: "Sky coordinates at the cross",
+        description: "How the right ascension and declination of the pixel are written at the cross and at the cursor, for images with a WCS in the header. Copying a cross always gives decimal degrees.",
+        widget: fits_sky_coordinates_widget,
     },
     Item {
         section: Section::Netcdf,
@@ -2457,6 +2464,20 @@ fn chip_mock(ui: &mut egui::Ui, chip: Chip, lang: Language, with_title: bool) {
 
 fn fits_beam_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.beam, tr(lang, "Enabled")).changed()
+}
+
+fn fits_sky_coordinates_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.fits.sky_coordinates;
+    ui.horizontal(|ui| {
+        for format in SkyCoordinates::ALL {
+            ui.radio_value(
+                &mut s.fits.sky_coordinates,
+                format,
+                tr(lang, format.title()),
+            );
+        }
+    });
+    s.fits.sky_coordinates != before
 }
 
 fn fits_spectrum_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

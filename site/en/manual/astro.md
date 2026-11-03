@@ -13,7 +13,7 @@ Make faint images easy to see, then calibrate, select and finish them.
 **View → Sky chart** opens the sky chart window. It outlines where on the sky each astronomy image (FITS) was taken, over stars (to magnitude 6) and constellation lines, borders and names. No network is used.
 
 - The outline depends on what the header tells
-  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections are read
+  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections are read, with the optical distortion polynomials (`-SIP` and `TPV`)
   - **Dotted red**: images with the mount pointing (`RA` `DEC`, or `OBJCTRA` `OBJCTDEC`), focal length (`FOCALLEN`) and pixel size (`XPIXSZ` `YPIXSZ`). The area estimated from the field of view is drawn with north up (rotation unknown)
   - **Red cross**: images with only the mount pointing
 - When one file has two or more image HDUs with WCS, as from a mosaic camera, each detector is outlined thinly inside a thick outline around them all
@@ -22,6 +22,15 @@ Make faint images easy to see, then calibrate, select and finish them.
 - Click an outline for its thumbnail, file name, `OBJECT`, `DATE-OBS` and center coordinates. **Open** goes to the image's folder, selects the image and loads it first. Where outlines overlap, such as a series of shots of the same target, pick from a list
 - The outline of the active slot's image is drawn thicker
 - Outline colors can be changed in the **Sky chart** settings. Turn off **Use the sky chart** to remove it from the menu
+
+## See sky coordinates at the cross
+
+For images with a WCS in the header, the cross of [pixel value check](check.html#measure-pixel-values-probe-roi-analysis) (**V**) and the cursor value at the bottom left add the right ascension and declination after the value and position, such as "α 05h35m16.46s  δ -05°23′22.8″". Cubes also add the plane label.
+
+- The optical distortion polynomials (`-SIP`, common in plate solve results, and `TPV` in observatory data) are applied, so positions stay right at the edges of the image
+- Choose between **Hours and degrees** and **Decimal degrees** with the **Sky coordinates at the cross** setting (`fits.sky_coordinates`)
+- **Ctrl+C** copies the right ascension and declination in decimal degrees (south declinations negative) after the value, separated by commas
+- Images whose area is only estimated from the mount pointing and focal length (dotted red on the sky chart) get no coordinates, so a rough position is not shown as if it were exact for each pixel
 
 ## Switch extensions (HDUs)
 

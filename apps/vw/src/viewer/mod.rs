@@ -16,6 +16,7 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 use serde::{Deserialize, Serialize};
+use vw_core::sky::SkyFormat;
 use vw_core::{ColorModel, VwImage};
 
 use crate::derive::{self, Derive, View};
@@ -375,6 +376,8 @@ pub struct SlotLook<'a> {
     pub beam: bool,
     /// スペクトルを画像ではなくグラフで描く。
     pub spectrum_graph: bool,
+    /// 十字とカーソルの所に出す空の座標の書き方。
+    pub sky_format: SkyFormat,
 }
 
 /// 似た画像の組の印。同じ組のスロットには同じ番号と色を出す。
@@ -1045,17 +1048,25 @@ impl Slot {
         Some((text, swatch))
     }
 
-    /// 十字の位置の緯度・経度と面の札。
-    fn mark_place(&self, mark: &Mark) -> Option<probe::Place> {
+    /// 十字の位置の緯度・経度か空の座標と、面の札。
+    fn mark_place(&self, mark: &Mark, format: SkyFormat) -> Option<probe::Place> {
         let info = &self.shown()?.info;
-        probe::Place::at(info.geo.as_deref(), &info.metadata, mark.x, mark.y)
+        probe::Place::at(
+            info.geo.as_deref(),
+            info.sky.as_deref(),
+            format,
+            &info.metadata,
+            mark.x,
+            mark.y,
+        )
     }
 
     /// 選んでいる十字をコピーするときの文字。
     pub fn selected_mark_text(&self) -> Option<String> {
         let mark = self.selected_shown_mark()?;
         let value = self.mark_value(mark);
-        let place = self.mark_place(mark);
+        // コピーは度の小数で書くので、書き方はどれでもよい。
+        let place = self.mark_place(mark, SkyFormat::Degrees);
         Some(probe::clipboard_text(
             mark.x,
             mark.y,
@@ -1138,7 +1149,14 @@ impl Slot {
     }
 
     /// 表示中の画像に置いた十字と、その値を描く。
-    fn draw_marks(&self, ui: &egui::Ui, body: Rect, lang: Language, placed: &Placed) {
+    fn draw_marks(
+        &self,
+        ui: &egui::Ui,
+        body: Rect,
+        lang: Language,
+        placed: &Placed,
+        sky_format: SkyFormat,
+    ) {
         let Some(shown) = self.shown() else { return };
         let painter = ui.painter_at(body);
         let selected = self.selected_shown_mark();
@@ -1170,7 +1188,7 @@ impl Slot {
                     mark.x,
                     mark.y,
                     value.as_deref(),
-                    self.mark_place(mark).as_ref(),
+                    self.mark_place(mark, sky_format).as_ref(),
                 ),
                 egui::FontId::proportional(12.0),
                 color,
@@ -1672,6 +1690,7 @@ impl Slot {
             bar,
             beam,
             spectrum_graph,
+            sky_format,
         } = look;
         self.colors = colors;
         let mut out = SlotFrame::default();
@@ -2048,7 +2067,7 @@ impl Slot {
                 has_marks || has_rois || has_lines || (tool == Tool::Probe && pointer.hovered);
             self.draw_rois(ui, body, lang, &placed, drawing);
             self.draw_lines(ui, body, &placed, drawing_line);
-            self.draw_marks(ui, body, lang, &placed);
+            self.draw_marks(ui, body, lang, &placed, sky_format);
             if tool == Tool::Probe {
                 let hover = pointer.hover.and_then(|p| placed.pixel_at(p));
                 if let Some((x, y)) = hover {
@@ -2061,7 +2080,7 @@ impl Slot {
                         Some(v) => format!("x {x}, y {y}   {}", crate::i18n::tr_text(lang, &v)),
                         None => format!("x {x}, y {y}"),
                     };
-                    if let Some(place) = self.mark_place(&mark) {
+                    if let Some(place) = self.mark_place(&mark, sky_format) {
                         text = format!("{text}   {}", place.label());
                     }
                     let galley = painter.layout_no_wrap(
@@ -2536,6 +2555,7 @@ pub mod test_support {
             frame_delays: None,
             spectrum: None,
             geo: None,
+            sky: None,
         }
     }
 

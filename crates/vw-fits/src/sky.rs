@@ -1,7 +1,8 @@
 //! 画像が空のどこを写したか。ヘッダの WCS（はっきり）か、架台の向き（およそ）から決める。
 //!
 //! WCS は天頂投影のうち、撮影と公開データでほぼすべてを占める TAN と、SIN・ARC・STG・ZEA を
-//! 読む。`-SIP` などの歪みの補正は、星図に枠を描くには差が見えないほど小さいので当てない。
+//! 読む。光学系の歪みの多項式（`-SIP` と `TPV`）も当てる。星図の枠では差が見えないほど小さいが、
+//! 十字で画素の空の座標を出すと、画像の端で数画素ずれるため。
 //! CAR や AIT のような全天の投影は、1 枚の写真には使われないので読まない。
 
 use std::f64::consts::PI;
@@ -56,6 +57,7 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
                 cd: [[-sx, 0.0], [0.0, sy]],
                 projection: Projection::Tan,
                 lonpole: 180.0,
+                distortion: Distortion::None,
             };
             outline(size, &|x, y| wcs.to_sky(x, y))
         }
@@ -134,6 +136,8 @@ pub fn wcs_through(
             wcs.cd[1][0] * b + wcs.cd[1][1] * e,
         ],
     ];
+    // 歪みの多項式は引き継がない。SIP は元の画素の並びの CRPIX からの式なので、貼り合わせで
+    // 動かした画素には書き直せない。1 枚の写真の範囲では、星図の枠や重ね合わせには差が見えない。
     let code = wcs.projection.code();
     let number = |v: f64| format!("{v:.15E}");
     let mut cards = vec![
@@ -157,6 +161,43 @@ pub fn wcs_through(
         }
     }
     Some(cards)
+}
+
+/// 表示した画像の画素と空の座標の対応（十字に出す）。
+#[derive(Debug)]
+pub(crate) struct ImageSky {
+    wcs: Wcs,
+    height: f64,
+    /// 表示で上下を返したか（FITS の最初の行が下になる）。
+    flipped: bool,
+}
+
+impl ImageSky {
+    /// ヘッダに WCS があれば作る。架台の向きからの見積もりは使わない（およその座標を、
+    /// 画素ごとの正しい座標のように見せないため）。
+    pub(crate) fn read(
+        lookup: &dyn Fn(&str) -> Option<String>,
+        height: usize,
+        flipped: bool,
+    ) -> Option<Self> {
+        Some(Self {
+            wcs: Wcs::read(lookup)?,
+            height: height as f64,
+            flipped,
+        })
+    }
+}
+
+impl vw_core::sky::SkyMap for ImageSky {
+    fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        // 表示の画素（0 始まり、上が 0）を FITS の画素（1 始まり、最初の行が y = 1）にする。
+        let fits_y = if self.flipped {
+            self.height - y
+        } else {
+            y + 1.0
+        };
+        self.wcs.to_sky(x + 1.0, fits_y)
+    }
 }
 
 /// 空の点 `target`（赤経・赤緯、度）が `wcs` の画像で写る画素。`guess` から探す。
@@ -424,6 +465,110 @@ impl Projection {
     }
 }
 
+/// 光学系の歪みの多項式。
+#[derive(Debug, Clone, PartialEq)]
+enum Distortion {
+    None,
+    /// SIP（Shupe ほか 2005）。画素のずれ (u, v) に足す多項式の係数 `(p, q, 係数)`。
+    Sip {
+        a: Vec<(i32, i32, f64)>,
+        b: Vec<(i32, i32, f64)>,
+    },
+    /// TPV（SCAMP の書き方）。投影面の座標（度）を書き直す、`PV1_0`〜`PV1_39` と `PV2_0`〜`PV2_39`。
+    Tpv {
+        pv1: Box<[f64; 40]>,
+        pv2: Box<[f64; 40]>,
+    },
+}
+
+impl Distortion {
+    /// `CTYPE` の後ろの印（`-SIP`）と、投影の名前（`TPV`）から読む。係数が 1 つもなければ歪みなし。
+    fn read(num: &dyn Fn(&str) -> Option<f64>, sip: bool, tpv: bool) -> Self {
+        if sip {
+            let terms = |name: &str| -> Vec<(i32, i32, f64)> {
+                let Some(order) = num(&format!("{name}_ORDER")) else {
+                    return Vec::new();
+                };
+                let order = order.clamp(0.0, 9.0) as i32;
+                let mut out = Vec::new();
+                for p in 0..=order {
+                    for q in 0..=order - p {
+                        if let Some(c) = num(&format!("{name}_{p}_{q}")).filter(|&c| c != 0.0) {
+                            out.push((p, q, c));
+                        }
+                    }
+                }
+                out
+            };
+            let (a, b) = (terms("A"), terms("B"));
+            if !a.is_empty() || !b.is_empty() {
+                return Distortion::Sip { a, b };
+            }
+        }
+        if tpv {
+            // 書いていない係数は、1 次の PVi_1 が 1、ほかは 0（歪みなし）。
+            let coefficients = |axis: u32| {
+                let mut c = [0.0; 40];
+                c[1] = 1.0;
+                for (k, v) in c.iter_mut().enumerate() {
+                    if let Some(x) = num(&format!("PV{axis}_{k}")) {
+                        *v = x;
+                    }
+                }
+                c
+            };
+            return Distortion::Tpv {
+                pv1: Box::new(coefficients(1)),
+                pv2: Box::new(coefficients(2)),
+            };
+        }
+        Distortion::None
+    }
+
+    /// 画素のずれ (u, v) を、CD を掛ける前に直す（SIP）。
+    fn before_cd(&self, u: f64, v: f64) -> (f64, f64) {
+        match self {
+            Distortion::Sip { a, b } => {
+                let sum = |terms: &[(i32, i32, f64)]| -> f64 {
+                    terms
+                        .iter()
+                        .map(|&(p, q, c)| c * u.powi(p) * v.powi(q))
+                        .sum()
+                };
+                (u + sum(a), v + sum(b))
+            }
+            _ => (u, v),
+        }
+    }
+
+    /// 投影面の座標（度）を、CD を掛けた後に直す（TPV）。
+    fn after_cd(&self, x: f64, y: f64) -> (f64, f64) {
+        match self {
+            Distortion::Tpv { pv1, pv2 } => (tpv(pv1, x, y), tpv(pv2, y, x)),
+            _ => (x, y),
+        }
+    }
+}
+
+/// TPV の多項式。`PV1` は (ξ, η)、`PV2` は (η, ξ) の順に入れる。項の並びは
+/// 1, x, y, r, x², xy, y², x³, x²y, xy², y³, r³, x⁴ … y⁴, x⁵ … y⁵, r⁵, x⁶ … y⁶, x⁷ … y⁷, r⁷。
+fn tpv(c: &[f64; 40], x: f64, y: f64) -> f64 {
+    let r = x.hypot(y);
+    let mut sum = c[0];
+    let mut k = 1;
+    for degree in 1..=7 {
+        for i in 0..=degree {
+            sum += c[k] * x.powi(degree - i) * y.powi(i);
+            k += 1;
+        }
+        if degree % 2 == 1 {
+            sum += c[k] * r.powi(degree);
+            k += 1;
+        }
+    }
+    sum
+}
+
 /// 天頂投影の WCS（論文 Calabretta & Greisen 2002 の式）。
 #[derive(Debug, Clone, PartialEq)]
 struct Wcs {
@@ -434,6 +579,7 @@ struct Wcs {
     cd: [[f64; 2]; 2],
     projection: Projection,
     lonpole: f64,
+    distortion: Distortion,
 }
 
 impl Wcs {
@@ -447,8 +593,9 @@ impl Wcs {
             ("DEC-", "RA--") => true,
             _ => return None,
         };
-        let projection = match c1.get(5..8)? {
-            "TAN" => Projection::Tan,
+        let code = c1.get(5..8)?;
+        let projection = match code {
+            "TAN" | "TPV" => Projection::Tan,
             "SIN" => Projection::Sin,
             "ARC" => Projection::Arc,
             "STG" => Projection::Stg,
@@ -458,6 +605,12 @@ impl Wcs {
         let cd = cd_matrix(&num)?;
         let (ra_axis, dec_axis) = if swapped { (2, 1) } else { (1, 2) };
         let cd = if swapped { [cd[1], cd[0]] } else { cd };
+        let sip = c1.get(8..).is_some_and(|rest| rest.trim() == "-SIP");
+        let mut distortion = Distortion::read(&num, sip, code == "TPV");
+        if swapped && let Distortion::Tpv { pv1, pv2 } = &mut distortion {
+            // PV1 は 1 本目の軸（ここでは赤緯）の式なので、赤経・赤緯の順に入れ替える。
+            std::mem::swap(pv1, pv2);
+        }
         Some(Self {
             crpix: [num("CRPIX1")?, num("CRPIX2")?],
             crval: [
@@ -467,14 +620,19 @@ impl Wcs {
             cd,
             projection,
             lonpole: num("LONPOLE").unwrap_or(180.0),
+            distortion,
         })
     }
 
     /// 画素 `(x, y)`（1 始まり）の赤経・赤緯（度）。
     fn to_sky(&self, x: f64, y: f64) -> Option<[f64; 2]> {
-        let (dx, dy) = (x - self.crpix[0], y - self.crpix[1]);
-        let px = self.cd[0][0] * dx + self.cd[0][1] * dy;
-        let py = self.cd[1][0] * dx + self.cd[1][1] * dy;
+        let (dx, dy) = self
+            .distortion
+            .before_cd(x - self.crpix[0], y - self.crpix[1]);
+        let (px, py) = self.distortion.after_cd(
+            self.cd[0][0] * dx + self.cd[0][1] * dy,
+            self.cd[1][0] * dx + self.cd[1][1] * dy,
+        );
         let r = px.hypot(py);
         let phi = px.atan2(-py);
         let r_rad = r.to_radians();
@@ -662,6 +820,116 @@ mod tests {
     }
 
     /// astropy 7 で、上の CD 行列のまま投影だけ変えて求めた左下の角。
+    /// 2048 x 1536 の画像の、強めの SIP（隅で約 4 画素ずれる）。
+    const SIP_CARDS: [(&str, &str); 22] = [
+        ("CTYPE1", "RA---TAN-SIP"),
+        ("CTYPE2", "DEC--TAN-SIP"),
+        ("CRPIX1", "1024.5"),
+        ("CRPIX2", "768.5"),
+        ("CRVAL1", "83.82"),
+        ("CRVAL2", "-5.39"),
+        ("CD1_1", "-2.8E-4"),
+        ("CD1_2", "1.2E-5"),
+        ("CD2_1", "1.1E-5"),
+        ("CD2_2", "2.8E-4"),
+        ("A_ORDER", "3"),
+        ("A_0_2", "2.1E-6"),
+        ("A_1_1", "-3.3E-6"),
+        ("A_2_0", "4.0E-6"),
+        ("A_3_0", "-1.2E-9"),
+        ("A_1_2", "8.0E-10"),
+        ("B_ORDER", "3"),
+        ("B_0_2", "-2.5E-6"),
+        ("B_1_1", "3.1E-6"),
+        ("B_2_0", "1.7E-6"),
+        ("B_0_3", "9.0E-10"),
+        ("B_2_1", "-6.0E-10"),
+    ];
+
+    #[test]
+    fn sip_distortion_matches_astropy() {
+        // astropy 8.0.2 の all_pix2world（1 始まり）。
+        let expected = [
+            ([1.0, 1.0], [84.097_713_210_9, -5.615_262_483_5]),
+            ([2048.0, 1.0], [83.520_744_482_1, -5.594_059_857_9]),
+            ([1.0, 1536.0], [84.114_494_402_7, -5.186_810_840_3]),
+            ([2048.0, 1536.0], [83.540_965_649_6, -5.163_012_453_5]),
+            ([300.25, 1200.75], [84.027_765_030_2, -5.277_030_394_5]),
+        ];
+        let wcs = Wcs::read(&lookup(&SIP_CARDS)).unwrap();
+        for ([x, y], sky) in expected {
+            let p = wcs.to_sky(x, y).unwrap();
+            assert!(close(p, sky, 1e-8), "({x}, {y}): {p:?}");
+        }
+    }
+
+    #[test]
+    fn sip_moves_the_corners_by_a_few_pixels() {
+        let plain: Vec<(&str, &str)> = SIP_CARDS[..10]
+            .iter()
+            .map(|&(k, v)| (k, v.trim_end_matches("-SIP")))
+            .collect();
+        let with = Wcs::read(&lookup(&SIP_CARDS))
+            .unwrap()
+            .to_sky(1.0, 1.0)
+            .unwrap();
+        let without = Wcs::read(&lookup(&plain))
+            .unwrap()
+            .to_sky(1.0, 1.0)
+            .unwrap();
+        // astropy で SIP を外した隅（84.098 703 472 3, -5.616 091 307 4）。
+        assert!(close(without, [84.098_703_472_3, -5.616_091_307_4], 1e-8));
+        let pixels = (with[1] - without[1]).abs() / 2.8e-4;
+        assert!(pixels > 2.0, "{pixels}");
+    }
+
+    #[test]
+    fn tpv_distortion_matches_astropy() {
+        let cards = [
+            ("CTYPE1", "RA---TPV"),
+            ("CTYPE2", "DEC--TPV"),
+            ("CRPIX1", "-50.0"),
+            ("CRPIX2", "4200.0"),
+            ("CRVAL1", "150.1"),
+            ("CRVAL2", "2.2"),
+            ("CD1_1", "0.0"),
+            ("CD1_2", "7.3E-5"),
+            ("CD2_1", "-7.3E-5"),
+            ("CD2_2", "0.0"),
+            ("PV1_0", "-1.2E-4"),
+            ("PV1_1", "1.0012"),
+            ("PV1_2", "3.0E-4"),
+            ("PV1_4", "-2.0E-3"),
+            ("PV1_5", "1.5E-3"),
+            ("PV1_6", "-8.0E-4"),
+            ("PV1_7", "-1.0E-2"),
+            ("PV1_9", "-9.0E-3"),
+            ("PV1_11", "4.0E-3"),
+            ("PV2_0", "2.0E-4"),
+            ("PV2_1", "1.0009"),
+            ("PV2_2", "-2.0E-4"),
+            ("PV2_4", "-1.2E-3"),
+            ("PV2_5", "9.0E-4"),
+            ("PV2_6", "-5.0E-4"),
+            ("PV2_7", "-9.5E-3"),
+            ("PV2_9", "-1.1E-2"),
+            ("PV2_11", "3.0E-3"),
+        ];
+        // astropy 8.0.2 の all_pix2world（1 始まり）。
+        let expected = [
+            ([1.0, 1.0], [149.792_978_449_9, 2.196_547_750_8]),
+            ([2048.0, 1.0], [149.793_124_755_2, 2.047_220_733_3]),
+            ([1.0, 4096.0], [150.092_272_018_6, 2.196_475_132_4]),
+            ([2048.0, 4096.0], [150.092_226_904_8, 2.046_927_937_3]),
+            ([1000.0, 2000.0], [149.938_988_913_5, 2.123_538_866_8]),
+        ];
+        let wcs = Wcs::read(&lookup(&cards)).unwrap();
+        for ([x, y], sky) in expected {
+            let p = wcs.to_sky(x, y).unwrap();
+            assert!(close(p, sky, 1e-8), "({x}, {y}): {p:?}");
+        }
+    }
+
     #[test]
     fn sin_arc_stg_and_zea_match_astropy() {
         let expected = [

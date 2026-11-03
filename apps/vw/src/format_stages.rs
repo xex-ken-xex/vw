@@ -516,6 +516,7 @@ mod tests {
             frame_delays: None,
             spectrum: None,
             geo: None,
+            sky: None,
         }
     }
 
