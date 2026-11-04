@@ -13,9 +13,10 @@ Make faint images easy to see, then calibrate, select and finish them.
 **View → Sky chart** opens the sky chart window. It outlines where on the sky each astronomy image (FITS) was taken, over stars (to magnitude 6) and constellation lines, borders and names. No network is used.
 
 - The outline depends on what the header tells
-  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections are read, with the optical distortion polynomials (`-SIP` and `TPV`)
+  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections and the all-sky CAR, AIT and MOL are read, with the optical distortion polynomials (`-SIP` and `TPV`). Coordinates may be right ascension and declination (`RA` `DEC`) or galactic (`GLON` `GLAT`)
   - **Dotted red**: images with the mount pointing (`RA` `DEC`, or `OBJCTRA` `OBJCTDEC`), focal length (`FOCALLEN`) and pixel size (`XPIXSZ` `YPIXSZ`). The area estimated from the field of view is drawn with north up (rotation unknown)
   - **Red cross**: images with only the mount pointing
+  - **Yellow cross**: images wider than a hemisphere, such as all-sky maps or bands around the sky. No outline is drawn; the cross marks the centre
 - When one file has two or more image HDUs with WCS, as from a mosaic camera, each detector is outlined thinly inside a thick outline around them all
 - At the top right, switch between **This folder** and **All datasets** (FITS in the search catalogs)
 - Drag to move, wheel to zoom, double-click to zoom 2x. Right ascension and declination under the cursor show at the bottom left
@@ -29,7 +30,8 @@ For images with a WCS in the header, the cross of [pixel value check](check.html
 
 - The optical distortion polynomials (`-SIP`, common in plate solve results, and `TPV` in observatory data) are applied, so positions stay right at the edges of the image
 - Choose between **Hours and degrees** and **Decimal degrees** with the **Sky coordinates at the cross** setting (`fits.sky_coordinates`)
-- **Ctrl+C** copies the right ascension and declination in decimal degrees (south declinations negative) after the value, separated by commas
+- Images in galactic coordinates (such as all-sky maps) show the galactic longitude and latitude first, with the right ascension and declination in parentheses ("l 0.000000°  b +0.000000°  (α 17h45m37.20s  δ -28°56′10.2″)")
+- **Ctrl+C** copies the right ascension and declination in decimal degrees (south declinations negative) after the value, separated by commas. Galactic images add the galactic longitude and latitude after them
 - Images whose area is only estimated from the mount pointing and focal length (dotted red on the sky chart) get no coordinates, so a rough position is not shown as if it were exact for each pixel
 
 ## Switch extensions (HDUs)

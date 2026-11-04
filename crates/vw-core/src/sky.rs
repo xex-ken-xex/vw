@@ -7,6 +7,16 @@ pub trait SkyMap: Debug + Send + Sync {
     /// 表示の向き（上下を返した後）の画素の中心 `(x, y)`（0 始まり、小数も可）の赤経・赤緯（度）。
     /// 投影の外（全天図の四隅など）は `None`。
     fn at(&self, x: f64, y: f64) -> Option<[f64; 2]>;
+
+    /// 画像が銀河座標で書かれているとき、同じ画素の銀河経度・銀河緯度（度）。
+    fn galactic(&self, _x: f64, _y: f64) -> Option<[f64; 2]> {
+        None
+    }
+}
+
+/// 銀河経度・銀河緯度（度）の文字（`l 184.557000°  b -5.784000°`）。銀河座標は時分秒を使わない。
+pub fn format_galactic(l: f64, b: f64) -> String {
+    format!("l {:.6}°  b {b:+.6}°", l.rem_euclid(360.0))
 }
 
 /// 赤経・赤緯の書き方。
