@@ -1,8 +1,8 @@
 //! FITS（天体の画像）のデコーダプラグイン。
 //!
-//! - 最初の画像だけを見せる。Primary HDU にデータがなければ（`.fz` や JWST など）、データのある
-//!   最初の画像の拡張を使う。その画像の 3 次元目以降（キューブの面、`NAXIS3=3` の 3 面）は、
-//!   1 枚ずつのフレームにする（[`DecoderPlugin::frame_count`]）
+//! - 画像の HDU を 1 つ見せる。[`Choices`] で選んだ HDU、選んでいなければデータのある最初の画像
+//!   （Primary が空の `.fz` や JWST なら最初の拡張）。その画像の 3 次元目以降（キューブの面、
+//!   `NAXIS3=3` の 3 面）は、1 枚ずつのフレームにする（[`DecoderPlugin::frame_count`]）
 //! - `BSCALE`・`BZERO` をかけた値にする。符号なし 16bit（`BZERO=32768`）は 16bit のまま持つ
 //! - `BLANK` の画素と NaN は欠損として NaN にする（表示は黒）
 //! - `ROWORDER` があれば行の並びをそれに従わせ、なければ設定で上下を返す
@@ -34,7 +34,9 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 pub use calibration::Calibration;
 use header::Hdu;
 pub use header::is_fits;
-pub use sky::{ImageHeader, Sky, header_of_file, pixel_map, sky, wcs_through};
+pub use sky::{
+    ImageHeader, Sky, header_of_file, image_headers_of_file, pixel_map, sky, wcs_through,
+};
 pub use stretch::Stretch;
 pub use write::encode;
 
@@ -96,6 +98,7 @@ pub struct FitsPlugin {
     options: SharedOptions,
     calibration: Calibration,
     cube_windows: CubeWindows,
+    choices: Choices,
 }
 
 impl FitsPlugin {
@@ -104,9 +107,19 @@ impl FitsPlugin {
             options,
             calibration,
             cube_windows: CubeWindows::default(),
+            choices: Choices::default(),
         }
     }
+
+    /// 見る HDU の選択を、アプリと共有する。
+    pub fn with_choices(mut self, choices: Choices) -> Self {
+        self.choices = choices;
+        self
+    }
 }
+
+/// ファイルごとに選んだ HDU の番号（Primary を 0 とした番号、[`Part::index`]）。
+pub type Choices = vw_core::choice::Choices<usize>;
 
 /// キューブ全体から決めた黒と白。面を送るたびに全体を読み直すと重いので、ファイルごとに覚える。
 /// 鍵はヘッダの中身とファイルの長さと決め方（場所はデコーダに届かないことがあるため）。
@@ -131,8 +144,14 @@ impl CubeWindows {
     }
 }
 
+/// プラグインの名前。
+pub const NAME: &str = "FITS";
 /// メタデータの見出し。
 pub const GROUP: &str = "FITS";
+/// 画像の HDU が 2 つ以上あるとき、見ている HDU の名前（[`Part::name`]）を書く鍵。
+pub const HDU: &str = "HDU";
+/// 選べる HDU の一覧の見出し。鍵が [`Part::name`]、値が [`Part::detail`]。
+pub const PARTS_GROUP: &str = "FITS HDUs";
 /// 行の並びを返して表示したとき、メタデータに [`ROWS_FLIPPED`] を書く鍵。
 /// 画面の行と FITS の y 座標の向きが逆になるので、WCS で位置を合わせるときに使う。
 pub const ROWS: &str = "Rows";
@@ -152,7 +171,7 @@ pub const SPECTRUM: &str = "Spectrum";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
-        "FITS"
+        NAME
     }
 
     fn extensions(&self) -> &[&str] {
@@ -168,9 +187,10 @@ impl DecoderPlugin for FitsPlugin {
     }
 
     fn frame_count(&self, data: &[u8]) -> Result<usize, DecodeError> {
+        let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        Ok(find_image(&hdus)?.planes)
+        Ok(find_image(&hdus, chosen)?.planes)
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
@@ -180,6 +200,7 @@ impl DecoderPlugin for FitsPlugin {
             self.options.get(),
             None,
             Some(&self.cube_windows),
+            self.choices.get(data),
         )
     }
 
@@ -195,13 +216,15 @@ impl DecoderPlugin for FitsPlugin {
             self.options.get(),
             Some((&self.calibration, path)),
             Some(&self.cube_windows),
+            self.choices.get(data),
         )
     }
 
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
+        let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        let image = find_image(&hdus)?;
+        let image = find_image(&hdus, chosen)?;
         Ok(metadata(&hdus, &image, 0))
     }
 }
@@ -240,10 +263,82 @@ impl Image<'_> {
     fn plane_pixels(&self) -> usize {
         self.width * self.height
     }
+
+    fn part(&self) -> Part {
+        let name = match self
+            .hdu
+            .get("EXTNAME")
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            Some(name) => match self.hdu.int("EXTVER").filter(|&v| v > 1) {
+                Some(version) => format!("{} {name},{version}", self.index),
+                None => format!("{} {name}", self.index),
+            },
+            None => self.index.to_string(),
+        };
+        Part {
+            index: self.index,
+            name,
+            width: self.width,
+            height: self.height,
+            planes: self.planes,
+            bitpix: self.bitpix,
+        }
+    }
 }
 
-/// データのある最初の画像。
-fn find_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
+/// 画像として見られる HDU の 1 つ（[`parts`]）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    /// Primary を 0 とした HDU の番号。
+    pub index: usize,
+    /// 番号と `EXTNAME`（`EXTVER` が 2 以上ならそれも）。`1 SCI`、`2 SCI,2`、名前がなければ `0`。
+    pub name: String,
+    pub width: usize,
+    pub height: usize,
+    /// 3 次元目以降の面の数。
+    pub planes: usize,
+    pub bitpix: i64,
+}
+
+impl Part {
+    /// 大きさと型（`2048 x 2048 x 3  -32`）。
+    pub fn detail(&self) -> String {
+        let planes = if self.planes > 1 {
+            format!(" x {}", self.planes)
+        } else {
+            String::new()
+        };
+        format!("{} x {}{planes}  {}", self.width, self.height, self.bitpix)
+    }
+}
+
+/// 画像として見られる HDU の一覧。表（BINTABLE）や空の HDU は入らない。
+pub fn parts(data: &[u8]) -> Result<Vec<Part>, DecodeError> {
+    let data = gunzip(data)?;
+    let hdus = header::hdus(&data)?;
+    let mut out = Vec::new();
+    for index in 0..hdus.len() {
+        if let Ok(Some(image)) = image_at(&hdus, index, 1) {
+            out.push(image.part());
+        }
+    }
+    Ok(out)
+}
+
+/// 見せる画像。`chosen` の HDU が画像ならそれ、そうでなければ [`default_image`]。
+fn find_image(hdus: &[Hdu], chosen: Option<usize>) -> Result<Image<'_>, DecodeError> {
+    if let Some(index) = chosen
+        && let Some(image) = image_at(hdus, index, 1)?
+    {
+        return Ok(image);
+    }
+    default_image(hdus)
+}
+
+/// 何も選んでいないときに見せる、データのある最初の画像。
+pub(crate) fn default_image(hdus: &[Hdu]) -> Result<Image<'_>, DecodeError> {
     // 軸が 1 本だけのデータは、ほかに画像がないときだけ使う。Primary に 1 次元の付属データを置き、
     // 本体の画像を拡張に入れるファイルがあるため。
     find_image_with_axes(hdus, 2).or_else(|_| find_image_with_axes(hdus, 1))
@@ -253,49 +348,63 @@ pub(crate) fn find_image_with_axes(
     hdus: &[Hdu],
     min_axes: usize,
 ) -> Result<Image<'_>, DecodeError> {
-    for (index, hdu) in hdus.iter().enumerate() {
-        let (compressed, prefix) = match hdu.xtension() {
-            None | Some("IMAGE") => (false, ""),
-            Some("BINTABLE") if hdu.logical("ZIMAGE") => (true, "Z"),
-            _ => continue,
-        };
-        let Some(axes) = hdu.axes(prefix) else {
-            continue;
-        };
-        if axes.len() < min_axes || axes.contains(&0) {
-            continue;
+    for index in 0..hdus.len() {
+        if let Some(image) = image_at(hdus, index, min_axes)? {
+            return Ok(image);
         }
-        // 軸が 1 本だけのスペクトルは、高さ 1 画素の画像として読む（グラフで描くのはアプリ）。
-        let (width, height) = (axes[0], axes.get(1).copied().unwrap_or(1));
-        let extra_axes = axes.get(2..).unwrap_or_default();
-        let Some(bitpix) = hdu.int(&format!("{prefix}BITPIX")) else {
-            continue;
-        };
-        let planes = extra_axes
-            .iter()
-            .try_fold(1usize, |n, &a| n.checked_mul(a))
-            .ok_or_else(|| {
-                DecodeError::Unsupported(format!("FITS image {width} x {height} is too large"))
-            })?;
-        // tile 圧縮の整数は i64 に展開するので、1 画素の最大は 8 バイト。
-        let bytes_per_pixel = if compressed {
-            8
-        } else {
-            (bitpix.unsigned_abs() / 8).max(1)
-        };
-        vw_core::limits::check_image(width as u64, height as u64, bytes_per_pixel)?;
-        return Ok(Image {
-            index,
-            hdu,
-            compressed,
-            bitpix,
-            width,
-            height,
-            planes,
-            extra_axes: extra_axes.to_vec(),
-        });
     }
     Err(DecodeError::Unsupported("FITS file has no image".into()))
+}
+
+/// `index` の HDU を画像として読む形。画像でない、軸が `min_axes` 本より少ない、データがないなら `None`。
+pub(crate) fn image_at(
+    hdus: &[Hdu],
+    index: usize,
+    min_axes: usize,
+) -> Result<Option<Image<'_>>, DecodeError> {
+    let Some(hdu) = hdus.get(index) else {
+        return Ok(None);
+    };
+    let (compressed, prefix) = match hdu.xtension() {
+        None | Some("IMAGE") => (false, ""),
+        Some("BINTABLE") if hdu.logical("ZIMAGE") => (true, "Z"),
+        _ => return Ok(None),
+    };
+    let Some(axes) = hdu.axes(prefix) else {
+        return Ok(None);
+    };
+    if axes.len() < min_axes.max(1) || axes.contains(&0) {
+        return Ok(None);
+    }
+    // 軸が 1 本だけのスペクトルは、高さ 1 画素の画像として読む（グラフで描くのはアプリ）。
+    let (width, height) = (axes[0], axes.get(1).copied().unwrap_or(1));
+    let extra_axes = axes.get(2..).unwrap_or_default();
+    let Some(bitpix) = hdu.int(&format!("{prefix}BITPIX")) else {
+        return Ok(None);
+    };
+    let planes = extra_axes
+        .iter()
+        .try_fold(1usize, |n, &a| n.checked_mul(a))
+        .ok_or_else(|| {
+            DecodeError::Unsupported(format!("FITS image {width} x {height} is too large"))
+        })?;
+    // tile 圧縮の整数は i64 に展開するので、1 画素の最大は 8 バイト。
+    let bytes_per_pixel = if compressed {
+        8
+    } else {
+        (bitpix.unsigned_abs() / 8).max(1)
+    };
+    vw_core::limits::check_image(width as u64, height as u64, bytes_per_pixel)?;
+    Ok(Some(Image {
+        index,
+        hdu,
+        compressed,
+        bitpix,
+        width,
+        height,
+        planes,
+        extra_axes: extra_axes.to_vec(),
+    }))
 }
 
 fn decode_with(
@@ -304,9 +413,11 @@ fn decode_with(
     options: Options,
     calibration: Option<(&Calibration, &Path)>,
     cube_windows: Option<&CubeWindows>,
+    chosen: Option<usize>,
 ) -> Result<VwImage, DecodeError> {
     let hdus = header::hdus(data)?;
-    let image = find_image(&hdus)?;
+    let image = find_image(&hdus, chosen)?;
+    let default = default_image(&hdus).is_ok_and(|d| d.index == image.index);
     if frame >= image.planes {
         return Err(DecodeError::Invalid(format!("no frame {frame}")));
     }
@@ -319,8 +430,9 @@ fn decode_with(
     let mut pixels = to_pixels(stored, image.hdu);
     let pattern = bayer_pattern(image.hdu);
     let mut calibrated = Metadata::default();
-    // キューブの面ごとに合うマスターはないので、1 面の画像だけに当てる。
-    if let Some((calibration, path)) = calibration.filter(|_| image.planes == 1) {
+    // キューブの面ごとに合うマスターはないので、1 面の画像だけに当てる。選んだ ERR や DQ のような
+    // 付属の HDU は撮った光ではないので、何も選んでいないときの画像だけに当てる。
+    if let Some((calibration, path)) = calibration.filter(|_| image.planes == 1 && default) {
         let get = |key: &str| {
             image
                 .hdu
@@ -362,6 +474,7 @@ fn decode_with(
     img.curve = options.curve;
     img.missing = options.missing;
     img.metadata = metadata(&hdus, &image, frame);
+    push_parts(&mut img.metadata, &hdus, &image);
     if flipped {
         img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
     }
@@ -389,7 +502,7 @@ fn decode_with(
 pub(crate) fn mosaic_values(data: &[u8]) -> Result<Vec<f32>, DecodeError> {
     let data = gunzip(data)?;
     let hdus = header::hdus(&data)?;
-    let image = find_image(&hdus)?;
+    let image = default_image(&hdus)?;
     let stored = if image.compressed {
         compressed_plane(&data, &image, 0)?
     } else {
@@ -597,6 +710,21 @@ fn metadata(hdus: &[Hdu], image: &Image, frame: usize) -> Metadata {
         push_cards(&mut m, &format!("{GROUP} HDU {}", image.index), image.hdu);
     }
     m
+}
+
+/// 画像の HDU が 2 つ以上あれば、見ている HDU（[`HDU`]）と、選べる HDU の一覧（[`PARTS_GROUP`]）を書く。
+fn push_parts(m: &mut Metadata, hdus: &[Hdu], image: &Image) {
+    let parts: Vec<Part> = (0..hdus.len())
+        .filter_map(|i| image_at(hdus, i, 1).ok().flatten())
+        .map(|i| i.part())
+        .collect();
+    if parts.len() < 2 {
+        return;
+    }
+    m.push(GROUP, HDU, image.part().name);
+    for part in parts {
+        m.push(PARTS_GROUP, part.name.as_str(), part.detail());
+    }
 }
 
 fn push_cards(m: &mut Metadata, group: &str, hdu: &Hdu) {

@@ -193,6 +193,8 @@ pub struct VwApp {
     netcdf: vw_netcdf::SharedOptions,
     /// NetCDF のファイルごとに選んだ変数（プラグインと共有）。
     netcdf_choices: vw_netcdf::Choices,
+    /// ファイルごとに選んだ FITS の HDU（FITS のプラグインと共有する）。
+    fits_choices: vw_fits::Choices,
     /// HDF として開く拡張子（プラグインと共有）と、その式。変わったときだけフォルダを読み直すため。
     hdf_extensions: vw_netcdf::HdfExtensions,
     hdf_pattern: String,
@@ -617,6 +619,13 @@ pub fn group_metadata(entries: &[(String, String, String)]) -> Vec<(&str, Vec<(&
     groups
 }
 
+/// FITS のプラグインとアプリで共有するもの。表示の決め方、校正、ファイルごとに選んだ HDU。
+pub type FitsShared = (
+    vw_fits::SharedOptions,
+    vw_fits::Calibration,
+    vw_fits::Choices,
+);
+
 /// NetCDF のプラグインとアプリで共有するもの。表示の決め方、ファイルごとに選んだ変数、
 /// HDF として開く拡張子。
 pub type NetcdfShared = (
@@ -629,8 +638,7 @@ impl VwApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         registry: Registry,
-        fits: vw_fits::SharedOptions,
-        calibration: vw_fits::Calibration,
+        (fits, calibration, fits_choices): FitsShared,
         (netcdf, netcdf_choices, hdf_extensions): NetcdfShared,
         initial: Vec<PathBuf>,
         started: Instant,
@@ -785,6 +793,7 @@ impl VwApp {
             calibration,
             netcdf,
             netcdf_choices,
+            fits_choices,
             hdf_extensions,
             hdf_pattern: settings.settings.netcdf.hdf_extensions.clone(),
             calibration_logged: Default::default(),

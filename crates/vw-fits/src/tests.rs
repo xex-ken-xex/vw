@@ -47,7 +47,7 @@ fn decode(data: &[u8]) -> VwImage {
 }
 
 fn decode_opts(data: &[u8], options: Options) -> VwImage {
-    decode_with(data, 0, options, None, None).unwrap()
+    decode_with(data, 0, options, None, None, None).unwrap()
 }
 
 fn f32s(img: &VwImage) -> Vec<f32> {
@@ -172,6 +172,103 @@ fn image_extension_is_used_when_the_primary_has_no_data() {
     assert!(matches!(&img.data, PixelData::U8(v) if v == &[7, 8]));
     assert_eq!(img.metadata.get(GROUP, "OBJECT"), Some("M31"));
     assert_eq!(img.metadata.get("FITS HDU 1", "EXTNAME"), Some("SCI"));
+}
+
+/// JWST の形: データのない Primary と、SCI（2 x 1、実数）・ERR（2 x 1、実数）・DQ（2 x 1、整数）、
+/// 最後に表（BINTABLE、選べない）。
+fn jwst_like() -> Vec<u8> {
+    let mut file = fits(&[card("BITPIX", "8"), card("NAXIS", "0")], &[]);
+    for (name, bitpix, data) in [
+        ("SCI", -32, f32_bytes(&[1.5, 2.5])),
+        ("ERR", -32, f32_bytes(&[0.1, 0.2])),
+        ("DQ", 16, i16_bytes(&[0, 4])),
+    ] {
+        let mut ext = vec![card("XTENSION", "'IMAGE   '")];
+        ext.extend(image_cards(bitpix, &[2, 1]));
+        ext.push(card("EXTNAME", &format!("'{name}'")));
+        file.extend(hdu_bytes(&ext, &[], &data));
+    }
+    let table = [
+        card("XTENSION", "'BINTABLE'"),
+        card("BITPIX", "8"),
+        card("NAXIS", "2"),
+        card("NAXIS1", "4"),
+        card("NAXIS2", "1"),
+        card("PCOUNT", "0"),
+        card("GCOUNT", "1"),
+        card("TFIELDS", "1"),
+        card("TFORM1", "'1E      '"),
+        card("EXTNAME", "'ASDF    '"),
+    ];
+    file.extend(hdu_bytes(&table, &[], &[0, 0, 0, 0]));
+    file
+}
+
+#[test]
+fn every_image_hdu_can_be_chosen_but_tables_cannot() {
+    let names: Vec<String> = parts(&jwst_like())
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(names, ["1 SCI", "2 ERR", "3 DQ"]);
+}
+
+#[test]
+fn the_chosen_hdu_is_shown_with_its_own_cards() {
+    let file = jwst_like();
+    let plugin = FitsPlugin::default();
+    let choices = Choices::default();
+    let plugin = plugin.with_choices(choices.clone());
+    assert_eq!(f32s(&plugin.decode(&file).unwrap()), [1.5, 2.5]);
+    choices.set(&file, 3usize);
+    let img = plugin.decode(&file).unwrap();
+    assert_eq!(f32s(&img), [0.0, 4.0]);
+    assert_eq!(img.metadata.get(GROUP, HDU), Some("3 DQ"));
+    assert_eq!(img.metadata.get("FITS HDU 3", "EXTNAME"), Some("DQ"));
+}
+
+#[test]
+fn a_choice_that_is_not_an_image_falls_back_to_the_first_image() {
+    let file = jwst_like();
+    let choices = Choices::default();
+    let plugin = FitsPlugin::default().with_choices(choices.clone());
+    choices.set(&file, 4usize);
+    assert_eq!(f32s(&plugin.decode(&file).unwrap()), [1.5, 2.5]);
+}
+
+#[test]
+fn files_with_several_images_list_them_in_the_metadata() {
+    let img = decode(&jwst_like());
+    assert_eq!(img.metadata.get(GROUP, HDU), Some("1 SCI"));
+    assert_eq!(img.metadata.get(PARTS_GROUP, "2 ERR"), Some("2 x 1  -32"));
+    assert_eq!(img.metadata.get(PARTS_GROUP, "3 DQ"), Some("2 x 1  16"));
+}
+
+#[test]
+fn a_file_with_one_image_has_no_hdu_list() {
+    let img = decode(&fits(&image_cards(8, &[2, 1]), &[1, 2]));
+    assert_eq!(img.metadata.get(GROUP, HDU), None);
+    assert!(
+        img.metadata
+            .entries
+            .iter()
+            .all(|(g, _, _)| g != PARTS_GROUP)
+    );
+}
+
+#[test]
+fn hdus_of_the_same_name_carry_their_version() {
+    let mut file = fits(&[card("BITPIX", "8"), card("NAXIS", "0")], &[]);
+    for version in 1..=2 {
+        let mut ext = vec![card("XTENSION", "'IMAGE   '")];
+        ext.extend(image_cards(8, &[1, 1]));
+        ext.push(card("EXTNAME", "'SCI'"));
+        ext.push(card("EXTVER", &version.to_string()));
+        file.extend(hdu_bytes(&ext, &[], &[version as u8]));
+    }
+    let names: Vec<String> = parts(&file).unwrap().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, ["1 SCI", "2 SCI,2"]);
 }
 
 #[test]
@@ -492,6 +589,21 @@ fn sky_of_bytes(name: &str, bytes: &[u8]) -> Option<Sky> {
     let header = header_of_file(&path);
     std::fs::remove_file(&path).unwrap();
     header.unwrap().and_then(|h| h.sky())
+}
+
+#[test]
+fn headers_of_every_image_hdu_are_read_without_the_pixels() {
+    let mut file = jwst_like();
+    // Primary（ヘッダ 1 ブロック + データ 2 ブロック）を除いた、WCS 付きの画像の拡張。
+    file.extend(file_with_wcs_after_data()[3 * 2880..].to_vec());
+    let path = std::env::temp_dir().join(format!("vw-fits-{}-parts.fits", std::process::id()));
+    std::fs::write(&path, &file).unwrap();
+    let headers = image_headers_of_file(&path);
+    std::fs::remove_file(&path).unwrap();
+    let headers = headers.unwrap();
+    let names: Vec<Option<&str>> = headers.iter().map(|h| h.get("EXTNAME")).collect();
+    assert_eq!(names, [Some("SCI"), Some("ERR"), Some("DQ"), None]);
+    assert!(headers[3].sky().is_some_and(|s| s.certain));
 }
 
 #[test]

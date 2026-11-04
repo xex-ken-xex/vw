@@ -112,14 +112,10 @@ use std::time::Instant;
 use vw_core::Registry;
 
 /// 組み込みのデコーダプラグインを登録する。新しい形式はここに 1 行足す。
-/// `fits` と `calibration` は FITS のプラグインと共有する、設定画面で変える表示と校正の決め方。
+/// `fits` は FITS のプラグインと共有する、設定画面で変える表示と校正の決め方と、ファイルごとに選んだ HDU。
 /// `netcdf` は NetCDF のプラグインと共有する表示の決め方と、ファイルごとに選んだ変数と、
 /// HDF として開く拡張子。
-fn registry(
-    fits: &vw_fits::SharedOptions,
-    calibration: &vw_fits::Calibration,
-    netcdf: &app::NetcdfShared,
-) -> Registry {
+fn registry(fits: &app::FitsShared, netcdf: &app::NetcdfShared) -> Registry {
     let mut registry = Registry::new();
     registry.register(Arc::new(vw_png::PngPlugin));
     registry.register(Arc::new(vw_jpeg::JpegPlugin));
@@ -127,10 +123,9 @@ fn registry(
     registry.register(Arc::new(vw_webp::WebpPlugin::default()));
     registry.register(Arc::new(vw_gif::GifPlugin::default()));
     registry.register(Arc::new(vw_tiff::TiffPlugin));
-    registry.register(Arc::new(vw_fits::FitsPlugin::new(
-        fits.clone(),
-        calibration.clone(),
-    )));
+    registry.register(Arc::new(
+        vw_fits::FitsPlugin::new(fits.0.clone(), fits.1.clone()).with_choices(fits.2.clone()),
+    ));
     registry.register(Arc::new(
         vw_netcdf::NetcdfPlugin::new(netcdf.0.clone(), netcdf.1.clone())
             .with_hdf_extensions(netcdf.2.clone()),
@@ -174,14 +169,12 @@ fn main() -> eframe::Result {
         options,
         depth,
         Box::new(move |cc| {
-            let fits = vw_fits::SharedOptions::default();
-            let calibration = vw_fits::Calibration::default();
+            let fits = Default::default();
             let netcdf = Default::default();
             Ok(Box::new(app::VwApp::new(
                 cc,
-                registry(&fits, &calibration, &netcdf),
+                registry(&fits, &netcdf),
                 fits,
-                calibration,
                 netcdf,
                 initial,
                 started,

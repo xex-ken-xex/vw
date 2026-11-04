@@ -210,24 +210,8 @@ impl ImageHeader {
 /// ファイルのヘッダだけを読む。画像がなければ `None`。データ部は読み飛ばす
 /// （フォルダの数百枚を星図に出すのに、1 枚数十 MB の画素を読まないため）。
 pub fn header_of_file(path: &Path) -> Result<Option<ImageHeader>, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(file);
-    let gzipped = reader
-        .fill_buf()
-        .map_err(|e| e.to_string())?
-        .starts_with(&[0x1f, 0x8b]);
-    let hdus = if gzipped {
-        read_headers(
-            &mut flate2::bufread::MultiGzDecoder::new(reader),
-            &mut skip_by_reading,
-        )
-    } else {
-        read_headers(&mut reader, &mut |r: &mut BufReader<std::fs::File>, n| {
-            r.seek_relative(i64::try_from(n).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())
-        })
-    }?;
-    let Ok(image) = crate::find_image(&hdus) else {
+    let hdus = headers_of_file(path, Until::FirstImage)?;
+    let Ok(image) = crate::default_image(&hdus) else {
         return Ok(None);
     };
     Ok(Some(ImageHeader {
@@ -236,18 +220,71 @@ pub fn header_of_file(path: &Path) -> Result<Option<ImageHeader>, String> {
     }))
 }
 
-/// 読んだ HDU の上限。画像はふつう 1 つ目か 2 つ目にある。
+/// ファイルの画像の HDU 全部のヘッダ（[`crate::parts`] と同じ順）。データ部は読み飛ばす。
+/// 検出器ごとに拡張を並べるモザイクカメラの、1 枚ずつの写した範囲を星図に出すのに使う。
+pub fn image_headers_of_file(path: &Path) -> Result<Vec<ImageHeader>, String> {
+    let hdus = headers_of_file(path, Until::End)?;
+    Ok((0..hdus.len())
+        .filter_map(|i| crate::image_at(&hdus, i, 1).ok().flatten())
+        .map(|image| ImageHeader {
+            image: image.hdu.clone(),
+            primary: hdus[0].clone(),
+        })
+        .collect())
+}
+
+/// ヘッダをどこまで読むか。
+#[derive(Clone, Copy, PartialEq)]
+enum Until {
+    FirstImage,
+    End,
+}
+
+fn headers_of_file(path: &Path, until: Until) -> Result<Vec<Hdu>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(file);
+    let gzipped = reader
+        .fill_buf()
+        .map_err(|e| e.to_string())?
+        .starts_with(&[0x1f, 0x8b]);
+    if gzipped {
+        read_headers(
+            &mut flate2::bufread::MultiGzDecoder::new(reader),
+            until,
+            &mut skip_by_reading,
+        )
+    } else {
+        read_headers(
+            &mut reader,
+            until,
+            &mut |r: &mut BufReader<std::fs::File>, n| {
+                r.seek_relative(i64::try_from(n).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
+/// 最初の画像を探すときに読む HDU の上限。画像はふつう 1 つ目か 2 つ目にある。
 const MAX_HEADERS: usize = 16;
+/// 全部の HDU を読むときの上限。すばる HSC の 1 ファイルは検出器 1 枚ずつなので、
+/// 何百枚を並べたファイルはまずないが、壊れたファイルで読み続けないように。
+const MAX_ALL_HEADERS: usize = 1024;
 /// 1 つのヘッダの大きさの上限（壊れたファイルで END を探し続けないように）。
 const MAX_HEADER_BYTES: usize = 100 * BLOCK;
 
-/// 画像の HDU に行き着くまでヘッダを読む。データ部は `skip` で飛ばす。
+/// 画像の HDU に行き着くまで（`until`）ヘッダを読む。データ部は `skip` で飛ばす。
 fn read_headers<R: Read>(
     r: &mut R,
+    until: Until,
     skip: &mut dyn FnMut(&mut R, u64) -> Result<(), String>,
 ) -> Result<Vec<Hdu>, String> {
+    let max = match until {
+        Until::FirstImage => MAX_HEADERS,
+        Until::End => MAX_ALL_HEADERS,
+    };
     let mut hdus = Vec::new();
-    while hdus.len() < MAX_HEADERS {
+    while hdus.len() < max {
         let mut bytes = Vec::new();
         loop {
             let mut block = [0u8; BLOCK];
@@ -273,7 +310,7 @@ fn read_headers<R: Read>(
         let data = hdu.data_len.next_multiple_of(BLOCK) as u64;
         hdus.push(hdu);
         // 1 次元のデータは、後ろに画像があればそちらを使うので、読み進める。
-        if crate::find_image_with_axes(&hdus, 2).is_ok() {
+        if until == Until::FirstImage && crate::find_image_with_axes(&hdus, 2).is_ok() {
             break;
         }
         skip(r, data)?;

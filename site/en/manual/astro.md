@@ -16,11 +16,23 @@ Make faint images easy to see, then calibrate, select and finish them.
   - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections are read
   - **Dotted red**: images with the mount pointing (`RA` `DEC`, or `OBJCTRA` `OBJCTDEC`), focal length (`FOCALLEN`) and pixel size (`XPIXSZ` `YPIXSZ`). The area estimated from the field of view is drawn with north up (rotation unknown)
   - **Red cross**: images with only the mount pointing
+- When one file has two or more image HDUs with WCS, as from a mosaic camera, each detector is outlined thinly inside a thick outline around them all
 - At the top right, switch between **This folder** and **All datasets** (FITS in the search catalogs)
 - Drag to move, wheel to zoom, double-click to zoom 2x. Right ascension and declination under the cursor show at the bottom left
 - Click an outline for its thumbnail, file name, `OBJECT`, `DATE-OBS` and center coordinates. **Open** goes to the image's folder, selects the image and loads it first. Where outlines overlap, such as a series of shots of the same target, pick from a list
 - The outline of the active slot's image is drawn thicker
 - Outline colors can be changed in the **Sky chart** settings. Turn off **Use the sky chart** to remove it from the menu
+
+## Switch extensions (HDUs)
+
+JWST and HST images and mosaic camera images hold several image HDUs (extensions) in one file (SCI, ERR and DQ for JWST, one per detector for a mosaic camera). The first image with data (SCI for JWST and HST) is shown first.
+
+- **N** / **Shift+N** switch to the next / previous HDU (the same keys as NetCDF variables). They can also be picked from right-click **HDU**, which lists their sizes and types
+- An HDU is named by its number (the primary is 0) and `EXTNAME` (`1 SCI`, or `2 SCI,2` when names repeat)
+- The chosen HDU is remembered per file until vw is closed
+- Black and white are chosen again for each HDU. Black and white set by hand are not carried to the next HDU (errors and flags have different ranges from the image)
+- Darks and flats are applied only to the image shown first
+- The metadata shows the primary's cards, the cards of the HDU on show (**FITS HDU n**) and the list of HDUs to choose from (**FITS HDUs**)
 
 ## Apply darks and flats
 

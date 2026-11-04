@@ -68,6 +68,94 @@ impl Item {
     }
 }
 
+/// 1 つのファイルの枠。WCS を持つ画像の HDU が 1 つ以下なら、範囲の分かる最初の画像の枠。
+/// 写す範囲の違う WCS を持つ HDU が 2 つ以上（モザイクカメラの検出器など）なら、それぞれを細い線で、
+/// 全体を囲む枠を太い線で出す。
+pub fn file_items(path: &Path, headers: &[vw_fits::ImageHeader]) -> Vec<Item> {
+    let item = |h: &vw_fits::ImageHeader| {
+        Item::from_header(path.to_path_buf(), &|k| h.get(k).map(str::to_owned))
+    };
+    let mut parts: Vec<Item> = Vec::new();
+    for found in headers.iter().filter_map(item) {
+        // HST の SCI・ERR・DQ のように、同じ検出器の HDU は同じ WCS を持つので 1 つにまとめる。
+        if found.sky.certain
+            && !found.sky.outline.is_empty()
+            && parts.iter().all(|p| p.sky.outline != found.sky.outline)
+        {
+            parts.push(Item {
+                kind: Kind::Part,
+                ..found
+            });
+        }
+    }
+    if parts.len() < 2 {
+        return headers.iter().find_map(item).into_iter().collect();
+    }
+    let points: Vec<Radec> = parts
+        .iter()
+        .flat_map(|p| p.sky.outline.iter().copied())
+        .collect();
+    let mut items = Vec::new();
+    if let Some(center) = sky_chart::mean_direction(&points)
+        && let Some(outline) = hull(center, &points)
+    {
+        items.push(Item {
+            path: path.to_path_buf(),
+            sky: Sky {
+                center,
+                outline,
+                certain: true,
+            },
+            object: parts[0].object.clone(),
+            taken: parts[0].taken.clone(),
+            kind: Kind::File,
+        });
+    }
+    items.extend(parts);
+    items
+}
+
+/// 点を囲む凸包（空の上で一回りした点）。`center` の平射図法の面で求める。
+/// 半球より広く散らばって面に載らない点があれば `None`。
+fn hull(center: Radec, points: &[Radec]) -> Option<Vec<Radec>> {
+    let mut flat: Vec<[f64; 2]> = points
+        .iter()
+        .map(|&p| sky_chart::project(center, p))
+        .collect::<Option<_>>()?;
+    flat.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    flat.dedup();
+    if flat.len() < 3 {
+        return None;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    // Andrew の単調連鎖法。下側と上側を別に作ってつなぐ。
+    let mut lower: Vec<[f64; 2]> = Vec::new();
+    for &p in &flat {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<[f64; 2]> = Vec::new();
+    for &p in flat.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    Some(
+        lower
+            .into_iter()
+            .map(|p| sky_chart::unproject(center, p))
+            .collect(),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Source {
     Folder(PathBuf),
@@ -792,15 +880,12 @@ fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    match vw_fits::header_of_file(&path) {
-                        Ok(Some(header)) => {
-                            let item =
-                                Item::from_header(path, &|k| header.get(k).map(str::to_owned));
-                            if let Some(item) = item {
+                    match vw_fits::image_headers_of_file(&path) {
+                        Ok(headers) => {
+                            for item in file_items(&path, &headers) {
                                 send(Found::Item(item));
                             }
                         }
-                        Ok(None) => {}
                         Err(e) => send(Found::Problem(format!("{}: {e}", path.display()))),
                     }
                     send(Found::Step);
@@ -905,6 +990,92 @@ mod tests {
         assert_eq!(items[0].path, Path::new("/data/a.fits"));
         assert_eq!(items[0].sky.center, [10.0, 20.0]);
         assert_eq!(items[0].object.as_deref(), Some("M31"));
+    }
+
+    /// 80 文字のカードを並べた FITS の HDU（データは `data` バイトの 0）。
+    fn hdu(cards: &[(&str, &str)], data: usize) -> Vec<u8> {
+        let mut text = String::new();
+        for (k, v) in cards {
+            text.push_str(&format!("{:<80}", format!("{k:<8}= {v:>20}")));
+        }
+        text.push_str(&format!("{:<80}", "END"));
+        let mut out = text.into_bytes();
+        out.resize(out.len().next_multiple_of(2880), b' ');
+        out.resize(out.len() + data.next_multiple_of(2880), 0);
+        out
+    }
+
+    /// 横に並んだ 2 枚の検出器（10 x 10 画素、0.01 度）を拡張に持つモザイクカメラの形。
+    fn mosaic_file(name: &str, crpix1s: &[&str]) -> PathBuf {
+        let mut file = hdu(&[("SIMPLE", "T"), ("BITPIX", "8"), ("NAXIS", "0")], 0);
+        for crpix1 in crpix1s {
+            file.extend(hdu(
+                &[
+                    ("XTENSION", "'IMAGE   '"),
+                    ("BITPIX", "8"),
+                    ("NAXIS", "2"),
+                    ("NAXIS1", "10"),
+                    ("NAXIS2", "10"),
+                    ("CTYPE1", "'RA---TAN'"),
+                    ("CTYPE2", "'DEC--TAN'"),
+                    ("CRPIX1", crpix1),
+                    ("CRPIX2", "5.5"),
+                    ("CRVAL1", "150.0"),
+                    ("CRVAL2", "2.0"),
+                    ("CDELT1", "-0.01"),
+                    ("CDELT2", "0.01"),
+                ],
+                100,
+            ));
+        }
+        let path = std::env::temp_dir().join(format!("vw-sky-{}-{name}", std::process::id()));
+        std::fs::write(&path, file).unwrap();
+        path
+    }
+
+    #[test]
+    fn detectors_of_a_mosaic_are_drawn_inside_one_outline() {
+        let path = mosaic_file("mosaic.fits", &["5.5", "-4.5"]);
+        let headers = vw_fits::image_headers_of_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let items = file_items(&path, &headers);
+        let kinds: Vec<Kind> = items.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, [Kind::File, Kind::Part, Kind::Part]);
+        // 2 枚で横 20 画素 x 縦 10 画素（0.2 x 0.1 度）。外枠の中心は 2 枚の間。
+        let whole = &items[0].sky;
+        assert!(sky_chart::angle(whole.center, [149.95, 2.0]) < 1e-3);
+        let ras: Vec<f64> = whole.outline.iter().map(|p| p[0]).collect();
+        let span = ras.iter().cloned().fold(f64::MIN, f64::max)
+            - ras.iter().cloned().fold(f64::MAX, f64::min);
+        assert!((span - 0.2).abs() < 1e-3, "{span}");
+    }
+
+    #[test]
+    fn hdus_of_the_same_detector_give_one_outline() {
+        let path = mosaic_file("same.fits", &["5.5", "5.5"]);
+        let headers = vw_fits::image_headers_of_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let items = file_items(&path, &headers);
+        let kinds: Vec<Kind> = items.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, [Kind::File]);
+    }
+
+    #[test]
+    fn hull_keeps_only_the_outer_points() {
+        let points = [
+            [10.0, 0.0],
+            [10.2, 0.0],
+            [10.2, 0.2],
+            [10.0, 0.2],
+            [10.1, 0.1],
+        ];
+        let outline = hull([10.1, 0.1], &points).unwrap();
+        assert_eq!(outline.len(), 4);
+        assert!(
+            outline
+                .iter()
+                .all(|p| sky_chart::angle(*p, [10.1, 0.1]) > 0.1)
+        );
     }
 
     #[test]
