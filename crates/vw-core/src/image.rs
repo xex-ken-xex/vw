@@ -144,6 +144,8 @@ pub struct VwImage {
     pub spectrum: Option<std::sync::Arc<crate::spectrum::Spectrum>>,
     /// 画素ごとの緯度・経度が分かるとき（気象・海洋の格子のデータ）。
     pub geo: Option<std::sync::Arc<crate::geo::GeoGrid>>,
+    /// 画素ごとの空の位置が分かるとき（WCS のある天体の画像）。
+    pub sky: Option<std::sync::Arc<dyn crate::sky::SkyMap>>,
 }
 
 impl VwImage {
@@ -181,6 +183,7 @@ impl VwImage {
             gamut: None,
             spectrum: None,
             geo: None,
+            sky: None,
         })
     }
 }

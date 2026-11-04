@@ -892,6 +892,16 @@ const JA: &[(&str, &str)] = &[
         "Draw data with only one axis (spectra) as a line graph against frequency, velocity or wavelength. When off, they are shown as an image one pixel high.",
         "軸が 1 本だけのデータ（スペクトル）を、周波数・速度・波長を横軸にした折れ線のグラフで描きます。切ると、高さ 1 画素の画像で表示します。",
     ),
+    ("Sky coordinates at the cross", "十字の空の座標"),
+    (
+        "How the right ascension and declination of the pixel are written at the cross and at the cursor, for images with a WCS in the header. Copying a cross always gives decimal degrees.",
+        "ヘッダに WCS のある画像で、十字とカーソルの所に出す赤経・赤緯の書き方です。十字のコピーは、いつも度の小数で書きます。",
+    ),
+    (
+        "Hours and degrees (05h35m17.30s)",
+        "時分秒・度分秒（05h35m17.30s）",
+    ),
+    ("Decimal degrees (83.822083°)", "度の小数（83.822083°）"),
     ("Luminance", "輝度"),
     ("Red", "R"),
     ("Green", "G"),

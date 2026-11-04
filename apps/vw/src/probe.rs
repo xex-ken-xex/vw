@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use vw_core::geo::GeoGrid;
+use vw_core::sky::{SkyFormat, SkyMap};
 use vw_core::{ColorModel, Metadata, PixelData, VwImage};
 
 use crate::quantity::Quantity;
@@ -86,30 +87,72 @@ pub fn value_text(
     }
 }
 
-/// 画素の地球の上の位置と、面（時刻・高さ）の札。気象・海洋の格子のデータにだけある。
+/// 画素の位置（地球の上か空の上）と、面（時刻・高さ）の札。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Place {
-    pub lat: f64,
-    pub lon: f64,
+    pub at: Where,
     pub plane: Option<String>,
 }
 
+/// 画素の位置。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Where {
+    /// 気象・海洋の格子のデータの緯度・経度（度）。
+    Earth { lat: f64, lon: f64 },
+    /// WCS のある天体の画像の赤経・赤緯（度）と、その書き方。
+    Sky {
+        ra: f64,
+        dec: f64,
+        format: SkyFormat,
+    },
+}
+
 impl Place {
-    /// 画素 `(x, y)` の位置。緯度・経度の分からない画像や、格子の外なら `None`。
-    pub fn at(geo: Option<&GeoGrid>, meta: &Metadata, x: u32, y: u32) -> Option<Self> {
-        let (lat, lon) = geo?.at(f64::from(x), f64::from(y))?;
+    /// 画素 `(x, y)` の位置。緯度・経度も空の座標も分からない画像や、格子・投影の外なら `None`。
+    pub fn at(
+        geo: Option<&GeoGrid>,
+        sky: Option<&dyn SkyMap>,
+        format: SkyFormat,
+        meta: &Metadata,
+        x: u32,
+        y: u32,
+    ) -> Option<Self> {
+        let (px, py) = (f64::from(x), f64::from(y));
+        let at = match (geo, sky) {
+            (Some(geo), _) => {
+                let (lat, lon) = geo.at(px, py)?;
+                Where::Earth { lat, lon }
+            }
+            (None, Some(sky)) => {
+                let [ra, dec] = sky.at(px, py)?;
+                Where::Sky { ra, dec, format }
+            }
+            (None, None) => return None,
+        };
         let plane = meta
             .get(vw_netcdf::GROUP, vw_fits::PLANE)
+            .or_else(|| meta.get(vw_fits::GROUP, vw_fits::PLANE))
             .map(str::to_owned);
-        Some(Self { lat, lon, plane })
+        Some(Self { at, plane })
     }
 
-    /// 緯度・経度と面の札を 1 行にした文字。
+    /// 位置と面の札を 1 行にした文字。
     pub fn label(&self) -> String {
-        let at = vw_core::geo::format_lat_lon(self.lat, self.lon);
+        let at = match self.at {
+            Where::Earth { lat, lon } => vw_core::geo::format_lat_lon(lat, lon),
+            Where::Sky { ra, dec, format } => vw_core::sky::format_radec(ra, dec, format),
+        };
         match &self.plane {
             Some(plane) => format!("{at}  {plane}"),
             None => at,
+        }
+    }
+
+    /// 計算に使える、符号付きの度の小数 2 つ（緯度・経度、または赤経・赤緯）。
+    fn degrees(&self) -> [f64; 2] {
+        match self.at {
+            Where::Earth { lat, lon } => [lat, lon],
+            Where::Sky { ra, dec, .. } => [ra.rem_euclid(360.0), dec],
         }
     }
 }
@@ -127,14 +170,15 @@ pub fn mark_label(x: u32, y: u32, value: Option<&str>, place: Option<&Place>) ->
 }
 
 /// 十字をコピーしたときの文字。表計算に貼れるよう、カンマで区切る。
-/// 緯度・経度は計算に使えるよう、南と西を負にした数で書く。
+/// 緯度・経度と赤経・赤緯は、計算に使えるよう度の小数で書く（南・西・南の赤緯は負）。
 pub fn clipboard_text(x: u32, y: u32, value: Option<&str>, place: Option<&Place>) -> String {
     let mut text = match value {
         Some(v) => format!("{x}, {y}, {v}"),
         None => format!("{x}, {y}"),
     };
     if let Some(place) = place {
-        text += &format!(", {:.6}, {:.6}", place.lat, place.lon);
+        let [a, b] = place.degrees();
+        text += &format!(", {a:.6}, {b:.6}");
         if let Some(plane) = &place.plane {
             text += &format!(", {plane}");
         }
@@ -265,8 +309,10 @@ mod tests {
 
     fn tokyo() -> Place {
         Place {
-            lat: 35.68,
-            lon: 139.77,
+            at: Where::Earth {
+                lat: 35.68,
+                lon: 139.77,
+            },
             plane: Some("time = 2020-01-01".to_owned()),
         }
     }
@@ -282,8 +328,10 @@ mod tests {
     #[test]
     fn copied_text_adds_signed_latitude_longitude_and_plane() {
         let place = Place {
-            lat: -12.5,
-            lon: -45.25,
+            at: Where::Earth {
+                lat: -12.5,
+                lon: -45.25,
+            },
             plane: None,
         };
         assert_eq!(
@@ -309,16 +357,72 @@ mod tests {
         let m = meta(&[]);
         let mut with_plane = Metadata::default();
         with_plane.push(vw_netcdf::GROUP, vw_fits::PLANE, "level = 500 hPa");
+        let at = |grid, meta, x, y| Place::at(grid, None, SkyFormat::Degrees, meta, x, y);
         assert_eq!(
-            Place::at(Some(&grid), &with_plane, 1, 1),
+            at(Some(&grid), &with_plane, 1, 1),
             Some(Place {
-                lat: 40.0,
-                lon: 20.0,
+                at: Where::Earth {
+                    lat: 40.0,
+                    lon: 20.0
+                },
                 plane: Some("level = 500 hPa".to_owned())
             })
         );
-        assert_eq!(Place::at(Some(&grid), &m, 1, 0).map(|p| p.lat), Some(50.0));
-        assert_eq!(Place::at(Some(&grid), &m, 5, 0), None);
-        assert_eq!(Place::at(None, &m, 0, 0), None);
+        assert_eq!(
+            at(Some(&grid), &m, 1, 0).map(|p| p.degrees()[0]),
+            Some(50.0)
+        );
+        assert_eq!(at(Some(&grid), &m, 5, 0), None);
+        assert_eq!(at(None, &m, 0, 0), None);
+    }
+
+    /// 1 画素が 1″ で、(0, 0) が赤経 83.82°・赤緯 -5.39° の空。
+    #[derive(Debug)]
+    struct Orion;
+
+    impl SkyMap for Orion {
+        fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+            (x < 10.0).then(|| [83.82 - x / 3600.0, -5.39 - y / 3600.0])
+        }
+    }
+
+    #[test]
+    fn sky_images_show_right_ascension_and_declination() {
+        let m = meta(&[]);
+        let place = Place::at(None, Some(&Orion), SkyFormat::Sexagesimal, &m, 0, 0).unwrap();
+        assert_eq!(
+            mark_label(0, 0, Some("1.5"), Some(&place)),
+            "1.5  (x 0, y 0)\nα 05h35m16.80s  δ -05°23′24.0″"
+        );
+        assert_eq!(
+            clipboard_text(0, 0, Some("1.5"), Some(&place)),
+            "0, 0, 1.5, 83.820000, -5.390000"
+        );
+        assert_eq!(
+            Place::at(None, Some(&Orion), SkyFormat::Degrees, &m, 0, 0)
+                .unwrap()
+                .label(),
+            "α 83.820000°  δ -5.390000°"
+        );
+    }
+
+    #[test]
+    fn outside_the_projection_has_no_sky_position() {
+        let m = meta(&[]);
+        assert_eq!(
+            Place::at(None, Some(&Orion), SkyFormat::Degrees, &m, 20, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn cube_planes_of_sky_images_follow_the_position() {
+        let mut m = Metadata::default();
+        m.push(vw_fits::GROUP, vw_fits::PLANE, "FREQ = 1.420 GHz");
+        let place = Place::at(None, Some(&Orion), SkyFormat::Degrees, &m, 0, 0).unwrap();
+        assert_eq!(
+            place.label(),
+            "α 83.820000°  δ -5.390000°  FREQ = 1.420 GHz"
+        );
     }
 }

@@ -607,6 +607,32 @@ fn headers_of_every_image_hdu_are_read_without_the_pixels() {
 }
 
 #[test]
+fn decoded_images_carry_the_sky_of_each_pixel() {
+    let file = file_with_wcs_after_data();
+    let at = |flip_rows: bool, x: f64, y: f64| {
+        let options = Options {
+            flip_rows,
+            ..Options::default()
+        };
+        decode_opts(&file, options).sky.unwrap().at(x, y).unwrap()
+    };
+    // 基準の画素 (CRPIX 2.5, 1.5) は、0 始まりの (1.5, 0.5)。上下を返しても同じ行（高さ 2 の真ん中）。
+    for flip in [false, true] {
+        let c = at(flip, 1.5, 0.5);
+        assert!((c[0] - 83.8221).abs() < 1e-9 && (c[1] + 5.3911).abs() < 1e-9);
+    }
+    // 表示の一番上の行は、返さなければ FITS の y = 1、返せば y = 2（赤緯が 0.1° 北）。
+    let north = at(true, 0.0, 0.0)[1] - at(false, 0.0, 0.0)[1];
+    assert!((north - 0.1).abs() < 1e-3, "{north}");
+}
+
+#[test]
+fn images_without_a_wcs_have_no_sky() {
+    let img = decode(&fits(&image_cards(8, &[2, 1]), &[1, 2]));
+    assert!(img.sky.is_none());
+}
+
+#[test]
 fn sky_is_read_from_the_headers_of_plain_and_gzipped_files() {
     use std::io::Write;
     let file = file_with_wcs_after_data();

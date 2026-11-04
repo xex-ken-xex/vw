@@ -23,6 +23,7 @@ pub mod limits;
 pub mod palette;
 mod palette_tables;
 pub mod plugin;
+pub mod sky;
 pub mod spectrum;
 pub mod xmp;
 

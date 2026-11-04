@@ -1010,6 +1010,35 @@ impl FitsCurve {
     }
 }
 
+/// 十字に出す空の座標の書き方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkyCoordinates {
+    /// 時分秒・度分秒。
+    #[default]
+    Sexagesimal,
+    /// 度の小数。
+    Degrees,
+}
+
+impl SkyCoordinates {
+    pub const ALL: [SkyCoordinates; 2] = [SkyCoordinates::Sexagesimal, SkyCoordinates::Degrees];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            SkyCoordinates::Sexagesimal => "Hours and degrees (05h35m17.30s)",
+            SkyCoordinates::Degrees => "Decimal degrees (83.822083°)",
+        }
+    }
+
+    pub fn format(self) -> vw_core::sky::SkyFormat {
+        match self {
+            SkyCoordinates::Sexagesimal => vw_core::sky::SkyFormat::Sexagesimal,
+            SkyCoordinates::Degrees => vw_core::sky::SkyFormat::Degrees,
+        }
+    }
+}
+
 /// 色の表のゲージを出す場所（スロットの中の端）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1403,6 +1432,8 @@ pub struct Fits {
     pub beam: bool,
     /// 軸が 1 本だけのデータ（スペクトル）を、高さ 1 画素の画像ではなく折れ線のグラフで描く。
     pub spectrum_graph: bool,
+    /// 十字に出す空の座標（赤経・赤緯）の書き方。
+    pub sky_coordinates: SkyCoordinates,
     /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
     pub calibration: FitsCalibration,
 }
@@ -1424,6 +1455,7 @@ impl Default for Fits {
             },
             beam: true,
             spectrum_graph: true,
+            sky_coordinates: SkyCoordinates::default(),
             calibration: FitsCalibration::default(),
         }
     }
@@ -1468,6 +1500,7 @@ impl Fits {
                 .unwrap_or_else(|| d.missing_color.clone()),
             beam: r.get("beam").unwrap_or(d.beam),
             spectrum_graph: r.get("spectrum_graph").unwrap_or(d.spectrum_graph),
+            sky_coordinates: r.get("sky_coordinates").unwrap_or(d.sky_coordinates),
             calibration: FitsCalibration::read(r.reader()),
         }
     }

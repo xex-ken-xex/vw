@@ -473,6 +473,15 @@ fn decode_with(
     });
     img.curve = options.curve;
     img.missing = options.missing;
+    let lookup = |key: &str| {
+        image
+            .hdu
+            .get(key)
+            .or_else(|| hdus[0].get(key))
+            .map(str::to_owned)
+    };
+    img.sky = sky::ImageSky::read(&lookup, h, flipped)
+        .map(|s| Arc::new(s) as Arc<dyn vw_core::sky::SkyMap>);
     img.metadata = metadata(&hdus, &image, frame);
     push_parts(&mut img.metadata, &hdus, &image);
     if flipped {
