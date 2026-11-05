@@ -8,9 +8,8 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap5 desktop desktop6 rescap">
+  IgnorableNamespaces="uap uap5 desktop rescap">
 
   <Identity Name="{{IDENTITY_NAME}}" Publisher="{{PUBLISHER}}" Version="{{VERSION}}" ProcessorArchitecture="x64" />
 
@@ -18,13 +17,6 @@
     <DisplayName>{{DISPLAY_NAME}}</DisplayName>
     <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <!--
-      %APPDATA% への書き込みを、パッケージ専用の場所へ振り替えさせない。振り替えられると、
-      「設定ファイルを開く」で起動したエディタやエクスプローラー（パッケージの外のプロセス）には
-      本物の %APPDATA%\vw が見え、vw が書いた設定やログが見つからない。zip 版から移った人の設定も
-      そのまま使える。そのために制限付きの機能 unvirtualizedResources が要る（下の Capabilities）。
-    -->
-    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
@@ -100,6 +92,5 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
-    <rescap:Capability Name="unvirtualizedResources" />
   </Capabilities>
 </Package>

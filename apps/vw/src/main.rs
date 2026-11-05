@@ -62,6 +62,7 @@ mod memory;
 mod meta_view;
 use vw_pipeline::{expr, nodes};
 mod owned_windows;
+mod packaged;
 mod people;
 mod people_graph;
 mod pipeline_view;
@@ -146,6 +147,7 @@ fn window_icon() -> eframe::egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    packaged::redirect_temp();
     vw_renderer::restrict_dll_search();
     let started = Instant::now();
     let initial: Vec<PathBuf> = std::env::args_os()

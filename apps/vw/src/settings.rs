@@ -3325,6 +3325,28 @@ mod tests {
     }
 
     #[test]
+    fn windows_config_follows_the_store_build_when_it_is_installed() {
+        let root = abs(&format!("store-{}", std::process::id()));
+        let (appdata, local) = (root.join("Roaming"), root.join("Local"));
+        let vars = [("APPDATA", s(&appdata)), ("LOCALAPPDATA", s(&local))];
+        assert_eq!(
+            config_path(true, env(&vars)),
+            Some(appdata.join("vw").join("settings.toml"))
+        );
+
+        std::fs::create_dir_all(vw_pipeline::settings_file::store_local_cache(&local)).unwrap();
+        assert_eq!(
+            config_path(true, env(&vars)),
+            Some(
+                vw_pipeline::settings_file::store_roaming_dir(&local)
+                    .join("vw")
+                    .join("settings.toml")
+            )
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn no_home_means_no_config_file() {
         assert_eq!(config_path(false, env(&[])), None);
         assert_eq!(config_path(true, env(&[])), None);

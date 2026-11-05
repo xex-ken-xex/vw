@@ -29,7 +29,7 @@ vw.exe をダブルクリックしても窓が出ない PC で、原因になり
    `1.1.0 / GDI Generic` のようにソフトウェアの 1.1 しかないときは、DirectX 12 で起動し直します
 5. **vw.exe の起動テスト**: 起動して 10 秒待ち、すぐ終わったら終了コードから原因を推します。
    vw.exe の横に置かれた古い DLL や、インターネットから来た印（SmartScreen の対象）も見ます
-6. **ログ**: 今回の起動で `%APPDATA%\vw\logs` にログができたか、できたなら末尾 30 行
+6. **ログ**: 今回の起動で `%APPDATA%\vw\logs`（Store 版が入っている PC では `%LOCALAPPDATA%\Packages\xex.vwImageViewer_97atvsd1padqw\LocalCache\Roaming\vw\logs`）にログができたか、できたなら末尾 30 行
 7. **イベントログ**: 直近 3 日の vw.exe のアプリケーション エラー
 
 最後に「まとめ」として、見つかった問題と直し方を番号付きで出します。
