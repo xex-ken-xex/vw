@@ -14,6 +14,30 @@ use crate::settings::Language;
 /// `{0}`・`{1}`（番号で、順を入れ替えるとき）で使う。
 const JA: &[(&str, &str)] = &[
     ("Opened folder {}", "フォルダ {} を開きました"),
+    (
+        "Sort order: Name (numbers by value), ascending",
+        "並び順: ファイル名（数字は数値として比較）、昇順",
+    ),
+    (
+        "Sort order: Name (numbers by value), descending",
+        "並び順: ファイル名（数字は数値として比較）、降順",
+    ),
+    (
+        "Sort order: Name (character by character), ascending",
+        "並び順: ファイル名（文字列として比較）、昇順",
+    ),
+    (
+        "Sort order: Name (character by character), descending",
+        "並び順: ファイル名（文字列として比較）、降順",
+    ),
+    (
+        "Sort order: Modified date, ascending",
+        "並び順: 更新日時、昇順",
+    ),
+    (
+        "Sort order: Modified date, descending",
+        "並び順: 更新日時、降順",
+    ),
     ("Closed {}", "{} を閉じました"),
     (
         "Loaded {} images from {}",
@@ -233,6 +257,14 @@ mod tests {
 
     fn ja(text: &str) -> Option<String> {
         translate(Language::Japanese, text)
+    }
+
+    #[test]
+    fn sort_order_change_is_translated() {
+        assert_eq!(
+            ja("Sort order: Modified date, descending").as_deref(),
+            Some("並び順: 更新日時、降順")
+        );
     }
 
     #[test]

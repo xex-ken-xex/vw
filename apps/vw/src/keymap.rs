@@ -68,6 +68,8 @@ pub enum Action {
     ExportImages,
     ParentFolder,
     OpenFolder,
+    CycleSortKey,
+    ToggleSortDescending,
     DevelopRaw,
     SwapRawPreview,
     ToggleClippingWarning,
@@ -231,6 +233,8 @@ impl Action {
         Action::RestoreSlot,
         Action::OpenFolder,
         Action::ParentFolder,
+        Action::CycleSortKey,
+        Action::ToggleSortDescending,
         Action::CopyFolderPath,
         Action::OpenInFileManager,
         Action::CloseZip,
@@ -410,6 +414,8 @@ impl Action {
             Action::FilterUnflagged => "filter_unflagged",
             Action::ExportImages => "export_images",
             Action::ParentFolder => "parent_folder",
+            Action::CycleSortKey => "cycle_sort_key",
+            Action::ToggleSortDescending => "toggle_sort_descending",
             Action::OpenFolder => "open_folder",
             Action::DevelopRaw => "develop_raw",
             Action::SwapRawPreview => "swap_raw_preview",
@@ -607,6 +613,8 @@ impl Action {
             Action::ShowPeopleGraph => "Relationship charts...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
+            Action::CycleSortKey => "Change sort order",
+            Action::ToggleSortDescending => "Descending order",
             Action::OpenFolder => "Open folder...",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -648,7 +656,9 @@ impl Action {
             | Action::PreviousPage
             | Action::NextPage
             | Action::ParentFolder
-            | Action::OpenFolder => KeyGroup::Navigate,
+            | Action::OpenFolder
+            | Action::CycleSortKey
+            | Action::ToggleSortDescending => KeyGroup::Navigate,
             Action::ToggleMaximize
             | Action::RestoreSlot
             | Action::FitImage
@@ -907,6 +917,8 @@ impl Action {
             Action::ToggleMaximize => vec![KeyCombo::plain(Enter)],
             Action::RestoreSlot => vec![KeyCombo::plain(Escape)],
             Action::OpenFolder => vec![KeyCombo::ctrl(O)],
+            Action::CycleSortKey => vec![KeyCombo::plain(S)],
+            Action::ToggleSortDescending => vec![KeyCombo::plain(S).with(false, true, false)],
             Action::ParentFolder => vec![
                 KeyCombo::plain(Backspace),
                 KeyCombo::mouse(MouseButton::Back),

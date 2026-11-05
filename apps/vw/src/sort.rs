@@ -28,6 +28,12 @@ impl SortKey {
             SortKey::Modified => "Modified date",
         }
     }
+
+    /// 切り替えのキーで次に選ぶ基準。[`SortKey::ALL`] の順に回り、最後の次は最初に戻る。
+    pub fn next(self) -> SortKey {
+        let at = SortKey::ALL.iter().position(|&k| k == self).unwrap_or(0);
+        SortKey::ALL[(at + 1) % SortKey::ALL.len()]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -172,6 +178,13 @@ mod tests {
     fn shorter_name_with_same_prefix_comes_first() {
         assert_eq!(natural_cmp("img", "img1"), Ordering::Less);
         assert_eq!(natural_cmp("a.png", "a.png.bak"), Ordering::Less);
+    }
+
+    #[test]
+    fn next_sort_key_cycles_through_all_keys() {
+        assert_eq!(SortKey::NameNatural.next(), SortKey::NameString);
+        assert_eq!(SortKey::NameString.next(), SortKey::Modified);
+        assert_eq!(SortKey::Modified.next(), SortKey::NameNatural);
     }
 
     fn item(name: &str, is_dir: bool, secs: u64) -> SortItem<'_> {

@@ -1733,6 +1733,8 @@ const JA: &[(&str, &str)] = &[
         "スロットの最大化/元に戻す、またはフォルダへ移動",
     ),
     ("Up one folder", "1 つ上のフォルダへ"),
+    ("Change sort order", "並び順を切り替える"),
+    ("Descending order", "降順に並べる"),
     ("Open folder...", "フォルダを開く..."),
     ("Recent folders", "最近開いたフォルダ"),
     ("No folders yet", "まだありません"),

@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, pos2, vec2};
 
+use crate::sort::SortKey;
 use crate::state::{self, AppState, Monitor, WindowState};
 use crate::{theme, window_placement};
 
@@ -45,7 +46,9 @@ impl VwApp {
         theme::apply(ctx, &self.settings().appearance);
         self.log
             .set_translator(crate::log_words::translator(self.lang()));
-        self.tree.set_order(self.settings().tree.order());
+        let order = self.settings().tree.order();
+        let reordered = order != self.tree.order();
+        self.tree.set_order(order);
         self.apply_probe_extensions();
         self.apply_fits_options();
         self.apply_netcdf_options();
@@ -54,6 +57,9 @@ impl VwApp {
         self.apply_archive_dir();
         self.apply_image_size_limit();
         self.apply_repair();
+        if reordered {
+            self.relist_current_folder(ctx);
+        }
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -61,6 +67,32 @@ impl VwApp {
             )),
             Ok(None) => {}
             Err(e) => self.log.error(format!("Settings: {e}")),
+        }
+    }
+
+    /// 並び順を変える。ツリーとスロットと前後送りがみな新しい順になる。
+    pub(super) fn set_sort_order(&mut self, ctx: &egui::Context, key: SortKey, descending: bool) {
+        let tree = &mut self.settings.settings.tree;
+        tree.sort = key;
+        tree.sort_descending = descending;
+        let direction = if descending {
+            "descending"
+        } else {
+            "ascending"
+        };
+        self.log
+            .info(format!("Sort order: {}, {direction}", key.title()));
+        self.settings_changed(ctx);
+    }
+
+    /// 並び順が変わったとき、cd しているフォルダを開き直してスロットを新しい順に並べ直す。
+    ///
+    /// 今あるスロットをその場で並べ替えないのは、まとめて読んだスロットや DICOM のシリーズの
+    /// スロットまで含めて並び順どおりに置き直すには、開くときと同じ手順を辿るのが確実なため。
+    /// 開き直すので、最大化と選んでいたスロットは戻る。
+    fn relist_current_folder(&mut self, ctx: &egui::Context) {
+        if let Some(dir) = self.current.clone() {
+            self.cd(ctx, dir, self.load_into);
         }
     }
 
