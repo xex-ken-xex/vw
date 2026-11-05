@@ -13,7 +13,7 @@ Download the file for your OS from the [Releases](https://github.com/xex-ken-xex
 | `vw-windows-x64.zip` | Windows 10 / 11 (64-bit) |
 | `vw-linux-x64.tar.gz` | x86_64 Linux such as Ubuntu 22.04 or later |
 
-The Microsoft Store version (under review) does not include the [vwbatch](check.html#apply-a-pixel-pipeline-to-many-images-vwbatch) command or the `check` folder for start-up problems. Use the zip version if you need them.
+The [Microsoft Store version](https://apps.microsoft.com/detail/9PP7JP120MW5) does not include the [vwbatch](check.html#apply-a-pixel-pipeline-to-many-images-vwbatch) command or the `check` folder for start-up problems. Use the zip version if you need them.
 
 There are two kinds of releases.
 
@@ -40,7 +40,7 @@ This warning appears for new unsigned apps. Press **More info** → **Run anyway
 
 On a PC with Windows 11 **Smart App Control** turned on, you get "Smart App Control blocked an app that may be unsafe" with no **Run** button, because vw is not signed. You can either:
 
-- **Use the Microsoft Store version**: it is not blocked (it is under review; the link will be added here when it is published)
+- **Use the Microsoft Store version**: it is not blocked. Get it from [Microsoft Store](https://apps.microsoft.com/detail/9PP7JP120MW5)
 - **Turn Smart App Control off**: **Windows Security** → **App & browser control** → **Smart App Control settings** → **Off**. On some Windows versions you cannot turn it back on without reinstalling Windows, and it weakens protection for other apps too. Decide at your own judgment and risk (ask your administrator on a work or school PC). Prefer the Store version if you can
 
 #### Ways to open images
