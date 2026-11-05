@@ -507,20 +507,21 @@ pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>
         weight[l.a] += l.correlation;
         weight[l.b] += l.correlation;
     }
-    let anchor = (0..count)
-        .max_by(|&x, &y| weight[x].total_cmp(&weight[y]).then(y.cmp(&x)))
-        .unwrap_or(0);
+    let anchor = first_clear_max((0..count).map(|i| (i, weight[i]))).unwrap_or(0);
     placed[anchor] = Some((Affine::IDENTITY, None));
     loop {
         // 置いた画像と置いていない画像をつなぐ組のうち、いちばん確かなもの（Prim の方法）。
-        let next = links
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| placed[l.a].is_some() != placed[l.b].is_some())
-            .max_by(|x, y| x.1.correlation.total_cmp(&y.1.correlation));
-        let Some((i, l)) = next else {
+        let next = first_clear_max(
+            links
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| placed[l.a].is_some() != placed[l.b].is_some())
+                .map(|(i, l)| (i, l.correlation)),
+        );
+        let Some(i) = next else {
             break;
         };
+        let l = &links[i];
         let Some(to_b) = l.map.inverse() else {
             break;
         };
@@ -532,6 +533,21 @@ pub fn tree(count: usize, links: &[Link]) -> Vec<Option<(Affine, Option<usize>)>
     }
     level(&mut placed);
     placed
+}
+
+/// 値がこれより近いものは同じとみなす。相関は画素の並べ方や足す順で末尾の桁が変わるので、
+/// そのまま大小を比べると、ほぼ同じ候補のどれを選ぶかがわずかな計算の違いで入れ替わる。
+const TIE: f64 = 1e-9;
+
+/// いちばん大きい値の番号。`TIE` 未満の差しかないものは、先に出てきた（番号の小さい）方を選ぶ。
+fn first_clear_max(values: impl Iterator<Item = (usize, f64)>) -> Option<usize> {
+    let mut best: Option<(usize, f64)> = None;
+    for (i, v) in values {
+        if best.is_none_or(|(_, b)| v > b + TIE) {
+            best = Some((i, v));
+        }
+    }
+    best.map(|(i, _)| i)
 }
 
 /// 置いた画像の多くがまっすぐ・等倍に見えるように、全体を回して縮める。基準の 1 枚が
