@@ -810,7 +810,7 @@ pub struct Tree {
 impl Default for Tree {
     fn default() -> Self {
         Self {
-            sort: SortKey::Modified,
+            sort: SortKey::NameNatural,
             sort_descending: true,
             confirm_every: false,
             confirm_chunk: 500,
@@ -4199,9 +4199,9 @@ ae_title = "PACS"
     }
 
     #[test]
-    fn tree_is_sorted_newest_first_by_default() {
+    fn tree_is_sorted_by_name_from_z_to_a_by_default() {
         let (s, _) = Settings::from_toml("").unwrap();
-        assert_eq!(s.tree.sort, SortKey::Modified);
+        assert_eq!(s.tree.sort, SortKey::NameNatural);
         assert!(s.tree.sort_descending);
     }
 
@@ -4218,7 +4218,7 @@ ae_title = "PACS"
     #[test]
     fn unknown_tree_sort_falls_back_to_default() {
         let (s, problems) = Settings::from_toml("[tree]\nsort = \"size\"\n").unwrap();
-        assert_eq!(s.tree.sort, SortKey::Modified);
+        assert_eq!(s.tree.sort, SortKey::NameNatural);
         assert_eq!(problems.len(), 1);
     }
 

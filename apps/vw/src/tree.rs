@@ -487,6 +487,10 @@ impl FolderTree {
     }
 
     /// 並び順を変え、表示中のフォルダもすぐ並べ直す。
+    pub fn order(&self) -> SortOrder {
+        self.order
+    }
+
     pub fn set_order(&mut self, order: SortOrder) {
         if order == self.order {
             return;

@@ -1251,6 +1251,16 @@ impl VwApp {
                 }
             }
             Action::ParentFolder => self.parent_folder(ctx),
+            Action::CycleSortKey => {
+                let tree = &self.settings().tree;
+                let (key, descending) = (tree.sort.next(), tree.sort_descending);
+                self.set_sort_order(ctx, key, descending);
+            }
+            Action::ToggleSortDescending => {
+                let tree = &self.settings().tree;
+                let (key, descending) = (tree.sort, !tree.sort_descending);
+                self.set_sort_order(ctx, key, descending);
+            }
             Action::OpenFolder => self.ask_folder_to_open(),
             Action::FitImage => self.slots[i].reset_view(),
             Action::ActualSize => self.slots[i].actual_size(),

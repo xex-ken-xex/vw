@@ -21,7 +21,8 @@ The folder tree works like a file explorer.
 | Right-click a folder in the tree → **Open folder** | Open the folder in Explorer (on Linux, the default file manager) |
 | Right-click a folder in the tree → **Copy** | Copy the full path of the folder to the clipboard |
 
-- The default order is **newest modified date first**. The **Sort order** setting can switch to file names (in name order, `img2` comes before `img10`). **Descending** is on by default, so turn it off to sort names from A to Z
+- The default order is **file names, descending** (Z to A). Numbers in names are compared by value, so `img10` comes before `img2`. Turn off the **Descending** setting to sort from A to Z
+- **S** switches what to sort by (name → name character by character → modified date), and **Shift+S** switches between ascending and descending. You can also pick them in **View → Sort order**. The tree, the slots and previous/next image all follow, and the current folder is opened again. If you have a settings file from an earlier version, the order written in it is kept
 - Hidden folders starting with a dot and the Windows Recycle Bin (`$RECYCLE.BIN`) are not shown
 - The last folder and the folders expanded in the tree come back at the next start
 

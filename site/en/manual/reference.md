@@ -41,7 +41,7 @@ The main settings. Find all of them with the search box of the settings screen.
 | | Keep the RAW preview after developing (`viewer.keep_raw_preview`) | Keep the camera's embedded preview after developing so J can switch | On |
 | | Burst interval (`similar.burst_seconds`) | Photos taken in a row with the same camera within this many seconds form one similar group. 0 for the same second only | 2 s |
 | | Look-alike tolerance (`similar.similar_bits`) | Images whose visual fingerprints (64 bits) differ in this many bits or fewer form a similar group. 0 for near duplicates only | 10 |
-| Folder tree | Sort order (`tree.sort`) | Name (numbers by value) / Name (character by character) / Modified date | Modified date |
+| Folder tree | Sort order (`tree.sort`) | Name (numbers by value) / Name (character by character) / Modified date | Name (numbers by value) |
 | | Descending (`tree.sort_descending`) | Reverse the order (Z to A, newest first) | On |
 | | Confirm large loads (`tree.confirm_every`) | Ask whether to continue every chunk | Off |
 | | Chunk size (`tree.confirm_chunk`) | Images loaded before asking again | 500 |

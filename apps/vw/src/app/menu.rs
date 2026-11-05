@@ -8,6 +8,7 @@ use crate::i18n::tr;
 use crate::keymap::Action;
 use crate::labels::Flag;
 use crate::settings_ui::layout_title;
+use crate::sort::SortKey;
 
 use super::*;
 
@@ -17,6 +18,7 @@ impl VwApp {
         let ctx = ui.ctx().clone();
         let mut chosen = None;
         let mut recent = None;
+        let mut sort = None;
         vw_ui::menu::bar(ui, |ui| {
             vw_ui::menu::bar_menu(ui, tr(lang, "File"), |ui| {
                 if self.menu_item(ui, Action::OpenFolder, None) {
@@ -61,6 +63,11 @@ impl VwApp {
                     }
                 }
                 vw_ui::menu::submenu(ui, tr(lang, "Window layout"), |ui| self.panes_menu(ui));
+                if let Some(Some(order)) =
+                    vw_ui::menu::submenu(ui, tr(lang, "Sort order"), |ui| self.sort_menu(ui))
+                {
+                    sort = Some(order);
+                }
                 ui.separator();
                 let pipeline = self.pipeline.open;
                 if self.menu_item(ui, Action::TogglePixelPipeline, Some(pipeline)) {
@@ -213,6 +220,37 @@ impl VwApp {
         if let Some(folder) = recent {
             self.open_folder(&ctx, folder);
         }
+        if let Some((key, descending)) = sort {
+            self.set_sort_order(&ctx, key, descending);
+        }
+    }
+
+    /// 表示メニューの「並び順」。基準はここで直接選び、キーの切り替えと降順も並べる。
+    fn sort_menu(&self, ui: &mut egui::Ui) -> Option<(SortKey, bool)> {
+        let lang = self.lang();
+        let tree = &self.settings().tree;
+        let mut chosen = None;
+        if self.menu_item(ui, Action::CycleSortKey, None) {
+            chosen = Some((tree.sort.next(), tree.sort_descending));
+        }
+        ui.separator();
+        for key in SortKey::ALL {
+            if ui
+                .add(vw_ui::menu::item(
+                    tree.sort == key,
+                    tr(lang, key.title()),
+                    "",
+                ))
+                .clicked()
+            {
+                chosen = Some((key, tree.sort_descending));
+            }
+        }
+        ui.separator();
+        if self.menu_item(ui, Action::ToggleSortDescending, Some(tree.sort_descending)) {
+            chosen = Some((tree.sort, !tree.sort_descending));
+        }
+        chosen
     }
 
     /// Labels メニュー。タグでの絞り込みはタグの数だけ並ぶので、キーを割り当てる操作にはせず
