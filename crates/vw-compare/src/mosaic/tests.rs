@@ -400,3 +400,45 @@ fn a_link_between_tiles_that_do_not_overlap_is_dropped_when_the_others_disagree(
     // 少しずれただけの組は、食い違いとみなさず残す。
     assert_eq!(kept, [0.99, 0.5, 0.99]);
 }
+
+#[test]
+fn images_with_nearly_equal_total_correlation_anchor_on_the_lower_number() {
+    let link = |a, b, x, correlation| Link {
+        a,
+        b,
+        map: shift(x, 0.0),
+        correlation,
+        overlap: 0.3,
+        kind: LinkKind::Overlap,
+        points: Vec::new(),
+    };
+    // 0・1・2 の合計の差は 1e-13 ほどで、計算の端数の範囲にすぎない。
+    let links = [
+        link(0, 1, -100.0, 0.99),
+        link(1, 2, -100.0, 0.99 + 1e-13),
+        link(0, 2, -200.0, 0.99 + 2e-13),
+    ];
+    let placed = tree(3, &links);
+    let (_, by) = placed[0].unwrap();
+    assert_eq!(by, None, "{placed:?}");
+}
+
+#[test]
+fn of_nearly_equal_links_the_lower_numbered_one_places_the_next_image() {
+    let link = |a, b, x, correlation| Link {
+        a,
+        b,
+        map: shift(x, 0.0),
+        correlation,
+        overlap: 0.3,
+        kind: LinkKind::Overlap,
+        points: Vec::new(),
+    };
+    let links = [
+        link(0, 1, -100.0, 0.9),
+        link(0, 2, -200.0, 0.9),
+        link(1, 2, -100.0, 0.9 + 1e-13),
+    ];
+    let placed = tree(3, &links);
+    assert_eq!(placed[1].unwrap().1, Some(0), "{placed:?}");
+}

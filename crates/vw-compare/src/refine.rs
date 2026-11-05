@@ -239,10 +239,13 @@ fn accumulate(r: &Plane, m: &Plane, p: &[f64; 8], stride: usize, sigma: f64) -> 
     let t = affine(p);
     let (gain, bias) = (p[6], p[7]);
     let k = 1.345 * sigma;
-    let acc = (0..r.height)
+    // rayon の fold/reduce は足す順がスレッドの動きで毎回変わり、相関の末尾の桁が揺れて
+    // 貼り合わせの基準まで変わるため、行ごとの和を並べてから上の行から順に足す。
+    let rows: Vec<Acc> = (0..r.height)
         .into_par_iter()
         .step_by(stride)
-        .fold(Acc::new, |mut acc, y| {
+        .map(|y| {
+            let mut acc = Acc::new();
             for x in (0..r.width).step_by(stride) {
                 let (fx, fy) = (x as f64, y as f64);
                 let [sx, sy] = t.apply([fx, fy]);
@@ -267,14 +270,15 @@ fn accumulate(r: &Plane, m: &Plane, p: &[f64; 8], stride: usize, sigma: f64) -> 
                         acc.h[a][b] += w * j[a] * j[b];
                     }
                 }
-                if acc.n % 7 == 0 {
+                if acc.n.is_multiple_of(7) {
                     acc.sample.push(res.abs() as f32);
                 }
                 acc.n += 1;
             }
             acc
         })
-        .reduce(Acc::new, Acc::merge);
+        .collect();
+    let acc = rows.into_iter().fold(Acc::new(), Acc::merge);
     if acc.n < 64 {
         return None;
     }

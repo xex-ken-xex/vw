@@ -180,6 +180,43 @@ fn three_overlapping_photos_are_found_placed_and_planned() {
 }
 
 #[test]
+fn stitching_the_same_photos_twice_gives_the_same_placement_and_reference() {
+    let tmp = TempDir::new();
+    let s = scene(700, 400);
+    let at = [[0, 0], [260, 40], [290, 60]];
+    let paths: Vec<PathBuf> = ["a.png", "b.png", "c.png"]
+        .iter()
+        .zip(at)
+        .map(|(name, at)| crop(&s, 700, tmp.path(), name, at, [400, 300]))
+        .collect();
+    let settings = StitchSettings::default();
+    let stitch = || {
+        let found = wait(start_job(
+            paths.clone(),
+            png_registry(),
+            StitchFeatures::Fallback,
+        ));
+        let arranged = arrange(
+            &found,
+            &found.links,
+            &HashMap::new(),
+            StitchProjection::Auto,
+            &settings,
+        );
+        plan_of(&found, &found.links, &arranged, &settings).unwrap()
+    };
+    let first = stitch();
+    let second = stitch();
+    assert_eq!(first, second);
+    let reference = first
+        .sources
+        .iter()
+        .find(|s| s.how == How::Reference)
+        .unwrap();
+    assert_eq!(reference.path, paths[0]);
+}
+
+#[test]
 fn choosing_another_shot_of_the_same_area_uses_it_instead() {
     let tmp = TempDir::new();
     let s = scene(700, 400);
