@@ -87,6 +87,7 @@ title: "設定とキーの一覧"
 | OS | 場所 |
 | --- | --- |
 | Windows | `%APPDATA%\vw\settings.toml` |
+| Windows（Microsoft Store 版が入っている PC。zip 版も同じ） | `%LOCALAPPDATA%\Packages\xex.vwImageViewer_97atvsd1padqw\LocalCache\Roaming\vw\settings.toml` |
 | Linux | `~/.config/vw/settings.toml`（`XDG_CONFIG_HOME` があればその下） |
 
 たとえば次のように書けます。書かれていない項目は初期値で動きます。

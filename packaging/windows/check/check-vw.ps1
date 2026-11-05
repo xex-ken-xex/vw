@@ -250,7 +250,13 @@ if (-not $VwExe -or -not (Test-Path $VwExe)) {
         }
     }
 
-    $logDir = Join-Path $env:APPDATA 'vw\logs'
+    # Store 版が入っている PC では、zip 版も Store 版の LocalCache に設定とログを置く。
+    $storeCache = Join-Path $env:LOCALAPPDATA 'Packages\xex.vwImageViewer_97atvsd1padqw\LocalCache'
+    if (Test-Path -LiteralPath $storeCache -PathType Container) {
+        $logDir = Join-Path $storeCache 'Roaming\vw\logs'
+    } else {
+        $logDir = Join-Path $env:APPDATA 'vw\logs'
+    }
     if (-not $NoLaunch) {
         Say ''
         Say "  vw.exe を起動して $WaitSeconds 秒待ちます..."

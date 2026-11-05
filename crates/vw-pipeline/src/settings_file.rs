@@ -7,18 +7,46 @@
 //! 2 つの読み方がずれないことは、ビューア側のテストで確かめる。
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use vw_fits::calibration;
 
+/// Microsoft Store 版のパッケージ ファミリ名。名前と発行元から決まり、版が上がっても変わらない。
+pub const STORE_PACKAGE_FAMILY: &str = "xex.vwImageViewer_97atvsd1padqw";
+
+/// Store 版の設定の置き場所の親（Store 版が %APPDATA% に書いたものが実際に置かれる場所）。
+/// `local_appdata` は %LOCALAPPDATA%。
+pub fn store_roaming_dir(local_appdata: &Path) -> PathBuf {
+    store_local_cache(local_appdata).join("Roaming")
+}
+
+/// Store 版のパッケージ専用の LocalCache。Store 版を入れると Windows が作り、外すと消す。
+pub fn store_local_cache(local_appdata: &Path) -> PathBuf {
+    local_appdata
+        .join("Packages")
+        .join(STORE_PACKAGE_FAMILY)
+        .join("LocalCache")
+}
+
 /// 設定ファイルの場所。Windows は `%APPDATA%\vw`、それ以外は XDG の規約に従う。
+/// ただし Windows で Store 版が入っていれば、zip 版も Store 版と同じ場所（Store 版の LocalCache）を使う。
+/// Store 版は %APPDATA% への書き込みを LocalCache へ振り替えられ、本物の %APPDATA% に書けないので、
+/// 2 つの版で設定を揃えるにはこちらへ寄せるしかない。Store 版を外すと設定も消え、初期化になる。
+/// Store 版が入っていない PC で zip 版がこの場所を作らないのは、Windows が管理する Packages の下に
+/// 先にフォルダがあると、あとで Store 版を入れるときに差し障るおそれがあるため。
 /// `env` は環境変数を引く関数（テストで差し替えるため）。
 pub fn config_path(windows: bool, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let absolute = |name: &str| env(name).map(PathBuf::from).filter(|p| p.is_absolute());
     let dir = if windows {
-        absolute("APPDATA")?
+        let store = absolute("LOCALAPPDATA")
+            .map(|local| store_local_cache(&local))
+            .filter(|cache| cache.is_dir());
+        match store {
+            Some(cache) => cache.join("Roaming"),
+            None => absolute("APPDATA")?,
+        }
     } else {
         absolute("XDG_CONFIG_HOME").or_else(|| absolute("HOME").map(|h| h.join(".config")))?
     };

@@ -87,6 +87,7 @@ The **Keyboard shortcuts** settings change the keys of every action.
 | OS | Location |
 | --- | --- |
 | Windows | `%APPDATA%\vw\settings.toml` |
+| Windows (PCs with the Microsoft Store version; the zip version uses it too) | `%LOCALAPPDATA%\Packages\xex.vwImageViewer_97atvsd1padqw\LocalCache\Roaming\vw\settings.toml` |
 | Linux | `~/.config/vw/settings.toml` (under `XDG_CONFIG_HOME` if set) |
 
 For example, you can write the following. Settings not written use their defaults.

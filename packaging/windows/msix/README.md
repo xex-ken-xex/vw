@@ -21,7 +21,11 @@ Windows の「スマート アプリ コントロール」でも、Store 版の 
   - スタートメニューに vw が出ます。
   - コマンドプロンプトから `vw` で呼べます（実行エイリアス）。
   - エクスプローラーで画像を右クリックしたときの「プログラムから開く」に vw が出ます。既定のアプリは変えません。
-  - 設定やログは zip 版と同じ `%APPDATA%\vw` に置かれます。zip 版の設定をそのまま使えます。
+  - 設定やログは `%LOCALAPPDATA%\Packages\xex.vwImageViewer_97atvsd1padqw\LocalCache\Roaming\vw` に置かれます。
+    Store 版を入れた PC では、zip 版もこの場所を使います（Store 版が入っていなければ zip 版は `%APPDATA%\vw`）。
+    Store 版をアンインストールすると、この場所は設定ごと消えます。設定を初めからにしたいときにも使えます。
+    Store 版の %APPDATA% への書き込みは Windows がこの場所へ振り替えるので、2 つの版で揃えるにはここに寄せるしかありません。
+  - 一時フォルダ（ZIP を解凍する先など）は、Store 版では同じ LocalCache の `Local\Temp` を使います。
   - VC++ ランタイム（`Microsoft.VCLibs.140.00.UWPDesktop`）は Store が一緒に入れます。
 - MSIX には署名をしません。そのため、**できた `.msix` はそのままでは PC に入れられません**。
   Partner Center に上げるためだけのファイルです。
@@ -74,19 +78,16 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\msix\make-msix.ps1 -S
    - `Package/Properties/PublisherDisplayName` → `-PublisherDisplayName`
    - 予約した名前 → `-DisplayName`
 4. CI が作った `vw-windows-x64.msix` を、提出の **パッケージ** に上げます。
-5. 提出の **申請オプション** で、制限付きの機能の理由を書きます（下の文面）。
+5. 提出の **申請オプション** で、制限付きの機能 runFullTrust の理由を書きます（下の文面）。
 6. **ストア登録情報**（説明・スクリーンショット）と **年齢区分** を埋めて提出します。
    プライバシー ポリシーの URL には、サイトの `privacy.html` を使います。
 
 ### 制限付きの機能の理由（申請オプションに貼る文面）
 
 > runFullTrust: vw is a Win32 desktop image viewer packaged with the Desktop Bridge.
->
-> unvirtualizedResources: vw keeps its settings, logs and caches in %APPDATA%\vw, shared with the
-> portable zip build. The app has a button that opens the settings file in the user's text editor and a
-> menu that opens the log folder in File Explorer. Those processes run outside the package, so with
-> file system write virtualization they would not see the files vw wrote. We therefore disable
-> virtualization with desktop6:FileSystemWriteVirtualization.
+
+前に申請した unvirtualizedResources（%APPDATA% への書き込みの振り替えをやめる機能）は、
+2026-11-04 の認定で認められませんでした。いまは使っていません。
 
 ## 2 回目からの更新
 
