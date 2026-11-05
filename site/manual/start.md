@@ -12,7 +12,7 @@ title: "はじめる"
 | `vw-windows-x64.zip` | Windows 10 / 11（64bit） |
 | `vw-linux-x64.tar.gz` | Ubuntu 22.04 以降など、x86_64 の Linux |
 
-Microsoft Store 版（審査中）には、画素の変換をまとめてかけるコマンド [vwbatch](check.html#画素の変換をまとめてかけるvwbatch) と、起動しないときに調べる `check` フォルダは入っていません。使うときは zip 版を使ってください。
+[Microsoft Store 版](https://apps.microsoft.com/detail/9PP7JP120MW5)には、画素の変換をまとめてかけるコマンド [vwbatch](check.html#画素の変換をまとめてかけるvwbatch) と、起動しないときに調べる `check` フォルダは入っていません。使うときは zip 版を使ってください。
 
 Releases には 2 種類あります。
 
@@ -39,7 +39,7 @@ Releases には 2 種類あります。
 
 Windows 11 の **スマート アプリ コントロール** が有効な PC では、「スマート アプリ コントロールにより、安全でない可能性があるアプリがブロックされました」と出て、**実行** のボタンがありません。vw に署名がないためです。次のどちらかで使えます。
 
-- **Microsoft Store 版を使う**: Store 版は止められません（いま審査中です。公開されたら、ここに入手先を書きます）
+- **Microsoft Store 版を使う**: Store 版は止められません。[Microsoft Store](https://apps.microsoft.com/detail/9PP7JP120MW5) から入れます
 - **スマート アプリ コントロールを切る**: **Windows セキュリティ** → **アプリとブラウザー コントロール** → **スマート アプリ コントロールの設定** で **オフ** にします。Windows の版によっては、一度切ると Windows を入れ直すまで有効に戻せません。ほかのアプリの守りも弱くなります。切るかどうかは、ご自身の判断と責任で決めてください（会社や学校の PC では、管理者に確かめてください）。できれば Store 版を使ってください
 
 #### 画像を開くいろいろな方法
