@@ -20,7 +20,7 @@ pub use vw_tree::{display_name, entry_is_dir, is_hidden_name, is_recycle_bin};
 
 use crate::app::context_menu::{self, FolderKind, MenuContext, Picked};
 use crate::i18n::tr;
-use crate::series::{Scan, Series, SeriesIndex, Study};
+use crate::series::{FolderSeries, Scan, Series, SeriesIndex, Study};
 use crate::settings::Language;
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 use crate::viewer::DraggedFile;
@@ -324,7 +324,7 @@ fn files_menu(r: &egui::Response, files: Vec<PathBuf>, view: &View, out: &mut Ve
 }
 
 /// まだ読んでいないフォルダの下に項目があるかの先読みの状態。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Peek {
     Asked,
     Done {
@@ -334,6 +334,8 @@ enum Peek {
         dataset: bool,
         /// データセットの登録か更新が途中で止まっているか。
         unfinished: bool,
+        /// DICOM の 1 シリーズだけのフォルダなら、並べる鍵（[`crate::series::folder_series`]）。
+        series: Option<FolderSeries>,
     },
 }
 
@@ -358,6 +360,7 @@ impl Peeker {
                     children: has_tree_children(&dir, &registry),
                     dataset: crate::catalog::exists_in(&dir),
                     unfinished: dir.join(crate::catalog::PARTIAL_FILE).is_file(),
+                    series: crate::series::folder_series(&dir, &registry),
                 };
                 if done.send((dir, peek)).is_err() {
                     break;
@@ -375,6 +378,13 @@ impl Peeker {
     fn receive(&mut self) {
         for (dir, peek) in self.results.try_iter() {
             self.known.insert(dir, peek);
+        }
+    }
+
+    fn series_of(&self, dir: &Path) -> Option<FolderSeries> {
+        match self.known.get(dir) {
+            Some(Peek::Done { series, .. }) => series.clone(),
+            _ => None,
         }
     }
 
@@ -458,6 +468,25 @@ fn lister(registry: &Registry, order: SortOrder) -> impl Fn(&Path) -> Vec<Node> 
     move |dir| list_dir(dir, registry, order)
 }
 
+/// 読み込み済みのフォルダの中で、1 シリーズのフォルダをシリーズの順にする
+/// （[`crate::series::place_in_series_order`]）。先読みの結果は後から届き、
+/// 読み直し（[`FolderTree::refresh`]）や並び順の変更でも設定の順に戻るので、描くたびに直す。
+fn place_series_folders(node: &mut Node, peeker: &Peeker) {
+    let Some(children) = &mut node.children else {
+        return;
+    };
+    crate::series::place_in_series_order(children, |c| {
+        if c.is_dir {
+            peeker.series_of(&c.path)
+        } else {
+            None
+        }
+    });
+    for child in children {
+        place_series_folders(child, peeker);
+    }
+}
+
 fn comparer(order: SortOrder) -> impl Fn(&Node, &Node) -> std::cmp::Ordering {
     move |a, b| sort::compare(order, &sort_item(a), &sort_item(b))
 }
@@ -529,6 +558,22 @@ impl FolderTree {
         }
     }
 
+    /// フォルダ `dirs` を先読みする（まだなら）。cd したフォルダのスロットを、ツリーに
+    /// 出ていなくてもシリーズの順に並べられるようにする。
+    pub fn ask_peeks(&mut self, ctx: &egui::Context, registry: &Registry, dirs: Vec<PathBuf>) {
+        let peeker = self.peeker.get_or_insert_with(|| {
+            let wake = ctx.clone();
+            Peeker::start(registry.clone(), move || wake.request_repaint())
+        });
+        peeker.receive();
+        peeker.ask(dirs);
+    }
+
+    /// 先読みで分かった、`dir` が DICOM の 1 シリーズだけのフォルダならその並べる鍵。
+    pub fn series_of(&self, dir: &Path) -> Option<FolderSeries> {
+        self.peeker.as_ref()?.series_of(dir)
+    }
+
     /// 先読みの結果をすべて捨てる。DICOM として中身を調べる拡張子が変わったときに使う。
     pub fn forget_peeks(&mut self) {
         if let Some(p) = &mut self.peeker {
@@ -558,6 +603,9 @@ impl FolderTree {
             Peeker::start(cx.registry.clone(), move || wake.request_repaint())
         });
         peeker.receive();
+        for root in &mut self.base.roots {
+            place_series_folders(root, peeker);
+        }
         let mut view = View {
             registry: cx.registry,
             current: cx.current,

@@ -351,6 +351,9 @@ pub struct VwApp {
     folder_load: Option<FolderLoad>,
     /// 開いたフォルダのスロットの中身の読み込みと、そのスロットの番号。
     explores: Vec<(u64, FolderLoad)>,
+    /// 開き終えたフォルダのスロットの番号と、ヘッダを読み終えるのを待っているフォルダ。
+    /// 読み終えたら、スロットを DICOM のシリーズに分ける（[`VwApp::split_explored_series`]）。
+    explored_series: Vec<(u64, Vec<PathBuf>)>,
     /// フォルダの DICOM の検査とシリーズ。ツリーと、cd したフォルダのスロットの両方で使う。
     series: SeriesIndex,
     /// ドロップされ、確認を待っている画像の移動。
@@ -890,6 +893,7 @@ impl VwApp {
             current: None,
             folder_load: None,
             explores: Vec::new(),
+            explored_series: Vec::new(),
             series: SeriesIndex::default(),
             pending_move: None,
             move_at: None,
@@ -1362,10 +1366,12 @@ impl eframe::App for VwApp {
         self.receive(&ctx);
         self.receive_archives(&ctx);
         self.pump_folder_load(&ctx);
-        self.pump_explores();
+        self.pump_explores(&ctx);
         if self.series.poll() {
             self.group_series();
         }
+        self.split_explored_series();
+        self.place_series_folder_slots();
         self.watch_folders(&ctx);
         self.keep_filter_hiding();
         for problem in self.labels.take_problems() {
