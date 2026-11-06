@@ -312,8 +312,10 @@ pub fn interleaved_image(
             let mut v: Vec<u16> = raw
                 .get(..samples * 2)
                 .ok_or_else(|| DecodeError::Invalid("pixel data is too short".into()))?
-                .chunks_exact(2)
-                .map(|b| (u32::from(u16::from_le_bytes([b[0], b[1]])) & mask) as u16)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&b| (u32::from(u16::from_le_bytes(b)) & mask) as u16)
                 .collect();
             if ybr {
                 ybr16_to_rgb(&mut v, stored);
