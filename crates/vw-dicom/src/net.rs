@@ -164,7 +164,7 @@ fn transfer_syntax(uid: &str) -> Option<&'static TransferSyntax> {
 }
 
 /// 画素が圧縮されていない（符号化し直しても画素が変わらない）転送構文か。
-fn is_native(uid: &str) -> bool {
+pub(crate) fn is_native(uid: &str) -> bool {
     transfer_syntax(uid).is_some_and(|ts| !ts.is_encapsulated_pixel_data())
 }
 

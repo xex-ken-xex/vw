@@ -6,6 +6,8 @@
 //!   を起こすので採らない
 //! - モノクロは Rescale Slope / Intercept を当てた値（CT なら HU）で持ち、ファイルの
 //!   ウィンドウ幅 / レベルを表示の階調として渡す。MONOCHROME1 は値を反転して持つ
+//! - カラーは RGB にして持つ。PALETTE COLOR・非圧縮の YBR_FULL_422・16bit のカラーは
+//!   dicom-pixeldata が RGB にしないので [`color`] で直す
 //! - 1 ファイルに複数フレームが入ったもの（シネなど）はフレームごとに読む
 //! - 患者情報は「Patient」のメタデータにだけ出す
 
@@ -24,6 +26,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 use charset::Charset;
 
 pub mod charset;
+pub mod color;
 pub mod net;
 pub mod pipeline;
 pub mod structure;
@@ -67,10 +70,8 @@ impl DecoderPlugin for DicomPlugin {
             )));
         }
         check_pixel_size(&obj)?;
-        let px = obj
-            .decode_pixel_data_frame(frame as u32)
-            .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
-        let mut img = to_image(&px, frame)?;
+        let colors = Colors::of(&obj)?;
+        let mut img = decode_one(&obj, &colors, frame)?;
         img.metadata = metadata(&obj);
         Ok(img)
     }
@@ -85,9 +86,10 @@ impl DecoderPlugin for DicomPlugin {
     ) {
         let opened = open(data, false).and_then(|obj| {
             check_pixel_size(&obj)?;
-            Ok(obj)
+            let colors = Colors::of(&obj)?;
+            Ok((obj, colors))
         });
-        let obj = match opened {
+        let (obj, colors) = match opened {
             Ok(obj) => obj,
             Err(e) => {
                 if let Some(&first) = order.first() {
@@ -104,13 +106,10 @@ impl DecoderPlugin for DicomPlugin {
                     "no frame {frame} (the file has {frames})"
                 )))
             } else {
-                obj.decode_pixel_data_frame(frame as u32)
-                    .map_err(|e| DecodeError::Unsupported(e.to_string()))
-                    .and_then(|px| to_image(&px, frame))
-                    .map(|mut img| {
-                        img.metadata = meta.clone();
-                        img
-                    })
+                decode_one(&obj, &colors, frame).map(|mut img| {
+                    img.metadata = meta.clone();
+                    img
+                })
             };
             if !each(frame, image) {
                 return;
@@ -236,16 +235,86 @@ fn int(obj: &DefaultDicomObject, tag: Tag) -> Option<i64> {
     obj.get(tag)?.to_int::<i64>().ok()
 }
 
+/// フレームによらず、ファイルで 1 度だけ読めばよいカラーの情報。
+enum Colors {
+    /// dicom-pixeldata が展開した画素をそのまま使う。
+    Decoded,
+    Palette(color::Palette),
+    /// 非圧縮の YBR_FULL_422。dicom-pixeldata を通さず、画素データを自前で広げる。
+    NativeYbr422,
+}
+
+impl Colors {
+    fn of(obj: &DefaultDicomObject) -> Result<Self, DecodeError> {
+        match text(obj, tags::PHOTOMETRIC_INTERPRETATION).as_deref() {
+            Some("PALETTE COLOR") => Ok(Self::Palette(color::Palette::read(obj)?)),
+            Some("YBR_FULL_422")
+                if !net::is_native(obj.meta().transfer_syntax().trim_end_matches('\0')) =>
+            {
+                Ok(Self::Decoded)
+            }
+            Some("YBR_FULL_422") => Ok(Self::NativeYbr422),
+            _ => Ok(Self::Decoded),
+        }
+    }
+}
+
+fn decode_one(
+    obj: &DefaultDicomObject,
+    colors: &Colors,
+    frame: usize,
+) -> Result<VwImage, DecodeError> {
+    if let Colors::NativeYbr422 = colors {
+        return native_ybr_422(obj, frame);
+    }
+    let px = obj
+        .decode_pixel_data_frame(frame as u32)
+        .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
+    to_image(&px, frame, colors)
+}
+
 /// 1 フレーム分の画素を [`VwImage`] にする。
-fn to_image(px: &DecodedPixelData, frame: usize) -> Result<VwImage, DecodeError> {
+fn to_image(px: &DecodedPixelData, frame: usize, colors: &Colors) -> Result<VwImage, DecodeError> {
     let (w, h) = (px.columns(), px.rows());
     let pixels = w as usize * h as usize;
     let raw = px.data();
-    match px.samples_per_pixel() {
-        1 => gray_image(px, frame, raw, pixels),
-        3 => color_image(px, raw, pixels),
-        n => Err(DecodeError::Unsupported(format!("{n} samples per pixel"))),
+    match (px.samples_per_pixel(), colors) {
+        (1, Colors::Palette(palette)) => {
+            let stored = u32::from(px.bits_stored()).clamp(1, 32);
+            let signed = px.pixel_representation() == PixelRepresentation::Signed;
+            let values = stored_values(raw, px.bits_allocated(), stored, signed, pixels)?;
+            palette.apply(w, h, &values)
+        }
+        (1, _) => gray_image(px, frame, raw, pixels),
+        (3, _) => color_image(px, raw, pixels),
+        (n, _) => Err(DecodeError::Unsupported(format!("{n} samples per pixel"))),
     }
+}
+
+/// 非圧縮の YBR_FULL_422 の `frame` 番目のフレーム。
+fn native_ybr_422(obj: &DefaultDicomObject, frame: usize) -> Result<VwImage, DecodeError> {
+    let u = |tag| int(obj, tag).unwrap_or(0).max(0) as usize;
+    let (columns, rows, allocated) = (u(tags::COLUMNS), u(tags::ROWS), u(tags::BITS_ALLOCATED));
+    let stored = int(obj, tags::BITS_STORED).map_or(allocated as u16, |v| v as u16);
+    let sample = allocated.div_ceil(8).max(1);
+    let data = obj
+        .get(tags::PIXEL_DATA)
+        .and_then(|e| e.value().primitive())
+        .ok_or_else(|| DecodeError::Invalid("no pixel data".into()))?
+        .to_bytes();
+    let size = columns.div_ceil(2) * 4 * sample * rows;
+    let raw = data
+        .get(frame * size..(frame + 1) * size)
+        .ok_or_else(|| DecodeError::Invalid(format!("pixel data has no frame {frame}")))?;
+    let full = color::expand_422(raw, columns, rows, sample)?;
+    color::interleaved_image(
+        columns as u32,
+        rows as u32,
+        &full,
+        allocated as u16,
+        stored,
+        true,
+    )
 }
 
 /// モノクロの画素。値を変えずに済む（傾き 1・切片 0・符号なし・MONOCHROME2）なら U8 / U16 の
@@ -367,46 +436,34 @@ fn stored_values(
         .collect())
 }
 
-/// カラーの画素（8bit の RGB / YBR_FULL）。
+/// カラーの画素（8bit / 16bit の RGB・YBR_FULL）。
 fn color_image(px: &DecodedPixelData, raw: &[u8], pixels: usize) -> Result<VwImage, DecodeError> {
-    if px.bits_allocated() != 8 {
-        return Err(DecodeError::Unsupported(format!(
-            "{}-bit color",
-            px.bits_allocated()
-        )));
-    }
-    if raw.len() < pixels * 3 {
-        return Err(DecodeError::Invalid("pixel data is too short".into()));
-    }
-    let mut rgb = match px.planar_configuration() {
-        PlanarConfiguration::Standard => raw[..pixels * 3].to_vec(),
-        PlanarConfiguration::PixelFirst => (0..pixels * 3)
-            .map(|i| raw[(i % 3) * pixels + i / 3])
-            .collect(),
-    };
-    match px.photometric_interpretation() {
-        PhotometricInterpretation::Rgb => {}
-        PhotometricInterpretation::YbrFull => ybr_to_rgb(&mut rgb),
+    let ybr = match px.photometric_interpretation() {
+        PhotometricInterpretation::Rgb => false,
+        PhotometricInterpretation::YbrFull => true,
         other => {
             return Err(DecodeError::Unsupported(format!(
                 "photometric interpretation {other}"
             )));
         }
-    }
-    VwImage::new(px.columns(), px.rows(), ColorModel::Rgb, PixelData::U8(rgb))
-        .map_err(DecodeError::Invalid)
-}
-
-/// YCbCr（JPEG と同じ式）を RGB に直す。
-fn ybr_to_rgb(px: &mut [u8]) {
-    for p in px.as_chunks_mut::<3>().0 {
-        let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
-        p[0] = (y + 1.402 * cr).round().clamp(0.0, 255.0) as u8;
-        p[1] = (y - 0.344136 * cb - 0.714136 * cr)
-            .round()
-            .clamp(0.0, 255.0) as u8;
-        p[2] = (y + 1.772 * cb).round().clamp(0.0, 255.0) as u8;
-    }
+    };
+    let sample = usize::from(px.bits_allocated()).div_ceil(8);
+    let interleaved;
+    let raw = match px.planar_configuration() {
+        PlanarConfiguration::Standard => raw,
+        PlanarConfiguration::PixelFirst => {
+            interleaved = color::interleave_planes(raw, pixels, sample);
+            &interleaved
+        }
+    };
+    color::interleaved_image(
+        px.columns(),
+        px.rows(),
+        raw,
+        px.bits_allocated(),
+        px.bits_stored(),
+        ybr,
+    )
 }
 
 /// 表示するメタデータ。検査やシリーズの並べ替えに使う UID もここから読む。
@@ -771,6 +828,127 @@ mod tests {
             let img = DicomPlugin.decode(&synth.bytes()).unwrap();
             assert!(matches!(&img.data, PixelData::U8(v) if v == &[1, 2, 3, 4, 5, 6]));
         }
+    }
+
+    fn rgb_u8(img: &VwImage) -> &[u8] {
+        assert_eq!(img.color, ColorModel::Rgb);
+        match &img.data {
+            PixelData::U8(v) => v,
+            other => panic!("expected U8, got {} bits", other.bits_per_sample()),
+        }
+    }
+
+    fn rgb_u16(img: &VwImage) -> &[u16] {
+        assert_eq!(img.color, ColorModel::Rgb);
+        match &img.data {
+            PixelData::U16(v) => v,
+            other => panic!("expected U16, got {} bits", other.bits_per_sample()),
+        }
+    }
+
+    /// 番号 0〜3 を 黒・赤・緑・青 に引く 8bit の表（2 項目を 1 語に詰める）。
+    fn four_color_palette(indices: &[u8]) -> Synth {
+        let pack = |a: u8, b: u8| u16::from_le_bytes([a, b]);
+        Synth::palette(indices.len() as u16, 1, indices)
+            .lut(0, 4, 0, 8, &[pack(0, 255), pack(0, 0)], false)
+            .lut(1, 4, 0, 8, &[pack(0, 0), pack(255, 0)], false)
+            .lut(2, 4, 0, 8, &[pack(0, 0), pack(0, 255)], false)
+    }
+
+    #[test]
+    fn palette_color_indices_are_looked_up_in_the_color_tables() {
+        let img = DicomPlugin
+            .decode(&four_color_palette(&[0, 1, 2, 3]).bytes())
+            .unwrap();
+        assert_eq!(rgb_u8(&img), [0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn palette_color_with_16_bit_tables_stays_16_bit() {
+        let ramp = [0, 1000, 65535];
+        let bytes = Synth::palette(3, 1, &[10, 11, 12])
+            .lut(0, 3, 10, 16, &ramp, false)
+            .lut(1, 3, 10, 16, &[0, 0, 0], false)
+            .lut(2, 3, 10, 16, &[65535, 65535, 65535], false)
+            .bytes();
+        let img = DicomPlugin.decode(&bytes).unwrap();
+        assert_eq!(
+            rgb_u16(&img),
+            [0, 0, 65535, 1000, 0, 65535, 65535, 0, 65535]
+        );
+    }
+
+    #[test]
+    fn segmented_palette_color_tables_are_expanded() {
+        // 256 項目: 0 から 255 へ直線（離散 1 項目 + 直線 255 項目）。緑と青は 0 のまま。
+        let up = [0, 1, 0, 1, 255, 255 * 256];
+        let flat = [0, 1, 0, 1, 255, 0];
+        let bytes = Synth::palette(3, 1, &[0, 128, 255])
+            .lut(0, 256, 0, 16, &up, true)
+            .lut(1, 256, 0, 16, &flat, true)
+            .lut(2, 256, 0, 16, &flat, true)
+            .bytes();
+        let img = DicomPlugin.decode(&bytes).unwrap();
+        let red: Vec<u16> = rgb_u16(&img).iter().step_by(3).copied().collect();
+        assert_eq!(red, [0, 128 * 256, 255 * 256]);
+    }
+
+    #[test]
+    fn palette_color_without_its_tables_is_an_error_not_a_gray_image() {
+        let bytes = Synth::palette(1, 1, &[0]).bytes();
+        let err = DicomPlugin.decode(&bytes).unwrap_err().to_string();
+        assert!(err.contains("palette"), "{err}");
+    }
+
+    #[test]
+    fn uncompressed_ybr_full_422_is_widened_to_one_rgb_per_pixel() {
+        // 4 x 2: 1 行目は灰色の 2 組、2 行目は赤（Y 76, Cb 85, Cr 255）の 2 組。
+        let data = [
+            100, 100, 128, 128, 200, 200, 128, 128, //
+            76, 76, 85, 255, 76, 76, 85, 255,
+        ];
+        let frame = DicomPlugin
+            .decode(&Synth::ybr_full_422(4, 2, &data).bytes())
+            .unwrap();
+        let px = rgb_u8(&frame);
+        assert_eq!(
+            &px[..12],
+            [100, 100, 100, 100, 100, 100, 200, 200, 200, 200, 200, 200]
+        );
+        for red in px[12..].chunks(3) {
+            assert!(red[0] > 250 && red[1] < 5 && red[2] < 5, "{red:?}");
+        }
+    }
+
+    #[test]
+    fn each_frame_of_an_uncompressed_ybr_full_422_file_is_read_separately() {
+        let frames = [[10, 10, 128, 128], [90, 90, 128, 128]];
+        let bytes = Synth::ybr_full_422(2, 1, &frames.concat())
+            .text(tags::NUMBER_OF_FRAMES, VR::IS, "2")
+            .bytes();
+        for (i, y) in [10, 90].into_iter().enumerate() {
+            let img = DicomPlugin.decode_frame(&bytes, i).unwrap();
+            assert_eq!(rgb_u8(&img), [y; 6]);
+        }
+    }
+
+    #[test]
+    fn sixteen_bit_rgb_stays_16_bit_with_bits_stored_as_depth() {
+        let values = [4095, 0, 2000, 1, 2, 3];
+        let img = DicomPlugin
+            .decode(&Synth::rgb16(2, 1, &values, 12).bytes())
+            .unwrap();
+        assert_eq!(rgb_u16(&img), values);
+        assert_eq!(img.significant_bits, 12);
+    }
+
+    #[test]
+    fn sixteen_bit_ybr_full_is_converted_to_16_bit_rgb() {
+        let bytes = Synth::rgb16(1, 1, &[40000, 32768, 32768], 16)
+            .photometric("YBR_FULL")
+            .bytes();
+        let img = DicomPlugin.decode(&bytes).unwrap();
+        assert_eq!(rgb_u16(&img), [40000, 40000, 40000]);
     }
 
     #[test]
