@@ -438,7 +438,7 @@ impl VwApp {
                 });
                 ui.horizontal(|ui| {
                     ui.weak(tr(lang, "Stored only on this PC (settings folder people.json)."));
-                    if ui.small_button(tr(lang, "Open folder")).clicked() {
+                    if ui.small_button(tr(lang, "Open the settings folder")).clicked() {
                         command = Some(Command::OpenSettingsFolder);
                     }
                 });

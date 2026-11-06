@@ -149,7 +149,7 @@ This guide uses the names shown in the English UI.
 1. In the settings, enter the parent folder of your photos (for example `C:\Users\me\Pictures`) in **Datasets** → **Dataset folders**
 2. In the folder tree, right-click a folder that belongs together (for example `Trip2026`) → **Register as dataset...**
 3. Enter a name and a memo and press **Register**; vw reads the images and builds a search catalog
-4. Press **Ctrl+D** to open the datasets screen. Your datasets are listed and can be searched by name or shooting information
+4. Press **Ctrl+D** to open the Datasets window. Your datasets are listed and can be searched by name or shooting information
 
 ## The main window
 
@@ -160,7 +160,7 @@ vw divides its main window into four windows.
 | Place | Contents |
 | --- | --- |
 | Menu bar | **File**, **View**, **Labels**, **AI tags**, **Image**, **Settings**, **Help**. Each item shows its key on the right. Once one menu is open, hovering over the next name switches to it. **Help** → **User guide (web)** (F1) opens this guide, and **Keyboard shortcuts** opens the key list in the settings |
-| Left column (tools) | From the top: select (arrow) / hand / zoom / pixel probe / ROI / measure (greyed out, not ready yet), tagging mode, filter, add slot. The settings button is at the bottom |
+| Left column (tools) | From the top: select (arrow icon) / hand / zoom / pixel probe / ROI / measure, tagging mode, filter, add slot. The settings button is at the bottom |
 | Folders (left) | A tree of folders and ZIPs. Clicking a folder moves there and lays out its contents in the image window. Start from Home, each drive on Windows, or `/` on Linux |
 | Images (center) | The frames (slots) that show images |
 | Metadata (right) | File information and in-image information (EXIF and so on) of the selected slot's image |

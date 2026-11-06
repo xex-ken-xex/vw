@@ -18,7 +18,7 @@ The folder tree works like a file explorer.
 | Double-click a folder slot | Load the images of that folder into that one slot (see [Folder slots](#folder-slots)) |
 | **Enter** on a folder slot, or the arrow at the right of its header | Go to that folder (the arrow appears when the mouse is over the header) |
 | Drop files or folders from a file manager | Go to that folder (for a file, select that image) |
-| Right-click a folder in the tree → **Open folder** | Open the folder in Explorer (on Linux, the default file manager) |
+| Right-click a folder in the tree → **Open in file manager** | Open the folder in Explorer (on Linux, the default file manager) |
 | Right-click a folder in the tree → **Copy** | Copy the full path of the folder to the clipboard |
 
 - The default order is **file names, descending** (Z to A). Numbers in names are compared by value, so `img10` comes before `img2`. Turn off the **Descending** setting to sort from A to Z
@@ -51,11 +51,11 @@ The mouse wheel steps through the images one by one, which is handy for comparin
 
 ## Move and zoom
 
-What a left drag on the image does depends on the tool column. **Hand** (the default) moves the image, the **arrow** carries the image to folders or the map, and **Zoom** zooms in and out. **H** switches to the hand and **Z** to zoom (press again for the arrow). The chosen tool is kept for the next start. To always start with one tool, set **Tool at startup** (`viewer.start_tool`). Zooming with a right drag works with every tool. If you pull the image out of its slot with the hand, a note next to the pointer tells you to drag the header to carry it.
+What a left drag on the image does depends on the tool column. **Hand** (the default) moves the image, **Select** carries the image to folders or the map, and **Zoom** zooms in and out. **H** switches to the hand and **Z** to zoom (press again for the arrow). The chosen tool is kept for the next start. To always start with one tool, set **Tool at startup** (`viewer.start_tool`). Zooming with a right drag works with every tool. If you pull the image out of its slot with the hand, a note next to the pointer tells you to drag the header to carry it.
 
 | Action | Result |
 | --- | --- |
-| Left drag | Move the image (with the hand tool; with the arrow it drags the image to a folder) |
+| Left drag | Move the image (with the hand tool; with Select it drags the image to a folder) |
 | Right drag (up/down) | Zoom around the point you pressed |
 | Click / Alt+click | With the zoom tool, zoom in / out one step around the click (a left drag up/down also zooms) |
 | Ctrl+wheel / touchpad pinch | Zoom around the mouse |
@@ -150,10 +150,10 @@ ZIP, 7z and tar files open like folders. These kinds are supported:
 1. Click the ZIP in the tree or double-click it in a slot
 2. vw extracts it to a temporary folder (setting **Archive extraction folder**), shows it as another root at the top of the tree, and goes into it
 3. For a password-protected archive, vw asks for the password (it is not remembered)
-4. When you are done, right-click the ZIP root in the tree → **Close ZIP**. The extracted files are deleted (also when vw exits)
+4. When you are done, right-click the ZIP root in the tree → **Close archive**. The extracted files are deleted (also when vw exits)
 
 - Images inside are read only. You cannot flag or tag them
-- **Open folder** on a folder inside a ZIP opens the folder where the ZIP is
+- **Open in file manager** on a folder inside a ZIP opens the folder where the ZIP is
 - Shift_JIS names in old ZIP and tar files made on Japanese Windows are shown correctly
 - RAR, LZH, CAB, ISO and split archives (`.7z.001` etc.) cannot be opened. If a folder has one, the log shows it in yellow with its full path
 - Links inside tar files (symbolic and hard links) are not extracted

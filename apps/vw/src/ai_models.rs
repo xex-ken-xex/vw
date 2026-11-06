@@ -738,7 +738,7 @@ impl Dialog {
                     });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button(tr(lang, "Open folder")).clicked() {
+                    if ui.button(tr(lang, "Open the AI models folder")).clicked() {
                         let _ = std::fs::create_dir_all(&store.dir);
                         let _ = vw_launch::open_folder(&store.dir);
                     }

@@ -639,7 +639,7 @@ impl Action {
             Action::RemoveAiTagsImage => "Remove AI tags from this image",
             Action::CopyFolderPath => "Copy the folder path",
             Action::OpenInFileManager => "Open the folder in the file manager",
-            Action::CloseZip => "Close the ZIP",
+            Action::CloseZip => "Close the archive",
             Action::RegisterDataset => "Register the folder as a dataset...",
             Action::EditDataset => "Edit the folder's dataset...",
             Action::UpdateDataset => "Update the folder's dataset",

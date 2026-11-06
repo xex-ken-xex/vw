@@ -1,4 +1,4 @@
-//! ログ欄の、人が読む行（開いた・読み込んだ・フラグを付けた・できなかった理由）の訳。
+//! ログウインドウの、人が読む行（開いた・読み込んだ・フラグを付けた・できなかった理由）の訳。
 //!
 //! ログのファイルは英語のまま残し（問い合わせのときに英語で検索できるように）、画面にだけ訳を出す。
 //! 行は書く側で `format!` された後の文なので、英語の型（`{}` の所に何が入ってもよい）と突き合わせて
@@ -41,13 +41,13 @@ const JA: &[(&str, &str)] = &[
     ("Closed {}", "{} を閉じました"),
     (
         "Loaded {} images from {}",
-        "{1} から {0} 枚の画像を読みました",
+        "{1} から {0} 枚の画像を読み込みました",
     ),
     ("No images in {}", "{} に画像はありません"),
     ("No folder is open", "フォルダを開いていません"),
     (
         "Auto reload: {} new / {} removed image(s) in {}",
-        "自動で読み直し: {2} に新しい画像 {0} 枚、なくなった画像 {1} 枚",
+        "自動で読み直す: {2} に新しい画像 {0} 枚、なくなった画像 {1} 枚",
     ),
     (
         "Cleared the flags of {} images in {} (Ctrl+Z to undo)",
@@ -127,7 +127,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Slideshow: {} frames were skipped because images could not be decoded fast enough",
-        "スライドショー: 読むのが間に合わず、{} コマを飛ばしました",
+        "スライドショー: 読み込みが間に合わず、{} コマを飛ばしました",
     ),
     (
         "Showing {} files found in the dataset {}",
@@ -279,7 +279,7 @@ mod tests {
     fn numbered_places_reorder_the_values() {
         assert_eq!(
             ja("Loaded 12 images from C:\\pics").as_deref(),
-            Some("C:\\pics から 12 枚の画像を読みました")
+            Some("C:\\pics から 12 枚の画像を読み込みました")
         );
     }
 
