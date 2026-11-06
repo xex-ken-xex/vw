@@ -61,6 +61,7 @@ impl VwApp {
         self.loaded_folders.push((path.clone(), into));
         let listing = tree::list_folder(&path, &registry, tree.order());
         self.warn_unsupported_archives(&path);
+        self.tree.ask_peeks(ctx, &registry, listing.folders.clone());
         for folder in listing.folders.into_iter().chain(listing.archives) {
             let index = self.push_slot();
             self.slots[index].set_subfolder(folder);
@@ -321,7 +322,7 @@ impl VwApp {
     }
 
     /// 開いたフォルダのスロットに、見つかった画像を足していく。
-    pub(super) fn pump_explores(&mut self) {
+    pub(super) fn pump_explores(&mut self, ctx: &egui::Context) {
         let full = self.cell_needs_full();
         let mut i = 0;
         while i < self.explores.len() {
@@ -365,9 +366,124 @@ impl VwApp {
                     load.loaded,
                     load.root.display()
                 ));
+                self.scan_explored_series(ctx, id);
             } else {
                 i += 1;
             }
+        }
+    }
+
+    /// 開き終えたフォルダのスロット `id` の画像のうち、DICOM らしいもののヘッダを
+    /// フォルダごとに読み始める。読み終えたら [`Self::split_explored_series`] が分ける。
+    fn scan_explored_series(&mut self, ctx: &egui::Context, id: u64) {
+        let Some(seq) = self
+            .slots
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.sequence.as_ref())
+            .filter(|q| q.kind == SequenceKind::Subtree)
+        else {
+            return;
+        };
+        let registry = self.loader.registry().clone();
+        let extensions = tree::dicom_extensions(&registry);
+        let mut by_dir: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+        for path in &seq.paths {
+            if !tree::may_be_dicom(&registry, extensions, path) {
+                continue;
+            }
+            let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            match by_dir.iter_mut().find(|(d, _)| *d == dir) {
+                Some((_, files)) => files.push(path.clone()),
+                None => by_dir.push((dir, vec![path.clone()])),
+            }
+        }
+        if by_dir.is_empty() {
+            return;
+        }
+        let dirs = by_dir.iter().map(|(d, _)| d.clone()).collect();
+        for (dir, files) in by_dir {
+            self.scan_series(ctx, &dir, &files);
+        }
+        self.explored_series.push((id, dirs));
+    }
+
+    /// ヘッダを読み終えた、開いたフォルダのスロットを DICOM のシリーズに分ける。
+    /// 開いたスロットを先頭のシリーズにし、残りのシリーズをその直後に、DICOM でない画像を
+    /// さらにその後ろの 1 スロットに置く。cd したフォルダで並べるとき（[`Self::group_series`]）と
+    /// 同じ見え方にするため。
+    pub(super) fn split_explored_series(&mut self) {
+        let mut i = 0;
+        while i < self.explored_series.len() {
+            let (_, dirs) = &self.explored_series[i];
+            if dirs
+                .iter()
+                .any(|d| matches!(self.series.scan(d), Scan::Reading))
+            {
+                i += 1;
+                continue;
+            }
+            let (id, dirs) = self.explored_series.remove(i);
+            let studies: Vec<crate::series::Study> = dirs
+                .iter()
+                .filter_map(|d| match self.series.scan(d) {
+                    Scan::Done(studies) => Some(studies.to_vec()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let Some(index) = self.slots.iter().position(|s| s.id == id) else {
+                continue;
+            };
+            let Some(seq) = self.slots[index]
+                .sequence
+                .as_ref()
+                .filter(|q| q.kind == SequenceKind::Subtree)
+            else {
+                continue;
+            };
+            let folder = seq.folder.clone();
+            let (series, rest) = crate::series::split_into_series(&seq.paths, &studies);
+            if series.is_empty() {
+                continue;
+            }
+            let full = self.cell_needs_full();
+            let mut at = index;
+            for (n, series) in series.into_iter().enumerate() {
+                if n > 0 {
+                    at += 1;
+                    self.insert_folder_slot(at);
+                    self.slots[at].origin = Origin::Free;
+                }
+                let dir = series.files[0]
+                    .parent()
+                    .map_or_else(|| folder.clone(), Path::to_path_buf);
+                let first = series.files[0].clone();
+                self.slots[at].sequence = Some(Sequence::series(dir, series.title(), series.files));
+                self.start_load(at, first, full);
+            }
+            if !rest.is_empty() {
+                at += 1;
+                self.insert_folder_slot(at);
+                self.slots[at].origin = Origin::Free;
+                let first = rest[0].clone();
+                let mut seq = Sequence::subtree(folder);
+                seq.paths = rest;
+                self.slots[at].sequence = Some(seq);
+                self.start_load(at, first, full);
+            }
+        }
+    }
+
+    /// cd したフォルダのスロットのうち、DICOM の 1 シリーズだけのフォルダのものを、
+    /// それらが占めていた位置の中でシリーズの順に並べ直す。ツリーの先読みで分かった鍵を使う。
+    pub(super) fn place_series_folder_slots(&mut self) {
+        let active = self.slots[self.active].id;
+        let tree = &self.tree;
+        let moved =
+            crate::series::place_in_series_order(&mut self.slots, |s| tree.series_of(s.folder()?));
+        if moved && let Some(index) = self.slots.iter().position(|s| s.id == active) {
+            self.active = index;
         }
     }
 
