@@ -1176,8 +1176,14 @@ impl VwApp {
             let analysis_open = self.pipeline.open || self.histogram.open;
             let is_reference = self.quality_reference.is_some()
                 && self.slots[i].shown().map(|s| &s.path) == self.quality_reference.as_ref();
-            let pipeline_wants =
-                analysis_open && (i == self.active || is_reference) || deep_target == Some(i);
+            // 再生中のスロットは、止めるまで解析のために読まない。1 コマごとに読み始めては次のコマで
+            // 取り消すことになり、再生を遅くするだけで、解析のウインドウは前のグラフを出しておくので。
+            let playing = self
+                .playback
+                .as_ref()
+                .is_some_and(|p| p.slot == self.slots[i].id);
+            let pipeline_wants = analysis_open && (i == self.active || is_reference) && !playing
+                || deep_target == Some(i);
             let slot = &mut self.slots[i];
             slot.wants_full_now = resp.wants_full || pipeline_wants;
             if let Some(full) = slot.shown_mut().and_then(|s| s.full.as_mut())

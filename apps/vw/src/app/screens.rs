@@ -20,42 +20,44 @@ impl VwApp {
     /// 画素の変換の欄。アクティブなスロットの画像を見せ、手で変えた値とノードを表示に当てる。
     pub(super) fn pipeline_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown()?;
-            Some(crate::pipeline_view::Target {
-                path: &shown.path,
-                image: shown.full.as_ref().map(|f| &f.image),
-                info: &shown.info,
-                marks: slot
-                    .marks
-                    .iter()
-                    .filter(|m| m.path == shown.path)
-                    .map(|m| (m.x, m.y))
-                    .collect(),
-                evaluation: Some((self.evaluation.report(), &self.settings.settings.quality)),
-                values: slot.derive.as_ref().map(|d| &d.values),
-                preset: slot
-                    .derive
-                    .as_ref()
-                    .and_then(|d| Some((d.preset.as_deref()?, d.modified))),
-                saved: self
-                    .presets
-                    .presets()
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect(),
-                color_rules: &self.color_rules,
-                scale_filters: (
-                    self.settings.settings.viewer.magnify_filter,
-                    self.settings.settings.viewer.minify_filter,
-                ),
-                notes: slot
-                    .derive
-                    .as_ref()
-                    .and_then(|d| d.ready_for(shown))
-                    .map_or(&[], |r| r.notes.as_slice()),
-            })
-        });
+        let target =
+            analysis_image(&self.slots, self.active, &self.analysis_source).map(|(slot, t)| {
+                crate::pipeline_view::Target {
+                    path: t.path,
+                    image: t.image,
+                    info: t.info,
+                    stale: t.stale,
+                    marks: slot
+                        .marks
+                        .iter()
+                        .filter(|m| m.path == t.path)
+                        .map(|m| (m.x, m.y))
+                        .collect(),
+                    evaluation: Some((self.evaluation.report(), &self.settings.settings.quality)),
+                    values: slot.derive.as_ref().map(|d| &d.values),
+                    preset: slot
+                        .derive
+                        .as_ref()
+                        .and_then(|d| Some((d.preset.as_deref()?, d.modified))),
+                    saved: self
+                        .presets
+                        .presets()
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect(),
+                    color_rules: &self.color_rules,
+                    scale_filters: (
+                        self.settings.settings.viewer.magnify_filter,
+                        self.settings.settings.viewer.minify_filter,
+                    ),
+                    notes: slot
+                        .derive
+                        .as_ref()
+                        .zip(t.image)
+                        .and_then(|(d, image)| d.ready_at(t.path, image))
+                        .map_or(&[], |r| r.notes.as_slice()),
+                }
+            });
         let commands = self.pipeline.ui(ui, lang, target);
         self.apply_pipeline(commands);
     }
@@ -286,6 +288,15 @@ impl VwApp {
         }
     }
 
+    /// 解析の元画像を、アクティブなスロットの今の画像に合わせる（[`crate::analysis_source`]）。
+    pub(super) fn follow_analysis_source(&mut self) {
+        let slot = self.slots.get(self.active);
+        self.analysis_source.follow(
+            slot.map(|s| s.id),
+            slot.and_then(|s| s.shown()).map(frame_of),
+        );
+    }
+
     /// 定量評価。解析か色導出のウインドウが開いている間、アクティブなスロットの画像を評価する。
     pub(super) fn update_evaluation(&mut self, ctx: &egui::Context) {
         if !(self.pipeline.open || self.histogram.open) {
@@ -304,19 +315,23 @@ impl VwApp {
                 palette: shown.info.look.as_ref().and_then(|a| a.palette.as_ref()),
             })
         });
-        let input = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown()?;
-            Some(crate::quality::Input {
-                path: &shown.path,
-                image: shown.full.as_ref().map(|f| &f.image),
-                palette: shown.info.look.as_ref().and_then(|a| a.palette.as_ref()),
-                edited: slot.derive.as_ref().and_then(|d| d.luma_for(shown)),
-                target_roi: slot.roi_of(crate::roi::Kind::Target),
-                background_roi: slot.roi_of(crate::roi::Kind::Background),
-                // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
-                reference: reference.filter(|r| r.path != shown.path),
-            })
-        });
+        let input =
+            analysis_image(&self.slots, self.active, &self.analysis_source).map(|(slot, t)| {
+                crate::quality::Input {
+                    path: t.path,
+                    image: t.image,
+                    palette: t.info.look.as_ref().and_then(|a| a.palette.as_ref()),
+                    edited: slot
+                        .derive
+                        .as_ref()
+                        .zip(t.image)
+                        .and_then(|(d, image)| d.luma_at(t.path, image)),
+                    target_roi: slot.roi_at(t.path, crate::roi::Kind::Target),
+                    background_roi: slot.roi_at(t.path, crate::roi::Kind::Background),
+                    // 基準が自分なら変更前と比べるのと同じなので、基準なしとして扱う。
+                    reference: reference.filter(|r| r.path != t.path),
+                }
+            });
         self.evaluation.update(ctx, input.as_ref());
     }
 
@@ -344,23 +359,28 @@ impl VwApp {
     /// 解析の欄（画像全体のヒストグラムと評価）。色導出画面で値を変えていれば、変更後も重ねる。
     pub(super) fn histogram_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
-        let target = self.slots.get(self.active).and_then(|slot| {
-            let shown = slot.shown()?;
-            Some(crate::histogram_view::Target {
-                path: &shown.path,
-                image: shown.full.as_ref().map(|f| &f.image),
-                dicom: shown.info.plugin == "DICOM",
-                raw: shown.info.plugin == "RAW",
-                edited: slot
-                    .derive
-                    .as_ref()
-                    .and_then(|d| d.edit_for(&shown.path))
-                    .map(|(p, _)| p),
-                derived: slot.derive.as_ref().and_then(|d| d.full_for(shown)),
-                target_roi: slot.roi_of(crate::roi::Kind::Target),
-                background_roi: slot.roi_of(crate::roi::Kind::Background),
-            })
-        });
+        let target =
+            analysis_image(&self.slots, self.active, &self.analysis_source).map(|(slot, t)| {
+                crate::histogram_view::Target {
+                    path: t.path,
+                    image: t.image,
+                    stale: t.stale,
+                    dicom: t.info.plugin == "DICOM",
+                    raw: t.info.plugin == "RAW",
+                    edited: slot
+                        .derive
+                        .as_ref()
+                        .and_then(|d| d.edit_for(t.path))
+                        .map(|(p, _)| p),
+                    derived: slot
+                        .derive
+                        .as_ref()
+                        .zip(t.image)
+                        .and_then(|(d, image)| d.full_at(t.path, image)),
+                    target_roi: slot.roi_at(t.path, crate::roi::Kind::Target),
+                    background_roi: slot.roi_at(t.path, crate::roi::Kind::Background),
+                }
+            });
         let evaluated = crate::histogram_view::Evaluated {
             report: self.evaluation.report(),
             computing: self.evaluation.computing(),
@@ -799,4 +819,25 @@ fn write_new_file(path: &std::path::Path, text: &str) -> Result<(), String> {
             }
             _ => format!("{}: {e}", path.display()),
         })
+}
+
+/// スロットに表示中の画像を、解析のウインドウの入力の形にする。
+fn frame_of(shown: &crate::viewer::Shown) -> crate::analysis_source::Frame<'_> {
+    crate::analysis_source::Frame {
+        path: &shown.path,
+        info: &shown.info,
+        image: shown.full.as_ref().map(|f| &f.image),
+    }
+}
+
+/// アクティブなスロットと、解析の元画像。`&self` のメソッドにしないのは、
+/// 呼ぶ側が同時に解析のウインドウ（`self` のほかのフィールド）を書き換えるため。
+pub(super) fn analysis_image<'a>(
+    slots: &'a [Slot],
+    active: usize,
+    source: &'a crate::analysis_source::AnalysisSource,
+) -> Option<(&'a Slot, crate::analysis_source::AnalysisImage<'a>)> {
+    let slot = slots.get(active)?;
+    let shown = slot.shown()?;
+    Some((slot, source.view(slot.id, frame_of(shown))))
 }

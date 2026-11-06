@@ -772,10 +772,14 @@ impl Slot {
 
     /// 表示中の画像の ROI のうち、`kind` のもの。種類ごとに 1 つだけ持つ。
     pub fn roi_of(&self, kind: roi::Kind) -> Option<Region> {
-        let shown = self.shown()?;
+        self.roi_at(&self.shown()?.path, kind)
+    }
+
+    /// 画像 `path` に描いた ROI（解析のウインドウが前の画像を見せている間は、表示中の画像と違う）。
+    pub fn roi_at(&self, path: &Path, kind: roi::Kind) -> Option<Region> {
         self.rois
             .iter()
-            .find(|r| r.path == shown.path && r.kind == kind)
+            .find(|r| r.path == path && r.kind == kind)
             .map(|r| r.region)
     }
 
@@ -948,11 +952,15 @@ impl Slot {
 
     /// 表示中の画像の計測線（番号の順）。
     pub fn shown_lines(&self) -> Vec<&MeasureLine> {
-        let Some(shown) = self.shown() else {
-            return Vec::new();
-        };
-        let mut lines: Vec<&MeasureLine> =
-            self.lines.iter().filter(|l| l.path == shown.path).collect();
+        match self.shown() {
+            Some(shown) => self.lines_at(&shown.path),
+            None => Vec::new(),
+        }
+    }
+
+    /// 画像 `path` に引いた計測線。番号の順。
+    pub fn lines_at(&self, path: &Path) -> Vec<&MeasureLine> {
+        let mut lines: Vec<&MeasureLine> = self.lines.iter().filter(|l| l.path == path).collect();
         lines.sort_by_key(|l| l.number);
         lines
     }
@@ -2532,7 +2540,7 @@ fn draw_swatch(painter: &egui::Painter, at: Pos2, line: f32, swatch: Option<[u8;
 pub mod test_support {
     use super::*;
 
-    fn info(width: u32, height: u32, color: ColorModel) -> ImageInfo {
+    pub fn info(width: u32, height: u32, color: ColorModel) -> ImageInfo {
         ImageInfo {
             width,
             height,

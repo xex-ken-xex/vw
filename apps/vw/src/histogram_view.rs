@@ -24,6 +24,8 @@ pub struct Target<'a> {
     pub path: &'a Path,
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
+    /// 表示中の画像のフル解像度がまだなく、`path` は前の画像（[`crate::analysis_source`]）。
+    pub stale: bool,
     pub dicom: bool,
     /// カメラ RAW。センサーの値（現像前）の軸を出せる。
     pub raw: bool,
@@ -118,6 +120,17 @@ enum Gray {
     None,
 }
 
+fn gray_of(result: Result<Pipeline, String>) -> Gray {
+    match result {
+        Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
+            decoded: Decoded::of(&info),
+            unit: pixel_pipeline::unit_of(&info),
+            info,
+        }),
+        _ => Gray::None,
+    }
+}
+
 /// 数え直すかどうかを決める、数えた条件。
 #[derive(Debug, Clone, PartialEq)]
 struct Key {
@@ -155,6 +168,10 @@ pub struct HistogramView {
     path: Option<PathBuf>,
     raw: bool,
     gray: Option<Gray>,
+    /// 画像が替わって読み直している DICOM の段の値。届くまで前の `gray` で横軸を決めておく。
+    /// 読み込み中に `gray` を消すと、横軸が明るさに戻ってグラフが入れ替わるため。
+    gray_next: Option<Receiver<Result<Pipeline, String>>>,
+    stale: bool,
     counted: Option<(Key, Counted)>,
     counting: Option<(Key, Receiver<Counted>)>,
 }
@@ -164,8 +181,15 @@ impl HistogramView {
         self.open = false;
         self.path = None;
         self.gray = None;
+        self.gray_next = None;
+        self.stale = false;
         self.counted = None;
         self.counting = None;
+    }
+
+    /// 前の画像のグラフを出している（新しい画像のフル解像度か段の値を待っている）。
+    pub fn stale(&self) -> bool {
+        self.stale
     }
 
     /// 欄の見出し。「解析 - ファイル名」。
@@ -257,26 +281,32 @@ impl HistogramView {
         self.raw = target.is_some_and(|t| t.raw);
         if path != self.path {
             self.path = path;
-            self.gray = target.map(|t| {
-                if t.dicom {
-                    Gray::Reading(pixel_pipeline::read_in_background(ctx, t.path))
-                } else {
-                    Gray::None
+            self.gray_next = None;
+            match target {
+                Some(t) if t.dicom => {
+                    let rx = pixel_pipeline::read_in_background(ctx, t.path);
+                    if matches!(self.gray, Some(Gray::Loaded(_))) {
+                        self.gray_next = Some(rx);
+                    } else {
+                        self.gray = Some(Gray::Reading(rx));
+                    }
                 }
-            });
+                Some(_) => self.gray = Some(Gray::None),
+                None => self.gray = None,
+            }
+        }
+        if let Some(rx) = &self.gray_next
+            && let Ok(result) = rx.try_recv()
+        {
+            self.gray = Some(gray_of(result));
+            self.gray_next = None;
         }
         if let Some(Gray::Reading(rx)) = &self.gray
             && let Ok(result) = rx.try_recv()
         {
-            self.gray = Some(match result {
-                Ok(Pipeline::Gray(info)) => Gray::Loaded(GrayInfo {
-                    decoded: Decoded::of(&info),
-                    unit: pixel_pipeline::unit_of(&info),
-                    info,
-                }),
-                _ => Gray::None,
-            });
+            self.gray = Some(gray_of(result));
         }
+        self.stale = target.is_some_and(|t| t.stale) || self.gray_next.is_some();
         let available = self.axis_beyond_brightness(target.and_then(|t| t.image));
         if available != Some(self.axis) {
             self.axis = Axis::Brightness;
@@ -305,6 +335,10 @@ impl HistogramView {
             self.counting = None;
         }
         let Some(image) = t.image else { return };
+        // 段の値が届くまでは、新しい画像を前の画像の段で数えないよう、前の結果を出しておく。
+        if self.gray_next.is_some() {
+            return;
+        }
         let gray = match &self.gray {
             Some(Gray::Loaded(g)) => Some(g),
             _ => None,
@@ -939,6 +973,59 @@ fn stats_table(ui: &mut egui::Ui, lang: Language, g: &Graph, changed: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 合成した CT の DICOM を書いて、その段の値を読む。
+    fn ct(dir: &crate::test_util::TempDir, name: &str) -> (PathBuf, Result<Pipeline, String>) {
+        let path = dir.path().join(name);
+        std::fs::write(&path, vw_dicom::synth::Synth::ct(2, 1).bytes()).unwrap();
+        let read = pixel_pipeline::read(&path);
+        (path, read)
+    }
+
+    fn target<'a>(path: &'a Path, image: &'a Arc<VwImage>, stale: bool) -> Target<'a> {
+        Target {
+            path,
+            image: Some(image),
+            stale,
+            dicom: true,
+            raw: false,
+            edited: None,
+            derived: None,
+            target_roi: None,
+            background_roi: None,
+        }
+    }
+
+    #[test]
+    fn keeps_the_physical_axis_while_the_next_dicom_header_is_read() {
+        let dir = crate::test_util::TempDir::new();
+        let (a, read) = ct(&dir, "a.dcm");
+        let (b, _) = ct(&dir, "b.dcm");
+        let picture = Arc::new(image(ColorModel::Gray, PixelData::U16(vec![0, 100])));
+        let mut view = HistogramView {
+            path: Some(a),
+            gray: Some(gray_of(read)),
+            axis: Axis::Physical,
+            ..Default::default()
+        };
+        view.follow(
+            &egui::Context::default(),
+            Some(&target(&b, &picture, false)),
+        );
+        assert_eq!(view.axis, Axis::Physical);
+        assert!(view.stale());
+        assert_eq!(view.title(Language::English), "Analysis - b.dcm");
+    }
+
+    #[test]
+    fn marks_the_graph_stale_while_the_shown_frame_has_no_full_image() {
+        let picture = Arc::new(image(ColorModel::Gray, PixelData::U8(vec![0, 1])));
+        let mut view = HistogramView::default();
+        let mut t = target(Path::new("a.png"), &picture, true);
+        t.dicom = false;
+        view.follow(&egui::Context::default(), Some(&t));
+        assert!(view.stale());
+    }
 
     fn image(color: ColorModel, data: PixelData) -> VwImage {
         VwImage::new(2, 1, color, data).unwrap()

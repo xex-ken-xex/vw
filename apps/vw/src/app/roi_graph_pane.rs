@@ -340,14 +340,14 @@ const NO_ROI: &str =
 impl VwApp {
     /// アクティブなスロットの ROI と、並び（フレームやフォルダの画像）。
     fn roi_sources(&self) -> Option<(Vec<Area>, Vec<PathBuf>)> {
-        let slot = self.slots.get(self.active)?;
-        let shown = slot.shown()?;
+        let (slot, shown) =
+            super::screens::analysis_image(&self.slots, self.active, &self.analysis_source)?;
         let sequence: Vec<PathBuf> = match &slot.sequence {
             Some(s) if s.paths.len() > 1 => s.paths.clone(),
             _ if shown.info.frames > 1 => {
-                crate::frames::frame_paths(&crate::frames::file_of(&shown.path), shown.info.frames)
+                crate::frames::frame_paths(&crate::frames::file_of(shown.path), shown.info.frames)
             }
-            _ => vec![shown.path.clone()],
+            _ => vec![shown.path.to_path_buf()],
         };
         // 表示中の画像の ROI。フレームごとの平均では、並びのほかの画像に描いた ROI も使う
         // （フレームを送ると ROI が見えなくなっても、グラフが消えないように）。
@@ -387,17 +387,16 @@ impl VwApp {
         if areas.is_empty() {
             return Err(hint(NO_ROI));
         }
-        let shown = self.slots[self.active]
-            .shown()
-            .ok_or_else(|| hint(NO_ROI))?;
-        let full = shown
-            .full
-            .as_ref()
-            .ok_or_else(|| hint("Reading the image..."))?;
+        let (_, shown) =
+            super::screens::analysis_image(&self.slots, self.active, &self.analysis_source)
+                .ok_or_else(|| hint(NO_ROI))?;
+        let img = shown
+            .image
+            .ok_or_else(|| hint("Reading the image..."))?
+            .clone();
         let meta = shown.info.metadata.clone();
-        let img = full.image.clone();
         let (path, width, height, bits) = (
-            shown.path.clone(),
+            shown.path.to_path_buf(),
             shown.info.width,
             shown.info.height,
             shown.info.bits_per_sample,

@@ -3223,6 +3223,10 @@ const JA: &[(&str, &str)] = &[
         "計測ツール（M）を選び、画像の上をドラッグして線を引いてください。",
     ),
     ("Reading the image...", "画像を読み込んでいます..."),
+    (
+        "Showing the graph of the last image that was read at full resolution. It is updated when the shown image is read.",
+        "フル解像度で読めた最後の画像のグラフを出しています。表示中の画像を読み終えると更新します。",
+    ),
     ("Copy graph", "グラフをコピー"),
     (
         "Copy the graph with its title, legend and table as an image.",

@@ -9,6 +9,7 @@
 mod about;
 mod ai_models;
 mod ai_tags;
+mod analysis_source;
 mod app;
 mod archive;
 mod autoload;
