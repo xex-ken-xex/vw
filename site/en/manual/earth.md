@@ -91,7 +91,7 @@ HDF-EOS2 (HDF4) and HDF-EOS5 (HDF5) files describe grid projections and how lati
 
 ## Metadata and search
 
-The metadata pane shows the attributes of the current variable ("NetCDF variable"), all variables of the file ("NetCDF variables") and the file's global attributes ("NetCDF global attributes"). They are also stored in the [dataset](find.html) search catalog, so you can search by variable names and attributes.
+The Metadata window shows the attributes of the current variable ("NetCDF variable"), all variables of the file ("NetCDF variables") and the file's global attributes ("NetCDF global attributes"). They are also stored in the [dataset](find.html) search catalog, so you can search by variable names and attributes.
 
 ## Settings
 

@@ -99,13 +99,13 @@ impl Chip {
             Chip::SwapRawPreview => "JPEG / RAW",
             Chip::ToggleCalibration => "Apply dark and flat",
             Chip::ColorMap => "Color map",
-            Chip::DeriveSelect => "Derived display",
+            Chip::DeriveSelect => "After-pipeline display",
             Chip::EditPipeline => "Edit",
             Chip::DeriveCompare => "Compare",
             Chip::DeriveDifference => "Difference",
             Chip::Developing => "Developing RAW...",
             Chip::Calibrated => "Dark and flat applied",
-            Chip::Derived => "Derived",
+            Chip::Derived => "After pipeline",
             Chip::Similar => "Similar images",
         }
     }

@@ -17,7 +17,7 @@ The gear at the bottom left, or **Settings → Settings** (or **Ctrl+,**), switc
 
 ### Main settings
 
-The main settings. Find all of them with the search box of the settings screen.
+The main settings. Find all of them with the search box of Settings.
 
 | Group | Setting (key) | Meaning | Default |
 | --- | --- | --- | --- |
@@ -49,7 +49,7 @@ The main settings. Find all of them with the search box of the settings screen.
 | | Key for the other way (`tree.other_load_modifier`) | Loading a folder with this key held uses the other way | Alt |
 | Behavior | Group heading click (`behavior.header_click`) | Clicking a metadata window heading: Select only / Select and expand/collapse | Select and expand/collapse |
 | | Auto reload (`behavior.auto_reload`) | Watch the current folder and show new and rewritten images at once | On |
-| | Archive extraction folder (`behavior.archive_dir`) | Where opened ZIP and 7z files are extracted; `vw-archives` is made inside. Applies to archives opened after the change; open ones stay where they are until closed | Empty (the OS temporary folder) |
+| | Archive extraction folder (`behavior.archive_dir`) | Where opened archives (ZIP, 7z, tar and so on) are extracted; `vw-archives` is made inside. Applies to archives opened after the change; open ones stay where they are until closed | Empty (the OS temporary folder) |
 | Flags and tags | Tags (`labels.tags`) | Tags for images (comma-separated). The first 9 match keys 1 to 9 | None |
 | | Next image after labeling (`labels.advance`) | In tagging mode, go to the next image after labeling | On |
 | | Remove the location when exporting (`labels.export_strip_location`) | Initial value of "Remove the location" in image export | Off |
@@ -149,8 +149,8 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | K | Show / hide focus peaking |
 | Shift+O | Show / hide colors outside sRGB |
 | Ctrl+H | Open / close the analysis window (histogram, quality values) |
-| H | Switch the left drag between hand and arrow |
-| Z | Switch the left drag between zoom and arrow |
+| H | Switch the left drag between hand and select |
+| Z | Switch the left drag between zoom and select |
 | Ctrl+C | Copy the image to the clipboard |
 
 ### Layout and slots
@@ -182,7 +182,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | Key | Action |
 | --- | --- |
 | Ctrl+1 / 2 / 3 / 4 | Show / hide the folder tree / metadata / images / log |
-| Ctrl+D | Open / close the Datasets screen |
+| Ctrl+D | Open / close the Datasets window |
 | Ctrl+B | Open / close the subframes window |
 | Ctrl+M | Show / hide the map (asks first when the map is off in the settings) |
 | Ctrl+Z | Undo positions placed or removed on the map, and flags cleared in bulk |
@@ -195,7 +195,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | Action | Result |
 | --- | --- |
 | Wheel | Step through images or slots ([Step through images](view.html#step-through-images)) |
-| Left drag | With the hand, move the image / with the arrow, carry the image to a folder |
+| Left drag | With the hand, move the image / with Select, carry the image to a folder |
 | Right drag (up/down) / Ctrl+wheel / pinch | Zoom |
 | Double-click | Maximize the slot / on a folder slot, load its images |
 | Drag the header | Move the file (Ctrl to copy) |

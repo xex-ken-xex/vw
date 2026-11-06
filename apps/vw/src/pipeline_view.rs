@@ -1471,7 +1471,7 @@ impl PipelineView {
             ui.separator();
             ui.weak(tr(
                 lang,
-                "Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Full screen applies the active slot's values to every image.",
+                "Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Fullscreen applies the active slot's values to every image.",
             ));
         }
         edited

@@ -2,7 +2,7 @@
 title: "User guide"
 ---
 
-How to use vw, organized by what you want to do. Screen names are those of the English display.
+How to use vw, organized by what you want to do. Window and button names are those of the English display.
 
 - **[Get started](start.html)**: from installing to viewing photos, adding tags and making a catalog.
 - **[View images](view.html)**: lay out the images of a folder and compare them quickly.

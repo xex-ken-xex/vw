@@ -366,7 +366,7 @@ const ITEMS: &[Item] = &[
         section: Section::Behavior,
         key: "behavior.archive_dir",
         title: "Archive extraction folder",
-        description: "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
+        description: "Folder where archives (ZIP, 7z, tar and so on) are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
         widget: archive_dir_widget,
     },
     Item {
@@ -471,7 +471,7 @@ const ITEMS: &[Item] = &[
         section: Section::Datasets,
         key: "dataset.saved_searches",
         title: "Saved searches",
-        description: "Searches saved with a name from the datasets screen (Save search...). Opening one from Saved searches the catalogs again, so the results always include datasets added or updated since.",
+        description: "Searches saved with a name from the Datasets window (Save search...). Opening one from Saved searches the catalogs again, so the results always include datasets added or updated since.",
         widget: saved_searches_widget,
     },
     Item {
@@ -541,7 +541,7 @@ const ITEMS: &[Item] = &[
         section: Section::Reports,
         key: "measure.roi_bins",
         title: "Bins of the ROI histogram",
-        description: "How many bins the histogram of the ROI graph splits the values into. Integer values whose range is this or less get one bin per value.",
+        description: "How many bins the histogram of the ROI graph splits the values into. For integer values whose range is this or smaller, each value gets its own bin.",
         widget: roi_bins_widget,
     },
     Item {
@@ -940,14 +940,14 @@ const ITEMS: &[Item] = &[
         section: Section::Fits,
         key: "subframes.fwhm_ratio",
         title: "Subframe rejection",
-        description: "Limits for rejecting subframes in the Subframes pane. FWHM and star count are compared with the median of the folder: a frame is rejected when its FWHM is over that many times the median (blurred by seeing or focus), its eccentricity is over the limit (trailed stars), it has fewer stars than that share of the median (clouds), or its background is brighter than the median by that many times the noise (twilight, the moon).",
+        description: "Limits for rejecting subframes in the Subframes window. FWHM and star count are compared with the median of the folder: a frame is rejected when its FWHM is over that many times the median (blurred by seeing or focus), its eccentricity is over the limit (trailed stars), it has fewer stars than that share of the median (clouds), or its background is brighter than the median by that many times the noise (twilight, the moon).",
         widget: subframes_limits_widget,
     },
     Item {
         section: Section::Fits,
         key: "subframes.blink_fps",
         title: "Blink speed",
-        description: "Images per second when the Subframes pane plays the aligned images one after another.",
+        description: "Images per second when the Subframes window plays the aligned images one after another.",
         widget: subframes_fps_widget,
     },
     Item {
@@ -3684,7 +3684,7 @@ impl SettingsUi {
                 title_line(ui, tr(lang, "Send to apps"), "send.apps");
                 ui.weak(tr(
                     lang,
-                    "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for console tools).",
+                    "Apps listed in Send to in the right-click menu. In the arguments, write {path} or {paths}. {path} passes one file at a time (the app starts once per file); {paths} passes all the selected files at once (the app starts once). {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for command-line apps).",
                 ));
                 self.send_apps.ui(ui, settings, out);
             });
@@ -4497,7 +4497,7 @@ impl SendApps {
                         .checkbox(&mut row.show_output, "")
                         .on_hover_text(tr(
                             lang,
-                            "Show what the app prints and its exit code in the vw log (for console tools)",
+                            "Show what the app prints and its exit code in the vw log (for command-line apps)",
                         ))
                         .changed();
                     ui.horizontal(|ui| {

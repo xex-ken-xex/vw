@@ -4,7 +4,7 @@ title: "Find and keep images"
 
 Register folders as datasets and find them by content or by where photos were taken.
 
-![Datasets screen](../../images/en/dataset-search.png)
+![Datasets window](../../images/en/dataset-search.png)
 
 ## Datasets and search catalogs
 
@@ -30,7 +30,7 @@ Set these two in the **Datasets** settings.
 | **Dataset folders** | Folders to look for datasets in, one per line. All folders below are searched too | `C:\Users\me\Pictures`<br>`D:\Archive` |
 | **Dataset fields** | Fields written per dataset besides name, memo and tags. Comma-separated | `Source, Photographer` |
 
-**Dataset fields** become columns in the Datasets screen and can be used as search conditions.
+**Dataset fields** become columns in the Datasets window and can be used as search conditions.
 Adding fields later does not erase values already written.
 
 ## Register a dataset
@@ -49,7 +49,7 @@ Adding fields later does not erase values already written.
 - Files that cannot be read (broken images, for example) are recorded as "unreadable" too, and their count appears in the dataset details
 - Folders that cannot be written to (read-only media, for example) cannot be registered
 - Registered folders change color in the folder tree (teal)
-- While reading, the progress line in the Datasets screen offers **Pause reading** / **Cancel**. If you close vw while paused, reading continues from there next time. Cancel discards what was read so far
+- While reading, the progress line in the Datasets window offers **Pause reading** / **Cancel**. If you close vw while paused, reading continues from there next time. Cancel discards what was read so far
 - Paused folders, and folders where vw stopped midway, turn orange in the folder tree. Opening one asks whether to continue reading
 
 ## Edit and update
@@ -203,7 +203,7 @@ to bring them from a shared folder to your PC or to hand them to someone.
 - Files that are not images (batch files, notes and so on) are copied too. The dialog shows how many
 - When files were narrowed, the dialog opens with **only the files found** checked. Uncheck it to copy all the dataset's files.
   Even then, the files that are not images directly in the dataset folder (batch files and notes for the whole dataset) are copied along
-- When the Datasets screen is in its own window, the extract, edit and update dialogs open in that window too
+- When the Datasets window is detached from the main window, the extract, edit and update dialogs open in that window too
 
 ## Nested datasets
 
@@ -228,7 +228,7 @@ A dataset can be registered inside another (for example `trip2026/flowers` insid
 - Nearby dots merge into numbered circles. Click a circle to zoom to it; photos taken at the same spot are listed
 - Click a dot for its thumbnail, file name and time taken. **Open** goes to the photo's folder and selects it
 - In **This folder**, NetCDF files with latitudes and longitudes are also outlined in red ([Weather and ocean data](earth.html#latitude-longitude-time-and-level))
-- Type a town, state or country name (English or Japanese) in **Search places** at the top left to get suggestions; pick one to go there. The first time, press **Place names...** and **Download** **Place names (GeoNames)** in the download screen (about 4 MB, into `models/geonames` in the settings folder)
+- Type a town, state or country name (English or Japanese) in **Search places** at the top left to get suggestions; pick one to go there. The first time, press **Place names...** and **Download** **Place names (GeoNames)** in the download window (about 4 MB, into `models/geonames` in the settings folder)
 - With place name data, nearby town names appear in the dot information and in the metadata window. When a dataset's search catalog is **updated**, metadata `location` gets country (`Country`), state (`Region`) and city (`Town`) in English and Japanese, usable in advanced search
 - By default the map pictures are the standard [OpenStreetMap](https://www.openstreetmap.org/copyright) tiles. Only while the map is open, the visible part is downloaded and kept for 7 days or more in `map-tiles` in the settings folder. Without a connection, only the dots on a grid are shown
 - Change the picture source with **Map picture URL**. Follow the terms of the provider you use and change the credit (**Map credit**) to match

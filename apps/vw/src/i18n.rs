@@ -437,11 +437,11 @@ const JA: &[(&str, &str)] = &[
         "Stretches most steeply around the symmetry point; set it to the brightness of the sky background. A larger b narrows the stretch around it. Below LP and above HP the curve is a straight line. Put it after the stretch node.",
         "中心（SP）の付近をいちばん強く伸ばします。空の背景の明るさに合わせます。b を大きくすると、伸ばす所が中心の近くに絞られます。LP より暗い所と HP より明るい所は直線になります。伸縮ノードの後ろに置きます。",
     ),
-    ("Black (× noise)", "黒（雑音の倍）"),
+    ("Black (× noise)", "黒（ノイズの倍）"),
     ("Same curve for RGB", "RGB に同じ曲線"),
     (
         "Finds the sky background (median) and its noise in each channel, makes the background this bright with the midtones transfer function, and sets black that many times the noise below it. With the same curve for RGB, the color balance (and any color cast of the sky) is kept. Put it after the stretch node.",
-        "チャンネルごとに空の背景（中央値）と雑音を測り、中間調の変換（MTF）で背景をこの明るさにし、背景から雑音のその倍だけ暗い所を黒にします。RGB に同じ曲線を使うと、色の釣り合い（空の色かぶりも）をそのまま残します。伸縮ノードの後ろに置きます。",
+        "チャンネルごとに空の背景（中央値）とノイズを測り、中間調の変換（MTF）で背景をこの明るさにし、背景からノイズのその倍だけ暗い所を黒にします。RGB に同じ曲線を使うと、色の釣り合い（空の色かぶりも）をそのまま残します。伸縮ノードの後ろに置きます。",
     ),
     ("Black {}, midtones {}", "黒 {}、中間調 {}"),
     ("Blend", "重ね方"),
@@ -463,7 +463,7 @@ const JA: &[(&str, &str)] = &[
     ("Algorithm", "アルゴリズム"),
     ("Iterations", "繰り返し"),
     ("Regularization (TV)", "正則化（全変動）"),
-    ("Noise ratio", "雑音の比"),
+    ("Noise ratio", "ノイズの比"),
     ("Measure from stars", "星から測る"),
     (
         "Measured from {} stars: FWHM {} px",
@@ -476,11 +476,11 @@ const JA: &[(&str, &str)] = &[
     ("FWHM (px)", "FWHM (px)"),
     (
         "Repeats to tighten the stars. Too many repeats make dark rings and noise; the regularization keeps the sky smooth.",
-        "繰り返して星を締めます。回しすぎると星の周りの黒い輪と雑音が出ます。正則化で背景をなめらかに保ちます。",
+        "繰り返して星を締めます。回しすぎると星の周りの黒い輪とノイズが出ます。正則化で背景をなめらかに保ちます。",
     ),
     (
         "Divides once by the blur in frequency. Fast; a larger noise ratio is gentler and makes fewer rings.",
-        "周波数の上で一度にぼけを割ります。速く、雑音の比を大きくすると控えめになり輪が減ります。",
+        "周波数の上で一度にぼけを割ります。速く、ノイズの比を大きくすると控えめになり輪が減ります。",
     ),
     (
         "Adds back the remaining difference step by step. Gentler than Richardson–Lucy.",
@@ -502,7 +502,7 @@ const JA: &[(&str, &str)] = &[
     ("Detail", "細かさ"),
     ("Amount", "強さ"),
     ("Size (px)", "大きさ (px)"),
-    ("Threshold (× noise)", "しきい値（雑音の倍数）"),
+    ("Threshold (× noise)", "しきい値（ノイズの倍数）"),
     (
         "The black and white and the curve of the file stages are applied here.",
         "ファイルの段の黒と白と曲線を、ここで当てます。",
@@ -535,7 +535,7 @@ const JA: &[(&str, &str)] = &[
         "Gaussian noise on the 0..1 values.",
         "0〜1 の値に対するガウスノイズ。",
     ),
-    ("Window", "窓"),
+    ("Window", "Window"),
     ("Brightness", "明るさ"),
     ("Contrast", "コントラスト"),
     ("S-curve", "S 字"),
@@ -716,7 +716,7 @@ const JA: &[(&str, &str)] = &[
     ("No unit", "単位なし"),
     (
         "No window in the file: the full range of values is used.",
-        "ファイルにウィンドウがないので、値の全範囲を使っています。",
+        "ファイルに Window がないので、値の全範囲を使っています。",
     ),
     (
         "Put a probe cross on the image to see its values at each step.",
@@ -728,11 +728,11 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "The file has a VOI LUT Sequence, which vw does not apply yet. The window below is used instead.",
-        "ファイルに VOI LUT Sequence がありますが、vw はまだ当てません。代わりに下のウィンドウを使っています。",
+        "ファイルに VOI LUT Sequence がありますが、vw はまだ当てません。代わりに下の Window を使っています。",
     ),
     (
         "The file has several windows; the first is used.",
-        "ファイルにウィンドウが複数あり、最初の組を使っています。",
+        "ファイルに Window が複数あり、最初の組を使っています。",
     ),
     ("changed", "変更"),
     ("default (no tag)", "既定値（タグなし）"),
@@ -838,7 +838,7 @@ const JA: &[(&str, &str)] = &[
     ("FWHM", "FWHM"),
     ("Eccentricity", "離心率"),
     ("Stars", "星の数"),
-    ("Noise", "雑音"),
+    ("Noise", "ノイズ"),
     ("No stars", "星がない"),
     ("Rejected because", "除く理由"),
     (
@@ -854,15 +854,15 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Subframe rejection", "サブフレームを除くしきい値"),
     (
-        "Limits for rejecting subframes in the Subframes pane. FWHM and star count are compared with the median of the folder: a frame is rejected when its FWHM is over that many times the median (blurred by seeing or focus), its eccentricity is over the limit (trailed stars), it has fewer stars than that share of the median (clouds), or its background is brighter than the median by that many times the noise (twilight, the moon).",
-        "サブフレームのウインドウで画像を除くしきい値です。FWHM と星の数はフォルダの中央値と比べます。FWHM が中央値のその倍を超える（シーイングやピントでぼけた）、離心率がしきい値を超える（星が流れた）、星の数が中央値のその割合より少ない（雲）、背景が中央値より雑音のその倍を超えて明るい（薄明・月）画像を除きます。",
+        "Limits for rejecting subframes in the Subframes window. FWHM and star count are compared with the median of the folder: a frame is rejected when its FWHM is over that many times the median (blurred by seeing or focus), its eccentricity is over the limit (trailed stars), it has fewer stars than that share of the median (clouds), or its background is brighter than the median by that many times the noise (twilight, the moon).",
+        "サブフレームのウインドウで画像を除くしきい値です。FWHM と星の数はフォルダの中央値と比べます。FWHM が中央値のその倍を超える（シーイングやピントでぼけた）、離心率がしきい値を超える（星が流れた）、星の数が中央値のその割合より少ない（雲）、背景が中央値よりノイズのその倍を超えて明るい（薄明・月）画像を除きます。",
     ),
     ("FWHM (× median)", "FWHM（中央値の倍）"),
     ("Stars (× median)", "星の数（中央値の倍）"),
-    ("Background (× noise)", "背景（雑音の倍）"),
+    ("Background (× noise)", "背景（ノイズの倍）"),
     ("Blink speed", "切り替えの速さ"),
     (
-        "Images per second when the Subframes pane plays the aligned images one after another.",
+        "Images per second when the Subframes window plays the aligned images one after another.",
         "サブフレームのウインドウで、位置を合わせた画像を順に切り替えて見せるときの 1 秒あたりの枚数です。",
     ),
     ("images per second", "枚/秒"),
@@ -917,7 +917,7 @@ const JA: &[(&str, &str)] = &[
     ("after", "変更後"),
     ("pixels", "画素"),
     ("Before (file values)", "変更前（ファイルの値）"),
-    ("After (pixel pipeline)", "変更後（ピクセルパイプライン）"),
+    ("After (pixel pipeline)", "変更後（画素の変換）"),
     ("No change in the pixel pipeline", "変更なし"),
     ("Minimum", "最小"),
     ("Maximum", "最大"),
@@ -1010,7 +1010,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Turn images from color cameras (with BAYERPAT) into color. When off, they are shown as the gray mosaic stored in the file.",
-        "カラーカメラの画像（BAYERPAT のあるもの）をカラーにします。切ると、ファイルのままの灰色のモザイクで表示します。",
+        "カラーカメラの画像（BAYERPAT のあるもの）をカラーにします。切ると、ファイルのままのグレーのモザイクで表示します。",
     ),
     (
         "Same black and white for all planes",
@@ -1239,7 +1239,7 @@ const JA: &[(&str, &str)] = &[
         "Not a valid regular expression",
         "正規表現として正しくありません",
     ),
-    ("Close ZIP", "ZIP を閉じる"),
+    ("Close archive", "アーカイブを閉じる"),
     (
         "Images inside a ZIP cannot be labeled",
         "ZIP の中の画像にはラベルを付けられません",
@@ -1313,7 +1313,7 @@ const JA: &[(&str, &str)] = &[
     ("Degraded", "劣化"),
     (
         "Change values in the pixel pipeline, or choose a reference image in a slot.",
-        "色導出で値を変えるか、スロットで基準の画像を選んでください。",
+        "画素の変換で値を変えるか、スロットで基準の画像を選んでください。",
     ),
     (
         "The reference image is still loading.",
@@ -1343,7 +1343,7 @@ const JA: &[(&str, &str)] = &[
     ("Quality evaluation", "定量評価"),
     (
         "Peak signal-to-noise ratio against the reference image, in dB. Higher is better.",
-        "基準の画像に対するピーク信号対雑音比（dB）。大きいほど良い。",
+        "基準の画像に対するピーク S/N（dB）。大きいほど良い。",
     ),
     (
         "Structural similarity against the reference image, 0 to 1. Higher is better.",
@@ -1351,11 +1351,11 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Signal-to-noise ratio of the target ROI (mean / standard deviation). Higher is better.",
-        "対象 ROI の信号対雑音比（平均 / 標準偏差）。大きいほど良い。",
+        "対象 ROI のS/N（平均 / 標準偏差）。大きいほど良い。",
     ),
     (
         "Contrast-to-noise ratio between the target and background ROIs. Higher is better.",
-        "対象 ROI と背景 ROI のコントラスト対雑音比。大きいほど良い。",
+        "対象 ROI と背景 ROI のコントラスト対ノイズ比。大きいほど良い。",
     ),
     (
         "Variance of the Laplacian over the whole image. Blur lowers it.",
@@ -1390,12 +1390,12 @@ const JA: &[(&str, &str)] = &[
     ("Language of menus and labels.", "メニューやラベルの言語。"),
     ("UI scale", "表示倍率"),
     ("Size of text and icons.", "文字とアイコンの大きさ。"),
-    ("Compact windows", "ウインドウを詰めて表示"),
+    ("Compact windows", "ウインドウの余白を詰める"),
     (
         "Reduce padding to show more information.",
         "余白を減らして、より多くの情報を表示します。",
     ),
-    ("Enabled", "有効"),
+    ("Enabled", "オン"),
     ("Background color", "背景色"),
     (
         "Color behind images (#RRGGBB). Leave empty for the theme default.",
@@ -1429,7 +1429,7 @@ const JA: &[(&str, &str)] = &[
     ("Image size limit", "画像の大きさの上限"),
     (
         "Memory one image may take to decode (MB). A file whose header claims a larger image is not opened, so a broken header cannot exhaust memory.",
-        "1 枚の画像を読むのに使ってよいメモリ（MB）。見出しにこれより大きな画像だと書いてあるファイルは開きません。壊れた見出しでメモリを使い切らないためです。",
+        "1 枚の画像を読むのに使ってよいメモリ（MB）。ヘッダにこれより大きな画像だと書いてあるファイルは開きません。壊れたヘッダでメモリを使い切らないためです。",
     ),
     ("Sort order", "並び順"),
     (
@@ -1548,7 +1548,7 @@ const JA: &[(&str, &str)] = &[
         "What clicking a group heading (such as File in the metadata window) does. The arrow always expands or collapses.",
         "グループの見出し（メタデータウインドウの「ファイル」など）をクリックしたときの動作。▶ は常に開閉します。",
     ),
-    ("Auto reload", "自動リロード"),
+    ("Auto reload", "自動で読み直す"),
     (
         "Watch open folders. New images appear in the tree and folder slots, a slot showing the last image moves to the newest one, and overwritten images are reloaded.",
         "開いているフォルダを監視します。新しい画像をツリーとフォルダスロットに加え、最後の画像を表示しているスロットは最新の画像に移り、上書きされた画像は読み直します。",
@@ -1557,10 +1557,10 @@ const JA: &[(&str, &str)] = &[
         "Unsupported archive file: {}",
         "非対応アーカイブファイル：{}",
     ),
-    ("Archive extraction folder", "ZIP・7z の展開先"),
+    ("Archive extraction folder", "アーカイブの展開先"),
     (
-        "Folder where ZIP and 7z files are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
-        "開いている ZIP や 7z を展開するフォルダ（中に vw-archives フォルダを作ります）。空なら OS の一時フォルダです。すでに開いているものは、閉じるまで今の場所に置きます。",
+        "Folder where archives (ZIP, 7z, tar and so on) are extracted while they are open (a vw-archives folder is made inside it). Leave empty for the OS temporary folder. Archives already open stay where they are until closed.",
+        "開いているアーカイブ（ZIP・7z・tar など）を展開するフォルダ（中に vw-archives フォルダを作ります）。空なら OS の一時フォルダです。すでに開いているものは、閉じるまで今の場所に置きます。",
     ),
     ("Archive extraction threads", "展開のスレッド数"),
     (
@@ -1597,7 +1597,7 @@ const JA: &[(&str, &str)] = &[
     ("Export images", "画像の書き出し"),
     ("Folder", "フォルダ"),
     ("Include subfolders", "サブフォルダも含める"),
-    ("Images shown", "対象の画像"),
+    ("Images shown", "表示する画像"),
     ("Copy files to a folder", "フォルダへコピー"),
     ("CSV list", "CSV の一覧"),
     ("JSONL list", "JSONL の一覧"),
@@ -1689,15 +1689,15 @@ const JA: &[(&str, &str)] = &[
     // 操作
     ("Previous image slot", "前の画像スロット"),
     ("Next image slot", "次の画像スロット"),
-    ("Show/hide folder tree", "フォルダツリーの表示切替"),
-    ("Show/hide metadata", "メタデータの表示切替"),
-    ("Show/hide images", "画像の表示切替"),
-    ("Show/hide log", "ログの表示切替"),
-    ("Open/close settings", "設定を開く／閉じる"),
+    ("Show/hide folder tree", "フォルダツリーの表示/非表示"),
+    ("Show/hide metadata", "メタデータの表示/非表示"),
+    ("Show/hide images", "画像の表示/非表示"),
+    ("Show/hide log", "ログの表示/非表示"),
+    ("Open/close settings", "設定を開く・閉じる"),
     // OS が使うキーの用途
-    ("Close window", "ウィンドウを閉じる"),
-    ("Switch windows", "ウィンドウの切り替え"),
-    ("Window menu", "ウィンドウメニュー"),
+    ("Close window", "ウインドウを閉じる"),
+    ("Switch windows", "ウインドウの切り替え"),
+    ("Window menu", "ウインドウメニュー"),
     ("System menu", "システムメニュー"),
     ("Select all", "すべて選択"),
     ("Undo", "元に戻す"),
@@ -1706,9 +1706,9 @@ const JA: &[(&str, &str)] = &[
     ("Start menu", "スタートメニュー"),
     ("Application menu", "アプリケーションメニュー"),
     ("Run command", "コマンドの実行"),
-    ("Move window", "ウィンドウの移動"),
-    ("Resize window", "ウィンドウのサイズ変更"),
-    ("Maximize window", "ウィンドウの最大化"),
+    ("Move window", "ウインドウの移動"),
+    ("Resize window", "ウインドウのサイズ変更"),
+    ("Maximize window", "ウインドウの最大化"),
     ("Open terminal", "端末を開く"),
     ("Lock screen", "画面のロック"),
     ("Restart display server", "表示サーバの再起動"),
@@ -1739,7 +1739,7 @@ const JA: &[(&str, &str)] = &[
     ("Recent folders", "最近開いたフォルダ"),
     ("No folders yet", "まだありません"),
     ("Restore the maximized slot", "最大化したスロットを戻す"),
-    ("User guide (web)", "Web の使い方"),
+    ("User guide (web)", "使い方（Web）"),
     ("Maximize slot", "スロットを最大化"),
     ("Fit image to slot", "スロットに合わせる"),
     (
@@ -1759,7 +1759,7 @@ const JA: &[(&str, &str)] = &[
     ("Auto stretch for viewing", "自動で明るく見せる"),
     (
         "Values used when the A key adds the auto stretch node to a slot: the sky background (median) is made this bright and black is set that many times the noise below the background. Without the same curve for RGB, each channel is stretched on its own, so a sky with a color cast looks gray. Values are the shown brightness from 0 to 1.",
-        "A キーでスロットに「自動で明るく見せる」のノードを足すときの値です。空の背景（中央値）をこの明るさにし、背景から雑音のその倍だけ暗い所を黒にします。RGB に同じ曲線を使わなければチャンネルごとに伸ばすので、色かぶりした空も灰色に見えます。値は表示の明るさ（0〜1）です。",
+        "A キーでスロットに「自動で明るく見せる」のノードを足すときの値です。空の背景（中央値）をこの明るさにし、背景からノイズのその倍だけ暗い所を黒にします。RGB に同じ曲線を使わなければチャンネルごとに伸ばすので、色かぶりした空もグレーに見えます。値は表示の明るさ（0〜1）です。",
     ),
     ("Show focus peaking", "フォーカスピーキングを出す"),
     ("Simulate color vision", "色覚の見え方を模擬する"),
@@ -1801,7 +1801,7 @@ const JA: &[(&str, &str)] = &[
     ("Look-alike tolerance", "似ているとみなす幅"),
     (
         "Shots from the same camera taken within this many seconds of each other are one group of similar images (a burst), shown with the same link mark in the slot header. 0 groups only shots taken in the same second.",
-        "同じカメラでこの秒数以内に続けて撮った写真を、似た画像の 1 つの組（連写）にして、スロットの見出しに同じ鎖の印を出します。0 にすると、同じ秒に撮ったものだけを組にします。",
+        "同じカメラでこの秒数以内に続けて撮った写真を、似た画像の 1 つの組（連写）にして、スロットのヘッダに同じ鎖の印を出します。0 にすると、同じ秒に撮ったものだけを組にします。",
     ),
     (
         "How different two images may look and still be grouped as similar, as the number of differing bits of their 64-bit fingerprint. 0 groups only near-identical copies; around 10 also groups the same scene resized, recompressed or slightly re-exposed.",
@@ -1826,7 +1826,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "How the colors look with this type of color vision (Machado et al. 2009). Gray images look the same.",
-        "この色覚での色の見え方です（Machado ほか 2009）。灰色の画像は変わりません。",
+        "この色覚での色の見え方です（Machado ほか 2009）。グレーの画像は変わりません。",
     ),
     (
         "Values used when the O key adds the clipping warning node to a slot: at or above the upper value is blown out (red when all channels are, yellow when only some are), at or below the lower value is crushed (blue). Values are the shown brightness from 0 to 1.",
@@ -1858,7 +1858,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "After a camera RAW is developed, keep the camera's embedded preview too, so the J key or the JPEG / RAW mark on the slot header switches between them. Uses more memory while both are kept.",
-        "カメラ RAW を現像したあとも、カメラが埋め込んだプレビューを残します。J キーかスロットの見出しの「JPEG」「RAW」の印で切り替えられます。両方を持つ間はメモリを多く使います。",
+        "カメラ RAW を現像したあとも、カメラが埋め込んだプレビューを残します。J キーかスロットのヘッダの「JPEG」「RAW」の印で切り替えられます。両方を持つ間はメモリを多く使います。",
     ),
     ("Zoom in", "拡大"),
     ("Zoom out", "縮小"),
@@ -2175,8 +2175,8 @@ const JA: &[(&str, &str)] = &[
     ("Search name", "検索の名前"),
     ("Saved searches", "保存した検索"),
     (
-        "Searches saved with a name from the datasets screen (Save search...). Opening one from Saved searches the catalogs again, so the results always include datasets added or updated since.",
-        "データセットの画面で名前を付けて保存した検索（検索を保存...）。「保存した検索」から開くたびにカタログを探し直すので、結果にはいつも、そのあと足したり更新したりしたデータセットも入ります。",
+        "Searches saved with a name from the Datasets window (Save search...). Opening one from Saved searches the catalogs again, so the results always include datasets added or updated since.",
+        "データセットウインドウで名前を付けて保存した検索（検索を保存...）。「保存した検索」から開くたびにカタログを探し直すので、結果にはいつも、そのあと足したり更新したりしたデータセットも入ります。",
     ),
     ("None yet.", "まだありません。"),
     ("Event: pause", "出来事: 撮影の空き"),
@@ -2198,7 +2198,16 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Advanced", "詳細"),
     ("Reload", "再読み込み"),
-    ("Open in file manager", "フォルダを開く"),
+    // 「フォルダを開く」だと Ctrl+O（vw で開く）と区別がつかない。Windows では誰もが知る
+    // 「エクスプローラ」の名で呼び、それ以外は一般名にする。
+    (
+        "Open in file manager",
+        if cfg!(windows) {
+            "エクスプローラで開く"
+        } else {
+            "ファイルマネージャーで開く"
+        },
+    ),
     (
         "Look for search catalogs again, to show catalogs added or deleted outside vw.",
         "検索カタログを探し直します。vw の外でカタログを足したり消したりしたときに使います。",
@@ -2395,7 +2404,7 @@ const JA: &[(&str, &str)] = &[
     ("WCS from", "WCS の元"),
     (
         "Each image is placed by the WCS in its header, or by matching the overlap, feature points or star patterns with a neighbour, then all are adjusted together. The metadata lists where each one went.",
-        "画像はヘッダの WCS か、隣の画像との重なり・特徴点・星の並びを合わせて置き、全体をまとめて直します。どこに置いたかはメタ情報に出ます。",
+        "画像はヘッダの WCS か、隣の画像との重なり・特徴点・星の並びを合わせて置き、全体をまとめて直します。どこに置いたかはメタデータに出ます。",
     ),
     (
         "The values of the files are laid on one grid. Where nothing was taken, the image is transparent (or NaN for real numbers).",
@@ -2465,9 +2474,13 @@ const JA: &[(&str, &str)] = &[
     ("Copy the folder path", "フォルダのパスをコピー"),
     (
         "Open the folder in the file manager",
-        "フォルダをファイラで開く",
+        if cfg!(windows) {
+            "フォルダをエクスプローラで開く"
+        } else {
+            "フォルダをファイルマネージャーで開く"
+        },
     ),
-    ("Close the ZIP", "ZIP を閉じる"),
+    ("Close the archive", "アーカイブを閉じる"),
     (
         "Register the folder as a dataset...",
         "フォルダをデータセットとして登録...",
@@ -2601,8 +2614,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Send to apps", "送り先のアプリ"),
     (
-        "Apps listed in Send to in the right-click menu. In the arguments, {path} is one file (the app starts once per file), {paths} is every file (the app starts once), {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for console tools).",
-        "右クリックの「送る」に並べるアプリ。引数の {path} は 1 ファイル（1 ファイルごとにアプリを起動）、{paths} は全ファイル（アプリは 1 回だけ起動）、{dir} はファイルのあるフォルダ、{name} はファイル名。どれも書かなければ、ファイルを末尾に足します。拡張子は正規表現で、拡張子全体と大文字小文字を区別せずに照らします（nef|arw|cr[23] など）。空なら何でも受け付けます。拡張子に dicom と書くと、拡張子のない DICOM のファイルも受け取ります。出力: アプリが出した文字と終了コードをログに出します（コンソールで動く道具向け）。",
+        "Apps listed in Send to in the right-click menu. In the arguments, write {path} or {paths}. {path} passes one file at a time (the app starts once per file); {paths} passes all the selected files at once (the app starts once). {dir} is the folder of the file and {name} is its name. Without any of them, the files are added at the end. Extensions: a regular expression for the whole extension, case-insensitive, e.g. nef|arw|cr[23]; empty means any file. Writing dicom there also takes DICOM files without an extension. Output: show what the app prints and its exit code in the log (for command-line apps).",
+        "右クリックの「送る」に並べるアプリ。引数には {path} か {paths} を書きます。{path} は 1 ファイルずつ渡し（ファイルの数だけアプリを起動）、{paths} は選んだファイルを全部まとめて 1 回で渡します。{dir} はファイルのあるフォルダ、{name} はファイル名です。どれも書かなければ、ファイルを末尾に足します。拡張子は正規表現で、拡張子全体と大文字小文字を区別せずに照らします（nef|arw|cr[23] など）。空なら何でも受け付けます。拡張子に dicom と書くと、拡張子のない DICOM のファイルも受け取ります。出力: アプリが出した文字と終了コードをログに出します（コマンドラインで動くアプリ向け）。",
     ),
     ("Program", "プログラム"),
     ("Arguments", "引数"),
@@ -2610,8 +2623,8 @@ const JA: &[(&str, &str)] = &[
     ("Extensions", "拡張子"),
     ("Output", "出力"),
     (
-        "Show what the app prints and its exit code in the vw log (for console tools)",
-        "アプリが出した文字と終了コードを vw のログに出す（コンソールで動く道具向け）",
+        "Show what the app prints and its exit code in the vw log (for command-line apps)",
+        "アプリが出した文字と終了コードを vw のログに出す（コマンドラインで動くアプリ向け）",
     ),
     ("Files and folders", "ファイルとフォルダ"),
     ("any", "何でも"),
@@ -2660,7 +2673,7 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Sending", "送信中"),
     ("Cancel sending", "送信を取り消す"),
-    ("Derived", "色導出"),
+    ("After pipeline", "変換後"),
     ("Standard", "標準"),
     ("No difference", "差なし"),
     ("Max", "最大"),
@@ -2672,13 +2685,13 @@ const JA: &[(&str, &str)] = &[
     ("Edit", "編集"),
     (
         "Open the pixel pipeline for this slot",
-        "このスロットの色導出のウインドウを開きます",
+        "このスロットの画素の変換のウインドウを開きます",
     ),
     ("Compare", "比較"),
     ("Difference", "差"),
     (
         "Left: standard, right: derived. Drag the line to move it.",
-        "左が標準、右が色導出です。線をドラッグで動かせます。",
+        "左が標準、右が変換後です。線をドラッグで動かせます。",
     ),
     (
         "Brightness difference from the standard display: black (none) to red, yellow and white (largest).",
@@ -2686,11 +2699,11 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Standard: not a grayscale image",
-        "標準のまま: グレースケールの画像ではありません",
+        "変換なし: グレーの画像ではありません",
     ),
     (
         "Standard: file values do not reproduce the standard display",
-        "標準のまま: ファイルの値で描くと標準の表示と一致しません",
+        "変換なし: ファイルの値で描くと標準の表示と一致しません",
     ),
     (
         "Standard: could not read the pipeline",
@@ -2753,9 +2766,9 @@ const JA: &[(&str, &str)] = &[
         "Settings > Pixel pipeline decides the color map for each kind of image.",
         "設定の「画素の変換」で、画像の種類ごとに色の表を決めています。",
     ),
-    ("Off (gray)", "使わない（灰色）"),
-    ("Gray", "灰色"),
-    ("Gray (inverted)", "灰色（反転）"),
+    ("Off (gray)", "使わない（グレー）"),
+    ("Gray", "グレー"),
+    ("Gray (inverted)", "グレー（反転）"),
     ("Cool-warm (blue, white, red)", "青・白・赤（coolwarm）"),
     ("Blue, black, red", "青・黒・赤"),
     (
@@ -2766,7 +2779,7 @@ const JA: &[(&str, &str)] = &[
     ("White", "白"),
     ("Apply", "当てる"),
     ("Reset black and white", "黒と白を元に戻す"),
-    ("Only for gray images", "灰色の画像だけで使えます"),
+    ("Only for gray images", "グレーの画像だけで使えます"),
     ("Use a color map", "色の表を使う"),
     ("Default in settings", "設定の既定"),
     ("Back to the default", "既定に戻す"),
@@ -2780,7 +2793,7 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Measurement", "計測"),
     (
-        "Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Full screen applies the active slot's values to every image.",
+        "Read by: the slot, copy (Ctrl+C), the analysis brightness axis and the after column of quality evaluation. Fullscreen applies the active slot's values to every image.",
         "読むもの: スロットの表示、コピー（Ctrl+C）、解析の明るさの軸、定量評価の変更後の列。全画面は、入ったときのスロットの値をどの画像にも当てます。",
     ),
     (
@@ -2802,16 +2815,16 @@ const JA: &[(&str, &str)] = &[
     ("DICOM PT", "DICOM の PT"),
     ("FITS images", "FITS の画像"),
     ("DICOM images", "DICOM の画像"),
-    ("Other gray images", "ほかの灰色の画像"),
+    ("Other gray images", "ほかのグレーの画像"),
     ("Insert from the start", "初めから入れる"),
     ("Right", "右"),
     ("Top", "上"),
     ("Bottom", "下"),
-    ("Gauge on gray images", "灰色の画像のゲージ"),
+    ("Gauge on gray images", "グレーの画像のゲージ"),
     ("Custom color maps", "自分で足す色の表"),
     (
         "Insert the color map stage into the pixel pipeline of gray images from the start, for the kinds of images turned on below. The stage turns brightness into colors and also changes the slot; probe, ROI and analysis values stay the file values. Each slot can still turn it on or off and pick another color map (right-click, Image menu, or the stage in the pixel pipeline).",
-        "灰色の画像の画素の変換に、色の表の段を初めから入れます。入れるのは、下で「初めから入れる」にした種類の画像です。この段は明るさを色にし、スロットの表示も変えます。十字・ROI・解析の値はファイルの値のままです。スロットごとに、段を外したり別の色の表を選んだりもできます（右クリック、「画像」メニュー、画素の変換の段）。",
+        "グレーの画像の画素の変換に、色の表の段を初めから入れます。入れるのは、下で「初めから入れる」にした種類の画像です。この段は明るさを色にし、スロットの表示も変えます。十字・ROI・解析の値はファイルの値のままです。スロットごとに、段を外したり別の色の表を選んだりもできます（右クリック、「画像」メニュー、画素の変換の段）。",
     ),
     (
         "Astronomy images: insert the color map stage from the start, and its color map.",
@@ -2819,7 +2832,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Gray DICOM images other than the subtypes below (CT, MR, X-ray and so on): insert the color map stage from the start, and its color map.",
-        "下の種類以外の灰色の DICOM（CT、MR、X 線など）: 色の表の段を初めから入れるかと、その色の表。",
+        "下の種類以外のグレーの DICOM（CT、MR、X 線など）: 色の表の段を初めから入れるかと、その色の表。",
     ),
     (
         "PET images (Modality PT): insert the color map stage from the start, and its color map. Hot Iron, PET and Hot Metal Blue are the palettes defined by the DICOM standard.",
@@ -2827,7 +2840,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Gray images in other formats (16-bit PNG, TIFF and so on): insert the color map stage from the start, and its color map.",
-        "ほかの形式の灰色の画像（16bit の PNG、TIFF など）: 色の表の段を初めから入れるかと、その色の表。",
+        "ほかの形式のグレーの画像（16bit の PNG、TIFF など）: 色の表の段を初めから入れるかと、その色の表。",
     ),
     (
         "Where the gauge (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
@@ -2835,7 +2848,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Also show the gauge on gray images without a color map, to read the values of black and white.",
-        "色の表を当てていない灰色の画像にもゲージを出します。黒と白の値を読むのに使えます。",
+        "色の表を当てていないグレーの画像にもゲージを出します。黒と白の値を読むのに使えます。",
     ),
     (
         "Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
@@ -2947,15 +2960,15 @@ const JA: &[(&str, &str)] = &[
     ("Compose", "合成"),
     (
         "Put two or three gray images on red, green and blue.",
-        "灰色の画像 2〜3 枚を赤・緑・青に重ねます。",
+        "グレーの画像 2〜3 枚を赤・緑・青に重ねます。",
     ),
     (
         "Choose the gray images for red, green and blue. They are put on top of each other in the slot.",
-        "赤・緑・青に当てる灰色の画像を選びます。スロットの中で重ねて出します。",
+        "赤・緑・青に当てるグレーの画像を選びます。スロットの中で重ねて出します。",
     ),
     (
         "Show two or three gray images in slots first.",
-        "先に灰色の画像を 2〜3 枚スロットに出してください。",
+        "先にグレーの画像を 2〜3 枚スロットに出してください。",
     ),
     (
         "Choose by the FILTER of the files",
@@ -3073,7 +3086,7 @@ const JA: &[(&str, &str)] = &[
     ("System information copied", "システム情報をコピーしました"),
     (
         "Shows gray bands made inside vw on the whole screen of a monitor, so you can see how deep its gradation is (8, 10, 12 or 14 bits). No image files are needed.",
-        "vw の中で作った灰色の帯をモニタの画面いっぱいに出し、何 bit（8・10・12・14bit）の階調で出ているかを確かめます。画像のファイルは要りません。",
+        "vw の中で作ったグレーの帯をモニタの画面いっぱいに出し、何 bit（8・10・12・14bit）の階調で出ているかを確かめます。画像のファイルは要りません。",
     ),
     (
         "The monitors cannot be listed here. The test opens on the monitor of this window.",
@@ -3120,14 +3133,14 @@ const JA: &[(&str, &str)] = &[
         "Read uncompressed TIFF files that omit the required StripByteCounts tag (some industrial CT projections), taking the strip size from width x height x bits. These files break the format, so a reader can misbehave on them: turn this on at your own risk. Off: such files fail to open and the log names this setting.",
         "必須の StripByteCounts タグがない無圧縮の TIFF（産業用 CT の投影像など）を、幅 × 高さ × ビット数から大きさを補って読みます。フォーマットとして異常なファイルなので、読む側が誤動作するおそれがあります。自己責任で ON にしてください。OFF のときは開けず、ログにこの設定を案内します。",
     ),
-    // スロットの見出しと下の帯の部品
+    // スロットのヘッダと下の帯の部品
     ("JPEG / RAW", "JPEG / RAW の切り替え"),
-    ("Derived display", "色導出の表示"),
+    ("After-pipeline display", "変換後の表示"),
     ("Similar images", "似た画像"),
-    ("Slot header and bottom bar", "スロットの見出しと下の帯"),
+    ("Slot header and bottom bar", "スロットのヘッダと下の帯"),
     (
         "Drag a part onto the header or the bottom bar to place it, and drag it within an edge to reorder. Drag it off to hide it. Lists and the compare switches fit only the bottom bar. The bottom bar appears when the mouse is in the lower quarter of a slot; parts that do not apply to the image are not shown.",
-        "部品を見出しか下の帯へドラッグして置き、同じ辺の中でドラッグして並べ替えます。外へドラッグすると隠します。一覧を開く部品と見比べの切り替えは下の帯だけに置けます。下の帯はマウスがスロットの下 1/4 に来たときに出ます。画像に当てはまらない部品は出ません。",
+        "部品をヘッダか下の帯へドラッグして置き、同じ辺の中でドラッグして並べ替えます。外へドラッグすると隠します。一覧を開く部品と見比べの切り替えは下の帯だけに置けます。下の帯はマウスがスロットの下 1/4 に来たときに出ます。画像に当てはまらない部品は出ません。",
     ),
     (
         "Not placed (drag here to hide a part)",
@@ -3166,7 +3179,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "When a line is drawn with the measure tool, open the Line profile window that shows the values along it.",
-        "計測ツールで線を引き終えたら、線に沿った値を出す「計測線のグラフ」の欄を開きます。",
+        "計測ツールで線を引き終えたら、線に沿った値を出す「計測線のグラフ」のウインドウを開きます。",
     ),
     ("Image comparison", "画像の比較"),
     (
@@ -3275,14 +3288,14 @@ const JA: &[(&str, &str)] = &[
     ("Frames that could not be read", "読めなかったフレーム"),
     ("Histogram of the ROI", "ROI のヒストグラム"),
     (
-        "How many bins the histogram of the ROI graph splits the values into. Integer values whose range is this or less get one bin per value.",
-        "ROI のグラフのヒストグラムで、値をいくつの区間に分けるか。値の幅がこれ以下の整数なら、1 つの値に 1 区間にします。",
+        "How many bins the histogram of the ROI graph splits the values into. For integer values whose range is this or smaller, each value gets its own bin.",
+        "ROI のグラフのヒストグラムで、値をいくつの区間に分けるか。整数の値で、最小から最大までの幅がこれ以下なら、値 1 つにつき 1 区間にします。",
     ),
     ("Left to right", "左から右"),
     ("Mean measured value", "計測の値の平均"),
     (
-        "Mean of each ROI in every frame of the sequence, at the same place in every frame.",
-        "並びの各フレームでの、各 ROI の平均。どのフレームでも同じ場所で測る。",
+        "Mean of each ROI, frame by frame, at the same place in every frame.",
+        "フレームごとに、同じ場所の ROI の平均を出します。",
     ),
     ("Mean of the ROI per frame", "フレームごとの ROI の平均"),
     ("Mean per frame", "フレームごとの平均"),
@@ -3324,13 +3337,13 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Choose black and white once from all times and levels of a variable, so that they can be compared. When off, each plane gets its own. Each variable has its own.",
-        "変数の全部の時刻・高さから黒と白を 1 つ決めて、比べられるようにします。切ると、面ごとに決めます。黒と白は変数ごとに決めます。",
+        "変数のすべての時刻・高さをまとめて見て、黒と白を 1 組決めます。面どうしを比べられます。切ると、面ごとに決めます。黒と白は変数ごとに決めます。",
     ),
     ("North up", "北を上にする"),
     ("Show coordinates", "座標を出す"),
     (
         "Show the latitude and longitude (and the time or level of the plane) at the probe cross, use kilometers along measurement lines, dates or levels in the ROI graph per frame, and the extent of the data on the map. Projected grids (such as Lambert or polar stereographic) and rotated poles are turned into latitude and longitude.",
-        "十字の位置に緯度・経度（と面の時刻・高さ）を出し、計測線のグラフの横軸を km に、ROI のグラフのフレームごとの平均の横軸を日時・高さにし、地図にデータの範囲を描きます。図法の格子（ランベルト、極の平射など）や回転極の格子も、緯度・経度に直して出します。",
+        "十字の位置に緯度・経度（と面の時刻・高さ）を出します。計測線のグラフの横軸は km、ROI のグラフのフレームごとの平均の横軸は日時・高さになり、地図にデータの範囲を描きます。図法の格子（ランベルト、極の平射など）や回転極の格子も、緯度・経度に直して出します。",
     ),
     ("Longitudes from -180 to 180", "経度を −180〜180° に回す"),
     (

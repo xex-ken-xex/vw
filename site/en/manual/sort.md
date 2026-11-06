@@ -153,7 +153,7 @@ Line up images of the same scene (RAW and JPEG, retakes, other lenses or setting
    - **Difference**: the size of differences in color (black → red → yellow → white). **Overlay the difference** lays it semi-transparent over the other views
    - Cyan boxes mark the places with the largest differences (5 places)
 
-The right panel shows shift, rotation and scale, PSNR, SSIM, color difference (ΔE2000), brightness shift, ratios of sharpness, noise and vignetting, and brightness histograms. Values use the colors shown in the slot (after the pixel pipeline), measured inside the rectangle where the images overlap.
+The right side shows shift, rotation and scale, PSNR, SSIM, color difference (ΔE2000), brightness shift, ratios of sharpness, noise and vignetting, and brightness histograms. Values use the colors shown in the slot (after the pixel pipeline), measured inside the rectangle where the images overlap.
 
 - **Match brightness** (on by default): before measuring, brightness is matched to the reference so tone differences such as RAW development vs. JPEG do not count as differences. Brightness shift, vignetting and histograms are values before matching
 - Images that probably did not align (low correlation, small overlap) get ⚠
@@ -185,7 +185,7 @@ Right-click an image or a folder in the tree → **Send to** to open it in anoth
 
 - **Open with the default app**: open with the app the OS associates with that file type
 - Below it are the apps listed in the **Send to apps** setting. At first these are the apps the OS uses for JPEG and camera RAW
-- For each app, the settings hold a name, program, arguments, what it accepts (files / folders / both), output (when on, what the app prints and its exit code go to the vw log; for console tools that print and exit at once) and extensions (a regular expression matched against the whole extension, case-insensitive, such as `nef|arw|cr[23]`; empty means any)
+- For each app, the settings hold a name, program, arguments, what it accepts (files / folders / both), output (when on, what the app prints and its exit code go to the vw log; for command-line apps that print and exit at once) and extensions (a regular expression matched against the whole extension, case-insensitive, such as `nef|arw|cr[23]`; empty means any)
 - The arguments can contain the following. Without any of them, the files are added at the end
 
 | Placeholder | Meaning |
@@ -233,7 +233,7 @@ and images are never sent out.
 7. To remove only unwanted tags, right-click the tag in the metadata window (from this image / from all images in the folder / never add).
    **AI tags → Tidy AI tags in this folder...** lists the tags of the open folder with counts, and removes several at once.
    Tags set to "never add" go into **Settings → AI tags → Excluded tags** and are not added again
-8. In folders registered as datasets, AI tags and people's names also go into the search catalog, so you can search them in the Datasets screen
+8. In folders registered as datasets, AI tags and people's names also go into the search catalog, so you can search them in the Datasets window
    (metadata kind `ai tags` in [Advanced conditions](find.html#advanced-conditions)). After adding AI tags or names, **Update** the dataset
 9. AI tags and faces record the name and version of the model that made them, shown as **AI model** and **Face model** in the metadata window.
    When a newer vw changes a model, they show "(older than the current model)", and **AI tags → Redo AI tags and faces made by older models**

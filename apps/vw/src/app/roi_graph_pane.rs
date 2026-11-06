@@ -188,7 +188,7 @@ impl Gathered {
             ),
             Body::Frames { .. } => tr(
                 lang,
-                "Mean of each ROI in every frame of the sequence, at the same place in every frame.",
+                "Mean of each ROI, frame by frame, at the same place in every frame.",
             ),
         }
         .to_owned();

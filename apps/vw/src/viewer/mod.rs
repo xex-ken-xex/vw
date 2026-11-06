@@ -1568,8 +1568,8 @@ impl Slot {
             )
             .to_owned(),
             Chip::Derived => match &self.derive {
-                Some(d) => format!("{}: {}", tr(lang, "Derived"), derive_name(d, lang)),
-                None => tr(lang, "Derived").to_owned(),
+                Some(d) => format!("{}: {}", tr(lang, "After pipeline"), derive_name(d, lang)),
+                None => tr(lang, "After pipeline").to_owned(),
             },
             Chip::DeriveCompare => {
                 tr(lang, "Left: standard, right: derived. Drag the line to move it.").to_owned()

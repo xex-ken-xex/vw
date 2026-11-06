@@ -250,7 +250,7 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         Action::ToggleRoiGraph => "ROI graph",
         Action::TogglePixelPipeline => "Pixel pipeline...",
         Action::OpenInFileManager => "Open in file manager",
-        Action::CloseZip => "Close ZIP",
+        Action::CloseZip => "Close archive",
         Action::RegisterDataset => "Register as dataset...",
         Action::EditDataset => "Edit dataset...",
         Action::UpdateDataset => "Update dataset",
