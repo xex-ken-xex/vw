@@ -147,32 +147,28 @@ impl Gathered {
 impl VwApp {
     /// アクティブなスロットの画像の線と値。線がない・元の画像を読み込み中なら `Err` で案内。
     fn gather_profiles(&self) -> Result<Gathered, &'static str> {
-        let slot = self
-            .slots
-            .get(self.active)
-            .ok_or("Choose the measure tool (M) and drag on an image to draw a line.")?;
-        let shown = slot
-            .shown()
-            .ok_or("Choose the measure tool (M) and drag on an image to draw a line.")?;
-        let lines = slot.shown_lines();
+        let (slot, t) =
+            super::screens::analysis_image(&self.slots, self.active, &self.analysis_source)
+                .ok_or("Choose the measure tool (M) and drag on an image to draw a line.")?;
+        let lines = slot.lines_at(t.path);
         if lines.is_empty() {
             return Err("Choose the measure tool (M) and drag on an image to draw a line.");
         }
-        let full = shown.full.as_ref().ok_or("Reading the image...")?;
-        let meta = &shown.info.metadata;
+        let image = t.image.ok_or("Reading the image...")?;
+        let meta = &t.info.metadata;
         let values = Values::of(meta);
         let profiles = lines
             .iter()
-            .map(|l| line_profile::profile(&full.image, meta, l, &values))
+            .map(|l| line_profile::profile(image, meta, l, &values))
             .collect();
         Ok(Gathered {
-            path: shown.path.clone(),
+            path: t.path.to_path_buf(),
             profiles,
             values,
-            color: full.image.color,
-            width: shown.info.width,
-            height: shown.info.height,
-            bits: shown.info.bits_per_sample,
+            color: image.color,
+            width: t.info.width,
+            height: t.info.height,
+            bits: t.info.bits_per_sample,
         })
     }
 

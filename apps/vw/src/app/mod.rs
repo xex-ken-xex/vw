@@ -335,6 +335,8 @@ pub struct VwApp {
     window: Option<WindowState>,
     /// メタデータ欄に出しているスロットの番号。
     metadata_from: Option<u64>,
+    /// 解析の元画像（前の画像を出し続けるため）。
+    analysis_source: crate::analysis_source::AnalysisSource,
     /// Ctrl+C でコピーする欄。
     focus: Focus,
     meta_selected: Option<MetaSelection>,
@@ -882,6 +884,7 @@ impl VwApp {
             restoring,
             window: None,
             metadata_from: None,
+            analysis_source: Default::default(),
             focus: Focus::Images,
             meta_selected: None,
             toast: None,
@@ -1401,6 +1404,7 @@ impl eframe::App for VwApp {
         self.send_ui(&ctx);
         self.launch_ui(&ctx);
         self.fill_send_apps(&ctx);
+        self.follow_analysis_source();
         self.update_evaluation(&ctx);
         self.map_tick(&ctx);
         self.sky_tick();

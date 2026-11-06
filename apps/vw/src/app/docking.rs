@@ -155,6 +155,21 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
 struct AppPanes<'a> {
     app: &'a mut VwApp,
     ctx: egui::Context,
+    /// このフレームで見出しの行に読み込み中の印を出したペイン。見出しの行がない
+    /// （別ウインドウに 1 つだけ出している）ペインは、中身の右上に出す。
+    marked: Vec<String>,
+}
+
+/// 解析の元画像（[`crate::analysis_source`]）を数えるペイン。
+const ANALYSIS_PANES: [&str; 4] = [ANALYSIS, PIPELINE, LINE_PROFILE, ROI_GRAPH];
+
+/// 解析のペインが前の画像のグラフを出している印。見出しの名前は OS のウインドウバーにも出るので、
+/// 名前の文字に印を足さずに、見出しの行か中身に描く（OS の字体には印の字がない）。
+fn stale_mark(ui: &mut egui::Ui, lang: Language) {
+    ui.weak(icon::HOURGLASS_MEDIUM).on_hover_text(tr(
+        lang,
+        "Showing the graph of the last image that was read at full resolution. It is updated when the shown image is read.",
+    ));
 }
 
 /// 中身の余白。今までのパネルの枠（`Frame::side_top_panel`）と同じ左右の余白で、
@@ -179,10 +194,10 @@ impl Panes for AppPanes<'_> {
                 crate::sub_window::title(lang, "Zoom map", self.app.active_image().as_deref())
             }
             LINE_PROFILE => {
-                crate::sub_window::title(lang, "Line profile", self.app.active_image().as_deref())
+                crate::sub_window::title(lang, "Line profile", self.app.analysis_path().as_deref())
             }
             ROI_GRAPH => {
-                crate::sub_window::title(lang, "ROI graph", self.app.active_image().as_deref())
+                crate::sub_window::title(lang, "ROI graph", self.app.analysis_path().as_deref())
             }
             // 絞り込み中は、ファイルが隠れていることに気づけるよう名前に条件を添える。
             // 別ウインドウでは OS のウインドウバーにも出る。
@@ -239,12 +254,39 @@ impl Panes for AppPanes<'_> {
                 if titled {
                     let title = self.title(pane);
                     vw_ui::panel::header(ui, &title);
+                    if ANALYSIS_PANES.contains(&pane) && self.app.analysis_stale(pane) {
+                        stale_mark(ui, lang);
+                        self.marked.push(pane.to_owned());
+                    }
                 }
             }
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, pane: &str) {
+        self.panes_ui(ui, pane);
+        // 中身を描いた後に決める。解析のペインは描くときに新しい画像の段を読み始めるので。
+        if ANALYSIS_PANES.contains(&pane)
+            && !self.marked.iter().any(|m| m == pane)
+            && self.app.analysis_stale(pane)
+        {
+            let corner = ui.max_rect().right_top() + egui::vec2(-vw_dock::HEADER_MARGIN, 2.0);
+            let lang = self.app.lang();
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_max(
+                        corner - egui::vec2(24.0, 0.0),
+                        corner + egui::vec2(0.0, 20.0),
+                    ))
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                |ui| stale_mark(ui, lang),
+            );
+        }
+    }
+}
+
+impl AppPanes<'_> {
+    fn panes_ui(&mut self, ui: &mut egui::Ui, pane: &str) {
         if TOOLS.contains(&pane) && ui.ctx().viewport_id() == egui::ViewportId::ROOT {
             self.app.tool_hovered |= ui.rect_contains_pointer(ui.max_rect());
         }
@@ -284,6 +326,22 @@ impl Panes for AppPanes<'_> {
 }
 
 impl VwApp {
+    /// 解析のペイン `pane` が、表示中の画像ではなく前の画像のグラフを出しているか。
+    fn analysis_stale(&self, pane: &str) -> bool {
+        match pane {
+            ANALYSIS => self.histogram.stale(),
+            PIPELINE => self.pipeline.stale(),
+            _ => super::screens::analysis_image(&self.slots, self.active, &self.analysis_source)
+                .is_some_and(|(_, t)| t.stale && t.image.is_some()),
+        }
+    }
+
+    /// 解析の元画像のパス。ペインの見出しに出す。
+    fn analysis_path(&self) -> Option<PathBuf> {
+        super::screens::analysis_image(&self.slots, self.active, &self.analysis_source)
+            .map(|(_, t)| t.path.to_path_buf())
+    }
+
     /// 本体の中のペインと別ウインドウを出す。
     pub(super) fn docked_ui(&mut self, ui: &mut egui::Ui) {
         let Some(mut dock) = self.dock.take() else {
@@ -298,6 +356,7 @@ impl VwApp {
                 &mut AppPanes {
                     app: self,
                     ctx: ctx.clone(),
+                    marked: Vec::new(),
                 },
                 labels,
             );
@@ -319,6 +378,7 @@ impl VwApp {
             &mut AppPanes {
                 app: self,
                 ctx: ctx.clone(),
+                marked: Vec::new(),
             },
             labels,
         );

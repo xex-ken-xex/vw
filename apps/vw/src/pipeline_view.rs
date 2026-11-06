@@ -40,6 +40,8 @@ pub struct Target<'a> {
     pub path: &'a Path,
     /// フル解像度の画像。まだ読み込んでいなければ `None`。
     pub image: Option<&'a Arc<VwImage>>,
+    /// 表示中の画像のフル解像度がまだなく、`path` は前の画像（[`crate::analysis_source`]）。
+    pub stale: bool,
     pub info: &'a ImageInfo,
     /// その画像に置いた十字の位置。
     pub marks: Vec<(u32, u32)>,
@@ -323,6 +325,10 @@ pub struct PipelineView {
     pub open_zoom_map: bool,
     path: Option<PathBuf>,
     loaded: Option<Loaded>,
+    /// 画像が替わって読み直している DICOM の段の値。届くまで前の `loaded` の図を出しておく。
+    /// 読み込み中に `loaded` を替えると、ウインドウ全体が読み込み中の印に替わって点滅するため。
+    next: Option<Receiver<Result<Pipeline, String>>>,
+    stale: bool,
     /// 自由なノードの鎖。毎フレーム、スロットの色導出の値から写す。
     chain: Chain,
     /// 鎖のノードが知らせること（星から測った PSF など）。毎フレーム、スロットの色導出の結果から写す。
@@ -357,6 +363,24 @@ pub struct PipelineView {
     file_dir: Option<PathBuf>,
 }
 
+/// 裏で読んだ DICOM の段の値を、図に出す形にする。フル解像度の画像は後で `follow` が入れる。
+fn loaded_of(result: Result<Pipeline, String>) -> Loaded {
+    match result {
+        Ok(Pipeline::Gray(info)) => Loaded::Gray(Box::new(GrayState {
+            decoded: Decoded::of(&info),
+            info: *info,
+            image: None,
+            in_file: placeholder(),
+            file: placeholder(),
+            params: placeholder(),
+            histogram: None,
+            window_edit: None,
+            window_sent: None,
+        })),
+        Ok(Pipeline::Color(c)) => Loaded::Color(c),
+        Err(e) => Loaded::Failed(e),
+    }
+}
 impl PipelineView {
     /// 動かしたノードの位置（状態ファイルに残す形）。
     pub fn node_positions(&self) -> BTreeMap<String, [f32; 2]> {
@@ -385,9 +409,16 @@ impl PipelineView {
         self.open = false;
         self.path = None;
         self.loaded = None;
+        self.next = None;
+        self.stale = false;
         self.chain.clear();
         self.add_at = None;
         vec![Command::Closed]
+    }
+
+    /// 前の画像の図を出している（新しい画像のフル解像度か段の値を待っている）。
+    pub fn stale(&self) -> bool {
+        self.stale
     }
 
     /// 欄の見出し。「画素の変換 - ファイル名」。
@@ -581,6 +612,10 @@ impl PipelineView {
 
     /// 今の値（スロットの色導出に渡す形）。ファイルの段の値は、ファイルと違うときだけ持つ。
     fn values(&self) -> Option<Values> {
+        // 読み直している間の `loaded` は前の画像の段なので、その値をスロットに当てない。
+        if self.next.is_some() {
+            return None;
+        }
         let params = match self.loaded.as_ref()? {
             Loaded::Gray(g) => {
                 // VOI の中心と幅はスロットの黒と白が持つので、色導出の値には入れない。
@@ -606,11 +641,27 @@ impl PipelineView {
         let path = target.map(|t| t.path.to_path_buf());
         if path != self.path {
             self.path = path;
-            self.loaded = target.map(|t| match t.info.plugin.as_str() {
-                "DICOM" => Loaded::Reading(pixel_pipeline::read_in_background(ctx, t.path)),
-                _ => Loaded::Plain(Vec::new()),
-            });
+            self.next = None;
+            match target {
+                Some(t) if t.info.plugin == "DICOM" => {
+                    let rx = pixel_pipeline::read_in_background(ctx, t.path);
+                    if matches!(self.loaded, Some(Loaded::Gray(_) | Loaded::Color(_))) {
+                        self.next = Some(rx);
+                    } else {
+                        self.loaded = Some(Loaded::Reading(rx));
+                    }
+                }
+                Some(_) => self.loaded = Some(Loaded::Plain(Vec::new())),
+                None => self.loaded = None,
+            }
         }
+        if let Some(rx) = &self.next
+            && let Ok(result) = rx.try_recv()
+        {
+            self.loaded = Some(loaded_of(result));
+            self.next = None;
+        }
+        self.stale = target.is_some_and(|t| t.stale) || self.next.is_some();
         // 合成は、色ごとの黒と白を変えるたびに読み直した内訳になるので、毎フレーム合わせる。
         if let Some(c) = target.and_then(|t| t.info.compose.clone()) {
             self.loaded = Some(Loaded::Compose(c));
@@ -629,21 +680,7 @@ impl PipelineView {
         if let Some(Loaded::Reading(rx)) = &self.loaded
             && let Ok(result) = rx.try_recv()
         {
-            self.loaded = Some(match result {
-                Ok(Pipeline::Gray(info)) => Loaded::Gray(Box::new(GrayState {
-                    decoded: Decoded::of(&info),
-                    info: *info,
-                    image: None,
-                    in_file: placeholder(),
-                    file: placeholder(),
-                    params: placeholder(),
-                    histogram: None,
-                    window_edit: None,
-                    window_sent: None,
-                })),
-                Ok(Pipeline::Color(c)) => Loaded::Color(c),
-                Err(e) => Loaded::Failed(e),
-            });
+            self.loaded = Some(loaded_of(result));
         }
         // フル解像度の画像が届いた、または捨てられて読み直されたら、ヒストグラムを作り直す。
         if let (Some(Loaded::Gray(g)), Some(image)) =
@@ -3107,6 +3144,44 @@ fn number(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_the_drawn_stages_while_the_next_dicom_header_is_read() {
+        let dir = crate::test_util::TempDir::new();
+        let [a, b] = ["a.dcm", "b.dcm"].map(|name| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, vw_dicom::synth::Synth::ct(2, 1).bytes()).unwrap();
+            path
+        });
+        let mut view = PipelineView {
+            path: Some(a.clone()),
+            loaded: Some(loaded_of(pixel_pipeline::read(&a))),
+            ..Default::default()
+        };
+        assert!(view.values().is_some());
+        let mut info = crate::viewer::test_support::info(2, 1, vw_core::ColorModel::Gray);
+        info.plugin = "DICOM".into();
+        let rules = Arc::new(colormap::Rules::new(&Default::default()));
+        let target = Target {
+            path: &b,
+            image: None,
+            stale: false,
+            info: &info,
+            marks: Vec::new(),
+            evaluation: None,
+            values: None,
+            preset: None,
+            saved: Vec::new(),
+            color_rules: &rules,
+            scale_filters: (ScaleFilter::Linear, ScaleFilter::Linear),
+            notes: &[],
+        };
+        view.follow(&egui::Context::default(), Some(&target));
+        assert!(matches!(view.loaded, Some(Loaded::Gray(_))));
+        assert!(view.stale());
+        // 前の画像の段の値を、新しい画像のスロットに当てない。
+        assert_eq!(view.values(), None);
+    }
 
     #[test]
     fn moved_nodes_come_back_at_the_same_place_per_kind() {

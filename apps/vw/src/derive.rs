@@ -267,12 +267,16 @@ impl Derive {
 
     /// 表示中の画像 `shown` の色導出の結果。値を変えて描き直している間は前の値のものを返す。
     pub fn ready_for(&self, shown: &Shown) -> Option<&Ready> {
-        let full = shown.full.as_ref()?;
+        self.ready_at(&shown.path, &shown.full.as_ref()?.image)
+    }
+
+    /// [`Derive::ready_for`] を、パスとフル解像度の画像で引く（解析のウインドウが前の画像を見せている間）。
+    pub fn ready_at(&self, path: &Path, image: &Arc<VwImage>) -> Option<&Ready> {
         self.ready.as_ref().filter(|r| {
-            r.key.path == shown.path
-                && r.key.image == Arc::as_ptr(&full.image) as usize
+            r.key.path == path
+                && r.key.image == Arc::as_ptr(image) as usize
                 && matches!(
-                    self.headers.get(&shown.path),
+                    self.headers.get(path),
                     Some(Header::Gray(_) | Header::Plain)
                 )
         })
@@ -313,14 +317,19 @@ impl Derive {
 
     /// 表示中の画像 `shown` の、全画素で描いた色導出（コピーや定量評価に使う）。下描きなら `None`。
     pub fn full_for(&self, shown: &Shown) -> Option<&Arc<ColorImage>> {
-        self.ready_for(shown)
+        self.full_at(&shown.path, &shown.full.as_ref()?.image)
+    }
+
+    /// [`Derive::full_for`] を、パスとフル解像度の画像で引く。
+    pub fn full_at(&self, path: &Path, image: &Arc<VwImage>) -> Option<&Arc<ColorImage>> {
+        self.ready_at(path, image)
             .filter(|r| !r.preview)
             .map(|r| &r.full)
     }
 
-    /// [`Derive::full_for`] の明るさ（定量評価に使う）。
-    pub fn luma_for(&self, shown: &Shown) -> Option<&Arc<Vec<f32>>> {
-        self.ready_for(shown)
+    /// [`Derive::full_at`] の明るさ（定量評価に使う）。
+    pub fn luma_at(&self, path: &Path, image: &Arc<VwImage>) -> Option<&Arc<Vec<f32>>> {
+        self.ready_at(path, image)
             .filter(|r| !r.preview)
             .map(|r| &r.luma)
     }
