@@ -505,9 +505,9 @@ dependencies = [
 
 [[package]]
 name = "charls-sys"
-version = "2.4.5"
+version = "2.4.6+charls.2.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28bd4cd0583158019ce942b42ec9b4200462199e65c76cd3be5df5322d3a159b"
+checksum = "cc3ade47233f5da8e23735191366ed0e52a96a4dcb4fb50ecd18faefc87c3185"
 dependencies = [
  "cmake",
  "link-cplusplus",
