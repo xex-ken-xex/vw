@@ -92,6 +92,18 @@ pub struct Color {
     pub stored: Stored,
     /// 色空間の変換。YBR → RGB、パレットなど。
     pub conversion: &'static str,
+    /// PALETTE COLOR の Red・Green・Blue の表。表が読めなければ `None`（画像も読めない）。
+    pub palette: Option<[crate::color::LutInfo; 3]>,
+}
+
+impl Color {
+    /// 表示の前に持つ RGB が 16bit か（16bit のカラー、または 16bit の表のパレット）。
+    pub fn is_deep(&self) -> bool {
+        match &self.palette {
+            Some(luts) => luts.iter().any(|l| l.bits > 8),
+            None => self.stored.bits_allocated > 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,7 +123,15 @@ pub fn read(data: &[u8], frame: usize) -> Result<Pipeline, DecodeError> {
             p if p.starts_with("YBR") => "ybr_to_rgb",
             _ => "unknown",
         };
-        return Ok(Pipeline::Color(Color { stored, conversion }));
+        let palette = (conversion == "palette")
+            .then(|| crate::color::Palette::read(&obj).ok())
+            .flatten()
+            .map(|p| p.info());
+        return Ok(Pipeline::Color(Color {
+            stored,
+            conversion,
+            palette,
+        }));
     }
     let groups = Groups::of(&obj, frame);
     let invert = stored.photometric == "MONOCHROME1";
@@ -370,5 +390,22 @@ mod tests {
         };
         assert_eq!(c.conversion, "none");
         assert_eq!(c.stored.samples_per_pixel, 3);
+    }
+
+    #[test]
+    fn palette_color_lists_each_color_table() {
+        let bytes = Synth::palette(1, 1, &[0])
+            .lut(0, 256, 0, 16, &[0, 1, 0, 1, 255, 65535], true)
+            .lut(1, 4, 0, 8, &[0, 0], false)
+            .lut(2, 4, 0, 8, &[0, 0], false)
+            .bytes();
+        let Pipeline::Color(c) = read(&bytes, 0).unwrap() else {
+            panic!("not color")
+        };
+        assert_eq!(c.conversion, "palette");
+        let [red, green, _] = c.palette.unwrap();
+        assert_eq!((red.entries, red.bits, red.segmented), (256, 16, true));
+        assert_eq!((green.entries, green.bits, green.segmented), (4, 8, false));
+        assert!(c.is_deep());
     }
 }

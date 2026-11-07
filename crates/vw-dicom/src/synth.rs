@@ -74,6 +74,76 @@ impl Synth {
         s.pixel_data(VR::OB, data.to_vec())
     }
 
+    /// 16bit のカラー画像。`data` は R G B の順に並べたサンプル、`stored` は Bits Stored。
+    pub fn rgb16(columns: u16, rows: u16, data: &[u16], stored: u16) -> Self {
+        let mut s = Self::new(SC_IMAGE, columns, rows);
+        s.put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "RGB");
+        s.put_u16(tags::SAMPLES_PER_PIXEL, 3);
+        s.put_u16(tags::PLANAR_CONFIGURATION, 0);
+        s.pixels_u16(data, stored)
+    }
+
+    /// 非圧縮の YBR_FULL_422 の 8bit の画像。`data` は横の 2 画素ごとに Y1 Y2 Cb Cr。
+    pub fn ybr_full_422(columns: u16, rows: u16, data: &[u8]) -> Self {
+        let mut s = Self::new(SC_IMAGE, columns, rows);
+        s.put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "YBR_FULL_422");
+        s.put_u16(tags::SAMPLES_PER_PIXEL, 3);
+        s.put_u16(tags::PLANAR_CONFIGURATION, 0);
+        s.bits(8, 8, false);
+        s.pixel_data(VR::OB, data.to_vec())
+    }
+
+    /// PALETTE COLOR の 8bit の画像。色の表は [`Synth::lut`] で足す。
+    pub fn palette(columns: u16, rows: u16, indices: &[u8]) -> Self {
+        let mut s = Self::new(SC_IMAGE, columns, rows);
+        s.put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "PALETTE COLOR");
+        s.bits(8, 8, false);
+        s.pixel_data(VR::OB, indices.to_vec())
+    }
+
+    /// Palette Color LUT を 1 色分足す。`channel` は 0 = Red、1 = Green、2 = Blue。
+    /// `entries` は記述子の項目数（65536 は 0 と書く）、`data` は OW の語（8bit の表なら
+    /// 2 項目を 1 語に詰めたもの）。`segmented` なら Segmented の方の属性に書く。
+    pub fn lut(
+        mut self,
+        channel: usize,
+        entries: u32,
+        first: u16,
+        bits: u16,
+        data: &[u16],
+        segmented: bool,
+    ) -> Self {
+        let (descriptor, plain, segmented_tag) = [
+            (
+                tags::RED_PALETTE_COLOR_LOOKUP_TABLE_DESCRIPTOR,
+                tags::RED_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+                tags::SEGMENTED_RED_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+            ),
+            (
+                tags::GREEN_PALETTE_COLOR_LOOKUP_TABLE_DESCRIPTOR,
+                tags::GREEN_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+                tags::SEGMENTED_GREEN_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+            ),
+            (
+                tags::BLUE_PALETTE_COLOR_LOOKUP_TABLE_DESCRIPTOR,
+                tags::BLUE_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+                tags::SEGMENTED_BLUE_PALETTE_COLOR_LOOKUP_TABLE_DATA,
+            ),
+        ][channel];
+        let entries = if entries >= 65_536 { 0 } else { entries as u16 };
+        self.obj.put(DataElement::new(
+            descriptor,
+            VR::US,
+            PrimitiveValue::from([entries, first, bits]),
+        ));
+        self.obj.put(DataElement::new(
+            if segmented { segmented_tag } else { plain },
+            VR::OW,
+            PrimitiveValue::U16(data.into()),
+        ));
+        self
+    }
+
     pub fn pixels_i16(mut self, values: &[i16]) -> Self {
         self.bits(16, 16, true);
         let bytes = values.iter().flat_map(|v| v.to_le_bytes()).collect();

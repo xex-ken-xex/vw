@@ -3067,12 +3067,38 @@ fn color_body(ui: &mut egui::Ui, lang: Language, node: Node, c: &Color) {
                 "ybr_to_rgb" => tr(lang, "YCbCr to RGB"),
                 _ => tr(lang, "Unknown"),
             });
+            for (name, lut) in ["R", "G", "B"].iter().zip(c.palette.iter().flatten()) {
+                ui.weak(palette_line(lang, name, lut));
+            }
         }
         Node::Display => {
-            ui.label(tr(lang, "8-bit RGB"));
+            ui.label(tr(
+                lang,
+                if c.is_deep() {
+                    "16-bit RGB"
+                } else {
+                    "8-bit RGB"
+                },
+            ));
         }
         _ => {}
     }
+}
+
+/// 「R: 256 entries, first value 0, 16 bit, segmented」の形の 1 行。
+fn palette_line(lang: Language, name: &str, lut: &vw_dicom::color::LutInfo) -> String {
+    let mut line = format!(
+        "{name}: {} {}, {} {}, {} bit",
+        lut.entries,
+        tr(lang, "entries"),
+        tr(lang, "first value"),
+        lut.first,
+        lut.bits
+    );
+    if lut.segmented {
+        line.push_str(&format!(", {}", tr(lang, "segmented")));
+    }
+    line
 }
 
 /// VOI の曲線。後ろに物理量のヒストグラムを出す。ドラッグで中心と幅を変える。
