@@ -3179,12 +3179,15 @@ mod tests {
             std::fs::write(&path, vw_dicom::synth::Synth::ct(2, 1).bytes()).unwrap();
             path
         });
+        // 裏のスレッドで読む代わりに、結果を手で届ける。小さなヘッダは読み終わるのが速く、
+        // 本物のスレッドだと「読んでいる途中」を見る前に届いてしまうことがあるため。
+        let (tx, rx) = std::sync::mpsc::channel();
         let mut view = PipelineView {
-            path: Some(a.clone()),
+            path: Some(b.clone()),
             loaded: Some(loaded_of(pixel_pipeline::read(&a))),
+            next: Some(rx),
             ..Default::default()
         };
-        assert!(view.values().is_some());
         let mut info = crate::viewer::test_support::info(2, 1, vw_core::ColorModel::Gray);
         info.plugin = "DICOM".into();
         let rules = Arc::new(colormap::Rules::new(&Default::default()));
@@ -3202,11 +3205,17 @@ mod tests {
             scale_filters: (ScaleFilter::Linear, ScaleFilter::Linear),
             notes: &[],
         };
-        view.follow(&egui::Context::default(), Some(&target));
+        let ctx = egui::Context::default();
+        view.follow(&ctx, Some(&target));
         assert!(matches!(view.loaded, Some(Loaded::Gray(_))));
         assert!(view.stale());
         // 前の画像の段の値を、新しい画像のスロットに当てない。
         assert_eq!(view.values(), None);
+
+        tx.send(pixel_pipeline::read(&b)).unwrap();
+        view.follow(&ctx, Some(&target));
+        assert!(!view.stale());
+        assert!(view.values().is_some());
     }
 
     #[test]
