@@ -43,7 +43,7 @@ regex = "1"
 # 検索カタログの日時（UTC）と、ログの日時（地方時なので clock）を書く。
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # ごみ箱へ送る。chrono は送ったものを一覧する API にしか要らない。
-trash = { version = "5.2", default-features = false, features = ["coinit_apartmentthreaded"] }
+trash = { version = "5.3", default-features = false, features = ["coinit_apartmentthreaded", "freedesktop"] }
 # 読むだけなので、圧縮側（zopfli）や C ライブラリの要る方式は入れない。
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "aes-crypto"] }
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256", "bzip2", "ppmd"] }
