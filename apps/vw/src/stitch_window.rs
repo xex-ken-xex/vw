@@ -789,7 +789,7 @@ impl StitchWindow {
             "Drag an image onto the preview where it roughly belongs. It is matched from there, or left where you put it.",
         ));
         for i in unplaced {
-            let id = ui.id().with(("stitch_drag", i));
+            let id = ui.scope_id().with(("stitch_drag", i));
             ui.dnd_drag_source(id, Dragged(i), |ui| {
                 ui.label(format!(
                     "{} {}",

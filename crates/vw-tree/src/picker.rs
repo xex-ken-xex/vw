@@ -133,7 +133,7 @@ impl Picker {
     pub fn show(&mut self, ctx: &egui::Context) -> Outcome {
         let mut outcome = Outcome::Open;
         let modal =
-            egui::Modal::new(egui::Id::new(("vw_tree_picker", &self.title))).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique(("vw_tree_picker", &self.title))).show(ctx, |ui| {
                 ui.set_width(560.0);
                 vw_ui::panel::header(ui, &self.title);
                 ui.add_space(4.0);

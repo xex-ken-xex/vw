@@ -788,7 +788,7 @@ impl Session {
             self.adjust_view(ui, lang, area);
             return;
         }
-        let id = ui.id().with("compare_view");
+        let id = ui.scope_id().with("compare_view");
         let response = ui.interact(area, id, Sense::click_and_drag());
         let tiles = self.tiles(area);
         let painter = ui.painter_at(area);
@@ -857,7 +857,7 @@ impl Session {
     fn adjust_view(&mut self, ui: &egui::Ui, lang: Language, area: Rect) {
         let response = ui.interact(
             area,
-            ui.id().with("compare_adjust"),
+            ui.scope_id().with("compare_adjust"),
             Sense::click_and_drag(),
         );
         let painter = ui.painter_at(area);

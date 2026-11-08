@@ -72,7 +72,7 @@ impl ZoomMap {
             let aspect = vec2(t.size[0].max(1) as f32, t.size[1].max(1) as f32);
             let fit = (map_area.width() / aspect.x).min(map_area.height() / aspect.y);
             let map = Rect::from_center_size(map_area.center(), aspect * fit);
-            let id = ui.id().with(("zoom_map", caption));
+            let id = ui.scope_id().with(("zoom_map", caption));
             let response = ui.interact(map, id, Sense::click_and_drag());
             let painter = ui.painter_at(cell);
             painter.image(

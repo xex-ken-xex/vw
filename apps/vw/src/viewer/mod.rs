@@ -533,7 +533,7 @@ fn header_button(
     icon: &str,
     size: f32,
 ) -> egui::Response {
-    let response = ui.interact(rect, ui.id().with(id), Sense::click());
+    let response = ui.interact(rect, ui.scope_id().with(id), Sense::click());
     let visuals = ui.visuals();
     let color = if response.hovered() {
         painter.rect_filled(rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
@@ -560,7 +560,7 @@ fn similar_text(mark: &SimilarMark) -> String {
 /// 似た画像の印の説明。
 /// 手のひらで画像を引いても運べないので、見出しを引けば運べることをマウスの横に出す。
 fn move_hint(ctx: &egui::Context, pointer: egui::Pos2, lang: Language) {
-    egui::Area::new(egui::Id::new("move_hint"))
+    egui::Area::new(egui::Id::unique("move_hint"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pointer + egui::vec2(14.0, 14.0))
         .interactable(false)
@@ -645,7 +645,7 @@ fn draw_beam(
         Color32::from_white_alpha(110),
         egui::Stroke::new(1.0, Color32::from_gray(235)),
     ));
-    let response = ui.interact(frame, ui.id().with("beam"), Sense::hover());
+    let response = ui.interact(frame, ui.scope_id().with("beam"), Sense::hover());
     response.on_hover_text(format!(
         "{} {:.2}\" × {:.2}\", PA {:.1}°",
         crate::i18n::tr(lang, "Beam"),
@@ -1224,7 +1224,7 @@ impl Slot {
             // 札を hover のウィジェットにすると、その上ではスロットの本体が hover でなくなり、
             // ホイールやドラッグが効かなくなるため。
             if let Some(missing) = missing.as_ref().filter(|_| ui.rect_contains_pointer(pill)) {
-                let id = ui.id().with(("mark-missing", mark.x, mark.y));
+                let id = ui.scope_id().with(("mark-missing", mark.x, mark.y));
                 egui::Tooltip::always_open(
                     ui.ctx().clone(),
                     ui.layer_id(),
@@ -1270,7 +1270,11 @@ impl Slot {
                 let x = body.left() + body.width() * d.split;
                 let handle = Rect::from_x_y_ranges(x - 4.0..=x + 4.0, body.y_range());
                 let response = ui
-                    .interact(handle, ui.id().with(("split", self.id)), Sense::drag())
+                    .interact(
+                        handle,
+                        ui.scope_id().with(("split", self.id)),
+                        Sense::drag(),
+                    )
                     .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
                 if response.dragged() {
                     let moved = d.split + response.drag_delta().x / body.width().max(1.0);
@@ -1654,7 +1658,7 @@ impl Slot {
             );
             let response = ui.interact(
                 mark_rect,
-                ui.id().with(("similar", self.id)),
+                ui.scope_id().with(("similar", self.id)),
                 Sense::click(),
             );
             if response.hovered() {
@@ -1669,7 +1673,11 @@ impl Slot {
             pos2(right - (HEADER - 2.0), header.min.y + 2.0),
             pos2(right, header.max.y - 2.0),
         );
-        let mark = ui.interact(mark_rect, ui.id().with((chip, self.id)), Sense::hover());
+        let mark = ui.interact(
+            mark_rect,
+            ui.scope_id().with((chip, self.id)),
+            Sense::hover(),
+        );
         painter.text(
             mark_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -1780,7 +1788,7 @@ impl Slot {
 
         let response = ui.interact(
             body,
-            ui.id().with(("slot", self.id)),
+            ui.scope_id().with(("slot", self.id)),
             Sense::click_and_drag(),
         );
         let pointer = Pointer::read(&response);
@@ -2171,7 +2179,7 @@ impl Slot {
             } else {
                 applied
             };
-            let id = ui.id().with(("gauge", self.id));
+            let id = ui.scope_id().with(("gauge", self.id));
             let event = crate::colormap_ui::gauge(
                 ui,
                 id,
@@ -2287,7 +2295,7 @@ impl Slot {
         // 画像の移動はヘッダのドラッグでも始められる。手のひらのツールでは画像の上のドラッグがパンになるため。
         let header_response = ui.interact(
             header,
-            ui.id().with(("header", self.id)),
+            ui.scope_id().with(("header", self.id)),
             Sense::click_and_drag(),
         );
         if header_response.clicked() {

@@ -1369,7 +1369,7 @@ impl VwApp {
             ui.ctx()
                 .layer_painter(egui::LayerId::new(
                     egui::Order::Foreground,
-                    ui.id().with("reorder"),
+                    ui.scope_id().with("reorder"),
                 ))
                 .rect_stroke(
                     *rect,
@@ -1418,7 +1418,7 @@ impl VwApp {
             Some((from, dx)) => layout::page_after_drag(from, dx, view.pages),
             None => view.page,
         };
-        let inner = egui::Area::new(egui::Id::new("page_bar"))
+        let inner = egui::Area::new(egui::Id::unique("page_bar"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(area.right_bottom() - vec2(6.0, 6.0))

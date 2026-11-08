@@ -1071,7 +1071,7 @@ impl DatasetsScreen {
                         let rect = first.union(last).expand2(spacing / 2.0);
                         let row = ui.interact(
                             rect,
-                            ui.id().with(("dataset-row", &e.dir)),
+                            ui.scope_id().with(("dataset-row", &e.dir)),
                             egui::Sense::click(),
                         );
                         if row.hovered() {

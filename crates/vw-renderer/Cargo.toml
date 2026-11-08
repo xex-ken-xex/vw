@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["glow", "wgpu_no_default_features", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu_no_default_features", "wayland", "x11"] }
 
 # eframe の wgpu を既定の機能のまま入れると、使わない Metal・WebGL・WebGPU まで付いてくる。
 [target.'cfg(windows)'.dependencies]

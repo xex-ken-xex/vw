@@ -328,7 +328,7 @@ impl VwApp {
         };
         let name = file.0.file_name().unwrap_or_default().to_string_lossy();
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-        egui::Area::new(egui::Id::new("drag_preview"))
+        egui::Area::new(egui::Id::unique("drag_preview"))
             .order(egui::Order::Tooltip)
             .fixed_pos(pointer + vec2(14.0, 14.0))
             .interactable(false)

@@ -73,7 +73,7 @@ pub fn bar_menu<'a, R>(
     atoms: impl IntoAtoms<'a>,
     content: impl FnOnce(&mut Ui) -> R,
 ) -> (Response, Option<R>) {
-    let open_key = ui.id().with("vw-open-bar-menu");
+    let open_key = ui.scope_id().with("vw-open-bar-menu");
     let (response, inner) = MenuButton::new(atoms).ui(ui, content);
     let ctx = ui.ctx();
     let popup_id = Popup::default_response_id(&response);
@@ -134,7 +134,7 @@ pub fn button<'a, R>(
 }
 
 /// ▼ で一覧を開く選択。一覧はメニューと同じ見た目にする。
-pub fn combo(id_salt: impl egui::AsIdSalt) -> ComboBox {
+pub fn combo<'a>(id_salt: impl egui::AsIdSalt) -> ComboBox<'a> {
     ComboBox::from_id_salt(id_salt).popup_style(popup_style.into())
 }
 
@@ -151,7 +151,7 @@ pub fn submenu<R>(
     content: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let button =
-        Button::new((check_atom(false), text.into())).right_text(SubMenuButton::RIGHT_ARROW);
+        Button::new((check_atom(false), text.into())).right_text(SubMenuButton::arrow_atom(None));
     SubMenuButton::from_button(button)
         .ui(ui, content)
         .1

@@ -1173,7 +1173,7 @@ const ITEMS: &[Item] = &[
 /// 打っている途中の文字を設定とは別に持つのは、1 文字ごとに検査で弾くと、
 /// 小文字を打ってから直すといった途中の状態を作れなくなるため。
 fn ae_title_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
-    let id = ui.id().with("ae_title_draft");
+    let id = ui.scope_id().with("ae_title_draft");
     let mut draft = ui
         .data(|d| d.get_temp::<String>(id))
         .unwrap_or_else(|| s.dicom_send.ae_title.clone());
@@ -1238,7 +1238,7 @@ fn checked_text(
     width: f32,
     valid: impl Fn(&str) -> bool,
 ) -> bool {
-    let id = ui.id().with((key, "draft"));
+    let id = ui.scope_id().with((key, "draft"));
     let mut draft = ui
         .data(|d| d.get_temp::<String>(id))
         .unwrap_or_else(|| value.clone());
@@ -2618,7 +2618,7 @@ fn calib_equalize_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) ->
 
 /// 数でないあいだは赤くして、数か空になったときだけ設定にする。
 fn calib_synthetic_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
-    let id = ui.id().with("synthetic_bias_draft");
+    let id = ui.scope_id().with("synthetic_bias_draft");
     let current = &mut s.fits.calibration.synthetic_bias;
     let mut draft = ui
         .data(|d| d.get_temp::<String>(id))
@@ -4370,10 +4370,10 @@ impl Destinations {
             if let Some(Echo::Done(result)) = self.echoes.get(&row.id) {
                 let key = ("echo_logged", row.id);
                 let logged = ui
-                    .data(|d| d.get_temp::<bool>(egui::Id::new(key)))
+                    .data(|d| d.get_temp::<bool>(egui::Id::unique(key)))
                     .unwrap_or(false);
                 if !logged {
-                    ui.data_mut(|d| d.insert_temp(egui::Id::new(key), true));
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique(key), true));
                     let target = format!("{} ({})", row.dest.name, row.dest.address());
                     out.logs.push(match result {
                         Ok(()) => (true, format!("C-ECHO {target}: OK")),

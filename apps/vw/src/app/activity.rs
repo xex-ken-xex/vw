@@ -165,7 +165,7 @@ impl VwApp {
             self.toast = None;
             return;
         }
-        egui::Area::new(egui::Id::new("copied_toast"))
+        egui::Area::new(egui::Id::unique("copied_toast"))
             .order(egui::Order::Tooltip)
             .fixed_pos(toast.pos + vec2(12.0, 12.0))
             .interactable(false)

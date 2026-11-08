@@ -76,7 +76,7 @@ impl VwApp {
         .replace("{to}", &hint.suggested_mb.to_string());
         let suggested = hint.suggested_mb;
         let mut answer = None;
-        egui::Area::new(egui::Id::new("memory_hint"))
+        egui::Area::new(egui::Id::unique("memory_hint"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -48.0))
             .show(ctx, |ui| {
