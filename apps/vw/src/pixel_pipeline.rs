@@ -67,9 +67,10 @@ pub fn read_in_background(
 /// ファイルの段を読む（フレームのパスなら、そのフレームの段）。
 pub fn read(path: &std::path::Path) -> Result<Pipeline, String> {
     let (file, frame) = frames::split(path).unwrap_or_else(|| (path.to_path_buf(), 0));
-    std::fs::read(&file)
+    // 段はヘッダだけで決まるので、画素データの手前まで読む。
+    vw_dicom::frame_reader::read_head_file(&file)
+        .and_then(|head| vw_dicom::pipeline::read(&head, frame))
         .map_err(|e| e.to_string())
-        .and_then(|bytes| vw_dicom::pipeline::read(&bytes, frame).map_err(|e| e.to_string()))
 }
 
 #[cfg(test)]

@@ -126,12 +126,31 @@ pub trait DecoderPlugin: Send + Sync {
         self.decode(data).map(|img| img.metadata)
     }
 
+    /// ファイル全体を読まずに、フレームを 1 枚ずつその場所だけ読む口を開く。ヘッダとフレームの
+    /// 場所の表だけを先に読む。ネットワーク越しの数 GB のマルチフレームを、全体を読み終えるまで
+    /// 待たずに出すため。開けない（1 枚だけのファイル、場所を出せない形）なら `None` で、
+    /// 呼ぶ側は今までどおりファイル全体を読む。既定は `None`。
+    fn open_frames(&self, _path: &Path) -> Option<Arc<dyn FrameSource>> {
+        None
+    }
+
     /// 検索カタログに入れるメタデータ。既定は [`Self::read_metadata`] と同じ。
     /// メタデータ欄には見やすいよう選んだ項目だけを出し、検索にはすべてを使いたい形式
     /// （DICOM のタグ）が上書きする。
     fn read_all_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         self.read_metadata(data)
     }
+}
+
+/// [`DecoderPlugin::open_frames`] で開いた、フレームを 1 枚ずつ読めるファイル。
+pub trait FrameSource: Send + Sync {
+    fn frame_count(&self) -> usize;
+
+    /// ファイルの大きさ（バイト）。
+    fn file_size(&self) -> u64;
+
+    /// `frame` 番目（0 始まり）のフレーム。読むのはそのフレームの場所だけ。
+    fn decode_frame(&self, frame: usize) -> Result<VwImage, DecodeError>;
 }
 
 /// 中身で形式を判定するときに読む先頭のバイト数。DICOM の印（128 バイト目から）が入る長さ。
@@ -310,6 +329,17 @@ impl Registry {
             .find(path, data)
             .ok_or_else(|| DecodeError::Unsupported(format!("no plugin for {}", path.display())))?;
         Ok((plugin.read_all_metadata(data)?, plugin.name()))
+    }
+
+    /// プラグインを選んで [`DecoderPlugin::open_frames`] し、使ったプラグイン名と一緒に返す。
+    /// 選ぶのに読むのは先頭だけ。
+    pub fn open_frames(&self, path: &Path) -> Option<(Arc<dyn FrameSource>, &str)> {
+        let mut header = Vec::with_capacity(PROBE_BYTES);
+        std::fs::File::open(path)
+            .and_then(|f| std::io::Read::take(f, PROBE_BYTES as u64).read_to_end(&mut header))
+            .ok()?;
+        let plugin = self.find(path, &header)?;
+        Some((plugin.open_frames(path)?, plugin.name()))
     }
 
     /// ファイルの各フレームを出しておく時間（ミリ秒）。[`DecoderPlugin::frame_delays`]。
