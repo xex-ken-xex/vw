@@ -863,6 +863,16 @@ fn frame_means(
     cached: &mut Option<(PathBuf, Vec<u8>)>,
 ) -> Result<Vec<FrameMean>, String> {
     let (file, frame) = crate::frames::split(path).unwrap_or((path.to_path_buf(), 0));
+    // フレームの場所だけを読める形式は、ファイル全体を読まない（数 GB のファイルを作業の数だけ持たない）。
+    if crate::frames::split(path).is_some()
+        && let Some((source, _)) = crate::frame_store::STORE.source(registry, &file)
+    {
+        let image = source.decode_frame(frame).map_err(|e| e.to_string())?;
+        return Ok(regions
+            .iter()
+            .map(|&r| roi_graph::frame_mean(&image, &image.metadata, r, index))
+            .collect());
+    }
     if cached.as_ref().is_none_or(|(f, _)| *f != file) {
         let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
         *cached = Some((file.clone(), bytes));

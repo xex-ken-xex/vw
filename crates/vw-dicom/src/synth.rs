@@ -179,6 +179,45 @@ impl Synth {
         self
     }
 
+    /// [`Self::encapsulated`] の、各フレームを 2 つの断片に分け、Basic Offset Table を書く版。
+    pub fn encapsulated_in_halves(
+        mut self,
+        transfer_syntax: &'static str,
+        frames: Vec<Vec<u8>>,
+    ) -> Self {
+        self.transfer_syntax = transfer_syntax;
+        self.put_str(tags::NUMBER_OF_FRAMES, VR::IS, &frames.len().to_string());
+        let mut offsets = Vec::new();
+        let mut fragments = Vec::new();
+        let mut at = 0u32;
+        for frame in frames {
+            offsets.push(at);
+            // 断片は偶数の長さにする。
+            let half = (frame.len() / 2) & !1;
+            let (a, b) = frame.split_at(half);
+            for part in [a, b] {
+                let mut part = part.to_vec();
+                if part.len() % 2 == 1 {
+                    part.push(0);
+                }
+                at += 8 + part.len() as u32;
+                fragments.push(part);
+            }
+        }
+        self.obj.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new(offsets, fragments),
+        ));
+        self
+    }
+
+    /// ファイルの転送構文を変える（非圧縮どうし）。
+    pub fn transfer_syntax(mut self, uid: &'static str) -> Self {
+        self.transfer_syntax = uid;
+        self
+    }
+
     /// 圧縮したカラーは YBR_RCT（可逆）や YBR_ICT（非可逆）と書かれる。
     pub fn photometric(mut self, value: &str) -> Self {
         self.put_str(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, value);

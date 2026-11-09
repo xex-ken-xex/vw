@@ -12,7 +12,7 @@ use crate::export::Matcher;
 use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::loader::Job;
-use crate::series::Scan;
+use crate::series::{Part, Scan};
 use crate::settings::LoadInto;
 use crate::tree::{self};
 use crate::viewer::{Content, Origin, Sequence, SequenceKind, Slot};
@@ -150,12 +150,12 @@ impl VwApp {
         let active_id = self.slots[self.active].id;
         let mut first_new = None;
         for series in self.current_series() {
-            let has_slot = self.slots.iter().any(|s| {
-                s.sequence
-                    .as_ref()
-                    .is_some_and(|q| q.kind == SequenceKind::Series && q.paths == series.files)
-            });
-            if has_slot {
+            let parts: Vec<Part> = series
+                .parts()
+                .into_iter()
+                .filter(|part| !self.has_part_slot(part))
+                .collect();
+            if parts.is_empty() {
                 continue;
             }
             for index in (0..self.slots.len()).rev() {
@@ -167,21 +167,33 @@ impl VwApp {
                 }
             }
             // フォルダのスロットと、先に作ったシリーズのスロットの後ろに挟む。
-            let at = self
+            let after = self
                 .slots
                 .iter()
-                .rposition(|s| s.folder().is_some() || s.sequence.is_some())
+                .rposition(|s| {
+                    s.folder().is_some()
+                        || s.sequence.is_some()
+                        || (s.origin == Origin::Free && !is_blank(s))
+                })
                 .map_or(0, |i| i + 1);
-            if !self.slots.get(at).is_some_and(is_blank) {
-                self.insert_folder_slot(at);
-            }
-            let slot = &mut self.slots[at];
-            slot.origin = Origin::Free;
-            let first = series.files[0].clone();
-            slot.sequence = Some(Sequence::series(dir.clone(), series.title(), series.files));
             let full = self.cell_needs_full();
-            self.start_load(at, first, full);
-            first_new.get_or_insert(self.slots[at].id);
+            for (at, part) in (after..).zip(parts) {
+                if !self.slots.get(at).is_some_and(is_blank) {
+                    self.insert_folder_slot(at);
+                }
+                let slot = &mut self.slots[at];
+                slot.origin = Origin::Free;
+                let first = match part {
+                    Part::Files(files) => {
+                        let first = files[0].clone();
+                        slot.sequence = Some(Sequence::series(dir.clone(), series.title(), files));
+                        first
+                    }
+                    Part::File(file) => file,
+                };
+                self.start_load(at, first, full);
+                first_new.get_or_insert(self.slots[at].id);
+            }
         }
         // 見ていた画像のスロットがシリーズにまとめられて消えたら、最初のシリーズを見せる。
         let alive = |id| self.slots.iter().position(|s| s.id == id);
@@ -190,6 +202,20 @@ impl VwApp {
         {
             self.active = index;
         }
+    }
+
+    /// シリーズの `part` を出すスロットがもうあるか。
+    fn has_part_slot(&self, part: &Part) -> bool {
+        self.slots.iter().any(|s| match part {
+            Part::Files(files) => s
+                .sequence
+                .as_ref()
+                .is_some_and(|q| q.kind == SequenceKind::Series && q.paths == *files),
+            Part::File(file) => {
+                s.origin == Origin::Free
+                    && s.path.as_ref().is_some_and(|p| frames::file_of(p) == *file)
+            }
+        })
     }
 
     /// フォルダのスロットを開く。サブフォルダまで含めた画像をそのスロットに読み込む
@@ -449,17 +475,30 @@ impl VwApp {
             }
             let full = self.cell_needs_full();
             let mut at = index;
-            for (n, series) in series.into_iter().enumerate() {
+            let parts = series
+                .iter()
+                .flat_map(|series| series.parts().into_iter().map(move |part| (series, part)));
+            for (n, (series, part)) in parts.enumerate() {
                 if n > 0 {
                     at += 1;
                     self.insert_folder_slot(at);
                     self.slots[at].origin = Origin::Free;
                 }
-                let dir = series.files[0]
-                    .parent()
-                    .map_or_else(|| folder.clone(), Path::to_path_buf);
-                let first = series.files[0].clone();
-                self.slots[at].sequence = Some(Sequence::series(dir, series.title(), series.files));
+                let first = match part {
+                    Part::Files(files) => {
+                        let dir = files[0]
+                            .parent()
+                            .map_or_else(|| folder.clone(), Path::to_path_buf);
+                        let first = files[0].clone();
+                        self.slots[at].sequence =
+                            Some(Sequence::series(dir, series.title(), files));
+                        first
+                    }
+                    Part::File(file) => {
+                        self.slots[at].sequence = None;
+                        file
+                    }
+                };
                 self.start_load(at, first, full);
             }
             if !rest.is_empty() {
@@ -1212,8 +1251,13 @@ impl VwApp {
             self.cd(ctx, folder, into);
         }
         let found = self.slots.iter().position(|s| match &s.sequence {
-            Some(q) => q.kind == SequenceKind::Series && q.paths == files,
-            None => s.path.as_ref().is_some_and(|p| files.contains(p)),
+            Some(q) if q.kind == SequenceKind::Series => q.paths.iter().all(|p| files.contains(p)),
+            Some(q) if q.kind == SequenceKind::Frames => files.contains(&q.folder),
+            Some(_) => false,
+            None => s
+                .path
+                .as_ref()
+                .is_some_and(|p| files.contains(&frames::file_of(p))),
         });
         if let Some(index) = found {
             self.active = index;

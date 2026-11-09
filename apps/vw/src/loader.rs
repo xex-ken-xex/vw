@@ -339,6 +339,11 @@ pub(crate) fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "panic".to_owned())
 }
 
+/// 開いたファイルがこれより小さければ、フレームの場所だけを読む口を試さずに全体を読む。
+/// 1 枚だけのファイル（CT の 1 スライスなど）で、ヘッダを読むための往復が増えないようにする。
+/// 大きなファイルは全体を読む時間がヘッダの往復よりずっと長いので試す。
+const WHOLE_READ_BYTES: u64 = 16 << 20;
+
 /// [`load_fit`] の縮めない版。
 #[cfg(test)]
 pub fn load(registry: &Registry, path: &Path, thumb: bool, full: bool) -> Result<Loaded, String> {
@@ -384,6 +389,23 @@ fn load_look(
             got.image,
             &got.plugin,
             1,
+            got.file_size,
+            (got.read, got.decode),
+            thumb,
+            full,
+            fit_side,
+            look,
+        ));
+    }
+    if frame.is_none()
+        && std::fs::metadata(&file).is_ok_and(|m| m.len() >= WHOLE_READ_BYTES)
+        && let Some(got) = frame_store::STORE.first(registry, &file)
+    {
+        let (got, frames) = got?;
+        return Ok(finish(
+            got.image,
+            &got.plugin,
+            frames,
             got.file_size,
             (got.read, got.decode),
             thumb,

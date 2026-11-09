@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use vw_core::{Metadata, Registry};
 
 /// ヘッダを読むときに最初に読むバイト数。画素データの手前までがたいていこれに収まり、
-/// 1 ファイル数百 KB の CT でも全体を読まずに済む。収まらなければ全体を読み直す。
+/// 1 ファイル数百 KB の CT でも全体を読まずに済む。収まらなければ画素データの手前まで読み足す。
 const HEADER_BYTES: u64 = 64 * 1024;
 
 /// 1 つのシリーズ。
@@ -23,6 +23,17 @@ pub struct Series {
     pub modality: String,
     /// Instance Number の順（同じならファイル名の順）に並べたファイル。
     pub files: Vec<PathBuf>,
+    /// `files` のうち、フレームが 2 枚以上あるもの（同じ順）。
+    pub multiframe: Vec<PathBuf>,
+}
+
+/// シリーズをスロットに並べるときの 1 つ分。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Part {
+    /// 1 枚ずつのファイルをまとめた並び。ホイールでファイルを送る。
+    Files(Vec<PathBuf>),
+    /// 1 ファイル。マルチフレームなら、スロットの中でフレームを送る。
+    File(PathBuf),
 }
 
 impl Series {
@@ -40,6 +51,25 @@ impl Series {
             format!("{}, ", self.modality)
         };
         format!("{number}{description} ({modality}{})", self.files.len())
+    }
+
+    /// スロットに並べる形。1 枚ずつのファイルが 2 つ以上あれば 1 つの並びにまとめ、その後ろに
+    /// マルチフレームのファイル（と、まとめなかった 1 枚のファイル）を Instance Number の順に置く。
+    /// マルチフレームを並びに入れないのは、並びはファイルを送るだけで、各ファイルの 2 フレーム目
+    /// 以降に行けないため（トモシンセシスは左右・向きごとのファイルが 1 シリーズに入る）。
+    pub fn parts(&self) -> Vec<Part> {
+        let singles: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|f| !self.multiframe.contains(f))
+            .cloned()
+            .collect();
+        if singles.len() < 2 {
+            return self.files.iter().cloned().map(Part::File).collect();
+        }
+        std::iter::once(Part::Files(singles))
+            .chain(self.multiframe.iter().cloned().map(Part::File))
+            .collect()
     }
 }
 
@@ -104,11 +134,19 @@ pub fn group(entries: Vec<(PathBuf, Metadata)>) -> Vec<Study> {
                     description: get("Series"),
                     modality: get("Modality"),
                     files: Vec::new(),
+                    multiframe: Vec::new(),
                 });
                 study.series.last_mut().expect("just pushed")
             }
         };
         instance.insert(path.clone(), get("Instance number").trim().parse().ok());
+        if get("Number of frames")
+            .trim()
+            .parse::<usize>()
+            .is_ok_and(|n| n > 1)
+        {
+            series.multiframe.push(path.clone());
+        }
         series.files.push(path);
     }
     studies.sort_by(|a, b| (&a.date, &a.description).cmp(&(&b.date, &b.description)));
@@ -118,9 +156,9 @@ pub fn group(entries: Vec<(PathBuf, Metadata)>) -> Vec<Study> {
             .sort_by_key(|s| (s.number.is_none(), s.number, s.description.clone()));
         for series in &mut study.series {
             // 番号のないファイルは後ろに回す。
-            series
-                .files
-                .sort_by_key(|p| (instance[p].is_none(), instance[p], p.clone()));
+            let order = |p: &PathBuf| (instance[p].is_none(), instance[p], p.clone());
+            series.files.sort_by_key(order);
+            series.multiframe.sort_by_key(order);
         }
     }
     studies
@@ -257,6 +295,12 @@ pub fn split_into_series<'a>(
             }
             taken.extend(files.iter().cloned());
             found.push(Series {
+                multiframe: series
+                    .multiframe
+                    .iter()
+                    .filter(|f| wanted.contains(f))
+                    .cloned()
+                    .collect(),
                 files,
                 ..series.clone()
             });
@@ -283,8 +327,9 @@ fn read_header(registry: &Registry, path: &Path) -> Option<Metadata> {
         return None;
     }
     plugin.read_metadata(&head).ok().or_else(|| {
-        let all = std::fs::read(path).ok()?;
-        plugin.read_metadata(&all).ok()
+        // 画素データの手前まで読み足す。全体を読み直すと、数 GB のマルチフレームを丸ごと読んでしまう。
+        let head = vw_dicom::frame_reader::read_head_file(path).ok()?;
+        plugin.read_metadata(&head).ok()
     })
 }
 
@@ -394,6 +439,63 @@ mod tests {
         assert_eq!(shape, ["s1/a1: y", "s1/a2: x z", "s2/b: c"]);
     }
 
+    fn frames(mut m: Metadata, n: &str) -> Metadata {
+        m.push("DICOM", "Number of frames", n);
+        m
+    }
+
+    #[test]
+    fn multiframe_files_of_a_series_get_their_own_parts_after_the_single_files() {
+        let entries = vec![
+            (
+                PathBuf::from("tomo-l"),
+                frames(meta("s", "", "a", "1", "4"), "50"),
+            ),
+            (PathBuf::from("2d-r"), meta("s", "", "a", "1", "1")),
+            (
+                PathBuf::from("tomo-r"),
+                frames(meta("s", "", "a", "1", "3"), "48"),
+            ),
+            (
+                PathBuf::from("2d-l"),
+                frames(meta("s", "", "a", "1", "2"), "1"),
+            ),
+        ];
+        let series = &group(entries)[0].series[0];
+        assert_eq!(
+            series.parts(),
+            [
+                Part::Files(vec![PathBuf::from("2d-r"), PathBuf::from("2d-l")]),
+                Part::File(PathBuf::from("tomo-r")),
+                Part::File(PathBuf::from("tomo-l")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_series_of_only_multiframe_files_is_one_part_per_file() {
+        let entries = vec![
+            (
+                PathBuf::from("b"),
+                frames(meta("s", "", "a", "1", "2"), "30"),
+            ),
+            (
+                PathBuf::from("a"),
+                frames(meta("s", "", "a", "1", "1"), "30"),
+            ),
+            (PathBuf::from("c"), meta("s", "", "a", "1", "3")),
+        ];
+        let series = &group(entries)[0].series[0];
+        assert_eq!(
+            series.parts(),
+            [
+                Part::File(PathBuf::from("a")),
+                Part::File(PathBuf::from("b")),
+                Part::File(PathBuf::from("c")),
+            ]
+        );
+    }
+
     #[test]
     fn files_without_a_series_uid_are_left_out() {
         let studies = group(vec![(PathBuf::from("a.png"), Metadata::default())]);
@@ -408,6 +510,7 @@ mod tests {
             description: "Axial".into(),
             modality: "CT".into(),
             files: vec![PathBuf::from("a"), PathBuf::from("b")],
+            multiframe: vec![],
         };
         assert_eq!(series.title(), "#2 Axial (CT, 2)");
         let study = Study {
