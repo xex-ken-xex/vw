@@ -24,7 +24,7 @@ use crate::{Colors, check_pixel_size, decode_one, frames_in, int, metadata, open
 
 /// 場所を指して読めるファイル。テストでは読んだバイト数を数える。
 pub trait ReadAt: Send + Sync {
-    fn len(&self) -> u64;
+    fn size(&self) -> u64;
 
     /// `at` から `buf` の長さだけ読む。足りなければエラー。
     fn read_at(&self, at: u64, buf: &mut [u8]) -> std::io::Result<()>;
@@ -48,7 +48,7 @@ impl FileAt {
 }
 
 impl ReadAt for FileAt {
-    fn len(&self) -> u64 {
+    fn size(&self) -> u64 {
         self.len
     }
 
@@ -74,7 +74,7 @@ pub struct Head {
 /// 画素データの要素のヘッダまでを、足りなければ倍ずつ読み足して読む。辿れない形
 /// （deflate・ビッグエンディアン）や、頭が [`MAX_HEAD`] を超えるときは `None`。
 pub fn read_head(src: &dyn ReadAt) -> Result<Option<Head>, DecodeError> {
-    let total = src.len();
+    let total = src.size();
     let mut bytes = Vec::new();
     let mut want = FIRST_HEAD.min(total);
     loop {
@@ -226,7 +226,7 @@ impl FrameSource for FileFrames {
     }
 
     fn file_size(&self) -> u64 {
-        self.src.len()
+        self.src.size()
     }
 
     fn decode_frame(&self, frame: usize) -> Result<VwImage, DecodeError> {
@@ -297,13 +297,15 @@ fn fragment_layout(
     let mut table = vec![0u8; table_len as usize];
     src.read_at(value_at + 8, &mut table)?;
     let offsets: Vec<u64> = table
-        .chunks_exact(4)
-        .map(|b| u64::from(u32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u64::from(u32::from_le_bytes(*b)))
         .collect();
     let first = value_at + 8 + u64::from(table_len);
     let mut fragments = Vec::new();
     let mut at = first;
-    while at + 8 <= src.len() {
+    while at + 8 <= src.size() {
         let (tag, len) = item_header(at)?;
         match tag {
             SEQUENCE_END => break,
@@ -340,8 +342,8 @@ fn fragment_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use vw_core::{DecoderPlugin, PixelData};
 
@@ -358,7 +360,7 @@ mod tests {
     }
 
     impl ReadAt for Counted {
-        fn len(&self) -> u64 {
+        fn size(&self) -> u64 {
             self.data.len() as u64
         }
 
@@ -385,7 +387,9 @@ mod tests {
     }
 
     fn u16_frame(n: u16, pixels: usize) -> Vec<u16> {
-        (0..pixels).map(|i| n.wrapping_mul(1000).wrapping_add(i as u16)).collect()
+        (0..pixels)
+            .map(|i| n.wrapping_mul(1000).wrapping_add(i as u16))
+            .collect()
     }
 
     const SIDE: u16 = 256;
@@ -428,7 +432,14 @@ mod tests {
 
     #[test]
     fn frames_read_by_place_match_the_whole_file_reading() {
-        for synth in [bt(3), bt(3).per_frame_values(&[(1.0, 0.0, 100.0, 50.0), (2.0, -10.0, 900.0, 200.0), (1.0, 5.0, 3000.0, 1000.0)])] {
+        for synth in [
+            bt(3),
+            bt(3).per_frame_values(&[
+                (1.0, 0.0, 100.0, 50.0),
+                (2.0, -10.0, 900.0, 200.0),
+                (1.0, 5.0, 3000.0, 1000.0),
+            ]),
+        ] {
             let bytes = synth.bytes();
             let (src, _) = counted(bytes.clone());
             let frames = FileFrames::open(src).unwrap().unwrap();
@@ -437,7 +448,11 @@ mod tests {
                 let by_place = frames.decode_frame(i).unwrap();
                 assert_eq!(dbg_of(&by_place.data), dbg_of(&whole.data), "frame {i}");
                 assert_eq!(by_place.window, whole.window, "frame {i}");
-                assert_eq!(dbg_of(&by_place.metadata), dbg_of(&whole.metadata), "frame {i}");
+                assert_eq!(
+                    dbg_of(&by_place.metadata),
+                    dbg_of(&whole.metadata),
+                    "frame {i}"
+                );
             }
         }
     }
@@ -448,12 +463,20 @@ mod tests {
         let (src, _) = counted(bytes.clone());
         let frames = FileFrames::open(src).unwrap().unwrap();
         let whole = DicomPlugin.decode_frame(&bytes, 1).unwrap();
-        assert_eq!(dbg_of(&frames.decode_frame(1).unwrap().data), dbg_of(&whole.data));
+        assert_eq!(
+            dbg_of(&frames.decode_frame(1).unwrap().data),
+            dbg_of(&whole.data)
+        );
     }
 
     fn jpeg_ls_frames(n: u8) -> (Vec<Vec<u8>>, Vec<[u8; 16]>) {
-        let raw: Vec<[u8; 16]> = (0..n).map(|f| std::array::from_fn(|i| f * 20 + i as u8)).collect();
-        let jls = raw.iter().map(|r| crate::tests::jpeg_ls(4, 4, 8, 1, 0, r)).collect();
+        let raw: Vec<[u8; 16]> = (0..n)
+            .map(|f| std::array::from_fn(|i| f * 20 + i as u8))
+            .collect();
+        let jls = raw
+            .iter()
+            .map(|r| crate::tests::jpeg_ls(4, 4, 8, 1, 0, r))
+            .collect();
         (jls, raw)
     }
 
@@ -483,7 +506,10 @@ mod tests {
         let frames = FileFrames::open(src).unwrap().unwrap();
         for (i, want) in raw.iter().enumerate() {
             let img = frames.decode_frame(i).unwrap();
-            assert!(matches!(&img.data, PixelData::U8(v) if v == want), "frame {i}");
+            assert!(
+                matches!(&img.data, PixelData::U8(v) if v == want),
+                "frame {i}"
+            );
         }
     }
 
@@ -497,7 +523,10 @@ mod tests {
         let (src, _) = counted(bytes.clone());
         let frames = FileFrames::open(src).unwrap().unwrap();
         let whole = DicomPlugin.decode_frame(&bytes, 1).unwrap();
-        assert_eq!(dbg_of(&frames.decode_frame(1).unwrap().data), dbg_of(&whole.data));
+        assert_eq!(
+            dbg_of(&frames.decode_frame(1).unwrap().data),
+            dbg_of(&whole.data)
+        );
     }
 
     #[test]

@@ -180,7 +180,11 @@ impl Synth {
     }
 
     /// [`Self::encapsulated`] の、各フレームを 2 つの断片に分け、Basic Offset Table を書く版。
-    pub fn encapsulated_in_halves(mut self, transfer_syntax: &'static str, frames: Vec<Vec<u8>>) -> Self {
+    pub fn encapsulated_in_halves(
+        mut self,
+        transfer_syntax: &'static str,
+        frames: Vec<Vec<u8>>,
+    ) -> Self {
         self.transfer_syntax = transfer_syntax;
         self.put_str(tags::NUMBER_OF_FRAMES, VR::IS, &frames.len().to_string());
         let mut offsets = Vec::new();

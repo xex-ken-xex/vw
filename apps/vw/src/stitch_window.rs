@@ -1642,12 +1642,7 @@ const WCS_KEYS: [&str; 22] = [
 ];
 
 fn prepare(path: &Path, registry: &Registry) -> Result<(Prepared, Piece), String> {
-    let (file, frame) = crate::frames::split(path).unwrap_or((path.to_path_buf(), 0));
-    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
-    let (image, plugin) = registry
-        .decode_frame_bytes(&file, &bytes, frame)
-        .map_err(|e| e.to_string())?;
-    drop(bytes);
+    let (image, plugin, _) = crate::frame_store::decode_path(registry, path)?;
     let fits = plugin == "FITS";
     let (w, h) = (image.width as usize, image.height as usize);
     let display = vw_core::display::to_display(

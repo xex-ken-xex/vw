@@ -194,13 +194,9 @@ pub fn render(plan: &Plan, registry: &Registry) -> Result<(VwImage, usize), Stri
     // 縮めて出すときは、先に元の画像を整数分の 1 に縮めて、細かい模様の折り返しを防ぐ。
     let shrink = (grid.step().floor() as usize).max(1);
     for s in &plan.sources {
-        let (file, frame) = crate::frames::split(&s.path).unwrap_or((s.path.clone(), 0));
-        let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        read += bytes.len();
-        let (image, _) = registry
-            .decode_frame_bytes(&file, &bytes, frame)
-            .map_err(|e| format!("{}: {e}", file.display()))?;
-        drop(bytes);
+        let file = crate::frames::file_of(&s.path);
+        let (image, _, bytes) = crate::frame_store::decode_path(registry, &s.path)?;
+        read += bytes;
         let (w, h) = (image.width as usize, image.height as usize);
         if [w, h] != s.size {
             return Err(format!(

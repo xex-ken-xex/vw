@@ -112,6 +112,24 @@ impl Entry {
     }
 }
 
+/// `path`（フレームを指すパスも）の 1 枚を読み、画像とプラグイン名と読んだおよそのバイト数を返す。
+/// フレームの場所だけを読める形式はその場所だけを読み、それ以外はファイル全体を読む。
+/// 表示の置き場（[`STORE`]）には入れない。見ている画像の先読みを追い出さないため。
+pub fn decode_path(registry: &Registry, path: &Path) -> Result<(VwImage, String, usize), String> {
+    let (file, frame) = crate::frames::split(path).unwrap_or((path.to_path_buf(), 0));
+    let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", file.display());
+    if let Some((source, plugin)) = STORE.source(registry, &file) {
+        let image = source.decode_frame(frame).map_err(|e| fail(&e))?;
+        let read = image_bytes(&image);
+        return Ok((image, plugin, read));
+    }
+    let bytes = std::fs::read(&file).map_err(|e| fail(&e))?;
+    let (image, plugin) = registry
+        .decode_frame_bytes(&file, &bytes, frame)
+        .map_err(|e| fail(&e))?;
+    Ok((image, plugin.to_owned(), bytes.len()))
+}
+
 /// 先読みの距離。`cursor` から先へ数えて何枚目か（最後の先は頭に戻る）。
 fn ahead(frame: usize, cursor: usize, count: usize) -> usize {
     (frame + count - cursor % count) % count
@@ -193,6 +211,17 @@ impl FrameStore {
         Some(opened)
     }
 
+    /// `file` のフレームの場所だけを読む口と、そのプラグイン名。ほかの道具（ROI のグラフ、
+    /// つなぎ合わせ）がフレームを読むときに使う。開けなければ `None`。
+    pub fn source(
+        &self,
+        registry: &Registry,
+        file: &Path,
+    ) -> Option<(Arc<dyn FrameSource>, String)> {
+        let opened = self.open(registry, file, stamp(file)?)?;
+        Some((opened.source, opened.plugin))
+    }
+
     fn start_source(&self, registry: &Registry, file: &Path, now: Stamp) -> Option<Arc<Entry>> {
         let opened = self.open(registry, file, now)?;
         let file_size = opened.source.file_size() as usize;
@@ -269,7 +298,10 @@ impl FrameStore {
 
     /// 読み口のある置き場から `frame` 番目を渡す。持っていなければその場所だけを読む。
     fn read_frame(&'static self, entry: &Arc<Entry>, frame: usize) -> Result<Frame, String> {
-        let source = entry.source.as_ref().expect("only for entries with a source");
+        let source = entry
+            .source
+            .as_ref()
+            .expect("only for entries with a source");
         let count = source.source.frame_count();
         if frame >= count {
             return Err(format!("no frame {frame} (the file has {count})"));
@@ -360,7 +392,10 @@ impl FrameStore {
     }
 
     fn prefetch_ahead(&self, entry: &Arc<Entry>) {
-        let source = entry.source.as_ref().expect("only for entries with a source");
+        let source = entry
+            .source
+            .as_ref()
+            .expect("only for entries with a source");
         let count = source.source.frame_count();
         loop {
             let (next, estimate) = {
@@ -565,8 +600,8 @@ impl FrameStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vw_core::{ColorModel, DecodeError, DecoderPlugin, PixelData};
     use std::sync::Mutex;
+    use vw_core::{ColorModel, DecodeError, DecoderPlugin, PixelData};
 
     /// 先頭のバイトがフレーム数で、`n` 番目のフレームが画素値 `n` の 1x1 のグレー。
     /// 解析（decode_frames と decode_frame）の回数を数える。
@@ -747,7 +782,8 @@ mod tests {
         let plugin = Arc::new(Placed::default());
         let mut registry = Registry::new();
         registry.register(plugin.clone());
-        let dir = std::env::temp_dir().join(format!("vw-frame-store-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("vw-frame-store-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("tomo.placed");
         std::fs::write(&file, [frames]).unwrap();
@@ -776,7 +812,10 @@ mod tests {
     fn frames_of_a_placed_file_are_read_one_by_one_without_reading_the_whole_file() {
         let (store, registry, plugin, file) = setup_placed(5, 1 << 20, "whole");
         for i in [3, 0, 4] {
-            assert_eq!(value(store.frame(&registry, &file, i).unwrap().unwrap()), i as u8);
+            assert_eq!(
+                value(store.frame(&registry, &file, i).unwrap().unwrap()),
+                i as u8
+            );
         }
         assert_eq!(settled(store, &file), [0, 1, 2, 3, 4]);
         assert_eq!(plugin.whole.load(Ordering::Relaxed), 0);
