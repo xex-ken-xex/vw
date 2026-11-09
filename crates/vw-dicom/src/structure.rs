@@ -40,6 +40,7 @@ pub fn check(data: &[u8], total: u64, header_only: bool) -> Result<(), DecodeErr
         total,
         pos: 0,
         syntax: Syntax::EXPLICIT_LE,
+        found: None,
     };
     let syntax = match w.meta()? {
         Walk::More(s) => s,
@@ -51,6 +52,60 @@ pub fn check(data: &[u8], total: u64, header_only: bool) -> Result<(), DecodeErr
     }
     w.syntax = syntax;
     w.elements(None, 0, header_only).map(drop)
+}
+
+/// 一番外の画素データの要素の位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelDataAt {
+    /// 要素のヘッダ（タグ）の位置。ここより前がヘッダ。
+    pub header_at: u64,
+    /// 値の位置。断片の並び（未定義長）なら、最初の項目（Basic Offset Table）の位置。
+    pub value_at: u64,
+    /// 値の長さ。断片の並びなら `None`。
+    pub length: Option<u32>,
+}
+
+/// [`locate_pixel_data`] の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Located {
+    At(PixelDataAt),
+    /// 渡した頭では画素データまで届かない。もっと読んで渡し直す。
+    NeedMore,
+    /// ファイルの終わりまで画素データがない。
+    Absent,
+    /// 辿れない形（deflate やビッグエンディアン）。ファイル全体を読むしかない。
+    Unwalkable,
+}
+
+/// `data`（ファイルの頭から `data.len()` バイト、ファイル全体は `total` バイト）から、一番外の
+/// 画素データの要素を探す。途中の要素の長さも [`check`] と同じく確かめる。
+pub fn locate_pixel_data(data: &[u8], total: u64) -> Result<Located, DecodeError> {
+    let more = if (data.len() as u64) < total {
+        Located::NeedMore
+    } else {
+        Located::Absent
+    };
+    let Some(body) = data.get(PREAMBLE..) else {
+        return Ok(more);
+    };
+    let mut w = Walker {
+        data: body,
+        base: PREAMBLE as u64,
+        total,
+        pos: 0,
+        syntax: Syntax::EXPLICIT_LE,
+        found: None,
+    };
+    let syntax = match w.meta()? {
+        Walk::More(s) => s,
+        Walk::End => return Ok(more),
+    };
+    if syntax.deflated || syntax.big_endian {
+        return Ok(Located::Unwalkable);
+    }
+    w.syntax = syntax;
+    w.elements(None, 0, true)?;
+    Ok(w.found.map_or(more, Located::At))
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +160,8 @@ struct Walker<'a> {
     total: u64,
     pos: usize,
     syntax: Syntax,
+    /// 一番外の画素データで辿るのをやめたときの、その位置。
+    found: Option<PixelDataAt>,
 }
 
 impl Walker<'_> {
@@ -144,6 +201,7 @@ impl Walker<'_> {
         header_only: bool,
     ) -> Result<Walk<()>, DecodeError> {
         while end.is_none_or(|e| self.pos < e) {
+            let start = self.pos;
             let Walk::More(h) = self.header()? else {
                 return Ok(Walk::End);
             };
@@ -157,6 +215,11 @@ impl Walker<'_> {
                 continue;
             }
             if header_only && depth == 0 && h.tag == PIXEL_DATA {
+                self.found = Some(PixelDataAt {
+                    header_at: self.base + start as u64,
+                    value_at: self.base + self.pos as u64,
+                    length: (h.length != UNDEFINED).then_some(h.length),
+                });
                 return Ok(Walk::End);
             }
             let sequence = h.vr == Some(VR::SQ) || h.length == UNDEFINED;

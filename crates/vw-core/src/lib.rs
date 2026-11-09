@@ -30,4 +30,4 @@ pub mod xmp;
 pub use display::{DisplayImage, DisplayImage16, DisplayParams};
 pub use image::{ColorModel, Curve, Metadata, PixelData, VwImage};
 pub use palette::Palette;
-pub use plugin::{DecodeError, DecoderPlugin, ProbeExtensions, Registry};
+pub use plugin::{DecodeError, DecoderPlugin, FrameSource, ProbeExtensions, Registry};

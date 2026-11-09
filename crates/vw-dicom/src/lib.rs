@@ -27,6 +27,7 @@ use charset::Charset;
 
 pub mod charset;
 pub mod color;
+pub mod frame_reader;
 pub mod net;
 pub mod pipeline;
 pub mod structure;
@@ -115,6 +116,15 @@ impl DecoderPlugin for DicomPlugin {
                 return;
             }
         }
+    }
+
+    fn open_frames(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<std::sync::Arc<dyn vw_core::FrameSource>> {
+        let src = frame_reader::FileAt::open(path).ok()?;
+        let frames = frame_reader::FileFrames::open(Box::new(src)).ok()??;
+        Some(std::sync::Arc::new(frames))
     }
 
     /// 画素データの手前で読むのをやめるので、大きなファイルでも速い。
@@ -659,7 +669,7 @@ fn dicom_transfer_syntax_name(uid: &str) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use dicom_core::VR;
     use synth::{
@@ -678,13 +688,13 @@ mod tests {
     }
 
     /// testdata/*.j2k に入れた値。testdata/make_j2k.py で作った。
-    const J2K_GRAY16: [u16; 8] = [0, 1000, 2000, 3000, 4095, 300, 40, 7];
+    pub(crate) const J2K_GRAY16: [u16; 8] = [0, 1000, 2000, 3000, 4095, 300, 40, 7];
     const J2K_RGB8: [u8; 24] = [
         255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30, 200, 100, 50, 0, 0, 0, 255, 255, 255, 128, 64,
         32,
     ];
 
-    fn jpeg_ls(
+    pub(crate) fn jpeg_ls(
         width: u32,
         height: u32,
         bits: i32,
