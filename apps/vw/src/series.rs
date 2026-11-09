@@ -37,8 +37,17 @@ pub enum Part {
 }
 
 impl Series {
-    /// ツリーに出す名前。例: `#2 Axial 1mm (CT, 24)`。
+    /// ツリーに出す名前。例: `#2 Axial 1mm (CT, 24)`。数はシリーズ全体のファイル数。
     pub fn title(&self) -> String {
+        self.title_with_count(self.files.len())
+    }
+
+    /// シリーズの一部を入れたスロットの見出し。数はそのスロットに入れたファイル数。
+    pub fn slot_title(&self, files: &[PathBuf]) -> String {
+        self.title_with_count(files.len())
+    }
+
+    fn title_with_count(&self, count: usize) -> String {
         let number = self.number.map(|n| format!("#{n} ")).unwrap_or_default();
         let description = if self.description.is_empty() {
             "(no description)"
@@ -50,7 +59,7 @@ impl Series {
         } else {
             format!("{}, ", self.modality)
         };
-        format!("{number}{description} ({modality}{})", self.files.len())
+        format!("{number}{description} ({modality}{count})")
     }
 
     /// スロットに並べる形。1 枚ずつのファイルが 2 つ以上あれば 1 つの並びにまとめ、その後ろに
@@ -520,6 +529,33 @@ mod tests {
             series: vec![],
         };
         assert_eq!(study.title(), "Head 2026-10-01");
+    }
+
+    fn tomo_and_2d_series() -> Series {
+        Series {
+            uid: "1".into(),
+            number: Some(1),
+            description: "Tomo + 2D".into(),
+            modality: "MG".into(),
+            files: ["2d-l", "2d-r", "tomo-l", "tomo-r"]
+                .map(PathBuf::from)
+                .to_vec(),
+            multiframe: ["tomo-l", "tomo-r"].map(PathBuf::from).to_vec(),
+        }
+    }
+
+    #[test]
+    fn slot_title_of_a_series_split_by_multiframe_counts_only_files_in_the_slot() {
+        let series = tomo_and_2d_series();
+        let Some(Part::Files(files)) = series.parts().into_iter().next() else {
+            panic!("2D files should be grouped first");
+        };
+        assert_eq!(series.slot_title(&files), "#1 Tomo + 2D (MG, 2)");
+    }
+
+    #[test]
+    fn tree_title_of_a_series_split_by_multiframe_counts_all_files() {
+        assert_eq!(tomo_and_2d_series().title(), "#1 Tomo + 2D (MG, 4)");
     }
 
     #[test]

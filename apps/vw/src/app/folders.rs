@@ -186,7 +186,11 @@ impl VwApp {
                 let first = match part {
                     Part::Files(files) => {
                         let first = files[0].clone();
-                        slot.sequence = Some(Sequence::series(dir.clone(), series.title(), files));
+                        slot.sequence = Some(Sequence::series(
+                            dir.clone(),
+                            series.slot_title(&files),
+                            files,
+                        ));
                         first
                     }
                     Part::File(file) => file,
@@ -490,8 +494,8 @@ impl VwApp {
                             .parent()
                             .map_or_else(|| folder.clone(), Path::to_path_buf);
                         let first = files[0].clone();
-                        self.slots[at].sequence =
-                            Some(Sequence::series(dir, series.title(), files));
+                        let title = series.slot_title(&files);
+                        self.slots[at].sequence = Some(Sequence::series(dir, title, files));
                         first
                     }
                     Part::File(file) => {
