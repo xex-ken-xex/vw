@@ -47,6 +47,8 @@ pub enum Action {
     Layout3x3,
     Layout4x4,
     LayoutCustom,
+    PickLayout,
+    ToggleWallBar,
     TogglePlay,
     ToggleTagging,
     FlagGood,
@@ -279,6 +281,8 @@ impl Action {
         Action::Layout3x3,
         Action::Layout4x4,
         Action::LayoutCustom,
+        Action::PickLayout,
+        Action::ToggleWallBar,
         Action::TogglePixelProbe,
         Action::ToggleRoi,
         Action::ToggleHandTool,
@@ -400,6 +404,8 @@ impl Action {
             Action::Layout3x3 => "layout_3x3",
             Action::Layout4x4 => "layout_4x4",
             Action::LayoutCustom => "layout_custom",
+            Action::PickLayout => "pick_layout",
+            Action::ToggleWallBar => "toggle_wall_bar",
             Action::TogglePlay => "toggle_play",
             Action::ToggleTagging => "toggle_tagging",
             Action::FlagGood => "flag_good",
@@ -561,6 +567,8 @@ impl Action {
             Action::Layout3x3 => "Layout: 3 x 3",
             Action::Layout4x4 => "Layout: 4 x 4",
             Action::LayoutCustom => "Layout: custom",
+            Action::PickLayout => "Choose a layout...",
+            Action::ToggleWallBar => "Show the bar under the slots",
             Action::TogglePlay => "Play/pause slideshow",
             Action::ToggleTagging => "Tagging mode on/off",
             Action::FlagGood => "Flag as good",
@@ -691,6 +699,8 @@ impl Action {
             | Action::Layout3x3
             | Action::Layout4x4
             | Action::LayoutCustom
+            | Action::PickLayout
+            | Action::ToggleWallBar
             | Action::NewSlot
             | Action::CloseSlot
             | Action::CloseAllSlots => KeyGroup::Layout,
@@ -966,6 +976,7 @@ impl Action {
             Action::Layout3x3 => vec![KeyCombo::alt(Num5)],
             Action::Layout4x4 => vec![KeyCombo::alt(Num6)],
             Action::LayoutCustom => vec![KeyCombo::alt(Num7)],
+            Action::PickLayout | Action::ToggleWallBar => vec![],
             Action::TogglePlay => vec![KeyCombo::plain(P)],
             Action::ToggleTagging => vec![KeyCombo::plain(T)],
             Action::FlagGood => vec![KeyCombo::plain(ArrowUp)],

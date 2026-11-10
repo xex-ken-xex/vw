@@ -15,6 +15,7 @@ use crate::tree::{self};
 use crate::viewer::{Content, SequenceKind, Shown};
 
 use super::*;
+use crate::wall_bar::WallPart;
 
 impl VwApp {
     /// アクティブなスロットを最大化して、その並び（フォルダスロットならその中身、
@@ -48,7 +49,10 @@ impl VwApp {
             self.log.warn("Slideshow: there is only one image to show");
             return;
         }
-        if self.maximized != Some(slot.id) {
+        // 外壁の帯に再生があれば、並べたまま選んでいるスロットで再生する。なければ今までどおり
+        // 最大化して、その下に出す再生の帯で操作できるようにする。
+        self.playing_in_place = self.settings().wall_bar.shows(WallPart::Play);
+        if !self.playing_in_place && self.maximized != Some(slot.id) {
             self.toggle_maximize(self.active);
         }
         let v = &self.settings().viewer;
@@ -115,8 +119,13 @@ impl VwApp {
             return;
         };
         let index = self.slots.iter().position(|s| s.id == pb.slot);
-        let Some(index) = index.filter(|_| self.maximized == Some(pb.slot)) else {
-            // 最大化を解いた、別のスロットに移った、スロットを閉じた。
+        let still_watched = if self.playing_in_place {
+            self.slots.get(self.active).is_some_and(|s| s.id == pb.slot)
+        } else {
+            self.maximized == Some(pb.slot)
+        };
+        let Some(index) = index.filter(|_| still_watched) else {
+            // 最大化を解いた、別のスロットを選んだ、スロットを閉じた。
             self.stop_playback();
             return;
         };
@@ -230,58 +239,87 @@ impl VwApp {
             .unwrap_or(self.settings().viewer.slideshow_fps)
     }
 
-    /// 最大化したスロットの下の再生バー。
+    /// 外壁の帯を出していないときに、最大化したスロットの下に出す再生バー。
     pub(super) fn play_bar(&self, ui: &mut egui::Ui) -> Option<BarAction> {
+        ui.horizontal_centered(|ui| {
+            ui.add_space(6.0);
+            self.play_controls(ui, false, false, false)
+        })
+        .inner
+    }
+
+    /// 再生の操作（再生／止める、ファイルの速さ、FPS、速さの候補、最後まで行ったら、位置、
+    /// 落としたフレーム）。外壁の帯と再生バーの、横に並べる中で描く。`compact` なら速さの候補を
+    /// 小さなメニューにしまう。
+    /// `compact` は速さの候補を小さなメニューにしまう。`icons` は文字を省いて、狭い外壁の帯に入れる。
+    /// `in_menu` はメニューの中に描くときで、一覧を下の段で開く（[`Self::wall_bar`] の「…」）。
+    pub(super) fn play_controls(
+        &self,
+        ui: &mut egui::Ui,
+        compact: bool,
+        icons: bool,
+        in_menu: bool,
+    ) -> Option<BarAction> {
         let lang = self.lang();
         let viewer = &self.settings().viewer;
         let mut action = None;
-        ui.horizontal_centered(|ui| {
-            ui.add_space(6.0);
-            let playing = self.playback.is_some();
-            let (glyph, tip) = if playing {
-                (icon::PAUSE, "Pause")
-            } else {
-                (icon::PLAY, "Play")
-            };
-            let tip = self.with_key(tr(lang, tip), Action::TogglePlay);
-            if ui.button(glyph).on_hover_text(tip).clicked() {
-                action = Some(BarAction::TogglePlay);
-            }
-            let file_fps = self.file_fps();
-            let mut use_file = self.use_file_speed;
-            let r = ui
-                .add_enabled(
-                    file_fps.is_some(),
-                    egui::Checkbox::new(&mut use_file, tr(lang, "File speed")),
-                )
-                .on_hover_text(tr(
+        let playing = self.playback.is_some();
+        let (glyph, tip) = if playing {
+            (icon::PAUSE, "Pause")
+        } else {
+            (icon::PLAY, "Play")
+        };
+        let tip = self.with_key(tr(lang, tip), Action::TogglePlay);
+        if ui.button(glyph).on_hover_text(tip).clicked() {
+            action = Some(BarAction::TogglePlay);
+        }
+        let file_fps = self.file_fps();
+        let mut use_file = self.use_file_speed;
+        let r = ui
+            .add_enabled(
+                file_fps.is_some(),
+                egui::Checkbox::new(
+                    &mut use_file,
+                    if icons { "" } else { tr(lang, "File speed") },
+                ),
+            )
+            .on_hover_text(format!(
+                "{}\n{}",
+                tr(lang, "File speed"),
+                tr(
                     lang,
                     "Play at the speed written in the file. Changing the FPS turns this off.",
-                ))
-                .on_disabled_hover_text(tr(lang, "This file has no speed information."));
-            if r.changed() {
-                action = Some(BarAction::FileSpeed(use_file));
-            }
-            // 止まっているときも、再生したら使う速さを出す。
-            let current_fps = self.playback.as_ref().map_or_else(|| self.playback_fps(), |pb| pb.fps);
-            let following_file = file_fps.is_some() && self.use_file_speed;
-            let mut fps = current_fps;
-            // ファイルの速さで再生するときは、手で変えられることは残しつつ、数字を薄く出す。
-            // 入力を無効にしないのは、そこで速さを変えればチェックが外れて、その速さになるようにするため。
-            let r = ui
-                .scope(|ui| {
-                    if following_file {
-                        let weak = ui.visuals().weak_text_color();
-                        ui.visuals_mut().override_text_color = Some(weak);
-                    }
-                    ui.add(fps_input(&mut fps))
-                })
-                .inner;
-            if r.changed() || r.drag_stopped() {
-                // ドラッグ中は再生にだけ反映し、ファイルには離したときに書く。
-                let save = !r.dragged();
-                action = Some(BarAction::Fps { fps, save });
-            }
+                )
+            ))
+            .on_disabled_hover_text(tr(lang, "This file has no speed information."));
+        if r.changed() {
+            action = Some(BarAction::FileSpeed(use_file));
+        }
+        // 止まっているときも、再生したら使う速さを出す。
+        let current_fps = self
+            .playback
+            .as_ref()
+            .map_or_else(|| self.playback_fps(), |pb| pb.fps);
+        let following_file = file_fps.is_some() && self.use_file_speed;
+        let mut fps = current_fps;
+        // ファイルの速さで再生するときは、手で変えられることは残しつつ、数字を薄く出す。
+        // 入力を無効にしないのは、そこで速さを変えればチェックが外れて、その速さになるようにするため。
+        let r = ui
+            .scope(|ui| {
+                if following_file {
+                    let weak = ui.visuals().weak_text_color();
+                    ui.visuals_mut().override_text_color = Some(weak);
+                }
+                ui.add(fps_input(&mut fps))
+            })
+            .inner;
+        if r.changed() || r.drag_stopped() {
+            // ドラッグ中は再生にだけ反映し、ファイルには離したときに書く。
+            let save = !r.dragged();
+            action = Some(BarAction::Fps { fps, save });
+        }
+        // 外壁の帯では横幅をほかの部品と分け合うので、速さの候補は小さなメニューにしまう。
+        let mut presets = |ui: &mut egui::Ui| {
             for preset in slideshow::FPS_PRESETS {
                 let selected = (current_fps - preset).abs() < 0.05;
                 if ui.selectable_label(selected, format!("{preset}")).clicked() {
@@ -291,47 +329,74 @@ impl VwApp {
                     });
                 }
             }
-            ui.separator();
-            let mut end = viewer.slideshow_end;
-            vw_ui::menu::combo("slideshow_end")
-                .selected_text(tr(lang, end.title()))
-                .show_ui(ui, |ui| {
-                    for mode in EndMode::ALL {
-                        ui.selectable_value(&mut end, mode, tr(lang, mode.title()));
-                    }
-                });
-            if end != viewer.slideshow_end {
-                action = Some(BarAction::End(end));
+        };
+        if in_menu {
+            ui.menu_button(icon::CARET_DOWN, |ui| presets(ui))
+                .response
+                .on_hover_text(tr(lang, "Speed presets"));
+        } else if compact {
+            let menu = ui
+                .small_button(icon::CARET_DOWN)
+                .on_hover_text(tr(lang, "Speed presets"));
+            egui::Popup::menu(&menu).show(|ui| presets(ui));
+        } else {
+            presets(ui);
+        }
+        ui.separator();
+        let mut end = viewer.slideshow_end;
+        let end_text = if icons {
+            icon::FLAG_CHECKERED.to_owned()
+        } else {
+            tr(lang, end.title()).to_owned()
+        };
+        let modes = |ui: &mut egui::Ui, end: &mut EndMode| {
+            for mode in EndMode::ALL {
+                ui.selectable_value(end, mode, tr(lang, mode.title()));
             }
-            ui.separator();
-            if let Some(seq) = self
-                .slots
-                .get(self.active)
-                .and_then(|s| s.sequence.as_ref())
-            {
-                ui.label(format!("{} / {}", seq.index + 1, seq.paths.len()));
+        };
+        if in_menu {
+            ui.menu_button(end_text, |ui| modes(ui, &mut end));
+        } else {
+            let mut combo = vw_ui::menu::combo("slideshow_end").selected_text(end_text);
+            if icons {
+                combo = combo.width(0.0);
             }
-            let window = Duration::from_secs(u64::from(viewer.slideshow_drop_window_secs));
-            let dropped = self
-                .playback
-                .as_ref()
-                .map(|pb| &pb.clock)
-                .or(self.stopped_clock.as_ref())
-                .map_or(0, |clock| clock.recent_dropped(Instant::now(), window));
-            if dropped > 0 {
-                // 止めている間は描き直しが起きないので、期間を過ぎた数が消えるよう描き直しを頼む。
-                ui.ctx().request_repaint_after(Duration::from_millis(500));
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    tr1(lang, "dropped {}", &dropped.to_string()),
-                )
-                .on_hover_text(tr1(
-                    lang,
-                    "Frames skipped in the last {} seconds because images could not be decoded fast enough.",
-                    &viewer.slideshow_drop_window_secs.to_string(),
-                ));
-            }
-        });
+            combo
+                .show_ui(ui, |ui| modes(ui, &mut end))
+                .response
+                .on_hover_text(tr(lang, end.title()));
+        }
+        if end != viewer.slideshow_end {
+            action = Some(BarAction::End(end));
+        }
+        ui.separator();
+        if let Some(seq) = self
+            .slots
+            .get(self.active)
+            .and_then(|s| s.sequence.as_ref())
+        {
+            ui.label(format!("{} / {}", seq.index + 1, seq.paths.len()));
+        }
+        let window = Duration::from_secs(u64::from(viewer.slideshow_drop_window_secs));
+        let dropped = self
+            .playback
+            .as_ref()
+            .map(|pb| &pb.clock)
+            .or(self.stopped_clock.as_ref())
+            .map_or(0, |clock| clock.recent_dropped(Instant::now(), window));
+        if dropped > 0 {
+            // 止めている間は描き直しが起きないので、期間を過ぎた数が消えるよう描き直しを頼む。
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                tr1(lang, "dropped {}", &dropped.to_string()),
+            )
+            .on_hover_text(tr1(
+                lang,
+                "Frames skipped in the last {} seconds because images could not be decoded fast enough.",
+                &viewer.slideshow_drop_window_secs.to_string(),
+            ));
+        }
         action
     }
 

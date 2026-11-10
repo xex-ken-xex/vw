@@ -44,25 +44,7 @@ impl VwApp {
 
     /// 設定画面で値が変わったときに、反映して保存する。
     pub(super) fn settings_changed(&mut self, ctx: &egui::Context) {
-        theme::apply(ctx, &self.settings().appearance);
-        self.log
-            .set_translator(crate::log_words::translator(self.lang()));
-        let order = self.settings().tree.order();
-        let reordered =
-            order != self.tree.order() || self.settings().file_sort != self.listed_files;
-        self.listed_files = self.settings().file_sort;
-        self.tree.set_order(order);
-        self.apply_probe_extensions();
-        self.apply_fits_options();
-        self.apply_netcdf_options();
-        self.apply_color_rules();
-        self.apply_texture_options();
-        self.apply_archive_dir();
-        self.apply_image_size_limit();
-        self.apply_repair();
-        if reordered {
-            self.relist_current_folder(ctx);
-        }
+        self.apply_settings(ctx);
         match self.settings.save() {
             Ok(Some(backup)) => self.log.info(format!(
                 "Settings: the previous file had errors and was kept as {}",
@@ -76,14 +58,10 @@ impl VwApp {
     /// ファイルのスロットと前後送りの並びを変える。
     pub(super) fn set_file_order(&mut self, ctx: &egui::Context, files: FileOrder) {
         self.settings.settings.file_sort = files;
-        let direction = if files.descending {
-            "descending"
-        } else {
-            "ascending"
-        };
         self.log.info(format!(
-            "File order: {}, {direction}, {}",
+            "File order: {}, {}, {}",
             files.key.title(),
+            files.direction().title(),
             files.mix.title()
         ));
         self.settings_changed(ctx);
@@ -255,6 +233,30 @@ impl VwApp {
         }
     }
 
+    /// 今の設定を画面と読み込みに反映する。並びが変わっていれば、開いているフォルダを並べ直す。
+    /// 設定画面から変えたときも、設定ファイルを書き換えたときも、同じように反映するため 1 つにする。
+    fn apply_settings(&mut self, ctx: &egui::Context) {
+        theme::apply(ctx, &self.settings().appearance);
+        self.log
+            .set_translator(crate::log_words::translator(self.lang()));
+        let order = self.settings().tree.order();
+        let reordered =
+            order != self.tree.order() || self.settings().file_sort != self.listed_files;
+        self.listed_files = self.settings().file_sort;
+        self.tree.set_order(order);
+        self.apply_probe_extensions();
+        self.apply_fits_options();
+        self.apply_netcdf_options();
+        self.apply_color_rules();
+        self.apply_texture_options();
+        self.apply_archive_dir();
+        self.apply_image_size_limit();
+        self.apply_repair();
+        if reordered {
+            self.relist_current_folder(ctx);
+        }
+    }
+
     /// 設定ファイルが外部のエディタで書き換えられていたら読み直して反映する。
     pub(super) fn reload_settings(&mut self, ctx: &egui::Context) {
         match self.settings.reload_if_changed() {
@@ -264,16 +266,7 @@ impl VwApp {
                 for p in problems {
                     self.log.error(format!("Settings: {p}"));
                 }
-                theme::apply(ctx, &self.settings().appearance);
-                self.tree.set_order(self.settings().tree.order());
-                self.apply_probe_extensions();
-                self.apply_fits_options();
-                self.apply_netcdf_options();
-                self.apply_color_rules();
-                self.apply_texture_options();
-                self.apply_archive_dir();
-                self.apply_image_size_limit();
-                self.apply_repair();
+                self.apply_settings(ctx);
             }
             Some(Err(e)) => self.log.error(format!("Settings not reloaded: {e}")),
         }

@@ -4,7 +4,7 @@ use eframe::egui;
 use egui_phosphor::regular as icon;
 
 use crate::export::Filter;
-use crate::file_order::{FileKey, FileOrder, Mix};
+use crate::file_order::{Direction, FileKey, FileOrder, Mix};
 use crate::i18n::tr;
 use crate::keymap::Action;
 use crate::labels::Flag;
@@ -232,7 +232,7 @@ impl VwApp {
 
     /// 表示メニューの「並び順」。ファイルの並びを上に、フォルダの並びをその下の小さなメニューに置く。
     /// 基準はここで直接選び、キーの切り替えと降順・混ざり方も並べる。
-    fn sort_menu(&self, ui: &mut egui::Ui) -> Option<SortChange> {
+    pub(super) fn sort_menu(&self, ui: &mut egui::Ui) -> Option<SortChange> {
         let lang = self.lang();
         let files = self.settings().file_sort;
         let tree = &self.settings().tree;
@@ -257,11 +257,9 @@ impl VwApp {
             }
         }
         ui.separator();
-        if self.menu_item(ui, Action::ToggleSortDescending, Some(files.descending)) {
-            chosen = Some(SortChange::Files(FileOrder {
-                descending: !files.descending,
-                ..files
-            }));
+        let descending = files.direction() == Direction::Descending;
+        if self.menu_item(ui, Action::ToggleSortDescending, Some(descending)) {
+            chosen = Some(SortChange::Files(files.reversed()));
         }
         if self.menu_item(ui, Action::ToggleSortMix, Some(files.mix == Mix::ByKind)) {
             chosen = Some(SortChange::Files(FileOrder {
@@ -576,7 +574,7 @@ fn tool_button(
 }
 
 /// 並び順のメニューで選んだこと。
-enum SortChange {
+pub(super) enum SortChange {
     Files(FileOrder),
     Folders(SortKey, bool),
 }
