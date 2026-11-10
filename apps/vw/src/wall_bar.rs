@@ -152,6 +152,80 @@ pub fn grid_at(offset: (f32, f32), cell: f32) -> SlotLayout {
     SlotLayout::grid(side(offset.0), side(offset.1))
 }
 
+/// 1 つの部品の、文字ありとアイコンだけの幅。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PartWidth {
+    pub full: f32,
+    pub icons: f32,
+}
+
+/// 帯の部品をどう詰めるか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fit {
+    /// 左寄せ・右寄せを左から通して数えて、前からいくつをアイコンだけにするか。
+    pub icons: usize,
+    /// 左寄せの部品のうち、帯に出す数。残りは「…」のメニューにしまう。
+    pub left_shown: usize,
+}
+
+/// 帯の幅の測り方。部品の幅は、それぞれのあとの隙間を含めて測る。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Room {
+    pub available: f32,
+    /// 部品の間の区切りの幅。
+    pub separator: f32,
+    /// 左寄せと右寄せの間の空き。
+    pub gap: f32,
+    /// 「…」のボタンの幅。
+    pub more: f32,
+}
+
+/// 帯に入るよう、左の部品から順にアイコンだけにし、それでも入らなければ左寄せの部品を後ろから
+/// 「…」にしまう。右寄せの部品（ページ）はしまわない。
+pub fn fit(left: &[PartWidth], right: &[PartWidth], room: Room) -> Fit {
+    let all = left.len() + right.len();
+    let width = |icons: usize, left_shown: usize| {
+        let pick = |i: usize, w: &PartWidth| if i < icons { w.icons } else { w.full };
+        let more = left_shown < left.len();
+        let left_items = left_shown + usize::from(more);
+        let left_width: f32 = left[..left_shown]
+            .iter()
+            .enumerate()
+            .map(|(i, w)| pick(i, w))
+            .sum::<f32>()
+            + if more { room.more } else { 0.0 }
+            + left_items.saturating_sub(1) as f32 * room.separator;
+        let right_width: f32 = right
+            .iter()
+            .enumerate()
+            .map(|(i, w)| pick(left.len() + i, w))
+            .sum::<f32>()
+            + right.len().saturating_sub(1) as f32 * room.separator;
+        let gap = if left_items > 0 && !right.is_empty() {
+            room.gap
+        } else {
+            0.0
+        };
+        left_width + gap + right_width
+    };
+    for icons in 0..=all {
+        if width(icons, left.len()) <= room.available {
+            return Fit {
+                icons,
+                left_shown: left.len(),
+            };
+        }
+    }
+    let left_shown = (0..left.len())
+        .rev()
+        .find(|&shown| width(all, shown) <= room.available)
+        .unwrap_or(0);
+    Fit {
+        icons: all,
+        left_shown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +293,74 @@ mod tests {
     #[test]
     fn grid_outside_the_cells_is_clamped_to_the_edge() {
         assert_eq!(grid_at((-5.0, 500.0), 10.0), SlotLayout::grid(1, 8));
+    }
+
+    const ROOM: Room = Room {
+        available: 100.0,
+        separator: 5.0,
+        gap: 10.0,
+        more: 10.0,
+    };
+
+    fn widths(list: &[(f32, f32)]) -> Vec<PartWidth> {
+        list.iter()
+            .map(|&(full, icons)| PartWidth { full, icons })
+            .collect()
+    }
+
+    #[test]
+    fn everything_fits_with_text_when_there_is_room() {
+        let left = widths(&[(30.0, 10.0), (30.0, 10.0)]);
+        let right = widths(&[(20.0, 10.0)]);
+        // 30 + 5 + 30 + 10 + 20 = 95
+        assert_eq!(
+            fit(&left, &right, ROOM),
+            Fit {
+                icons: 0,
+                left_shown: 2
+            }
+        );
+    }
+
+    #[test]
+    fn narrow_bar_turns_parts_into_icons_from_the_left() {
+        let left = widths(&[(40.0, 10.0), (40.0, 10.0)]);
+        let right = widths(&[(20.0, 10.0)]);
+        // 文字ありは 40 + 5 + 40 + 10 + 20 = 115、先頭をアイコンにすると 85
+        assert_eq!(
+            fit(&left, &right, ROOM),
+            Fit {
+                icons: 1,
+                left_shown: 2
+            }
+        );
+    }
+
+    #[test]
+    fn parts_that_do_not_fit_even_as_icons_go_into_the_more_menu() {
+        let left = widths(&[(40.0, 30.0), (40.0, 30.0), (40.0, 30.0)]);
+        let right = widths(&[(20.0, 20.0)]);
+        // アイコンだけで 3 つは 30 * 3 + 5 * 2 + 10 + 20 = 130。2 つと「…」で 30 * 2 + 10 + 5 * 2 + 10 + 20 = 110、
+        // 1 つと「…」で 30 + 10 + 5 + 10 + 20 = 75
+        assert_eq!(
+            fit(&left, &right, ROOM),
+            Fit {
+                icons: 4,
+                left_shown: 1
+            }
+        );
+    }
+
+    #[test]
+    fn right_parts_are_never_put_away() {
+        let left = widths(&[(40.0, 40.0)]);
+        let right = widths(&[(200.0, 150.0)]);
+        assert_eq!(
+            fit(&left, &right, ROOM),
+            Fit {
+                icons: 2,
+                left_shown: 0
+            }
+        );
     }
 }

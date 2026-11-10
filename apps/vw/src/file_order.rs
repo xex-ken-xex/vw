@@ -84,6 +84,8 @@ pub enum Kind {
 }
 
 impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Photo, Kind::Dicom, Kind::Fits, Kind::Other];
+
     /// 拡張子から種類と、同じ名前の組（`IMG_0001.JPG` と `IMG_0001.ARW`）を並べる順を決める。
     /// 中身は読まない。拡張子で分からず中身で調べるファイル（`IM0001` など）は DICOM。
     fn of(registry: &Registry, path: &Path) -> (Kind, u8) {
@@ -139,6 +141,32 @@ impl KindOrder {
         Self {
             key,
             descending: false,
+        }
+    }
+}
+
+/// 並びの向き。種類ごとに並べるときは、種類によって違うことがある。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Ascending,
+    Descending,
+    Mixed,
+}
+
+impl Direction {
+    fn of(descending: bool) -> Self {
+        if descending {
+            Direction::Descending
+        } else {
+            Direction::Ascending
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Direction::Ascending => "ascending",
+            Direction::Descending => "descending",
+            Direction::Mixed => "by type",
         }
     }
 }
@@ -210,6 +238,39 @@ impl FileOrder {
             },
             Mix::ByKind => self.of_kind(kind),
         }
+    }
+
+    /// 今の並べ方での向き。種類ごとなら 4 種類の向きから決める。
+    pub fn direction(&self) -> Direction {
+        match self.mix {
+            Mix::OneLine => Direction::of(self.descending),
+            Mix::ByKind => {
+                let first = self.photo.descending;
+                if Kind::ALL
+                    .iter()
+                    .all(|&k| self.of_kind(k).descending == first)
+                {
+                    Direction::of(first)
+                } else {
+                    Direction::Mixed
+                }
+            }
+        }
+    }
+
+    /// 今の並べ方の向きを反転する。種類ごとなら 4 種類をそれぞれ反転するので、
+    /// ばらばらの向きはばらばらのまま入れ替わる。
+    pub fn reversed(mut self) -> Self {
+        match self.mix {
+            Mix::OneLine => self.descending = !self.descending,
+            Mix::ByKind => {
+                for kind in Kind::ALL {
+                    let order = self.of_kind_mut(kind);
+                    order.descending = !order.descending;
+                }
+            }
+        }
+        self
     }
 
     /// ファイル名だけで比べるときの近い並び。消えたファイル（もう日時を読めない）の
@@ -666,6 +727,44 @@ mod tests {
         let later = Stamp::new("2024:01:02 00:00:01").unwrap();
         assert!(day < later);
         assert_eq!(day.when, "20240102000000000");
+    }
+
+    #[test]
+    fn reversing_by_type_flips_every_type() {
+        let order = FileOrder {
+            mix: Mix::ByKind,
+            ..FileOrder::default()
+        };
+        assert_eq!(order.direction(), Direction::Ascending);
+        let reversed = order.reversed();
+        assert_eq!(reversed.direction(), Direction::Descending);
+        assert!(Kind::ALL.iter().all(|&k| reversed.of_kind(k).descending));
+        assert_eq!(reversed.descending, order.descending);
+    }
+
+    #[test]
+    fn reversing_in_one_line_leaves_the_types_alone() {
+        let order = FileOrder::default();
+        let reversed = order.reversed();
+        assert_eq!(reversed.descending, !order.descending);
+        assert!(
+            Kind::ALL
+                .iter()
+                .all(|&k| reversed.of_kind(k) == order.of_kind(k))
+        );
+    }
+
+    #[test]
+    fn types_with_different_directions_are_mixed_and_stay_mixed() {
+        let mut order = FileOrder {
+            mix: Mix::ByKind,
+            ..FileOrder::default()
+        };
+        order.dicom.descending = true;
+        assert_eq!(order.direction(), Direction::Mixed);
+        let reversed = order.reversed();
+        assert_eq!(reversed.direction(), Direction::Mixed);
+        assert!(!reversed.dicom.descending && reversed.photo.descending);
     }
 
     #[test]

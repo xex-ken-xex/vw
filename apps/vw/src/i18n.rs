@@ -1451,6 +1451,10 @@ const JA: &[(&str, &str)] = &[
     ("Modified date", "更新日時"),
     ("Descending", "降順"),
     (
+        "Each type has its own direction",
+        "種類ごとに向きが違います",
+    ),
+    (
         "Reverse the folder order (Z to A, newest first).",
         "フォルダの並びを逆にします（Z から A、新しい順）。",
     ),

@@ -243,7 +243,7 @@ impl VwApp {
     pub(super) fn play_bar(&self, ui: &mut egui::Ui) -> Option<BarAction> {
         ui.horizontal_centered(|ui| {
             ui.add_space(6.0);
-            self.play_controls(ui, false)
+            self.play_controls(ui, false, false, false)
         })
         .inner
     }
@@ -251,7 +251,15 @@ impl VwApp {
     /// 再生の操作（再生／止める、ファイルの速さ、FPS、速さの候補、最後まで行ったら、位置、
     /// 落としたフレーム）。外壁の帯と再生バーの、横に並べる中で描く。`compact` なら速さの候補を
     /// 小さなメニューにしまう。
-    pub(super) fn play_controls(&self, ui: &mut egui::Ui, compact: bool) -> Option<BarAction> {
+    /// `compact` は速さの候補を小さなメニューにしまう。`icons` は文字を省いて、狭い外壁の帯に入れる。
+    /// `in_menu` はメニューの中に描くときで、一覧を下の段で開く（[`Self::wall_bar`] の「…」）。
+    pub(super) fn play_controls(
+        &self,
+        ui: &mut egui::Ui,
+        compact: bool,
+        icons: bool,
+        in_menu: bool,
+    ) -> Option<BarAction> {
         let lang = self.lang();
         let viewer = &self.settings().viewer;
         let mut action = None;
@@ -270,11 +278,18 @@ impl VwApp {
         let r = ui
             .add_enabled(
                 file_fps.is_some(),
-                egui::Checkbox::new(&mut use_file, tr(lang, "File speed")),
+                egui::Checkbox::new(
+                    &mut use_file,
+                    if icons { "" } else { tr(lang, "File speed") },
+                ),
             )
-            .on_hover_text(tr(
-                lang,
-                "Play at the speed written in the file. Changing the FPS turns this off.",
+            .on_hover_text(format!(
+                "{}\n{}",
+                tr(lang, "File speed"),
+                tr(
+                    lang,
+                    "Play at the speed written in the file. Changing the FPS turns this off.",
+                )
             ))
             .on_disabled_hover_text(tr(lang, "This file has no speed information."));
         if r.changed() {
@@ -315,7 +330,11 @@ impl VwApp {
                 }
             }
         };
-        if compact {
+        if in_menu {
+            ui.menu_button(icon::CARET_DOWN, |ui| presets(ui))
+                .response
+                .on_hover_text(tr(lang, "Speed presets"));
+        } else if compact {
             let menu = ui
                 .small_button(icon::CARET_DOWN)
                 .on_hover_text(tr(lang, "Speed presets"));
@@ -325,13 +344,28 @@ impl VwApp {
         }
         ui.separator();
         let mut end = viewer.slideshow_end;
-        vw_ui::menu::combo("slideshow_end")
-            .selected_text(tr(lang, end.title()))
-            .show_ui(ui, |ui| {
-                for mode in EndMode::ALL {
-                    ui.selectable_value(&mut end, mode, tr(lang, mode.title()));
-                }
-            });
+        let end_text = if icons {
+            icon::FLAG_CHECKERED.to_owned()
+        } else {
+            tr(lang, end.title()).to_owned()
+        };
+        let modes = |ui: &mut egui::Ui, end: &mut EndMode| {
+            for mode in EndMode::ALL {
+                ui.selectable_value(end, mode, tr(lang, mode.title()));
+            }
+        };
+        if in_menu {
+            ui.menu_button(end_text, |ui| modes(ui, &mut end));
+        } else {
+            let mut combo = vw_ui::menu::combo("slideshow_end").selected_text(end_text);
+            if icons {
+                combo = combo.width(0.0);
+            }
+            combo
+                .show_ui(ui, |ui| modes(ui, &mut end))
+                .response
+                .on_hover_text(tr(lang, end.title()));
+        }
         if end != viewer.slideshow_end {
             action = Some(BarAction::End(end));
         }
