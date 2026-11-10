@@ -544,11 +544,78 @@ fn quantized_floats_are_restored_like_cfitsio() {
 fn unsupported_compression_is_reported_as_unsupported() {
     let mut file = fixture("uint16-cube-rice.fz");
     let at = file.windows(10).position(|w| w == b"'RICE_1  '").unwrap();
-    file[at..at + 13].copy_from_slice(b"'HCOMPRESS_1'");
+    file[at..at + 10].copy_from_slice(b"'LZ4_1   '");
     assert!(matches!(
         FitsPlugin::default().decode(&file),
-        Err(DecodeError::Unsupported(m)) if m.contains("HCOMPRESS_1")
+        Err(DecodeError::Unsupported(m)) if m.contains("LZ4_1")
     ));
+}
+
+fn assert_frame_eq(compressed: &str, plain: &str, frame: usize) {
+    let p = FitsPlugin::default();
+    let a = f32s(&p.decode(&fixture(compressed)).unwrap());
+    let b = f32s(&p.decode_frame(&fixture(plain), frame).unwrap());
+    assert_eq!(a.len(), b.len(), "{compressed}");
+    for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+        assert!(
+            x == y || (x.is_nan() && y.is_nan()),
+            "{compressed} at {i}: {x} vs {y}"
+        );
+    }
+}
+
+#[test]
+fn lossless_hcompress_tiles_decode_to_the_original_pixels() {
+    // tile は 10 x 6 で、右と下の端の tile は 5 x 5（2 の累乗でない大きさ）。
+    assert_frame_eq("uint16-hcompress.fz", "uint16-cube.fits", 0);
+    same_as("uint8-hcompress.fz", "uint8.fits");
+    same_as("int32-hcompress.fz", "int32-shifted.fits");
+}
+
+#[test]
+fn lossy_hcompress_matches_cfitsio_with_and_without_smoothing() {
+    same_as(
+        "int16-hcompress-scale4-smooth0.fz",
+        "int16-hcompress-scale4-smooth0-expected.fits",
+    );
+    same_as(
+        "int16-hcompress-scale4-smooth1.fz",
+        "int16-hcompress-scale4-smooth1-expected.fits",
+    );
+}
+
+#[test]
+fn quantized_floats_in_hcompress_match_cfitsio() {
+    same_as("float32-hcompress.fz", "float32-hcompress-expected.fits");
+}
+
+#[test]
+fn plio_mask_decodes_to_the_original_values() {
+    same_as("mask-plio.fz", "mask.fits");
+}
+
+#[test]
+fn damaged_hcompress_and_plio_tiles_are_errors_not_crashes() {
+    let p = FitsPlugin::default();
+    let mut seed = 99u32;
+    for name in [
+        "uint16-hcompress.fz",
+        "int16-hcompress-scale4-smooth1.fz",
+        "mask-plio.fz",
+    ] {
+        let original = fixture(name);
+        // 見出し（先頭の 2 ブロック）の後ろ、表と圧縮した中身のある所だけを壊す。
+        let body = 2880 * 2;
+        for _ in 0..300 {
+            let mut file = original.clone();
+            for _ in 0..3 {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let at = body + seed as usize % (file.len() - body);
+                file[at] = (seed >> 16) as u8;
+            }
+            let _ = p.decode(&file);
+        }
+    }
 }
 
 #[test]

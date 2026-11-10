@@ -13,7 +13,9 @@
 
 mod bayer;
 pub mod calibration;
+mod hcompress;
 mod header;
+mod plio;
 pub mod radio;
 mod sky;
 pub mod spectrum;
