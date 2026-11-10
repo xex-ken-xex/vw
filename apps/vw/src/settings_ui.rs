@@ -27,6 +27,7 @@ use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
 use crate::sort::SortKey;
 use crate::viewer::ScaleFilter;
 use crate::viewer::chrome::{self, Chip, Edge};
+use crate::wall_bar::{Side, WallBar, WallPart};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -229,6 +230,20 @@ const ITEMS: &[Item] = &[
         title: "Dropped frames period",
         description: "The play bar shows how many frames were skipped (not decoded in time) during this many last seconds.",
         widget: drop_window_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "wall_bar.show",
+        title: "Bar under the slots",
+        description: "Show a thin bar under the slot area with the commands for all the slots of the folder: playback of the selected slot, file order, how mixed file types are ordered, layout and pages.",
+        widget: wall_bar_show_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "wall_bar.left",
+        title: "Parts of the bar under the slots",
+        description: "Drag a part onto the left or right end of the bar to place it, and drag it within the bar to reorder. Drag it off to hide it. When Pages is hidden, the page bar floats at the bottom right of the slots; when Playback is hidden, the play bar appears under a maximized slot.",
+        widget: wall_bar_widget,
     },
     Item {
         section: Section::Viewer,
@@ -2418,6 +2433,190 @@ fn slot_bar_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
     changed
 }
 
+fn wall_bar_show_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.wall_bar.show, tr(lang, "Enabled"))
+        .changed()
+}
+
+/// 外壁の帯の模型。スロットの領域の下に帯を描き、左寄せと右寄せの部品をドラッグで並べる。
+/// スロットの帯（[`slot_bar_widget`]）と同じ操作にする。
+fn wall_bar_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let bar = &mut s.wall_bar;
+    let mut changed = false;
+    let width = ui.available_width().min(560.0);
+    let id = ui.make_persistent_id("wall_bar.mockup");
+    let visuals = ui.visuals().clone();
+    ui.vertical(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        let (slots, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
+        ui.painter().rect_filled(slots, 0.0, Color32::from_gray(40));
+        ui.painter().text(
+            slots.center(),
+            egui::Align2::CENTER_CENTER,
+            tr(lang, "Slots"),
+            egui::FontId::proportional(12.0),
+            Color32::from_gray(110),
+        );
+        let (strip, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+        ui.painter().rect_filled(strip, 0.0, Color32::from_gray(50));
+        let split = strip.left() + strip.width() * 0.65;
+        let left = egui::Rect::from_min_max(strip.left_top(), egui::pos2(split, strip.bottom()));
+        let right = egui::Rect::from_min_max(egui::pos2(split, strip.top()), strip.right_bottom());
+        ui.painter().vline(
+            split,
+            strip.y_range().shrink(6.0),
+            egui::Stroke::new(1.0, Color32::from_gray(80)),
+        );
+        changed |= wall_side(ui, id, bar, Side::Left, left, lang);
+        changed |= wall_side(ui, id, bar, Side::Right, right, lang);
+    });
+    ui.add_space(6.0);
+    let hidden = bar.hidden();
+    let palette = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(6, 4))
+        .stroke(egui::Stroke::new(
+            1.0,
+            visuals.widgets.noninteractive.bg_stroke.color,
+        ))
+        .corner_radius(3)
+        .show(ui, |ui| {
+            ui.set_width(width - 12.0);
+            ui.weak(tr(lang, "Not placed (drag here to hide a part)"));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                for part in hidden {
+                    ui.dnd_drag_source(id.with(("palette", part)), part, |ui| {
+                        wall_part_mock(ui, part, lang, true);
+                    });
+                }
+            });
+        })
+        .response;
+    if let Some((part, released)) = dragged_over::<WallPart>(ui, palette.rect) {
+        if released {
+            bar.remove(part);
+            changed = true;
+        } else {
+            ui.painter().rect_stroke(
+                palette.rect,
+                3.0,
+                egui::Stroke::new(1.0, visuals.selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    if ui.input(|i| i.pointer.any_released())
+        && let Some(part) = egui::DragAndDrop::take_payload::<WallPart>(ui.ctx())
+    {
+        bar.remove(*part);
+        changed = true;
+    }
+    ui.add_space(4.0);
+    let default = WallBar::default();
+    if ui.button(tr(lang, "Reset to default")).clicked()
+        && (bar.left != default.left || bar.right != default.right)
+    {
+        bar.left = default.left;
+        bar.right = default.right;
+        changed = true;
+    }
+    changed
+}
+
+/// 外壁の帯の模型の、左寄せか右寄せの 1 区画。変わったら true。
+fn wall_side(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    bar: &mut WallBar,
+    side: Side,
+    rect: egui::Rect,
+    lang: Language,
+) -> bool {
+    let parts: Vec<WallPart> = bar.side(side).to_vec();
+    let inner = rect.shrink2(egui::vec2(6.0, 2.0));
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    row.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+    let mut placed: Vec<(WallPart, egui::Rect)> = Vec::new();
+    for &part in &parts {
+        let r = row.dnd_drag_source(id.with((side == Side::Left, part)), part, |ui| {
+            wall_part_mock(ui, part, lang, false);
+        });
+        placed.push((part, r.response.rect));
+    }
+    let pointer_x = ui.ctx().pointer_interact_pos().map(|p| p.x);
+    let index_at = |x: f32| -> usize {
+        placed
+            .iter()
+            .rfind(|(_, r)| r.center().x < x)
+            .and_then(|(p, _)| parts.iter().position(|k| k == p).map(|i| i + 1))
+            .unwrap_or(0)
+    };
+    let Some((part, released)) = dragged_over::<WallPart>(ui, rect) else {
+        return false;
+    };
+    if released {
+        let Some(x) = pointer_x else { return false };
+        let mut index = index_at(x);
+        if let Some(from) = parts.iter().position(|p| *p == part)
+            && from < index
+        {
+            index -= 1;
+        }
+        bar.place(part, side, index);
+        return true;
+    }
+    let x = pointer_x.map_or(inner.left(), |x| {
+        let i = index_at(x);
+        match (i.checked_sub(1).and_then(|i| placed.get(i)), placed.get(i)) {
+            (Some((_, a)), Some((_, b))) => (a.right() + b.left()) / 2.0,
+            (Some((_, a)), None) => a.right() + 2.0,
+            (None, Some((_, b))) => b.left() - 2.0,
+            (None, None) => inner.left(),
+        }
+    });
+    ui.painter().vline(
+        x,
+        rect.y_range(),
+        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+    );
+    false
+}
+
+/// 外壁の帯の模型の部品 1 つ。`with_title` なら絵の横に名前も出す（置いていない部品の一覧）。
+/// 帯の上では絵だけにする。名前まで並べると、本物の帯より狭い模型に収まらないため。
+fn wall_part_mock(ui: &mut egui::Ui, part: WallPart, lang: Language, with_title: bool) {
+    let glyph = match part {
+        WallPart::Play => icon::PLAY,
+        WallPart::Sort => icon::SORT_ASCENDING,
+        WallPart::Mix => icon::LIST,
+        WallPart::Layout => icon::GRID_FOUR,
+        WallPart::Pages => icon::CARET_RIGHT,
+    };
+    let text = if with_title {
+        format!("{glyph} {}", tr(lang, part.title()))
+    } else {
+        glyph.to_owned()
+    };
+    egui::Frame::new()
+        .fill(Color32::from_white_alpha(20))
+        .corner_radius(3)
+        .inner_margin(egui::Margin::symmetric(5, 2))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(text)
+                    .size(12.0)
+                    .color(Color32::from_gray(230)),
+            );
+        })
+        .response
+        .on_hover_text(tr(lang, part.title()));
+}
+
 /// 模型の 1 辺。部品をドラッグ元として並べ、落とされた部品を置く。変わったら true。
 fn slot_edge(
     ui: &mut egui::Ui,
@@ -2526,7 +2725,10 @@ fn slot_edge(
 /// egui の `Response::dnd_release_payload` を使わないのは、ドラッグ中の部品の絵が前のフレームで
 /// マウスの真下にあるため、離した瞬間のヒットテストがその絵の層だけを見て、下の辺を
 /// 「指していない」と判断するから。矩形で直に判定すれば落とし先を取りこぼさない。
-fn dragged_over(ui: &egui::Ui, rect: egui::Rect) -> Option<(Chip, bool)> {
+fn dragged_over<T: Copy + Send + Sync + 'static>(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+) -> Option<(T, bool)> {
     let pos = ui.ctx().pointer_interact_pos()?;
     // 辺のすぐ外で離しても受ける。細い帯の縁を正確に指すのは難しいため。
     if !rect.expand(4.0).contains(pos) {
@@ -2534,9 +2736,9 @@ fn dragged_over(ui: &egui::Ui, rect: egui::Rect) -> Option<(Chip, bool)> {
     }
     let released = ui.input(|i| i.pointer.any_released());
     let chip = if released {
-        egui::DragAndDrop::take_payload::<Chip>(ui.ctx())?
+        egui::DragAndDrop::take_payload::<T>(ui.ctx())?
     } else {
-        egui::DragAndDrop::payload::<Chip>(ui.ctx())?
+        egui::DragAndDrop::payload::<T>(ui.ctx())?
     };
     Some((*chip, released))
 }
@@ -4128,6 +4330,7 @@ mod tests {
         // 1 つの項目の widget が、鍵の名前の値と一緒に変えるもの。
         const SHARED: &[(&str, &[&str])] = &[
             ("slot_bar.top", &["slot_bar.bottom"]),
+            ("wall_bar.left", &["wall_bar.right"]),
             ("check.clipping_high", &["check.clipping_low"]),
             ("check.peaking_threshold", &["check.peaking_dim"]),
             (

@@ -232,7 +232,7 @@ impl VwApp {
 
     /// 表示メニューの「並び順」。ファイルの並びを上に、フォルダの並びをその下の小さなメニューに置く。
     /// 基準はここで直接選び、キーの切り替えと降順・混ざり方も並べる。
-    fn sort_menu(&self, ui: &mut egui::Ui) -> Option<SortChange> {
+    pub(super) fn sort_menu(&self, ui: &mut egui::Ui) -> Option<SortChange> {
         let lang = self.lang();
         let files = self.settings().file_sort;
         let tree = &self.settings().tree;
@@ -576,7 +576,7 @@ fn tool_button(
 }
 
 /// 並び順のメニューで選んだこと。
-enum SortChange {
+pub(super) enum SortChange {
     Files(FileOrder),
     Folders(SortKey, bool),
 }

@@ -17,6 +17,7 @@ use crate::sort::{SortKey, SortOrder};
 use crate::toml_reader::Reader;
 use crate::viewer::ScaleFilter;
 use crate::viewer::chrome::{Chip, SlotBar};
+use crate::wall_bar::{WallBar, WallPart};
 use vw_quality::{Metric, Thresholds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -2947,6 +2948,7 @@ pub struct Settings {
     pub stitch: StitchSettings,
     pub repair: Repair,
     pub slot_bar: SlotBar,
+    pub wall_bar: WallBar,
     pub keys: Keymap,
 }
 
@@ -2980,6 +2982,36 @@ fn read_slot_bar(r: &mut Reader<'_>) -> SlotBar {
                 c.id()
             ),
         );
+    }
+    bar
+}
+
+/// `[wall_bar]`: 外壁の帯。知らない名前は外して報告し、残りは生かす（`[slot_bar]` と同じ）。
+fn read_wall_bar(r: &mut Reader<'_>) -> WallBar {
+    let d = WallBar::default();
+    let mut r = r.at("wall_bar");
+    let mut side = |key: &str, default: Vec<WallPart>| -> Vec<WallPart> {
+        let Some(names) = r.get::<Vec<String>>(key) else {
+            return default;
+        };
+        let mut parts = Vec::new();
+        for name in names {
+            match WallPart::from_id(&name) {
+                Some(p) => parts.push(p),
+                None => r.problem(key, format!("unknown part \"{name}\" (skipped)")),
+            }
+        }
+        parts
+    };
+    let left = side("left", d.left);
+    let right = side("right", d.right);
+    let mut bar = WallBar {
+        show: r.get("show").unwrap_or(d.show),
+        left,
+        right,
+    };
+    for p in bar.tidy() {
+        r.problem("left", format!("\"{}\" placed twice (skipped)", p.id()));
     }
     bar
 }
@@ -3041,6 +3073,7 @@ impl Settings {
         let stitch = StitchSettings::read(&mut r);
         let repair = Repair::read(&mut r);
         let slot_bar = read_slot_bar(&mut r);
+        let wall_bar = read_wall_bar(&mut r);
         let mut problems = std::mem::take(&mut r.problems);
         let keys = match r.section("keys") {
             Some(t) => {
@@ -3083,6 +3116,7 @@ impl Settings {
                 stitch,
                 repair,
                 slot_bar,
+                wall_bar,
                 keys,
             },
             problems,
@@ -4277,6 +4311,34 @@ ae_title = "PACS"
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(back.file_sort, s.file_sort);
+    }
+
+    #[test]
+    fn wall_bar_reads_its_parts_and_skips_unknown_ones() {
+        let text = "[wall_bar]\nshow = false\nleft = [\"layout\", \"nope\"]\nright = [\"play\", \"pages\"]\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(!s.wall_bar.show);
+        assert_eq!(s.wall_bar.left, [WallPart::Layout]);
+        assert_eq!(s.wall_bar.right, [WallPart::Play, WallPart::Pages]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
+    fn wall_bar_part_placed_twice_is_kept_once() {
+        let text = "[wall_bar]\nleft = [\"sort\"]\nright = [\"sort\"]\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert_eq!(s.wall_bar.left, [WallPart::Sort]);
+        assert!(s.wall_bar.right.is_empty());
+        assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn wall_bar_survives_writing_and_reading_back() {
+        let mut s = Settings::default();
+        s.wall_bar.remove(WallPart::Pages);
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.wall_bar, s.wall_bar);
     }
 
     #[test]

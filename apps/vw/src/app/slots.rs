@@ -17,7 +17,10 @@ use crate::slideshow::Frame;
 use crate::tree::{self};
 use crate::viewer::{Content, Full, Origin, RawFace, Shown, Slot, SlotCommand, SlotLook};
 
+use super::menu::SortChange;
+use super::wall::WallClick;
 use super::*;
+use crate::wall_bar::WallPart;
 
 /// 地図に合わせる範囲の外周の、1 辺あたりの点の数。
 const MAP_OUTLINE_POINTS_PER_SIDE: usize = 16;
@@ -1041,7 +1044,15 @@ impl VwApp {
         // 画像の欄は枠なしのパネルなので、下の帯は自分で塗らないとウインドウの地（黒）が透けて、
         // ライトのテーマでは灰色の字が黒の上に乗って読めなくなる。
         let bar_fill = ui.visuals().panel_fill;
-        if maximized {
+        let wall = self.settings().wall_bar.clone();
+        let mut wall_click = None;
+        if wall.show {
+            let (rest, bar) = area.split_top_bottom_at_y(area.max.y - super::wall::WALL_BAR);
+            area = rest;
+            wall_click = self.wall_bar(ui, bar, &view);
+        }
+        // 外壁の帯に再生を置いていなければ、今までどおり最大化したときに再生の帯を出す。
+        if maximized && !wall.shows(WallPart::Play) {
             let (rest, bar) = area.split_top_bottom_at_y(area.max.y - PLAY_BAR);
             area = rest;
             ui.painter().rect_filled(bar, 0.0, bar_fill);
@@ -1292,8 +1303,42 @@ impl VwApp {
             self.set_focus(ui.ctx(), Focus::Images);
         }
         self.drag_to_reorder(ui, &cells);
-        if view.pages > 1 {
-            match self.page_bar(ui.ctx(), area, &view) {
+        if !wall.shows(WallPart::Layout)
+            && let Some(click) =
+                self.floating_layout_picker(ui.ctx(), area.left_bottom() + vec2(6.0, -6.0))
+        {
+            wall_click = Some(click);
+        }
+        let mut page_move = None;
+        match wall_click {
+            Some(WallClick::Bar(action)) => self.apply_bar_action(ui.ctx(), action),
+            Some(WallClick::Page(page)) => page_move = Some(page),
+            Some(WallClick::Sort(SortChange::Files(files))) => self.set_file_order(ui.ctx(), files),
+            Some(WallClick::Sort(SortChange::Folders(key, descending))) => {
+                self.set_sort_order(ui.ctx(), key, descending)
+            }
+            Some(WallClick::Run(action)) => {
+                let ctx = ui.ctx().clone();
+                self.run(&ctx, action);
+            }
+            Some(WallClick::Layout(layout)) => {
+                // 選んだ n×m は「カスタム」にも覚え、別のレイアウトにした後もキーで戻せるようにする。
+                let ctx = ui.ctx().clone();
+                let viewer = &mut self.settings.settings.viewer;
+                if viewer.custom_layout != layout && viewer.layout == layout {
+                    viewer.custom_layout = layout;
+                    self.settings_changed(&ctx);
+                }
+                self.settings.settings.viewer.custom_layout = layout;
+                self.set_layout(&ctx, layout);
+            }
+            None => {}
+        }
+        if view.pages > 1 && !wall.shows(WallPart::Pages) {
+            page_move = self.page_bar(ui.ctx(), area, &view);
+        }
+        if view.pages > 1 || page_move.is_some() {
+            match page_move {
                 Some(PageMove::Step(delta)) => self.step_page(delta),
                 Some(PageMove::To(page)) => self.go_to_page(page),
                 Some(PageMove::Scroll(steps)) => self.scroll_slots(steps),
@@ -1402,23 +1447,14 @@ impl VwApp {
         self.active = self.slots.iter().position(|s| s.id == active).unwrap_or(0);
     }
 
-    /// スロットがページに分かれているときに、画像フィールドの右下に出すページの帯。
-    /// スロットの総数、今のページとページ数、前後のページへのボタンを並べる。
-    /// 帯の上でホイールを回すと前後のページへ、ページの数字を左右にドラッグすると遠くのページへ移る。
+    /// 外壁の帯にページの部品を置いていないときに、画像フィールドの右下に浮かべるページの帯。
     pub(super) fn page_bar(
         &mut self,
         ctx: &egui::Context,
         area: Rect,
         view: &layout::View,
     ) -> Option<PageMove> {
-        let lang = self.lang();
-        let total = tr1(lang, "{} slots", &self.slots.len().to_string());
-        let wheel_unit = self.settings().viewer.page_wheel;
-        let shown_page = match self.page_drag {
-            Some((from, dx)) => layout::page_after_drag(from, dx, view.pages),
-            None => view.page,
-        };
-        let inner = egui::Area::new(egui::Id::new("page_bar"))
+        egui::Area::new(egui::Id::new("page_bar"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(area.right_bottom() - vec2(6.0, 6.0))
@@ -1426,44 +1462,58 @@ impl VwApp {
                 egui::Frame::popup(ui.style())
                     .inner_margin(egui::Margin::symmetric(4, 1))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            ui.label(egui::RichText::new(total).small().weak());
-                            let previous = ui
-                                .small_button(egui_phosphor::regular::CARET_LEFT)
-                                .on_hover_text(tr(lang, "Previous page"));
-                            let number = ui
-                                .add(
-                                    egui::Label::new(
-                                        egui::RichText::new(format!(
-                                            "{} / {}",
-                                            shown_page + 1,
-                                            view.pages
-                                        ))
-                                        .small(),
-                                    )
-                                    .sense(egui::Sense::drag())
-                                    .selectable(false),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-                                .on_hover_text(format!(
-                                    "{}\n{}",
-                                    tr(
-                                        lang,
-                                        "Drag left or right to jump pages. Turn the wheel here, or Shift+wheel over the slots, to scroll.",
-                                    ),
-                                    tr1(lang, "Wheel: {}", tr(lang, wheel_unit.title())),
-                                ));
-                            let next = ui
-                                .small_button(egui_phosphor::regular::CARET_RIGHT)
-                                .on_hover_text(tr(lang, "Next page"));
-                            (previous.clicked(), next.clicked(), number)
-                        })
-                        .inner
+                        ui.horizontal(|ui| self.page_controls(ui, view)).inner
                     })
-            });
-        let (previous, next, number) = inner.inner.inner;
-        let bar = inner.response.rect;
+                    .inner
+            })
+            .inner
+    }
+
+    /// ページの操作。スロットの総数、今のページとページ数、前後のページへのボタンを並べる。
+    /// 上でホイールを回すと前後のページへ、ページの数字を左右にドラッグすると遠くのページへ移る。
+    /// ページが 1 つなら総数だけを出す。
+    pub(super) fn page_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: &layout::View,
+    ) -> Option<PageMove> {
+        let lang = self.lang();
+        let total = tr1(lang, "{} slots", &self.slots.len().to_string());
+        let start = ui.cursor().min;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(egui::RichText::new(total).small().weak());
+        if view.pages <= 1 {
+            return None;
+        }
+        let wheel_unit = self.settings().viewer.page_wheel;
+        let shown_page = match self.page_drag {
+            Some((from, dx)) => layout::page_after_drag(from, dx, view.pages),
+            None => view.page,
+        };
+        let previous = ui
+            .small_button(egui_phosphor::regular::CARET_LEFT)
+            .on_hover_text(tr(lang, "Previous page"));
+        let number = ui
+            .add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{} / {}", shown_page + 1, view.pages)).small(),
+                )
+                .sense(egui::Sense::drag())
+                .selectable(false),
+            )
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .on_hover_text(format!(
+                "{}\n{}",
+                tr(
+                    lang,
+                    "Drag left or right to jump pages. Turn the wheel here, or Shift+wheel over the slots, to scroll.",
+                ),
+                tr1(lang, "Wheel: {}", tr(lang, wheel_unit.title())),
+            ));
+        let next = ui
+            .small_button(egui_phosphor::regular::CARET_RIGHT)
+            .on_hover_text(tr(lang, "Next page"));
+        let bar = Rect::from_min_max(start, ui.min_rect().max).union(previous.rect);
         if number.drag_started() {
             self.page_drag = Some((view.page, 0.0));
         }
@@ -1475,15 +1525,18 @@ impl VwApp {
             }
             return (target != view.page).then_some(PageMove::To(target));
         }
-        if previous {
+        if previous.clicked() {
             return Some(PageMove::Step(-1));
         }
-        if next {
+        if next.clicked() {
             return Some(PageMove::Step(1));
         }
-        if ctx.rect_contains_pointer(inner.response.layer_id, bar) {
+        if ui
+            .ctx()
+            .rect_contains_pointer(ui.layer_id(), bar.union(next.rect))
+        {
             // 帯の上では Shift の有無を問わない。Shift を押したまま帯に来ても止まらないように。
-            let wheel = ctx.input(|i| {
+            let wheel = ui.ctx().input(|i| {
                 let (plain, shifted) =
                     crate::viewer::split_wheel(&i.events, i.viewport_rect().height());
                 plain + shifted
