@@ -1,7 +1,7 @@
 //! tile 圧縮の画像（FITS の規約「Tiled Image Compression」、`.fz`）の展開。
 //!
 //! 画像を tile に分け、BINTABLE の 1 行に 1 tile を圧縮して入れたもの。RICE_1、GZIP_1、GZIP_2、
-//! NOCOMPRESS を展開する。HCOMPRESS_1 と PLIO_1 は展開できない。
+//! HCOMPRESS_1、PLIO_1、NOCOMPRESS を展開する（HCOMPRESS_1 は hcompress.rs、PLIO_1 は plio.rs）。
 //!
 //! fitsrs の展開を使わないのは、fitsrs の RICE が 1 画素 4 バイトの tile しか読めず、天体カメラの
 //! `.fz`（16bit を 2 バイトで RICE 圧縮したもの）で、値が化けるか、桁あふれで落ちるため。
@@ -24,7 +24,15 @@ use vw_core::DecodeError;
 use crate::header::Hdu;
 
 /// 展開できる圧縮の方式。
-pub const METHODS: &[&str] = &["RICE_1", "RICE_ONE", "GZIP_1", "GZIP_2", "NOCOMPRESS"];
+pub const METHODS: &[&str] = &[
+    "RICE_1",
+    "RICE_ONE",
+    "GZIP_1",
+    "GZIP_2",
+    "HCOMPRESS_1",
+    "PLIO_1",
+    "NOCOMPRESS",
+];
 
 /// 1 面分の値。整数の画像は格納値（`BSCALE`・`BZERO` をかける前）、実数の画像は実際の値。
 pub enum Plane {
@@ -411,6 +419,11 @@ fn tile_values(
             let block = zval(hdu, "BLOCKSIZE").unwrap_or(32);
             rice(bytes, pixels, bytepix as usize, block as usize)?
         }
+        "HCOMPRESS_1" => {
+            let smooth = zval(hdu, "SMOOTH").unwrap_or(0) != 0;
+            crate::hcompress::decode(bytes, smooth, pixels)?
+        }
+        "PLIO_1" => crate::plio::decode(bytes, pixels)?,
         "GZIP_1" => ints_be(&gunzip(bytes, pixels * int_bytes)?, int_bytes, pixels)?,
         "GZIP_2" => ints_be(
             &unshuffle(&gunzip(bytes, pixels * int_bytes)?, int_bytes),
