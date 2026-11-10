@@ -16,11 +16,12 @@ use std::time::SystemTime;
 use eframe::egui::{self, collapsing_header::CollapsingState};
 use vw_core::Registry;
 use vw_tree::{Hooks, without_toggle};
-pub use vw_tree::{display_name, entry_is_dir, is_hidden_name, is_recycle_bin};
+pub use vw_tree::{entry_is_dir, is_hidden_name, is_recycle_bin};
 
 use crate::app::context_menu::{self, FolderKind, MenuContext, Picked};
+use crate::file_order::{FileOrder, ListOrder};
 use crate::i18n::tr;
-use crate::series::{FolderSeries, Scan, Series, SeriesIndex, Study};
+use crate::series::{Scan, Series, SeriesIndex, Study};
 use crate::settings::Language;
 use crate::sort::{self, SortItem, SortKey, SortOrder};
 use crate::viewer::DraggedFile;
@@ -334,8 +335,6 @@ enum Peek {
         dataset: bool,
         /// データセットの登録か更新が途中で止まっているか。
         unfinished: bool,
-        /// DICOM の 1 シリーズだけのフォルダなら、並べる鍵（[`crate::series::folder_series`]）。
-        series: Option<FolderSeries>,
     },
 }
 
@@ -360,7 +359,6 @@ impl Peeker {
                     children: has_tree_children(&dir, &registry),
                     dataset: crate::catalog::exists_in(&dir),
                     unfinished: dir.join(crate::catalog::PARTIAL_FILE).is_file(),
-                    series: crate::series::folder_series(&dir, &registry),
                 };
                 if done.send((dir, peek)).is_err() {
                     break;
@@ -378,13 +376,6 @@ impl Peeker {
     fn receive(&mut self) {
         for (dir, peek) in self.results.try_iter() {
             self.known.insert(dir, peek);
-        }
-    }
-
-    fn series_of(&self, dir: &Path) -> Option<FolderSeries> {
-        match self.known.get(dir) {
-            Some(Peek::Done { series, .. }) => series.clone(),
-            _ => None,
         }
     }
 
@@ -468,25 +459,6 @@ fn lister(registry: &Registry, order: SortOrder) -> impl Fn(&Path) -> Vec<Node> 
     move |dir| list_dir(dir, registry, order)
 }
 
-/// 読み込み済みのフォルダの中で、1 シリーズのフォルダをシリーズの順にする
-/// （[`crate::series::place_in_series_order`]）。先読みの結果は後から届き、
-/// 読み直し（[`FolderTree::refresh`]）や並び順の変更でも設定の順に戻るので、描くたびに直す。
-fn place_series_folders(node: &mut Node, peeker: &Peeker) {
-    let Some(children) = &mut node.children else {
-        return;
-    };
-    crate::series::place_in_series_order(children, |c| {
-        if c.is_dir {
-            peeker.series_of(&c.path)
-        } else {
-            None
-        }
-    });
-    for child in children {
-        place_series_folders(child, peeker);
-    }
-}
-
 fn comparer(order: SortOrder) -> impl Fn(&Node, &Node) -> std::cmp::Ordering {
     move |a, b| sort::compare(order, &sort_item(a), &sort_item(b))
 }
@@ -558,22 +530,6 @@ impl FolderTree {
         }
     }
 
-    /// フォルダ `dirs` を先読みする（まだなら）。cd したフォルダのスロットを、ツリーに
-    /// 出ていなくてもシリーズの順に並べられるようにする。
-    pub fn ask_peeks(&mut self, ctx: &egui::Context, registry: &Registry, dirs: Vec<PathBuf>) {
-        let peeker = self.peeker.get_or_insert_with(|| {
-            let wake = ctx.clone();
-            Peeker::start(registry.clone(), move || wake.request_repaint())
-        });
-        peeker.receive();
-        peeker.ask(dirs);
-    }
-
-    /// 先読みで分かった、`dir` が DICOM の 1 シリーズだけのフォルダならその並べる鍵。
-    pub fn series_of(&self, dir: &Path) -> Option<FolderSeries> {
-        self.peeker.as_ref()?.series_of(dir)
-    }
-
     /// 先読みの結果をすべて捨てる。DICOM として中身を調べる拡張子が変わったときに使う。
     pub fn forget_peeks(&mut self) {
         if let Some(p) = &mut self.peeker {
@@ -603,9 +559,6 @@ impl FolderTree {
             Peeker::start(cx.registry.clone(), move || wake.request_repaint())
         });
         peeker.receive();
-        for root in &mut self.base.roots {
-            place_series_folders(root, peeker);
-        }
         let mut view = View {
             registry: cx.registry,
             current: cx.current,
@@ -688,9 +641,10 @@ pub struct Listing {
     pub images: Vec<PathBuf>,
 }
 
-pub fn list_folder(path: &Path, registry: &Registry, order: SortOrder) -> Listing {
+/// フォルダと ZIP はフォルダの並び（`order.folders`）、画像はファイルの並び（`order.files`）にする。
+pub fn list_folder(path: &Path, registry: &Registry, order: ListOrder) -> Listing {
     let mut out = Listing::default();
-    for n in list_dir(path, registry, order) {
+    for n in list_dir(path, registry, order.folders) {
         if n.is_dir {
             out.folders.push(n.path);
         } else if n.ext.archive {
@@ -699,6 +653,7 @@ pub fn list_folder(path: &Path, registry: &Registry, order: SortOrder) -> Listin
             out.images.push(n.path);
         }
     }
+    crate::file_order::sort_files(&mut out.images, &order.files, registry);
     out
 }
 
@@ -718,33 +673,29 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-/// `path` と同じフォルダにある対応画像を、ツリーと同じ `order` で返す（前後の画像への移動用）。
-pub fn sibling_images(path: &Path, registry: &Registry, order: SortOrder) -> Vec<PathBuf> {
+/// `path` と同じフォルダにある対応画像を、ファイルのスロットと同じ `files` の順で返す
+/// （前後の画像への移動用）。
+pub fn sibling_images(path: &Path, registry: &Registry, files: &FileOrder) -> Vec<PathBuf> {
     let Some(dir) = path.parent() else {
         return Vec::new();
     };
-    let mut files: Vec<Node> = std::fs::read_dir(dir)
+    let mut images: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
                 .filter(|p| registry.supports_file(p) && p.is_file())
-                .map(|path| {
-                    let modified = (order.key == SortKey::Modified)
-                        .then(|| modified(&path))
-                        .flatten();
-                    Node::entry(path.clone(), display_name(&path), false, modified)
-                })
                 .collect()
         })
         .unwrap_or_default();
-    sort_nodes(&mut files, order);
-    files.into_iter().map(|n| n.path).collect()
+    crate::file_order::sort_files(&mut images, files, registry);
+    images
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_util::{TempDir, all_registry, png_registry};
+    use vw_tree::display_name;
 
     fn names(nodes: &[Node]) -> Vec<&str> {
         nodes.iter().map(|n| n.name.as_str()).collect()
@@ -793,7 +744,7 @@ mod tests {
         let files = sibling_images(
             &dir.path().join("a.png"),
             &png_registry(),
-            SortOrder::default(),
+            &FileOrder::plain(SortOrder::default()),
         );
         let names: Vec<_> = files
             .iter()
@@ -844,16 +795,20 @@ mod tests {
     }
 
     #[test]
-    fn siblings_follow_the_same_order_as_the_tree() {
+    fn siblings_follow_the_file_order() {
         let dir = TempDir::new();
         dir.touch_at("x10.png", 1_000);
         dir.touch_at("x9.png", 2_000);
         let registry = png_registry();
         let file_names = |order| -> Vec<String> {
-            sibling_images(&dir.path().join("x9.png"), &registry, order)
-                .iter()
-                .map(|p| display_name(p))
-                .collect()
+            sibling_images(
+                &dir.path().join("x9.png"),
+                &registry,
+                &FileOrder::plain(order),
+            )
+            .iter()
+            .map(|p| display_name(p))
+            .collect()
         };
         assert_eq!(
             file_names(by(SortKey::NameNatural, false)),
@@ -867,6 +822,24 @@ mod tests {
             file_names(by(SortKey::Modified, true)),
             ["x9.png", "x10.png"]
         );
+    }
+
+    #[test]
+    fn folders_and_files_follow_their_own_orders() {
+        let dir = TempDir::new();
+        dir.mkdir("d1");
+        dir.mkdir("d2");
+        dir.touch("a.png");
+        dir.touch("b.png");
+        let order = ListOrder::plain(
+            by(SortKey::NameNatural, true),
+            by(SortKey::NameNatural, false),
+        );
+        let listing = list_folder(dir.path(), &png_registry(), order);
+        let names =
+            |paths: &[PathBuf]| -> Vec<String> { paths.iter().map(|p| display_name(p)).collect() };
+        assert_eq!(names(&listing.folders), ["d2", "d1"]);
+        assert_eq!(names(&listing.images), ["a.png", "b.png"]);
     }
 
     #[test]
@@ -924,7 +897,8 @@ mod tests {
         dir.touch("img2.png");
         dir.touch("notes.txt");
         dir.touch("pack.zip");
-        let listing = list_folder(dir.path(), &png_registry(), SortOrder::default());
+        let order = ListOrder::plain(SortOrder::default(), SortOrder::default());
+        let listing = list_folder(dir.path(), &png_registry(), order);
         let names = |v: &[PathBuf]| v.iter().map(|p| display_name(p)).collect::<Vec<_>>();
         assert_eq!(names(&listing.folders), ["sub2", "sub10"]);
         assert_eq!(names(&listing.archives), ["pack.zip"]);

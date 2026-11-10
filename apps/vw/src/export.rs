@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use vw_core::Registry;
 
 use crate::archive::{self, ArchiveError, EntryError};
+use crate::file_order::ListOrder;
 use crate::labels::{Flag, Label, LabelStore};
-use crate::sort::SortOrder;
 use crate::tree;
 
 /// 表示や抜き出しの対象にする画像の条件。
@@ -80,7 +80,7 @@ pub fn collect(
     root: &Path,
     recursive: bool,
     registry: &Registry,
-    order: SortOrder,
+    order: ListOrder,
     matcher: &Matcher,
 ) -> Collected {
     let mut out = Collected::default();
@@ -520,7 +520,10 @@ mod tests {
             filter: &filter,
             labels: &labels,
         };
-        let order = SortOrder::default();
+        let order = ListOrder::plain(
+            crate::sort::SortOrder::default(),
+            crate::sort::SortOrder::default(),
+        );
         let flat = collect(dir.path(), false, &png_registry(), order, &matcher);
         assert_eq!(flat.images, std::slice::from_ref(&top));
         let all = collect(dir.path(), true, &png_registry(), order, &matcher);
@@ -550,7 +553,10 @@ mod tests {
             filter: &filter,
             labels: &labels,
         };
-        let order = SortOrder::default();
+        let order = ListOrder::plain(
+            crate::sort::SortOrder::default(),
+            crate::sort::SortOrder::default(),
+        );
         let flat = collect(dir.path(), false, &png_registry(), order, &matcher);
         assert!(flat.archives.is_empty());
         let all = collect(dir.path(), true, &png_registry(), order, &matcher);

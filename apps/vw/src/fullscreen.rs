@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use eframe::egui::{self, Color32, Rect, TextureHandle, TextureOptions, pos2};
 use vw_core::Registry;
 
+use crate::file_order::ListOrder;
 use crate::frames;
 use crate::i18n::{tr, tr1};
 use crate::keymap::{Action, Keymap, Scope};
@@ -83,12 +84,12 @@ fn walk_dir(
         key: order.key,
         descending: order.folders_descending,
     };
-    let listing = tree::list_folder(dir, registry, folder_order);
-    let mut files = listing.images;
-    // 並べ方は名前が同じでも順が決まる（全順序）ので、逆にすれば逆の向きに並べたのと同じになる。
-    if order.files_descending != order.folders_descending {
-        files.reverse();
-    }
+    let file_order = SortOrder {
+        key: order.key,
+        descending: order.files_descending,
+    };
+    let listing = tree::list_folder(dir, registry, ListOrder::plain(folder_order, file_order));
+    let files = listing.images;
     if !files.is_empty() {
         found(Folder {
             dir: dir.to_path_buf(),

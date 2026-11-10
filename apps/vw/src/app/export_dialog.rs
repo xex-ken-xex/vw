@@ -187,7 +187,7 @@ impl VwApp {
         let Some(dialog) = &self.export else {
             return;
         };
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let files = export::collect(
             &dialog.root,
             dialog.recursive,

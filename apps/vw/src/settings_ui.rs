@@ -15,6 +15,7 @@ use crate::keymap::{
 use crate::layout::{SlotLayout, WheelScroll};
 use vw_quality::Thresholds;
 
+use crate::file_order::{FileKey, Kind, Mix};
 use crate::settings::{
     CalibrationApply, ColorFormat, ColorNode, CustomPalette, DarkScaling, FitsCalibration,
     FitsCurve, FitsStretch, FlatMatch, FlatNormalize, Fullscreen, FullscreenMode, GaugeSide,
@@ -303,15 +304,64 @@ const ITEMS: &[Item] = &[
         section: Section::Tree,
         key: "tree.sort",
         title: "Sort order",
-        description: "Order of the folders in the tree and of the folders and images in the slots, also used for previous/next image. Folders always come first.",
+        description: "Order of the folders in the tree and of the folder and ZIP slots. Folders always come before files. Images are ordered by the file order below.",
         widget: sort_widget,
     },
     Item {
         section: Section::Tree,
         key: "tree.sort_descending",
         title: "Descending",
-        description: "Reverse the sort order (Z to A, newest first).",
+        description: "Reverse the folder order (Z to A, newest first).",
         widget: descending_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.key",
+        title: "File order",
+        description: "Order of the image slots, also used for previous/next image, when file types are mixed in one line. Date of the data uses the time a photo was taken, the study date of DICOM and DATE-OBS of FITS, and the modified date for other files. Files with the same name and a different extension stay next to each other.",
+        widget: file_key_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.descending",
+        title: "Files in descending order",
+        description: "Reverse the file order (Z to A, newest first).",
+        widget: file_descending_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.mix",
+        title: "When file types are mixed",
+        description: "Mixed in one line: order every file by the file order above. Grouped by type: photos, DICOM, FITS and other images in this order, each by its own order below.",
+        widget: file_mix_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.photo",
+        title: "Order of photos",
+        description: "JPEG, WebP and camera RAW, when grouped by type.",
+        widget: photo_order_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.dicom",
+        title: "Order of DICOM",
+        description: "When grouped by type. Date of the data orders by study date, then series number, then instance number. The images inside a series slot are always in instance number order.",
+        widget: dicom_order_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.fits",
+        title: "Order of FITS",
+        description: "When grouped by type. Date of the data is DATE-OBS.",
+        widget: fits_order_widget,
+    },
+    Item {
+        section: Section::Tree,
+        key: "file_sort.other",
+        title: "Order of other images",
+        description: "PNG, BMP, TIFF, GIF and others, when grouped by type.",
+        widget: other_order_widget,
     },
     Item {
         section: Section::Tree,
@@ -1764,6 +1814,63 @@ fn sort_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
             }
         });
     s.tree.sort != before
+}
+
+fn file_key_combo(ui: &mut egui::Ui, id: &str, key: &mut FileKey, lang: Language) {
+    vw_ui::menu::combo(id)
+        .selected_text(tr(lang, key.title()))
+        .show_ui(ui, |ui| {
+            for k in FileKey::ALL {
+                ui.selectable_value(key, k, tr(lang, k.title()));
+            }
+        });
+}
+
+fn file_key_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.file_sort.key;
+    file_key_combo(ui, "file_sort_key", &mut s.file_sort.key, lang);
+    s.file_sort.key != before
+}
+
+fn file_descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.file_sort.descending, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn file_mix_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.file_sort.mix;
+    ui.horizontal(|ui| {
+        for mix in Mix::ALL {
+            ui.radio_value(&mut s.file_sort.mix, mix, tr(lang, mix.title()));
+        }
+    });
+    s.file_sort.mix != before
+}
+
+fn kind_order_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language, kind: Kind) -> bool {
+    let order = s.file_sort.of_kind_mut(kind);
+    let before = *order;
+    ui.horizontal(|ui| {
+        file_key_combo(ui, &format!("file_sort_{kind:?}"), &mut order.key, lang);
+        ui.checkbox(&mut order.descending, tr(lang, "Descending"));
+    });
+    *order != before
+}
+
+fn photo_order_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    kind_order_widget(s, ui, lang, Kind::Photo)
+}
+
+fn dicom_order_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    kind_order_widget(s, ui, lang, Kind::Dicom)
+}
+
+fn fits_order_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    kind_order_widget(s, ui, lang, Kind::Fits)
+}
+
+fn other_order_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    kind_order_widget(s, ui, lang, Kind::Other)
 }
 
 fn descending_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

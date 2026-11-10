@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, pos2, vec2};
 
+use crate::file_order::FileOrder;
 use crate::sort::SortKey;
 use crate::state::{self, AppState, Monitor, WindowState};
 use crate::{theme, window_placement};
@@ -47,7 +48,9 @@ impl VwApp {
         self.log
             .set_translator(crate::log_words::translator(self.lang()));
         let order = self.settings().tree.order();
-        let reordered = order != self.tree.order();
+        let reordered =
+            order != self.tree.order() || self.settings().file_sort != self.listed_files;
+        self.listed_files = self.settings().file_sort;
         self.tree.set_order(order);
         self.apply_probe_extensions();
         self.apply_fits_options();
@@ -70,7 +73,23 @@ impl VwApp {
         }
     }
 
-    /// 並び順を変える。ツリーとスロットと前後送りがみな新しい順になる。
+    /// ファイルのスロットと前後送りの並びを変える。
+    pub(super) fn set_file_order(&mut self, ctx: &egui::Context, files: FileOrder) {
+        self.settings.settings.file_sort = files;
+        let direction = if files.descending {
+            "descending"
+        } else {
+            "ascending"
+        };
+        self.log.info(format!(
+            "File order: {}, {direction}, {}",
+            files.key.title(),
+            files.mix.title()
+        ));
+        self.settings_changed(ctx);
+    }
+
+    /// フォルダの並びを変える。ツリーとフォルダのスロットが新しい順になる。
     pub(super) fn set_sort_order(&mut self, ctx: &egui::Context, key: SortKey, descending: bool) {
         let tree = &mut self.settings.settings.tree;
         tree.sort = key;
@@ -81,7 +100,7 @@ impl VwApp {
             "ascending"
         };
         self.log
-            .info(format!("Sort order: {}, {direction}", key.title()));
+            .info(format!("Folder order: {}, {direction}", key.title()));
         self.settings_changed(ctx);
     }
 

@@ -55,7 +55,7 @@ impl VwApp {
         // 外しておいた連なりのスロットも、新しい条件で合う画像を探し直すため、いったん戻す。
         self.show_hidden_slots();
         let registry = self.loader.registry().clone();
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let roots: Vec<PathBuf> = self
             .loaded_folders
             .iter()
@@ -232,7 +232,7 @@ impl VwApp {
                 .warn(tr(lang, "Select a folder in the tree first."));
             return;
         };
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let all = Filter::All;
         let matcher = if whole {
             Matcher {
@@ -374,8 +374,8 @@ impl VwApp {
         let at_end = match &slot.sequence {
             Some(seq) => seq.index + 1 >= seq.paths.len(),
             None => slot.path.as_ref().is_none_or(|p| {
-                let order = self.settings().tree.order();
-                let files = tree::sibling_images(p, self.loader.registry(), order);
+                let order = self.settings().list_order();
+                let files = tree::sibling_images(p, self.loader.registry(), &order.files);
                 files.last() == Some(p)
             }),
         };

@@ -4,6 +4,7 @@ use eframe::egui;
 use egui_phosphor::regular as icon;
 
 use crate::export::Filter;
+use crate::file_order::{FileKey, FileOrder, Mix};
 use crate::i18n::tr;
 use crate::keymap::Action;
 use crate::labels::Flag;
@@ -220,35 +221,85 @@ impl VwApp {
         if let Some(folder) = recent {
             self.open_folder(&ctx, folder);
         }
-        if let Some((key, descending)) = sort {
-            self.set_sort_order(&ctx, key, descending);
+        match sort {
+            Some(SortChange::Files(files)) => self.set_file_order(&ctx, files),
+            Some(SortChange::Folders(key, descending)) => {
+                self.set_sort_order(&ctx, key, descending)
+            }
+            None => {}
         }
     }
 
-    /// 表示メニューの「並び順」。基準はここで直接選び、キーの切り替えと降順も並べる。
-    fn sort_menu(&self, ui: &mut egui::Ui) -> Option<(SortKey, bool)> {
+    /// 表示メニューの「並び順」。ファイルの並びを上に、フォルダの並びをその下の小さなメニューに置く。
+    /// 基準はここで直接選び、キーの切り替えと降順・混ざり方も並べる。
+    fn sort_menu(&self, ui: &mut egui::Ui) -> Option<SortChange> {
         let lang = self.lang();
+        let files = self.settings().file_sort;
         let tree = &self.settings().tree;
         let mut chosen = None;
         if self.menu_item(ui, Action::CycleSortKey, None) {
-            chosen = Some((tree.sort.next(), tree.sort_descending));
+            chosen = Some(SortChange::Files(FileOrder {
+                key: files.key.next(),
+                ..files
+            }));
         }
         ui.separator();
-        for key in SortKey::ALL {
+        for key in FileKey::ALL {
             if ui
                 .add(vw_ui::menu::item(
-                    tree.sort == key,
+                    files.key == key,
                     tr(lang, key.title()),
                     "",
                 ))
                 .clicked()
             {
-                chosen = Some((key, tree.sort_descending));
+                chosen = Some(SortChange::Files(FileOrder { key, ..files }));
             }
         }
         ui.separator();
-        if self.menu_item(ui, Action::ToggleSortDescending, Some(tree.sort_descending)) {
-            chosen = Some((tree.sort, !tree.sort_descending));
+        if self.menu_item(ui, Action::ToggleSortDescending, Some(files.descending)) {
+            chosen = Some(SortChange::Files(FileOrder {
+                descending: !files.descending,
+                ..files
+            }));
+        }
+        if self.menu_item(ui, Action::ToggleSortMix, Some(files.mix == Mix::ByKind)) {
+            chosen = Some(SortChange::Files(FileOrder {
+                mix: files.mix.toggled(),
+                ..files
+            }));
+        }
+        ui.separator();
+        let folders = vw_ui::menu::submenu(ui, tr(lang, "Folder order"), |ui| {
+            let mut picked = None;
+            if self.menu_item(ui, Action::CycleFolderSortKey, None) {
+                picked = Some((tree.sort.next(), tree.sort_descending));
+            }
+            ui.separator();
+            for key in SortKey::ALL {
+                if ui
+                    .add(vw_ui::menu::item(
+                        tree.sort == key,
+                        tr(lang, key.title()),
+                        "",
+                    ))
+                    .clicked()
+                {
+                    picked = Some((key, tree.sort_descending));
+                }
+            }
+            ui.separator();
+            if self.menu_item(
+                ui,
+                Action::ToggleFolderSortDescending,
+                Some(tree.sort_descending),
+            ) {
+                picked = Some((tree.sort, !tree.sort_descending));
+            }
+            picked
+        });
+        if let Some(Some((key, descending))) = folders {
+            chosen = Some(SortChange::Folders(key, descending));
         }
         chosen
     }
@@ -522,4 +573,10 @@ fn tool_button(
     icon: egui::RichText,
 ) -> egui::Response {
     vw_ui::tool::button(ui, selected, enabled, icon, TOOL_BUTTON)
+}
+
+/// 並び順のメニューで選んだこと。
+enum SortChange {
+    Files(FileOrder),
+    Folders(SortKey, bool),
 }

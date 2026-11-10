@@ -1437,8 +1437,8 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Sort order", "並び順"),
     (
-        "Order of the folders in the tree and of the folders and images in the slots, also used for previous/next image. Folders always come first.",
-        "ツリーのフォルダと、スロットに並べるフォルダ・画像の並び順。前後の画像への移動もこの順になります。フォルダは常に画像より前です。",
+        "Order of the folders in the tree and of the folder and ZIP slots. Folders always come before files. Images are ordered by the file order below.",
+        "ツリーのフォルダと、スロットに並べるフォルダ・ZIP の並び順。フォルダは常にファイルより前です。画像は下のファイルの並びに従います。",
     ),
     (
         "Name (numbers by value)",
@@ -1451,8 +1451,8 @@ const JA: &[(&str, &str)] = &[
     ("Modified date", "更新日時"),
     ("Descending", "降順"),
     (
-        "Reverse the sort order (Z to A, newest first).",
-        "並び順を逆にします（Z から A、新しい順）。",
+        "Reverse the folder order (Z to A, newest first).",
+        "フォルダの並びを逆にします（Z から A、新しい順）。",
     ),
     ("Confirm large loads", "大量の読み込みを確認"),
     (
@@ -1737,8 +1737,53 @@ const JA: &[(&str, &str)] = &[
         "スロットの最大化/元に戻す、またはフォルダへ移動",
     ),
     ("Up one folder", "1 つ上のフォルダへ"),
-    ("Change sort order", "並び順を切り替える"),
-    ("Descending order", "降順に並べる"),
+    ("Change file order", "ファイルの並びを切り替える"),
+    ("Files in descending order", "ファイルを降順に並べる"),
+    ("Group files by type", "ファイルを種類ごとにまとめる"),
+    ("Change folder order", "フォルダの並びを切り替える"),
+    ("Folders in descending order", "フォルダを降順に並べる"),
+    ("Folder order", "フォルダの並び"),
+    ("File order", "ファイルの並び"),
+    (
+        "Date of the data (taken, study, observed)",
+        "データの日時（撮影・検査・観測）",
+    ),
+    ("File size", "ファイルの大きさ"),
+    ("Mixed in one line", "1 列に混ぜる"),
+    ("Grouped by type", "種類ごとにまとめる"),
+    ("When file types are mixed", "種類が混ざったとき"),
+    ("Order of photos", "写真の並び"),
+    ("Order of DICOM", "DICOM の並び"),
+    ("Order of FITS", "FITS の並び"),
+    ("Order of other images", "そのほかの画像の並び"),
+    (
+        "Order of the image slots, also used for previous/next image, when file types are mixed in one line. Date of the data uses the time a photo was taken, the study date of DICOM and DATE-OBS of FITS, and the modified date for other files. Files with the same name and a different extension stay next to each other.",
+        "画像のスロットの並び（種類を 1 列に混ぜるとき）。前後の画像への移動もこの順になります。データの日時は、写真は撮影日時、DICOM は検査の日付、FITS は DATE-OBS、そのほかは更新日時です。名前が同じで拡張子だけ違うファイルは隣に並びます。",
+    ),
+    (
+        "Reverse the file order (Z to A, newest first).",
+        "ファイルの並びを逆にします（Z から A、新しい順）。",
+    ),
+    (
+        "Mixed in one line: order every file by the file order above. Grouped by type: photos, DICOM, FITS and other images in this order, each by its own order below.",
+        "1 列に混ぜる: どの種類も上のファイルの並びで 1 列にします。種類ごとにまとめる: 写真・DICOM・FITS・そのほかの画像の順にまとめ、それぞれを下の並びにします。",
+    ),
+    (
+        "JPEG, WebP and camera RAW, when grouped by type.",
+        "JPEG・WebP・カメラの RAW（種類ごとにまとめるとき）。",
+    ),
+    (
+        "When grouped by type. Date of the data orders by study date, then series number, then instance number. The images inside a series slot are always in instance number order.",
+        "種類ごとにまとめるとき。データの日時は、検査の日付 → シリーズ番号 → Instance Number の順です。シリーズのスロットの中は常に Instance Number の順です。",
+    ),
+    (
+        "When grouped by type. Date of the data is DATE-OBS.",
+        "種類ごとにまとめるとき。データの日時は DATE-OBS です。",
+    ),
+    (
+        "PNG, BMP, TIFF, GIF and others, when grouped by type.",
+        "PNG・BMP・TIFF・GIF など（種類ごとにまとめるとき）。",
+    ),
     ("Open folder...", "フォルダを開く..."),
     ("Recent folders", "最近開いたフォルダ"),
     ("No folders yet", "まだありません"),

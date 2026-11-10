@@ -36,6 +36,7 @@ mod export;
 mod face_groups;
 mod face_store;
 mod faces;
+mod file_order;
 mod fonts;
 mod format_stages;
 mod frame_store;

@@ -243,6 +243,12 @@ impl Registry {
         read.is_ok() && self.plugins.iter().any(|p| p.probe(&header))
     }
 
+    /// 拡張子で決まるプラグインの名前。ファイルの種類ごとに並べ方を変えるのに使う。
+    /// 中身は読まない（並べるたびに全ファイルを開くと、大きなフォルダで遅くなるため）。
+    pub fn plugin_name_by_extension(&self, path: &Path) -> Option<&str> {
+        self.by_extension(path).map(|p| p.name())
+    }
+
     /// 拡張子ではどのプラグインか分からず、中身を読んで判定するファイルか。
     pub fn needs_probe(&self, path: &Path) -> bool {
         self.by_extension(path).is_none()
