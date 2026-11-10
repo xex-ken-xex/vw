@@ -30,7 +30,10 @@ vw-dock.workspace = true
 vw-log.workspace = true
 vw-launch.workspace = true
 vw-renderer.workspace = true
-eframe = { version = "0.36", default-features = false, features = ["glow", "wgpu_no_default_features", "default_fonts", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu_no_default_features", "default_fonts", "wayland", "x11"] }
+# egui 0.37 は組み込みの絵文字フォント（NotoEmoji / emoji-icon-font）を機能の後ろに移した。
+# vw は OS のフォントを探す system_fonts を入れていないので、これがないと絵文字が □ になる。
+egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
 egui-phosphor = "0.14"
 # 16bit の画像を GPU に送るときに、u16 の並びをそのままバイトとして渡すため（eframe の wgpu も使っている）。
 bytemuck = "1.25"

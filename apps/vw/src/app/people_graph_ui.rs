@@ -469,7 +469,7 @@ fn canvas(
         let rect = t.mul_rect(Rect::from_min_size(pos, CARD));
         let r = ui.interact(
             rect,
-            ui.id().with(("graph_person", &name)),
+            ui.scope_id().with(("graph_person", &name)),
             Sense::click_and_drag(),
         );
         let selected = w.selected.contains(&name);

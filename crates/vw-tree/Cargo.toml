@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-egui = { version = "0.36", default-features = false }
+egui = { version = "0.37", default-features = false }
 vw-ui.workspace = true
 
 [lints]

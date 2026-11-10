@@ -1,6 +1,6 @@
-# egui-wgpu 0.36.2（vw 用の写し）
+# egui-wgpu 0.37.0（vw 用の写し）
 
-crates.io の egui-wgpu 0.36.2 をそのまま写し、次だけを変えている。
+crates.io の egui-wgpu 0.37.0 をそのまま写し、次だけを変えている。
 
 - `src/lib.rs` の `preferred_framebuffer_format`: アプリが `set_preferred_surface_formats` で頼んだ形式を先に選ぶ。
   上流は 8bit の形式（Rgba8Unorm / Bgra8Unorm）があればいつもそれを選び、設定で変えられない。

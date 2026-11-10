@@ -348,7 +348,7 @@ impl VwApp {
         if !self.layout_picker {
             return None;
         }
-        let shown = egui::Area::new(egui::Id::new("floating_layout_picker"))
+        let shown = egui::Area::new(egui::Id::unique("floating_layout_picker"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(anchor)

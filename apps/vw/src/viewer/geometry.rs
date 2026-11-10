@@ -357,6 +357,7 @@ mod tests {
             unit: MouseWheelUnit::Line,
             delta: vec2(0.0, -1.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: if ctrl {
                 egui::Modifiers::COMMAND
             } else {
@@ -373,6 +374,7 @@ mod tests {
             unit: MouseWheelUnit::Line,
             delta,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers,
         };
         let down = vec2(0.0, -1.0);

@@ -779,7 +779,7 @@ impl Dock {
         if panes.has_header(pane) && (!alone || panes.has_header_controls(pane)) {
             let header = Rect::from_min_size(content.min, vec2(content.width(), HEADER));
             content.min.y += HEADER;
-            let id = Id::new(("vw-dock-header", pane));
+            let id = Id::unique(("vw-dock-header", pane));
             let response = ui.interact(header, id, Sense::click_and_drag());
             let mut row = ui.new_child(
                 UiBuilder::new()
@@ -816,7 +816,7 @@ impl Dock {
     fn dividers_ui(&mut self, ui: &Ui, window: Window, dividers: &[tree::Divider]) {
         for d in dividers {
             let zone = d.rect.expand(3.0);
-            let id = Id::new(("vw-dock-divider", window, &d.path));
+            let id = Id::unique(("vw-dock-divider", window, &d.path));
             let response = ui.interact(zone, id, Sense::drag());
             let icon = match d.axis {
                 Axis::Row => CursorIcon::ResizeHorizontal,
@@ -1240,9 +1240,10 @@ impl Dock {
         let local = g.local(drag.screen);
         let buttons = guides::buttons(g.area, &g.panes, local);
         let hot = guides::hit(&buttons, local);
-        let painter = ui
-            .ctx()
-            .layer_painter(LayerId::new(Order::Foreground, Id::new("vw-dock-guides")));
+        let painter = ui.ctx().layer_painter(LayerId::new(
+            Order::Foreground,
+            Id::unique("vw-dock-guides"),
+        ));
         let look = guides::Look::from_visuals(ui.visuals());
         guides::paint(&painter, &buttons, hot, &look);
         if !drag.follows && !drag.os_move {

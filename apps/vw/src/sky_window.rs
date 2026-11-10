@@ -370,7 +370,7 @@ impl SkyWindow {
 
     fn chart(&mut self, ui: &egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let rect = ui.max_rect();
-        let response = ui.interact(rect, ui.id().with("sky"), Sense::click_and_drag());
+        let response = ui.interact(rect, ui.scope_id().with("sky"), Sense::click_and_drag());
         let view = self.view.get_or_insert_with(View::default);
         if self.fit_when_done && self.scan.is_none() {
             let points: Vec<Radec> = self
@@ -459,7 +459,7 @@ impl SkyWindow {
         let anchor = shapes.get(first)?.anchor()?;
         let mut command = None;
         let mut choose = None;
-        egui::Area::new(ui.id().with("sky_popup"))
+        egui::Area::new(ui.scope_id().with("sky_popup"))
             .fixed_pos(anchor + vec2(12.0, -12.0))
             .order(egui::Order::Foreground)
             .constrain_to(rect)

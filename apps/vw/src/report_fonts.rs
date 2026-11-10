@@ -40,7 +40,7 @@ fn first(paths: &[&str]) -> Option<Font> {
 fn builtin(name: &str) -> Option<Font> {
     let defs = FontDefinitions::default();
     let data = defs.font_data.get(name)?;
-    Some((Arc::new(data.font.to_vec()), data.index))
+    Some((Arc::new((*data.font).as_ref().to_vec()), data.index))
 }
 
 /// テーマに合う字体の並び。

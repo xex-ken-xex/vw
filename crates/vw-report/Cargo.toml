@@ -11,7 +11,7 @@ repository.workspace = true
 [dependencies]
 # egui（epaint）が字形の描画に使っているのと同じ版。新しいクレートを増やさずに、
 # 題や凡例の文字を入れた画像をクリップボードとファイルに出すため。
-vello_cpu = { version = "0.1", default-features = false, features = ["std", "text", "u8_pipeline"] }
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline"] }
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 png = "0.18"
 base64 = { version = "0.23", default-features = false, features = ["std"] }

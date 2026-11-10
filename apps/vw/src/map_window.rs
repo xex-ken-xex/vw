@@ -505,7 +505,7 @@ impl MapWindow {
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut chosen = enter.then(|| self.names.first().cloned()).flatten();
         if !self.names.is_empty() && !self.query.is_empty() {
-            egui::Area::new(ui.id().with("map_names"))
+            egui::Area::new(ui.scope_id().with("map_names"))
                 .fixed_pos(edit.rect.left_bottom() + vec2(0.0, 2.0))
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
@@ -532,7 +532,7 @@ impl MapWindow {
     fn map(&mut self, ui: &egui::Ui, inputs: &Inputs<'_>) -> Vec<Command> {
         let rect = ui.max_rect();
         self.last_rect = Some(rect);
-        let response = ui.interact(rect, ui.id().with("map"), Sense::click_and_drag());
+        let response = ui.interact(rect, ui.scope_id().with("map"), Sense::click_and_drag());
         let view = self.view.get_or_insert_with(View::default);
         if self.fit_when_done && self.scan.is_none() {
             let points: Vec<[f64; 2]> = self.places.iter().map(|p| p.world).collect();
@@ -666,7 +666,7 @@ impl MapWindow {
             })?;
         let mut command = None;
         let mut choose = None;
-        egui::Area::new(ui.id().with("map_popup"))
+        egui::Area::new(ui.scope_id().with("map_popup"))
             .fixed_pos(anchor + vec2(12.0, -12.0))
             .order(egui::Order::Foreground)
             .constrain_to(rect)
@@ -743,7 +743,7 @@ impl MapWindow {
     /// 地図の絵の出典。提供元の条件で、いつも見える所に出す。
     fn attribution(&self, ui: &egui::Ui, inputs: &Inputs<'_>, rect: Rect) {
         let s = inputs.settings;
-        egui::Area::new(ui.id().with("map_credit"))
+        egui::Area::new(ui.scope_id().with("map_credit"))
             .fixed_pos(rect.right_bottom())
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .order(egui::Order::Middle)

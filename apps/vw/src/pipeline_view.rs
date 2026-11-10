@@ -930,7 +930,7 @@ impl PipelineView {
         };
         let mut open = true;
         egui::Window::new(tr(lang, "Search nodes"))
-            .id(ui.id().with("add_node_search"))
+            .id(ui.scope_id().with("add_node_search"))
             .fixed_pos(at)
             .collapsible(false)
             .resizable(false)
@@ -1541,7 +1541,7 @@ impl PipelineView {
                     ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
                 let mut command = match crate::colormap_ui::gauge(
                     ui,
-                    ui.id().with(("lane_gauge", i)),
+                    ui.scope_id().with(("lane_gauge", i)),
                     body,
                     crate::settings::GaugeSide::Top,
                     lang,
@@ -2372,7 +2372,7 @@ fn color_map_body(
     let (body, _) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::hover());
     match crate::colormap_ui::gauge(
         ui,
-        ui.id().with("color_map_gauge"),
+        ui.scope_id().with("color_map_gauge"),
         body,
         crate::settings::GaugeSide::Top,
         lang,

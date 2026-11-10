@@ -61,7 +61,7 @@ struct Shown {
 impl Dialog {
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             tone: Tone::Normal,
             title: String::new(),
             near: None,
