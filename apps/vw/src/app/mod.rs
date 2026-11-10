@@ -355,8 +355,10 @@ pub struct VwApp {
     file_rank: HashMap<PathBuf, usize>,
     /// スロットを今の並びにしたときのファイルの並びの設定。変わったらフォルダを開き直す。
     listed_files: crate::file_order::FileOrder,
-    /// 外壁の帯の右寄せの部品の幅（前のフレームで描いた幅）。
-    wall_right_width: f32,
+    /// 外壁の帯の部品の幅（前のフレームで描いた幅）。
+    wall_measure: wall::WallMeasure,
+    /// 外壁の帯に入りきらず「…」にしまった部品（前のフレーム）。
+    wall_overflow: Vec<crate::wall_bar::WallPart>,
     /// 「レイアウトを選ぶ」で、次に描くときにレイアウトの一覧を開く。
     layout_picker: bool,
     /// 再生しているスロットを最大化せず、並べたまま再生している（外壁の帯から）。
@@ -909,7 +911,8 @@ impl VwApp {
             current: None,
             file_rank: HashMap::new(),
             listed_files,
-            wall_right_width: 0.0,
+            wall_measure: wall::WallMeasure::default(),
+            wall_overflow: Vec::new(),
             layout_picker: false,
             playing_in_place: false,
             folder_load: None,
@@ -1282,8 +1285,7 @@ impl VwApp {
                 self.set_file_order(ctx, files);
             }
             Action::ToggleSortDescending => {
-                let mut files = self.settings().file_sort;
-                files.descending = !files.descending;
+                let files = self.settings().file_sort.reversed();
                 self.set_file_order(ctx, files);
             }
             Action::ToggleSortMix => {

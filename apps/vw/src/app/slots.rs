@@ -1303,7 +1303,7 @@ impl VwApp {
             self.set_focus(ui.ctx(), Focus::Images);
         }
         self.drag_to_reorder(ui, &cells);
-        if !wall.shows(WallPart::Layout)
+        if (!wall.shows(WallPart::Layout) || self.wall_overflow.contains(&WallPart::Layout))
             && let Some(click) =
                 self.floating_layout_picker(ui.ctx(), area.left_bottom() + vec2(6.0, -6.0))
         {
@@ -1334,7 +1334,9 @@ impl VwApp {
             }
             None => {}
         }
-        if view.pages > 1 && !wall.shows(WallPart::Pages) {
+        if view.pages > 1
+            && (!wall.shows(WallPart::Pages) || self.wall_overflow.contains(&WallPart::Pages))
+        {
             page_move = self.page_bar(ui.ctx(), area, &view);
         }
         if view.pages > 1 || page_move.is_some() {
@@ -1462,7 +1464,8 @@ impl VwApp {
                 egui::Frame::popup(ui.style())
                     .inner_margin(egui::Margin::symmetric(4, 1))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| self.page_controls(ui, view)).inner
+                        ui.horizontal(|ui| self.page_controls(ui, view, false, true))
+                            .inner
                     })
                     .inner
             })
@@ -1471,17 +1474,22 @@ impl VwApp {
 
     /// ページの操作。スロットの総数、今のページとページ数、前後のページへのボタンを並べる。
     /// 上でホイールを回すと前後のページへ、ページの数字を左右にドラッグすると遠くのページへ移る。
-    /// ページが 1 つなら総数だけを出す。
+    /// ページが 1 つなら総数だけを出す。`icons` なら、ページがあるときは総数を省く。
+    /// `own_wheel` なら、この上のホイールを読む（外壁の帯では帯の全体で読むので読まない）。
     pub(super) fn page_controls(
         &mut self,
         ui: &mut egui::Ui,
         view: &layout::View,
+        icons: bool,
+        own_wheel: bool,
     ) -> Option<PageMove> {
         let lang = self.lang();
         let total = tr1(lang, "{} slots", &self.slots.len().to_string());
         let start = ui.cursor().min;
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(egui::RichText::new(total).small().weak());
+        if !(icons && view.pages > 1) {
+            ui.label(egui::RichText::new(total).small().weak());
+        }
         if view.pages <= 1 {
             return None;
         }
@@ -1531,22 +1539,27 @@ impl VwApp {
         if next.clicked() {
             return Some(PageMove::Step(1));
         }
-        if ui
-            .ctx()
-            .rect_contains_pointer(ui.layer_id(), bar.union(next.rect))
-        {
-            // 帯の上では Shift の有無を問わない。Shift を押したまま帯に来ても止まらないように。
-            let wheel = ui.ctx().input(|i| {
-                let (plain, shifted) =
-                    crate::viewer::split_wheel(&i.events, i.viewport_rect().height());
-                plain + shifted
-            });
-            let steps = crate::viewer::wheel_steps(&mut self.page_wheel, wheel);
-            if steps != 0 {
-                return Some(PageMove::Scroll(steps));
-            }
+        if own_wheel {
+            return self
+                .page_wheel_over(ui, bar.union(next.rect))
+                .map(PageMove::Scroll);
         }
         None
+    }
+
+    /// `rect` の上でホイールを回したら、送るページの数。
+    pub(super) fn page_wheel_over(&mut self, ui: &egui::Ui, rect: Rect) -> Option<isize> {
+        if !ui.ctx().rect_contains_pointer(ui.layer_id(), rect) {
+            return None;
+        }
+        // 帯の上では Shift の有無を問わない。Shift を押したまま帯に来ても止まらないように。
+        let wheel = ui.ctx().input(|i| {
+            let (plain, shifted) =
+                crate::viewer::split_wheel(&i.events, i.viewport_rect().height());
+            plain + shifted
+        });
+        let steps = crate::viewer::wheel_steps(&mut self.page_wheel, wheel);
+        (steps != 0).then_some(steps)
     }
 
     /// フォルダを OS のファイラで開く。展開した ZIP の中なら、ZIP のあるフォルダを開く。

@@ -4,7 +4,7 @@ use eframe::egui;
 use egui_phosphor::regular as icon;
 
 use crate::export::Filter;
-use crate::file_order::{FileKey, FileOrder, Mix};
+use crate::file_order::{Direction, FileKey, FileOrder, Mix};
 use crate::i18n::tr;
 use crate::keymap::Action;
 use crate::labels::Flag;
@@ -257,11 +257,9 @@ impl VwApp {
             }
         }
         ui.separator();
-        if self.menu_item(ui, Action::ToggleSortDescending, Some(files.descending)) {
-            chosen = Some(SortChange::Files(FileOrder {
-                descending: !files.descending,
-                ..files
-            }));
+        let descending = files.direction() == Direction::Descending;
+        if self.menu_item(ui, Action::ToggleSortDescending, Some(descending)) {
+            chosen = Some(SortChange::Files(files.reversed()));
         }
         if self.menu_item(ui, Action::ToggleSortMix, Some(files.mix == Mix::ByKind)) {
             chosen = Some(SortChange::Files(FileOrder {

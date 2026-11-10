@@ -76,14 +76,10 @@ impl VwApp {
     /// ファイルのスロットと前後送りの並びを変える。
     pub(super) fn set_file_order(&mut self, ctx: &egui::Context, files: FileOrder) {
         self.settings.settings.file_sort = files;
-        let direction = if files.descending {
-            "descending"
-        } else {
-            "ascending"
-        };
         self.log.info(format!(
-            "File order: {}, {direction}, {}",
+            "File order: {}, {}, {}",
             files.key.title(),
+            files.direction().title(),
             files.mix.title()
         ));
         self.settings_changed(ctx);
