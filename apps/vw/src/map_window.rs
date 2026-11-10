@@ -15,13 +15,13 @@ use egui_phosphor::regular as icon;
 use vw_core::Registry;
 use vw_core::exif::Gps;
 
+use crate::file_order::ListOrder;
 use crate::geo_map::{self, Cluster, View};
 use crate::geonames::{Found as FoundName, Gazetteer};
 use crate::i18n::{tr, tr1};
 use crate::labels::{LabelStore, Position};
 use crate::map_tiles::Tiles;
 use crate::settings::{Language, MapSettings};
-use crate::sort::SortOrder;
 
 /// 点をまとめる升の大きさ（画素）。
 const CLUSTER_CELL: f64 = 44.0;
@@ -169,7 +169,7 @@ pub struct Inputs<'a> {
     pub folder: Option<&'a Path>,
     pub roots: &'a [String],
     pub registry: &'a Registry,
-    pub order: SortOrder,
+    pub order: ListOrder,
     /// 取った地図の絵を残すフォルダ。
     pub cache: Option<&'a Path>,
     /// 地名の表。まだダウンロードしていなければ `None`。
@@ -994,7 +994,7 @@ fn file_name(path: &Path) -> String {
 fn start_scan(
     source: Source,
     registry: Registry,
-    order: SortOrder,
+    order: ListOrder,
     extents: bool,
     ctx: &egui::Context,
 ) -> Scan {

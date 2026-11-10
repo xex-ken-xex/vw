@@ -110,7 +110,7 @@ impl VwApp {
             filter: &bad,
             labels: &self.labels,
         };
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let files = export::collect(&dir, false, self.loader.registry(), order, &matcher).images;
         if files.is_empty() {
             self.log.info(format!("No bad images in {}", dir.display()));

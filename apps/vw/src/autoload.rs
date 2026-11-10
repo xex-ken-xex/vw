@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, channel, sync_
 
 use vw_core::Registry;
 
-use crate::sort::SortOrder;
+use crate::file_order::ListOrder;
 use crate::tree::list_folder;
 
 /// 辿るスレッドが先に見つけておけるパスの数。UI が確認で止まっている間に、
@@ -52,7 +52,7 @@ impl FolderLoad {
     pub fn start(
         root: PathBuf,
         registry: Registry,
-        order: SortOrder,
+        order: ListOrder,
         subfolders: bool,
         confirm: bool,
         chunk: usize,
@@ -164,7 +164,7 @@ impl Drop for FolderLoad {
 /// フォルダを辿るスレッドの持ち物。
 struct Walker {
     registry: Registry,
-    order: SortOrder,
+    order: ListOrder,
     tx: SyncSender<PathBuf>,
     cancel: Arc<AtomicBool>,
     wake: Box<dyn Fn() + Send>,
@@ -236,7 +236,10 @@ mod tests {
         FolderLoad::start(
             root.to_path_buf(),
             png_registry(),
-            SortOrder::default(),
+            ListOrder::plain(
+                crate::sort::SortOrder::default(),
+                crate::sort::SortOrder::default(),
+            ),
             true,
             confirm,
             chunk,
@@ -316,7 +319,10 @@ mod tests {
         let mut load = FolderLoad::start(
             dir.path().to_path_buf(),
             png_registry(),
-            SortOrder::default(),
+            ListOrder::plain(
+                crate::sort::SortOrder::default(),
+                crate::sort::SortOrder::default(),
+            ),
             false,
             true,
             500,

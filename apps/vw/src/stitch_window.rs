@@ -23,9 +23,9 @@ use vw_compare::plane::Rgb;
 use vw_compare::{Affine, Warp};
 use vw_core::{Curve, DisplayParams, PixelData, Registry, VwImage};
 
+use crate::file_order::ListOrder;
 use crate::i18n::{tr, tr1};
 use crate::settings::{Language, StitchBlend, StitchFeatures, StitchProjection, StitchSettings};
-use crate::sort::SortOrder;
 use crate::stitch::{self, Depth, How, Plan, Source};
 
 /// 位置合わせに使う縮めた画像の長辺。細かく直す段の上限（2048）より小さくして、何十枚でも
@@ -55,7 +55,7 @@ pub struct Inputs<'a> {
     pub lang: Language,
     pub folder: Option<&'a Path>,
     pub registry: &'a Registry,
-    pub order: SortOrder,
+    pub order: ListOrder,
     pub settings: &'a StitchSettings,
     /// スロットに出ている画像。
     pub shown: &'a [PathBuf],

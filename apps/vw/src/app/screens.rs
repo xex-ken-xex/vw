@@ -459,7 +459,7 @@ impl VwApp {
             folder: self.current.as_deref(),
             roots: &settings.dataset.roots,
             registry: &registry,
-            order: settings.tree.order(),
+            order: settings.list_order(),
             cache: cache.as_deref(),
             places: self.place_names.as_deref(),
             labels: &self.labels,
@@ -505,7 +505,7 @@ impl VwApp {
             folder: self.current.as_deref(),
             roots: &settings.dataset.roots,
             registry: &registry,
-            order: settings.tree.order(),
+            order: settings.list_order(),
             active: active.as_deref(),
             extra: self.stitch.sky_items(),
         };
@@ -530,7 +530,7 @@ impl VwApp {
             lang: self.lang(),
             folder: self.current.as_deref(),
             registry: &registry,
-            order: settings.tree.order(),
+            order: settings.list_order(),
             limits: settings.subframes.limits(),
             fps: settings.subframes.blink_fps,
         };
@@ -560,7 +560,7 @@ impl VwApp {
             lang: self.lang(),
             folder: self.current.as_deref(),
             registry: &registry,
-            order: settings.tree.order(),
+            order: settings.list_order(),
             settings: &settings.stitch,
             shown: &shown,
         };

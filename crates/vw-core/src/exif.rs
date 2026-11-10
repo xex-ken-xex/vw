@@ -126,6 +126,19 @@ pub fn gps_of_file(path: &std::path::Path) -> Option<(Gps, Option<String>)> {
     Some((gps(&exif)?, taken))
 }
 
+/// ファイルの EXIF から撮影日時（DateTimeOriginal、なければ DateTime）を読む。画像は読まない。
+/// 撮影日時でファイルを並べるために、フォルダの全ファイルを見るため。
+pub fn taken_of_file(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let exif = exif::Reader::new()
+        .read_from_container(&mut std::io::BufReader::new(file))
+        .ok()?;
+    [exif::Tag::DateTimeOriginal, exif::Tag::DateTime]
+        .into_iter()
+        .find_map(|tag| exif.get_field(tag, exif::In::PRIMARY))
+        .map(|f| value(f, &exif))
+}
+
 /// EXIF の値の表示。文字列は kamadak-exif の表示だと `"NIKON"` のように引用符が付くので、
 /// 中身だけを出す。
 fn value(f: &exif::Field, exif: &exif::Exif) -> String {

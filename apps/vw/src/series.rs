@@ -173,114 +173,6 @@ pub fn group(entries: Vec<(PathBuf, Metadata)>) -> Vec<Study> {
     studies
 }
 
-/// 1 シリーズだけのフォルダを並べる鍵。検査の日付 → 検査の説明 → シリーズ番号の順に並ぶ
-/// （[`group`] と同じ順）。番号のないシリーズは後ろに回す。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FolderSeries {
-    study_date: String,
-    study_description: String,
-    study_uid: String,
-    no_number: bool,
-    number: Option<i64>,
-    description: String,
-}
-
-impl FolderSeries {
-    /// ヘッダから鍵と、シリーズの UID を作る。DICOM でなければ `None`。
-    fn of(m: &Metadata) -> Option<(String, Self)> {
-        let get = |k| m.get("DICOM", k).unwrap_or_default().to_owned();
-        let uid = get("Series UID");
-        if uid.is_empty() {
-            return None;
-        }
-        let number: Option<i64> = get("Series number").trim().parse().ok();
-        Some((
-            uid,
-            Self {
-                study_date: get("Study date"),
-                study_description: get("Study"),
-                study_uid: get("Study UID"),
-                no_number: number.is_none(),
-                number,
-                description: get("Series"),
-            },
-        ))
-    }
-}
-
-/// フォルダ `dir` が DICOM の 1 シリーズだけを入れているなら、並べる鍵を返す。
-///
-/// 読むのは名前の順で先頭と末尾のファイルのヘッダだけ。全部を読めば確実だが、CT の
-/// シリーズのフォルダが並ぶと検査 1 つで数百 MB を読むことになり、ネットワークドライブで
-/// ツリーの先読みが詰まるため。サブフォルダや ZIP、DICOM でない画像があれば 1 シリーズの
-/// フォルダとはみなさない。
-pub fn folder_series(dir: &Path, registry: &Registry) -> Option<FolderSeries> {
-    let extensions = crate::tree::dicom_extensions(registry);
-    let mut first: Option<PathBuf> = None;
-    let mut last: Option<PathBuf> = None;
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let name = e.file_name();
-        if crate::tree::is_hidden_name(&name.to_string_lossy()) {
-            continue;
-        }
-        let path = e.path();
-        if crate::tree::entry_is_dir(&e) || crate::archive::is_archive(&path) {
-            return None;
-        }
-        if !registry.supports_file(&path) {
-            continue;
-        }
-        if !crate::tree::may_be_dicom(registry, extensions, &path) {
-            return None;
-        }
-        let by_name = |a: &PathBuf, b: &PathBuf| {
-            crate::sort::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy())
-        };
-        if first.as_ref().is_none_or(|f| by_name(&path, f).is_lt()) {
-            first = Some(path.clone());
-        }
-        if last.as_ref().is_none_or(|l| by_name(&path, l).is_gt()) {
-            last = Some(path);
-        }
-    }
-    let (first_uid, key) = FolderSeries::of(&read_header(registry, &first?)?)?;
-    let last = last.expect("set together with first");
-    let (last_uid, _) = FolderSeries::of(&read_header(registry, &last)?)?;
-    (first_uid == last_uid).then_some(key)
-}
-
-/// `items` のうち鍵のあるもの（1 シリーズのフォルダ）だけを、それらが占めていた位置の中で
-/// 鍵の順に並べ直す。ほかの項目の位置は動かさない。
-///
-/// 並び順の比べ方に混ぜないのは、ファイルの並びの設定（名前の降順など）とシリーズ番号の
-/// 昇順を 1 つの比べ方にすると、鍵のあるものとないものの間で順序が矛盾するため。
-/// 並べ替えたら `true`。
-pub fn place_in_series_order<T>(
-    items: &mut Vec<T>,
-    key: impl Fn(&T) -> Option<FolderSeries>,
-) -> bool {
-    let mut keyed: Vec<(usize, FolderSeries)> = items
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| Some((i, key(item)?)))
-        .collect();
-    if keyed.is_sorted_by(|a, b| a.1 <= b.1) {
-        return false;
-    }
-    keyed.sort_by(|a, b| a.1.cmp(&b.1));
-    let mut slots: Vec<Option<T>> = std::mem::take(items).into_iter().map(Some).collect();
-    let mut movers = keyed
-        .iter()
-        .map(|(i, _)| slots[*i].take().expect("each index is taken once"))
-        .collect::<Vec<T>>()
-        .into_iter();
-    *items = slots
-        .into_iter()
-        .map(|s| s.unwrap_or_else(|| movers.next().expect("one mover per emptied place")))
-        .collect();
-    true
-}
-
 /// フォルダのスロットを開いて読んだ画像 `paths` を、DICOM のシリーズ（2 枚以上のもの）と
 /// 残りに分ける。シリーズは、フォルダごとのヘッダを読んだ結果 `studies` の順
 /// （検査 → シリーズ番号）で、中は Instance Number の順。残りは `paths` の順のまま。
@@ -324,7 +216,7 @@ pub fn split_into_series<'a>(
 }
 
 /// DICOM のヘッダだけを読む。DICOM でなければ `None`。
-fn read_header(registry: &Registry, path: &Path) -> Option<Metadata> {
+pub(crate) fn read_header(registry: &Registry, path: &Path) -> Option<Metadata> {
     let mut head = Vec::new();
     std::fs::File::open(path)
         .ok()?
@@ -612,77 +504,6 @@ mod tests {
                 p
             })
             .collect()
-    }
-
-    fn key(dir: &Path) -> Option<FolderSeries> {
-        folder_series(dir, &crate::test_util::all_registry())
-    }
-
-    #[test]
-    fn a_folder_of_one_series_gets_a_key_ordered_by_series_number() {
-        let root = crate::test_util::TempDir::new();
-        write_series(&root.path().join("a"), "1.3", 3, &[4, 1, 5, 2, 3]);
-        write_series(&root.path().join("b"), "1.1", 1, &[2, 1]);
-        write_series(&root.path().join("c"), "1.0", 10, &[1, 2]);
-        let (a, b, c) = (
-            key(&root.path().join("a")),
-            key(&root.path().join("b")),
-            key(&root.path().join("c")),
-        );
-        assert!(b.as_ref().unwrap() < a.as_ref().unwrap());
-        assert!(a.as_ref().unwrap() < c.as_ref().unwrap());
-    }
-
-    #[test]
-    fn a_folder_with_two_series_subfolders_or_other_images_gets_no_key() {
-        let root = crate::test_util::TempDir::new();
-        let two = root.path().join("two");
-        write_series(&two, "1.1", 1, &[1]);
-        // 名前の順で末尾に来るファイルを別のシリーズにする。
-        vw_dicom::synth::Synth::ct(1, 1)
-            .series("1.2", 2, "other")
-            .write(&two.join("zz.dcm"))
-            .unwrap();
-        assert_eq!(key(&two), None);
-
-        let nested = root.path().join("nested");
-        write_series(&nested, "1.1", 1, &[1, 2]);
-        std::fs::create_dir(nested.join("sub")).unwrap();
-        assert_eq!(key(&nested), None);
-
-        let mixed = root.path().join("mixed");
-        write_series(&mixed, "1.1", 1, &[1, 2]);
-        std::fs::write(mixed.join("a.png"), crate::test_util::png_bytes(1, 1)).unwrap();
-        assert_eq!(key(&mixed), None);
-
-        let plain = root.path().join("plain");
-        std::fs::create_dir(&plain).unwrap();
-        std::fs::write(plain.join("a.png"), crate::test_util::png_bytes(1, 1)).unwrap();
-        assert_eq!(key(&plain), None);
-    }
-
-    #[test]
-    fn series_folders_are_reordered_only_among_their_own_places() {
-        let k = |n: i64| FolderSeries {
-            study_date: "20261105".into(),
-            study_description: String::new(),
-            study_uid: "1".into(),
-            no_number: false,
-            number: Some(n),
-            description: String::new(),
-        };
-        // 名前の降順で並んだフォルダ。x と y はシリーズのフォルダでない。
-        let mut items = vec![
-            ("x", None),
-            ("S3", Some(3)),
-            ("y", None),
-            ("S2", Some(2)),
-            ("S1", Some(1)),
-        ];
-        assert!(place_in_series_order(&mut items, |(_, n)| n.map(k)));
-        let names: Vec<_> = items.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, ["x", "S1", "y", "S2", "S3"]);
-        assert!(!place_in_series_order(&mut items, |(_, n)| n.map(k)));
     }
 
     #[test]

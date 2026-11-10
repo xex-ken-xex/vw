@@ -15,29 +15,30 @@ use crate::settings::Language;
 const JA: &[(&str, &str)] = &[
     ("Opened folder {}", "フォルダ {} を開きました"),
     (
-        "Sort order: Name (numbers by value), ascending",
-        "並び順: ファイル名（数字は数値として比較）、昇順",
+        "Folder order: Name (numbers by value), ascending",
+        "フォルダの並び: ファイル名（数字は数値として比較）、昇順",
     ),
     (
-        "Sort order: Name (numbers by value), descending",
-        "並び順: ファイル名（数字は数値として比較）、降順",
+        "Folder order: Name (numbers by value), descending",
+        "フォルダの並び: ファイル名（数字は数値として比較）、降順",
     ),
     (
-        "Sort order: Name (character by character), ascending",
-        "並び順: ファイル名（文字列として比較）、昇順",
+        "Folder order: Name (character by character), ascending",
+        "フォルダの並び: ファイル名（文字列として比較）、昇順",
     ),
     (
-        "Sort order: Name (character by character), descending",
-        "並び順: ファイル名（文字列として比較）、降順",
+        "Folder order: Name (character by character), descending",
+        "フォルダの並び: ファイル名（文字列として比較）、降順",
     ),
     (
-        "Sort order: Modified date, ascending",
-        "並び順: 更新日時、昇順",
+        "Folder order: Modified date, ascending",
+        "フォルダの並び: 更新日時、昇順",
     ),
     (
-        "Sort order: Modified date, descending",
-        "並び順: 更新日時、降順",
+        "Folder order: Modified date, descending",
+        "フォルダの並び: 更新日時、降順",
     ),
+    ("File order: {}, {}, {}", "ファイルの並び: {}、{}、{}"),
     ("Closed {}", "{} を閉じました"),
     (
         "Loaded {} images from {}",
@@ -260,10 +261,10 @@ mod tests {
     }
 
     #[test]
-    fn sort_order_change_is_translated() {
+    fn folder_order_change_is_translated() {
         assert_eq!(
-            ja("Sort order: Modified date, descending").as_deref(),
-            Some("並び順: 更新日時、降順")
+            ja("Folder order: Modified date, descending").as_deref(),
+            Some("フォルダの並び: 更新日時、降順")
         );
     }
 

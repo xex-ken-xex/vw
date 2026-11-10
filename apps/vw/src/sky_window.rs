@@ -14,11 +14,11 @@ use egui_phosphor::regular as icon;
 use vw_core::Registry;
 use vw_fits::Sky;
 
+use crate::file_order::ListOrder;
 use crate::i18n::{tr, tr1};
 use crate::marks;
 use crate::settings::{Language, SkySettings};
 use crate::sky_chart::{self, Background, Radec, View};
-use crate::sort::SortOrder;
 
 /// 星図に出す画像の範囲。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +207,7 @@ pub struct Inputs<'a> {
     pub folder: Option<&'a Path>,
     pub roots: &'a [String],
     pub registry: &'a Registry,
-    pub order: SortOrder,
+    pub order: ListOrder,
     /// アクティブなスロットの画像。
     pub active: Option<&'a Path>,
     /// フォルダのほかに出す枠（貼り合わせた画像）。
@@ -860,7 +860,7 @@ fn is_fits_path(path: &Path) -> bool {
         .any(|ext| name.ends_with(&format!(".{ext}")))
 }
 
-fn start_scan(source: Source, registry: Registry, order: SortOrder, ctx: &egui::Context) -> Scan {
+fn start_scan(source: Source, registry: Registry, order: ListOrder, ctx: &egui::Context) -> Scan {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();

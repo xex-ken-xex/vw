@@ -70,6 +70,9 @@ pub enum Action {
     OpenFolder,
     CycleSortKey,
     ToggleSortDescending,
+    ToggleSortMix,
+    CycleFolderSortKey,
+    ToggleFolderSortDescending,
     DevelopRaw,
     SwapRawPreview,
     ToggleClippingWarning,
@@ -235,6 +238,9 @@ impl Action {
         Action::ParentFolder,
         Action::CycleSortKey,
         Action::ToggleSortDescending,
+        Action::ToggleSortMix,
+        Action::CycleFolderSortKey,
+        Action::ToggleFolderSortDescending,
         Action::CopyFolderPath,
         Action::OpenInFileManager,
         Action::CloseZip,
@@ -416,6 +422,9 @@ impl Action {
             Action::ParentFolder => "parent_folder",
             Action::CycleSortKey => "cycle_sort_key",
             Action::ToggleSortDescending => "toggle_sort_descending",
+            Action::ToggleSortMix => "toggle_sort_mix",
+            Action::CycleFolderSortKey => "cycle_folder_sort_key",
+            Action::ToggleFolderSortDescending => "toggle_folder_sort_descending",
             Action::OpenFolder => "open_folder",
             Action::DevelopRaw => "develop_raw",
             Action::SwapRawPreview => "swap_raw_preview",
@@ -613,8 +622,11 @@ impl Action {
             Action::ShowPeopleGraph => "Relationship charts...",
             Action::ToggleFaceFrames => "Show face frames",
             Action::ParentFolder => "Up one folder",
-            Action::CycleSortKey => "Change sort order",
-            Action::ToggleSortDescending => "Descending order",
+            Action::CycleSortKey => "Change file order",
+            Action::ToggleSortDescending => "Files in descending order",
+            Action::ToggleSortMix => "Group files by type",
+            Action::CycleFolderSortKey => "Change folder order",
+            Action::ToggleFolderSortDescending => "Folders in descending order",
             Action::OpenFolder => "Open folder...",
             Action::FullscreenSlideshow => "Fullscreen slideshow...",
             Action::FullscreenExit => "Fullscreen: exit",
@@ -658,7 +670,10 @@ impl Action {
             | Action::ParentFolder
             | Action::OpenFolder
             | Action::CycleSortKey
-            | Action::ToggleSortDescending => KeyGroup::Navigate,
+            | Action::ToggleSortDescending
+            | Action::ToggleSortMix
+            | Action::CycleFolderSortKey
+            | Action::ToggleFolderSortDescending => KeyGroup::Navigate,
             Action::ToggleMaximize
             | Action::RestoreSlot
             | Action::FitImage
@@ -919,6 +934,8 @@ impl Action {
             Action::OpenFolder => vec![KeyCombo::ctrl(O)],
             Action::CycleSortKey => vec![KeyCombo::plain(S)],
             Action::ToggleSortDescending => vec![KeyCombo::plain(S).with(false, true, false)],
+            Action::ToggleSortMix => vec![KeyCombo::plain(S).with(true, true, false)],
+            Action::CycleFolderSortKey | Action::ToggleFolderSortDescending => vec![],
             Action::ParentFolder => vec![
                 KeyCombo::plain(Backspace),
                 KeyCombo::mouse(MouseButton::Back),

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
 
+use crate::file_order::{FileKey, FileOrder, ListOrder};
 use crate::keymap::Keymap;
 use crate::layout::{SlotLayout, WheelScroll};
 use crate::slideshow::{DROP_WINDOW_RANGE, EndMode, FPS_RANGE};
@@ -2919,6 +2920,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub viewer: Viewer,
     pub tree: Tree,
+    pub file_sort: FileOrder,
     pub behavior: Behavior,
     pub metadata: MetadataSettings,
     pub roi: RoiSettings,
@@ -2982,6 +2984,25 @@ fn read_slot_bar(r: &mut Reader<'_>) -> SlotBar {
     bar
 }
 
+/// `[file_sort]`: ファイルのスロットの並び。1 列に並べるときの基準を書いていない設定ファイルは、
+/// ツリーの並び（`[tree]`）を引き継ぐ。ファイルの並びを分ける前は、ツリーの設定で
+/// フォルダとファイルの両方を並べていたので、開いたときの並びが変わらないようにするため。
+fn read_file_sort(r: &mut Reader<'_>, tree: &Tree) -> FileOrder {
+    let d = FileOrder::default();
+    let mut r = r.at("file_sort");
+    FileOrder {
+        key: r
+            .get("key")
+            .unwrap_or_else(|| FileKey::from_sort_key(tree.sort)),
+        descending: r.get("descending").unwrap_or(tree.sort_descending),
+        mix: r.get("mix").unwrap_or(d.mix),
+        photo: r.get("photo").unwrap_or(d.photo),
+        dicom: r.get("dicom").unwrap_or(d.dicom),
+        fits: r.get("fits").unwrap_or(d.fits),
+        other: r.get("other").unwrap_or(d.other),
+    }
+}
+
 impl Settings {
     /// TOML を読む。書かれていない項目は既定値になる。読めない項目は、その項目
     /// （キー割り当ては関係する操作も）だけを既定値にして、残りは生かす。
@@ -2993,6 +3014,7 @@ impl Settings {
         let appearance = Appearance::read(&mut r);
         let viewer = Viewer::read(&mut r);
         let tree = Tree::read(&mut r);
+        let file_sort = read_file_sort(&mut r, &tree);
         let behavior = Behavior::read(&mut r);
         let metadata = MetadataSettings::read(&mut r);
         let roi = RoiSettings::read(&mut r);
@@ -3034,6 +3056,7 @@ impl Settings {
                 appearance,
                 viewer,
                 tree,
+                file_sort,
                 behavior,
                 metadata,
                 roi,
@@ -3064,6 +3087,14 @@ impl Settings {
             },
             problems,
         ))
+    }
+
+    /// フォルダの一覧（スロットや前後の画像への移動）に使う、フォルダとファイルの並び。
+    pub fn list_order(&self) -> ListOrder {
+        ListOrder {
+            folders: self.tree.order(),
+            files: self.file_sort,
+        }
     }
 
     pub fn to_toml(&self) -> String {
@@ -4213,6 +4244,39 @@ ae_title = "PACS"
         assert_eq!(s.tree.sort, SortKey::NameString);
         assert!(!s.tree.sort_descending);
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn file_order_follows_the_tree_order_when_not_written() {
+        let (s, _) =
+            Settings::from_toml("[tree]\nsort = \"modified\"\nsort_descending = false\n").unwrap();
+        assert_eq!(s.file_sort.key, FileKey::Modified);
+        assert!(!s.file_sort.descending);
+    }
+
+    #[test]
+    fn file_order_is_read_apart_from_the_tree_and_per_type() {
+        let text = "[tree]\nsort = \"modified\"\n\
+                    [file_sort]\nkey = \"date\"\ndescending = false\nmix = \"by_kind\"\n\
+                    [file_sort.fits]\nkey = \"size\"\ndescending = true\n";
+        let (s, problems) = Settings::from_toml(text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(s.tree.sort, SortKey::Modified);
+        assert_eq!(s.file_sort.key, FileKey::Date);
+        assert_eq!(s.file_sort.mix, crate::file_order::Mix::ByKind);
+        assert_eq!(s.file_sort.fits.key, FileKey::Size);
+        assert!(s.file_sort.fits.descending);
+        assert_eq!(s.file_sort.photo, FileOrder::default().photo);
+    }
+
+    #[test]
+    fn file_order_survives_writing_and_reading_back() {
+        let mut s = Settings::default();
+        s.file_sort.mix = crate::file_order::Mix::ByKind;
+        s.file_sort.other.key = FileKey::Size;
+        let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.file_sort, s.file_sort);
     }
 
     #[test]
