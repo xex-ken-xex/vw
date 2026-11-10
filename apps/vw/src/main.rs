@@ -101,6 +101,7 @@ mod toml_reader;
 mod transfer;
 mod tree;
 mod viewer;
+mod wall_bar;
 mod watch;
 mod window_placement;
 mod zoom_map;

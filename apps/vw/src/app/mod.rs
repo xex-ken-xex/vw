@@ -71,6 +71,7 @@ mod slots;
 mod tag_name;
 mod transfers;
 mod undo;
+mod wall;
 
 /// 左端のツール列のツール。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -354,6 +355,12 @@ pub struct VwApp {
     file_rank: HashMap<PathBuf, usize>,
     /// スロットを今の並びにしたときのファイルの並びの設定。変わったらフォルダを開き直す。
     listed_files: crate::file_order::FileOrder,
+    /// 外壁の帯の右寄せの部品の幅（前のフレームで描いた幅）。
+    wall_right_width: f32,
+    /// 「レイアウトを選ぶ」で、次に描くときにレイアウトの一覧を開く。
+    layout_picker: bool,
+    /// 再生しているスロットを最大化せず、並べたまま再生している（外壁の帯から）。
+    playing_in_place: bool,
     /// cd したフォルダの画像の読み込み。
     folder_load: Option<FolderLoad>,
     /// 開いたフォルダのスロットの中身の読み込みと、そのスロットの番号。
@@ -902,6 +909,9 @@ impl VwApp {
             current: None,
             file_rank: HashMap::new(),
             listed_files,
+            wall_right_width: 0.0,
+            layout_picker: false,
+            playing_in_place: false,
             folder_load: None,
             explores: Vec::new(),
             explored_series: Vec::new(),
@@ -1281,6 +1291,12 @@ impl VwApp {
                 files.mix = files.mix.toggled();
                 self.set_file_order(ctx, files);
             }
+            Action::ToggleWallBar => {
+                let bar = &mut self.settings.settings.wall_bar;
+                bar.show = !bar.show;
+                self.settings_changed(ctx);
+            }
+            Action::PickLayout => self.layout_picker = !self.layout_picker,
             Action::CycleFolderSortKey => {
                 let tree = &self.settings().tree;
                 let (key, descending) = (tree.sort.next(), tree.sort_descending);

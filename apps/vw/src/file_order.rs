@@ -253,13 +253,18 @@ struct Stamp {
 }
 
 impl Stamp {
+    /// `YYYYMMDDhhmmss` とミリ秒の 3 桁。
+    const DIGITS: usize = 17;
+
     fn new(text: &str) -> Option<Self> {
         let mut digits: String = text.chars().filter(char::is_ascii_digit).collect();
         if digits.len() < 8 {
             return None;
         }
-        // 時刻のない日付や秒のない時刻を、時刻のあるものと桁をそろえて比べるため。
-        while digits.len() < 14 {
+        // 文字列のまま比べるので、時刻のない日付・小数秒のない時刻・ミリ秒より細かい時刻を
+        // ミリ秒までの 17 桁にそろえる。桁が違うと同じ時刻でも同点にならない。
+        digits.truncate(Stamp::DIGITS);
+        while digits.len() < Stamp::DIGITS {
             digits.push('0');
         }
         Some(Self {
@@ -642,7 +647,7 @@ mod tests {
             "DATE-OBS= '2024-01-02T03:04:05' / start",
             "END",
         ]);
-        assert_eq!(fits_date_of(&head).unwrap().when, "20240102030405");
+        assert_eq!(fits_date_of(&head).unwrap().when, "20240102030405000");
     }
 
     #[test]
@@ -660,7 +665,17 @@ mod tests {
         let day = Stamp::new("2024-01-02").unwrap();
         let later = Stamp::new("2024:01:02 00:00:01").unwrap();
         assert!(day < later);
-        assert_eq!(day.when, "20240102000000");
+        assert_eq!(day.when, "20240102000000000");
+    }
+
+    #[test]
+    fn same_time_compares_equal_whatever_the_precision() {
+        let exif = Stamp::new("2024:05:01 10:00:00").unwrap();
+        let modified = Stamp::new("20240501100000.000").unwrap();
+        let dicom = Stamp::new("20240501100000.000000").unwrap();
+        assert_eq!(exif, modified);
+        assert_eq!(exif, dicom);
+        assert!(Stamp::new("20240501100000.001").unwrap() > exif);
     }
 
     #[test]
