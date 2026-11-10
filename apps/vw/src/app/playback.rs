@@ -28,8 +28,8 @@ impl VwApp {
                 let Some(path) = slot.path.clone() else {
                     return;
                 };
-                let order = self.settings().tree.order();
-                let files = tree::sibling_images(&path, self.loader.registry(), order);
+                let order = self.settings().list_order();
+                let files = tree::sibling_images(&path, self.loader.registry(), &order.files);
                 let start = files.iter().position(|p| *p == path).unwrap_or(0);
                 (files, start)
             }

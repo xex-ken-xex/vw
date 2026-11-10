@@ -349,6 +349,11 @@ pub struct VwApp {
     images_area: Option<egui::Vec2>,
     /// cd しているフォルダ。スロットにはその中のフォルダと画像を並べる。
     current: Option<PathBuf>,
+    /// cd したフォルダの画像の、ファイルの並び（[`crate::file_order`]）での位置。
+    /// シリーズのスロットを画像のスロットの間の、並びどおりの位置に置くのに使う。
+    file_rank: HashMap<PathBuf, usize>,
+    /// スロットを今の並びにしたときのファイルの並びの設定。変わったらフォルダを開き直す。
+    listed_files: crate::file_order::FileOrder,
     /// cd したフォルダの画像の読み込み。
     folder_load: Option<FolderLoad>,
     /// 開いたフォルダのスロットの中身の読み込みと、そのスロットの番号。
@@ -652,6 +657,7 @@ impl VwApp {
         crate::fonts::load_cjk_in_background(&cc.egui_ctx);
         let mut log = Log::new(started);
         let (settings, notes) = SettingsStore::open(SettingsStore::default_path());
+        let listed_files = settings.settings.file_sort;
         let remember_open = settings.settings.metadata.remember_open;
         log.set_translator(crate::log_words::translator(
             settings.settings.appearance.language,
@@ -894,6 +900,8 @@ impl VwApp {
             frame: 0,
             images_area: None,
             current: None,
+            file_rank: HashMap::new(),
+            listed_files,
             folder_load: None,
             explores: Vec::new(),
             explored_series: Vec::new(),
@@ -1259,11 +1267,26 @@ impl VwApp {
             }
             Action::ParentFolder => self.parent_folder(ctx),
             Action::CycleSortKey => {
+                let mut files = self.settings().file_sort;
+                files.key = files.key.next();
+                self.set_file_order(ctx, files);
+            }
+            Action::ToggleSortDescending => {
+                let mut files = self.settings().file_sort;
+                files.descending = !files.descending;
+                self.set_file_order(ctx, files);
+            }
+            Action::ToggleSortMix => {
+                let mut files = self.settings().file_sort;
+                files.mix = files.mix.toggled();
+                self.set_file_order(ctx, files);
+            }
+            Action::CycleFolderSortKey => {
                 let tree = &self.settings().tree;
                 let (key, descending) = (tree.sort.next(), tree.sort_descending);
                 self.set_sort_order(ctx, key, descending);
             }
-            Action::ToggleSortDescending => {
+            Action::ToggleFolderSortDescending => {
                 let tree = &self.settings().tree;
                 let (key, descending) = (tree.sort, !tree.sort_descending);
                 self.set_sort_order(ctx, key, descending);
@@ -1374,7 +1397,6 @@ impl eframe::App for VwApp {
             self.group_series();
         }
         self.split_explored_series();
-        self.place_series_folder_slots();
         self.watch_folders(&ctx);
         self.keep_filter_hiding();
         for problem in self.labels.take_problems() {

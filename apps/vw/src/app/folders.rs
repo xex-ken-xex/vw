@@ -51,6 +51,7 @@ impl VwApp {
     /// DICOM のシリーズと画像をその後ろに読み込んでいく。前の読み込みが続いていれば、そこで打ち切る。
     pub(super) fn cd(&mut self, ctx: &egui::Context, path: PathBuf, into: LoadInto) {
         let tree = self.settings().tree.clone();
+        let order = self.settings().list_order();
         let registry = self.loader.registry().clone();
         self.finish_folder_load();
         self.deferred_changes.clear();
@@ -59,9 +60,9 @@ impl VwApp {
         self.current = Some(path.clone());
         self.load_into = into;
         self.loaded_folders.push((path.clone(), into));
-        let listing = tree::list_folder(&path, &registry, tree.order());
+        let listing = tree::list_folder(&path, &registry, order);
+        self.file_rank = rank_of(&listing.images);
         self.warn_unsupported_archives(&path);
-        self.tree.ask_peeks(ctx, &registry, listing.folders.clone());
         for folder in listing.folders.into_iter().chain(listing.archives) {
             let index = self.push_slot();
             self.slots[index].set_subfolder(folder);
@@ -83,7 +84,7 @@ impl VwApp {
         self.folder_load = Some(FolderLoad::start(
             path,
             registry,
-            tree.order(),
+            order,
             false,
             tree.confirm_every,
             tree.confirm_chunk as usize,
@@ -199,6 +200,7 @@ impl VwApp {
                 first_new.get_or_insert(self.slots[at].id);
             }
         }
+        self.place_file_slots();
         // 見ていた画像のスロットがシリーズにまとめられて消えたら、最初のシリーズを見せる。
         let alive = |id| self.slots.iter().position(|s| s.id == id);
         if alive(active_id).is_none()
@@ -241,7 +243,7 @@ impl VwApp {
         let load = FolderLoad::start(
             folder,
             self.loader.registry().clone(),
-            tree.order(),
+            self.settings().list_order(),
             true,
             tree.confirm_every,
             tree.confirm_chunk as usize,
@@ -344,6 +346,7 @@ impl VwApp {
             for (index, path) in targets {
                 self.start_load(index, path, full);
             }
+            self.place_file_slots();
         }
         if finished {
             self.finish_folder_load();
@@ -473,10 +476,14 @@ impl VwApp {
                 continue;
             };
             let folder = seq.folder.clone();
-            let (series, rest) = crate::series::split_into_series(&seq.paths, &studies);
+            let (mut series, rest) = crate::series::split_into_series(&seq.paths, &studies);
             if series.is_empty() {
                 continue;
             }
+            // シリーズどうしは、読み込んだ並び（フォルダとファイルの並びの設定）での先頭の
+            // ファイルの位置の順にする。
+            let rank = rank_of(&seq.paths);
+            series.sort_by_key(|q| q.files.first().and_then(|f| rank.get(f)).copied());
             let full = self.cell_needs_full();
             let mut at = index;
             let parts = series
@@ -518,13 +525,30 @@ impl VwApp {
         }
     }
 
-    /// cd したフォルダのスロットのうち、DICOM の 1 シリーズだけのフォルダのものを、
-    /// それらが占めていた位置の中でシリーズの順に並べ直す。ツリーの先読みで分かった鍵を使う。
-    pub(super) fn place_series_folder_slots(&mut self) {
+    /// cd したフォルダの画像のスロットと DICOM のシリーズのスロットを、それらが占めている
+    /// 位置の中で、ファイルの並びの順に並べ直す。シリーズのスロットは、その先頭のファイルの
+    /// 位置に置く。
+    ///
+    /// シリーズのスロットはヘッダを読み終えてから作り、画像のスロットは読み込みにつれて
+    /// 後ろに足すので、どちらも作った時点では並びどおりの位置にならない。画像のスロット
+    /// ごとに位置を探して差し込まないのは、読み込みが並びの順に届くので、動かす必要が
+    /// あるのはシリーズのスロットだけだから。
+    pub(super) fn place_file_slots(&mut self) {
+        let Some(current) = self.current.clone() else {
+            return;
+        };
         let active = self.slots[self.active].id;
-        let tree = &self.tree;
-        let moved =
-            crate::series::place_in_series_order(&mut self.slots, |s| tree.series_of(s.folder()?));
+        let rank = &self.file_rank;
+        let key = |s: &Slot| -> Option<usize> {
+            match &s.sequence {
+                Some(seq) if seq.kind == SequenceKind::Series && seq.folder == current => {
+                    rank.get(seq.paths.first()?).copied()
+                }
+                None if s.is_folder_image() => rank.get(s.path.as_ref()?).copied(),
+                _ => None,
+            }
+        };
+        let moved = crate::file_order::place_in_order(&mut self.slots, key);
         if moved && let Some(index) = self.slots.iter().position(|s| s.id == active) {
             self.active = index;
         }
@@ -787,14 +811,14 @@ impl VwApp {
         if let Some(current) = self.current.clone().filter(|c| dirs.contains(c)) {
             self.sync_folder_slots(&current, &registry);
             let images =
-                tree::list_folder(&current, &registry, self.settings().tree.order()).images;
+                tree::list_folder(&current, &registry, self.settings().list_order()).images;
             self.scan_series(ctx, &current, &images);
         }
         // フォルダを読み込み中は、スロットの並びを読み込みのほうに任せる。並びを読み直すと、
         // まだ読み込みが足していない画像と重なるため。
         let matcher = self.matcher();
         created.retain(|p| matcher.matches(p));
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         for dir in &dirs {
             self.sync_loaded_folder(dir, &created, &removed, &registry);
         }
@@ -877,7 +901,9 @@ impl VwApp {
             let at = newest
                 .or_else(|| watch::follow_newest(paths, &current, &created))
                 .or_else(|| paths.iter().position(|p| *p == current))
-                .unwrap_or_else(|| watch::position_of_removed(paths, &current, order));
+                .unwrap_or_else(|| {
+                    watch::position_of_removed(paths, &current, order.files.by_name())
+                });
             if let Some(seq) = &mut slot.sequence {
                 seq.paths = paths.clone();
                 seq.index = at;
@@ -918,7 +944,8 @@ impl VwApp {
     /// cd したフォルダのサブフォルダと ZIP のスロットを、フォルダの今の中身に合わせる。
     /// 消えたもののスロットは閉じ、新しいものはフォルダのスロットの最後に足す。
     pub(super) fn sync_folder_slots(&mut self, current: &Path, registry: &Registry) {
-        let listing = tree::list_folder(current, registry, self.settings().tree.order());
+        let listing = tree::list_folder(current, registry, self.settings().list_order());
+        self.file_rank = rank_of(&listing.images);
         self.warn_unsupported_archives(current);
         let wanted: Vec<PathBuf> = listing
             .folders
@@ -980,7 +1007,7 @@ impl VwApp {
         if last.is_none() && root.is_none() {
             return;
         }
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let listing = tree::list_folder(dir, registry, order).images;
         // ZIP の展開は、移った時点のフォルダの一覧にあった画像も「書き終えた」と知らせてくる。
         // すでにスロットにある画像は足さない。
@@ -1065,7 +1092,7 @@ impl VwApp {
 
     /// 読み込んだ時点で空だったフォルダに画像が来たら、フォルダスロットを作って最新の画像を出す。
     pub(super) fn add_folder_slot(&mut self, dir: &Path, registry: &Registry) {
-        let order = self.settings().tree.order();
+        let order = self.settings().list_order();
         let paths = tree::list_folder(dir, registry, order).images;
         let Some(newest) = paths.last().cloned() else {
             return;
@@ -1387,4 +1414,9 @@ impl VwApp {
                 });
         }
     }
+}
+
+/// 並んだ `paths` の、それぞれの位置。
+fn rank_of(paths: &[PathBuf]) -> HashMap<PathBuf, usize> {
+    paths.iter().cloned().zip(0..).collect()
 }

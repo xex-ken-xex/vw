@@ -18,9 +18,9 @@ use vw_pipeline::nodes::Float;
 use vw_pipeline::stretch_curves::AutoStretch;
 use vw_pipeline::subframes::{self, Evaluation, Limits, Map, Reason};
 
+use crate::file_order::ListOrder;
 use crate::i18n::{tr, tr1};
 use crate::settings::Language;
-use crate::sort::SortOrder;
 
 /// 縮小画像の長い辺の画素数。blink で画面いっぱいに出しても粗く見えず、
 /// 数百枚を覚えておいてもメモリを食いすぎない大きさ。
@@ -98,7 +98,7 @@ pub struct Inputs<'a> {
     /// 今開いているフォルダ。
     pub folder: Option<&'a Path>,
     pub registry: &'a Registry,
-    pub order: SortOrder,
+    pub order: ListOrder,
     pub limits: Limits,
     /// blink の 1 秒あたりの枚数。
     pub fps: f32,
@@ -704,7 +704,7 @@ fn bilinear(p: &Preview, x: f64, y: f64) -> Option<u8> {
     Some((top * (1.0 - fy) + bottom * fy).round() as u8)
 }
 
-fn start_scan(dir: PathBuf, registry: Registry, order: SortOrder, ctx: &egui::Context) -> Scan {
+fn start_scan(dir: PathBuf, registry: Registry, order: ListOrder, ctx: &egui::Context) -> Scan {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();

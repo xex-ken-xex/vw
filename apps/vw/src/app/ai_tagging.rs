@@ -297,7 +297,7 @@ impl VwApp {
 
     pub(super) fn folder_images(&mut self, dir: &Path) -> Vec<PathBuf> {
         let registry = self.loader.registry().clone();
-        let images = crate::tree::list_folder(dir, &registry, self.settings().tree.order()).images;
+        let images = crate::tree::list_folder(dir, &registry, self.settings().list_order()).images;
         if images.is_empty() {
             self.log.warn(format!("No images in {}", dir.display()));
         }

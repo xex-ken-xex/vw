@@ -212,8 +212,8 @@ impl VwApp {
         let files = match &slot.sequence {
             Some(seq) => seq.paths.clone(),
             None => {
-                let order = self.settings().tree.order();
-                tree::sibling_images(&path, self.loader.registry(), order)
+                let order = self.settings().list_order();
+                tree::sibling_images(&path, self.loader.registry(), &order.files)
             }
         };
         let matcher = self.matcher();
