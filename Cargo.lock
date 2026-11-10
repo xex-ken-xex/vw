@@ -2347,6 +2347,15 @@ dependencies = [
 
 [[package]]
 name = "lzma-rust2"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7277c9742229dc25243236d578b6471a798c554512c6f6a04365ec2e87c2a3bb"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "lzma-rust2"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef1d73c59a56771343712b22ea5615092c612c16ba291c0979e3105dfeec4890"
@@ -3826,7 +3835,7 @@ dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
  "js-sys",
- "lzma-rust2",
+ "lzma-rust2 0.25.0",
  "ppmd-rust",
  "sha2",
  "wasm-bindgen",
@@ -4127,6 +4136,7 @@ dependencies = [
  "fax",
  "flate2",
  "half",
+ "image-webp",
  "quick-error",
  "weezl",
  "zune-jpeg",
@@ -4456,7 +4466,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "libc",
- "lzma-rust2",
+ "lzma-rust2 0.25.0",
  "notify",
  "ort",
  "png",
@@ -4671,6 +4681,8 @@ dependencies = [
 name = "vw-tiff"
 version = "0.10.0"
 dependencies = [
+ "lzma-rust2 0.22.0",
+ "ruzstd",
  "tiff",
  "vw-core",
 ]

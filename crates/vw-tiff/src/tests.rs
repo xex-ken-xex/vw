@@ -749,3 +749,252 @@ fn written_images_read_back_with_their_values_and_description() {
         .unwrap();
     assert!(matches!(&back.data, PixelData::U8(v) if v == &[9, 9, 9, 255]));
 }
+
+// --- tiff クレートが読まない形（testdata/make_more_fixtures.py で libtiff などが作ったもの）---
+
+/// 4 色の絵（左上 赤、右上 緑、左下 青、右下 白）の各色の中の 1 画素が、`tolerance` 以内でその色か。
+fn assert_quadrants(img: &VwImage, tolerance: u8, which: &[usize]) {
+    const QUADS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+    let (w, h) = (img.width as usize, img.height as usize);
+    let points = [
+        (1, 1),
+        (w / 2 + 1, 1),
+        (1, h / 2 + 1),
+        (w / 2 + 1, h / 2 + 1),
+    ];
+    let channels = img.data.len() / (w * h);
+    for &q in which {
+        let (x, y) = points[q];
+        let at = (y * w + x) * channels;
+        let got: Vec<u8> = match &img.data {
+            PixelData::U8(v) => v[at..at + 3].to_vec(),
+            PixelData::U16(v) => v[at..at + 3].iter().map(|&c| (c / 257) as u8).collect(),
+            PixelData::F32(_) => panic!("real numbers"),
+        };
+        for (g, want) in got.iter().zip(QUADS[q]) {
+            assert!(
+                g.abs_diff(want) <= tolerance,
+                "quadrant {q}: {got:?} != {:?}",
+                QUADS[q]
+            );
+        }
+    }
+}
+
+const ALL_QUADRANTS: &[usize] = &[0, 1, 2, 3];
+
+#[test]
+fn fax_reference_pictures_agree_whichever_color_is_zero() {
+    let white_is_zero = u8_of(&decode(&fixture("fax_none_white_is_zero.tif")));
+    let black_is_zero = u8_of(&decode(&fixture("fax_none_black_is_zero.tif")));
+    assert_eq!(white_is_zero, black_is_zero);
+    // 絵の中に黒も白もある（全部同じ色では比べた意味がない）。
+    assert!(black_is_zero.contains(&0) && black_is_zero.contains(&255));
+}
+
+#[test]
+fn every_ccitt_fax_variant_decodes_to_the_same_picture() {
+    let want = u8_of(&decode(&fixture("fax_none_black_is_zero.tif")));
+    for name in [
+        "fax_huffman.tif",
+        "fax_huffman_word.tif",
+        "fax_g3_1d.tif",
+        "fax_g3_2d.tif",
+        "fax_g3_2d_fill.tif",
+        "fax_g3_2d_lsb.tif",
+    ] {
+        assert_eq!(u8_of(&decode(&fixture(name))), want, "{name}");
+    }
+}
+
+fn u8_of(img: &VwImage) -> Vec<u8> {
+    match &img.data {
+        PixelData::U8(v) => v.clone(),
+        _ => panic!("not 8-bit"),
+    }
+}
+
+#[test]
+fn fax_metadata_names_the_original_compression() {
+    let img = decode(&fixture("fax_g3_2d.tif"));
+    assert_eq!(
+        img.metadata.get("TIFF", "Compression"),
+        Some("CCITT Group 3")
+    );
+}
+
+#[test]
+fn a_truncated_fax_strip_is_an_error() {
+    let mut tiff = fixture("fax_g3_2d.tif");
+    // 1 つ目のストリップの中身を 0 で潰す（EOL も符号も読めない）。
+    let start = 8;
+    tiff[start..start + 20].fill(0);
+    assert!(TiffPlugin.decode(&tiff).is_err());
+}
+
+#[test]
+fn lzma_and_zstd_decode_to_the_uncompressed_pixels() {
+    let want = u8_of(&decode(&fixture("rgb_none.tif")));
+    for name in [
+        "rgb_lzma.tif",
+        "rgb_zstd.tif",
+        "rgb_zstd_predictor_tiles.tif",
+    ] {
+        assert_eq!(u8_of(&decode(&fixture(name))), want, "{name}");
+    }
+}
+
+#[test]
+fn webp_compressed_tiff_shows_the_four_colors() {
+    assert_quadrants(&decode(&fixture("rgb_webp.tif")), 8, ALL_QUADRANTS);
+}
+
+#[test]
+fn every_lab_kind_is_converted_to_srgb() {
+    // 8bit の L*a*b* は 1 段の差が大きく、緑の赤の値のように 0 に近い所は数段ずれる（ガンマの立ち上がりが急なため）。
+    for (name, tolerance) in [
+        ("lab_cielab8.tif", 12),
+        ("lab_cielab16.tif", 2),
+        ("lab_icclab8.tif", 12),
+        ("lab_icclab16.tif", 2),
+    ] {
+        let img = decode(&fixture(name));
+        assert_eq!(img.color, ColorModel::Rgb, "{name}");
+        assert_quadrants(&img, tolerance, ALL_QUADRANTS);
+    }
+    // ITULab の既定の範囲に入らない緑と青は見ない。
+    assert_quadrants(&decode(&fixture("lab_itulab8.tif")), 12, &[0, 3]);
+}
+
+#[test]
+fn sixteen_bit_lab_stays_sixteen_bit() {
+    let img = decode(&fixture("lab_cielab16.tif"));
+    assert!(matches!(img.data, PixelData::U16(_)));
+}
+
+fn f32_at(img: &VwImage, x: usize, y: usize) -> Vec<f32> {
+    let PixelData::F32(v) = &img.data else {
+        panic!("not real numbers")
+    };
+    let channels = v.len() / (img.width * img.height) as usize;
+    let at = (y * img.width as usize + x) * channels;
+    v[at..at + channels].to_vec()
+}
+
+#[test]
+fn log_l_keeps_the_luminance_as_real_numbers() {
+    let img = decode(&fixture("logl.tif"));
+    assert_eq!(img.color, ColorModel::Gray);
+    for (i, want) in [0.5f32, 1.0, 100.0, 1000.0].into_iter().enumerate() {
+        let got = f32_at(&img, i * 2, 3)[0];
+        assert!((got / want - 1.0).abs() < 0.005, "{got} != {want}");
+    }
+}
+
+#[test]
+fn logluv_gray_stays_neutral_and_red_stays_red() {
+    let img = decode(&fixture("logluv.tif"));
+    assert_eq!(img.color, ColorModel::Rgb);
+    let gray = f32_at(&img, 2, 2);
+    for c in &gray {
+        assert!((c / 50.0 - 1.0).abs() < 0.02, "{gray:?}");
+    }
+    let red = f32_at(&img, 8, 2);
+    assert!(red[0] > 10.0 * red[1].max(red[2]), "{red:?}");
+}
+
+#[test]
+fn subsampled_ycbcr_is_upsampled_to_rgb() {
+    for name in [
+        "ycbcr_2x2.tif",
+        "ycbcr_4x2.tif",
+        "ycbcr_2x1.tif",
+        "ycbcr_2x2_odd_lzw.tif",
+    ] {
+        let img = decode(&fixture(name));
+        assert_eq!(img.color, ColorModel::Rgb, "{name}");
+        assert_quadrants(&img, 3, ALL_QUADRANTS);
+    }
+    let odd = decode(&fixture("ycbcr_2x2_odd_lzw.tif"));
+    assert_eq!((odd.width, odd.height), (37, 23));
+}
+
+/// make_more_fixtures.py の多バンドの値: 画素 (x, y) の c 番目のバンドは (x * 37 + y * 101 + c * 1000 + 5) mod 65536。
+fn band_values(width: u32, height: u32, band: u32) -> Vec<u32> {
+    (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x * 37 + y * 101 + band * 1000 + 5) % 65536))
+        .collect()
+}
+
+#[test]
+fn each_band_of_a_multiband_page_is_a_frame() {
+    for (name, bands) in [
+        ("bands5.tif", 5),
+        ("bands5_planar.tif", 5),
+        ("bands6_rgb.tif", 6),
+    ] {
+        let tiff = fixture(name);
+        assert_eq!(TiffPlugin.frame_count(&tiff).unwrap(), bands, "{name}");
+        for band in 0..bands {
+            let img = TiffPlugin.decode_frame(&tiff, band).unwrap();
+            assert_eq!(img.color, ColorModel::Gray);
+            assert_u16(&img, &band_values(9, 7, band as u32));
+            let label = format!("{} / {bands}", band + 1);
+            assert_eq!(img.metadata.get("TIFF", "Band"), Some(label.as_str()));
+        }
+    }
+}
+
+#[test]
+fn gray_with_alpha_is_one_gray_frame() {
+    let tiff = fixture("gray_alpha.tif");
+    assert_eq!(TiffPlugin.frame_count(&tiff).unwrap(), 1);
+    let img = decode(&tiff);
+    assert_eq!(img.color, ColorModel::GrayAlpha);
+    let PixelData::U8(v) = &img.data else {
+        panic!()
+    };
+    assert_eq!(&v[..2], &[200, 100]);
+}
+
+#[test]
+fn floating_point_cmyk_is_converted_to_rgb() {
+    let img = decode(&fixture("cmyk_float.tif"));
+    assert_eq!(img.color, ColorModel::Rgb);
+    // シアン 100%・墨 50% → 赤 0、緑と青は半分。
+    assert_eq!(f32_at(&img, 0, 0), [0.0, 0.5, 0.5]);
+}
+
+#[test]
+fn damaged_files_of_the_new_kinds_are_errors_not_crashes() {
+    let names = [
+        "fax_huffman.tif",
+        "fax_huffman_word.tif",
+        "fax_g3_1d.tif",
+        "fax_g3_2d.tif",
+        "fax_g3_2d_lsb.tif",
+        "rgb_lzma.tif",
+        "rgb_zstd_predictor_tiles.tif",
+        "rgb_webp.tif",
+        "lab_cielab16.tif",
+        "logluv.tif",
+        "logl.tif",
+        "ycbcr_4x2.tif",
+        "ycbcr_2x2_odd_lzw.tif",
+        "bands5_planar.tif",
+    ];
+    let mut seed = 12345u32;
+    for name in names {
+        let original = fixture(name);
+        for _ in 0..200 {
+            let mut tiff = original.clone();
+            for _ in 0..4 {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let at = seed as usize % tiff.len();
+                tiff[at] = (seed >> 16) as u8;
+            }
+            let _ = TiffPlugin.frame_count(&tiff);
+            let _ = TiffPlugin.decode(&tiff);
+        }
+    }
+}

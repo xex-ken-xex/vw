@@ -43,7 +43,8 @@ pub fn cmyk_to_rgb(data: PixelData, channels: usize) -> Result<PixelData, Decode
         PixelData::U16(v) => PixelData::U16(convert(&v, channels, |c, k| {
             ((65535 - c as u32) as u64 * (65535 - k as u32) as u64 / 65535) as u16
         })),
-        PixelData::F32(_) => return Err(DecodeError::Unsupported("TIFF CMYK depth".into())),
+        // 実数のインクは 0〜1 の割合。
+        PixelData::F32(v) => PixelData::F32(convert(&v, channels, |c, k| (1.0 - c) * (1.0 - k))),
     })
 }
 
@@ -87,30 +88,94 @@ pub fn apply_color_map(indices: &[usize], map: &[u16]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// `data` の写しの、`ifd` 番目の IFD の PhotometricInterpretation をグレー（BlackIsZero）にしたもの。
-/// IFD が壊れていて書き換えられなければ `None`。
-pub fn with_gray_photometric(data: &[u8], ifd: usize) -> Option<Vec<u8>> {
+/// `data` の写しの、`ifd` 番目の IFD の PhotometricInterpretation を `value` にしたもの。
+/// Lab のように tiff クレートが色の種類として断るものを、同じ並びの RGB として読むために使う。
+pub fn with_photometric(data: &[u8], ifd: usize, value: u16) -> Option<Vec<u8>> {
+    let found = self::ifd(data, ifd)?;
+    let entry = found.entry(PHOTOMETRIC)?;
+    let mut out = data.to_vec();
+    found.header.set_short(&mut out, entry, value)?;
+    Some(out)
+}
+
+/// IFD のタグの値を読む口。tiff クレートが断る圧縮や色の形を、自前で読むときに使う。
+pub struct Ifd<'a> {
+    data: &'a [u8],
+    header: Header,
+    offset: usize,
+    count: usize,
+}
+
+/// `index` 番目の IFD。たどれなければ `None`。
+pub fn ifd(data: &[u8], index: usize) -> Option<Ifd<'_>> {
     let header = Header::read(data)?;
     let mut offset = header.first_ifd(data)?;
-    for _ in 0..ifd {
+    for _ in 0..index {
         offset = header.next_ifd(data, offset)?;
     }
     let count = header.entry_count(data, offset)?;
-    for i in 0..count {
-        let entry = offset + header.count_size() + i * header.entry_size();
-        if header.u16(data, entry)? == PHOTOMETRIC {
-            let value = entry + header.value_offset();
-            let mut out = data.to_vec();
-            let gray = if header.little {
-                1u16.to_le_bytes()
-            } else {
-                1u16.to_be_bytes()
-            };
-            out.get_mut(value..value + 2)?.copy_from_slice(&gray);
-            return Some(out);
-        }
+    Some(Ifd {
+        data,
+        header,
+        offset,
+        count,
+    })
+}
+
+impl Ifd<'_> {
+    /// `tag` の値（SHORT / LONG / LONG8）。ないか、ほかの型なら `None`。
+    pub fn values(&self, tag: u16) -> Option<Vec<u64>> {
+        self.header
+            .tag_values(self.data, self.offset, self.count, tag)
     }
-    None
+
+    /// `tag` の最初の値。
+    pub fn value(&self, tag: u16) -> Option<u64> {
+        self.values(tag)?.first().copied()
+    }
+
+    fn entry(&self, tag: u16) -> Option<usize> {
+        (0..self.count)
+            .map(|i| self.offset + self.header.count_size() + i * self.header.entry_size())
+            .find(|&entry| self.header.u16(self.data, entry) == Some(tag))
+    }
+}
+
+/// `data` の写しの、`ifd` 番目の IFD を、無圧縮の `chunks`（ストリップかタイルの並び。元と同じ順）を
+/// 指すように書き換えたもの。tiff クレートがほどけない圧縮を自前でほどいたあと、色の扱いや面の分け方、
+/// 差分（Predictor）の戻しを今の読み込みにそのまま任せるために使う。書き換えられなければ `None`。
+///
+/// 元の IFD をその場で書き換える（エントリの数は変わらない）。ほどいた中身と位置の並びは写しの末尾に足す。
+pub fn with_uncompressed_chunks(data: &[u8], ifd: usize, chunks: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let found = self::ifd(data, ifd)?;
+    let header = &found.header;
+    let tiled = found.entry(TILE_OFFSETS).is_some();
+    let (offsets_tag, counts_tag) = if tiled {
+        (TILE_OFFSETS, TILE_BYTE_COUNTS)
+    } else {
+        (STRIP_OFFSETS, STRIP_BYTE_COUNTS)
+    };
+    let offsets_entry = found.entry(offsets_tag)?;
+    let counts_entry = found.entry(counts_tag)?;
+    let compression_entry = found.entry(COMPRESSION)?;
+    let mut out = data.to_vec();
+    let mut offsets = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        if out.len() % 2 == 1 {
+            out.push(0);
+        }
+        offsets.push(out.len() as u64);
+        out.extend(chunk);
+    }
+    let counts: Vec<u64> = chunks.iter().map(|c| c.len() as u64).collect();
+    header.set_longs(&mut out, offsets_entry, &offsets)?;
+    header.set_longs(&mut out, counts_entry, &counts)?;
+    header.set_short(&mut out, compression_entry, 1)?;
+    // ほどいた中身は上位ビットから並べてある。
+    if let Some(fill) = found.entry(FILL_ORDER) {
+        header.set_short(&mut out, fill, 1)?;
+    }
+    Some(out)
 }
 
 /// [`with_byte_samples`] で書き換える値。
@@ -121,6 +186,9 @@ pub struct ByteSamples {
     pub tile_width: Option<usize>,
     /// 面を分けて持つ画像なら、サンプル数と色の種類を残す（各面のストリップを番号で引けるように）。
     pub keep_samples: bool,
+    /// 行の数も変えるなら `(ImageLength, RowsPerStrip か TileLength)`。間引いた YCbCr のように、
+    /// 1 行のバイトが画素の数行分をまとめて持つ画像で使う。
+    pub rows: Option<(usize, usize)>,
 }
 
 /// `data` の写しの、`ifd` 番目の IFD を、8bit のサンプルが `image_width` 個並ぶ画像に見せかけたもの。
@@ -142,6 +210,12 @@ pub fn with_byte_samples(data: &[u8], ifd: usize, patch: &ByteSamples) -> Option
         let entry = offset + header.count_size() + i * header.entry_size();
         match header.u16(data, entry)? {
             IMAGE_WIDTH => header.set_long(&mut out, entry, patch.image_width)?,
+            IMAGE_LENGTH if patch.rows.is_some() => {
+                header.set_long(&mut out, entry, patch.rows?.0)?;
+            }
+            ROWS_PER_STRIP | TILE_LENGTH if patch.rows.is_some() => {
+                header.set_long(&mut out, entry, patch.rows?.1)?;
+            }
             TILE_WIDTH => header.set_long(&mut out, entry, patch.tile_width?)?,
             BITS_PER_SAMPLE if patch.keep_samples => {
                 header.fill_shorts(&mut out, data, entry, 8)?
@@ -163,6 +237,10 @@ pub fn with_byte_samples(data: &[u8], ifd: usize, patch: &ByteSamples) -> Option
 /// 隠したタグに付ける番号（私用の範囲で、使われていないもの）。
 const HIDDEN_TAG: u16 = 65_000;
 const TILE_WIDTH: u16 = 322;
+const TILE_LENGTH: u16 = 323;
+const TILE_OFFSETS: u16 = 324;
+const TILE_BYTE_COUNTS: u16 = 325;
+const FILL_ORDER: u16 = 266;
 const EXTRA_SAMPLES: u16 = 338;
 const SAMPLE_FORMAT: u16 = 339;
 
@@ -457,6 +535,50 @@ impl Header {
         v[..2].copy_from_slice(&self.bytes_of_u16(value));
         copy.get_mut(value_at..value_at + inline)?
             .copy_from_slice(&v);
+        Some(())
+    }
+
+    /// エントリ `entry` を、LONG（BigTIFF なら LONG8）の並び `values` に書き換える。入りきらない並びは
+    /// `copy` の末尾に足して指す。
+    fn set_longs(&self, copy: &mut Vec<u8>, entry: usize, values: &[u64]) -> Option<()> {
+        let bytes: Vec<u8> = if self.big {
+            values.iter().flat_map(|v| self.bytes_of_u64(*v)).collect()
+        } else {
+            values
+                .iter()
+                .map(|v| u32::try_from(*v).ok().map(|v| self.bytes_of_u32(v)))
+                .collect::<Option<Vec<_>>>()?
+                .concat()
+        };
+        let kind = if self.big { 16 } else { 4 };
+        copy.get_mut(entry + 2..entry + 4)?
+            .copy_from_slice(&self.bytes_of_u16(kind));
+        let inline = if self.big { 8 } else { 4 };
+        let value_at = entry + self.value_offset();
+        let mut field = if bytes.len() <= inline {
+            bytes
+        } else {
+            if copy.len() % 2 == 1 {
+                copy.push(0);
+            }
+            let at = copy.len();
+            copy.extend(&bytes);
+            if self.big {
+                self.bytes_of_u64(at as u64).to_vec()
+            } else {
+                self.bytes_of_u32(u32::try_from(at).ok()?).to_vec()
+            }
+        };
+        field.resize(inline, 0);
+        if self.big {
+            copy.get_mut(entry + 4..entry + 12)?
+                .copy_from_slice(&self.bytes_of_u64(values.len() as u64));
+        } else {
+            copy.get_mut(entry + 4..entry + 8)?
+                .copy_from_slice(&self.bytes_of_u32(u32::try_from(values.len()).ok()?));
+        }
+        copy.get_mut(value_at..value_at + inline)?
+            .copy_from_slice(&field);
         Some(())
     }
 

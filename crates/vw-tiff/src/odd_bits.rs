@@ -191,6 +191,7 @@ fn samples(data: &[u8], ifd: usize, shape: &Shape) -> Result<Vec<u32>, DecodeErr
             image_width: tiles_across.map_or(row_bytes, |n| n * row_bytes),
             tile_width: shape.tile.map(|_| row_bytes),
             keep_samples: shape.planar,
+            rows: None,
         },
     )
     .ok_or_else(|| DecodeError::Invalid("broken IFD".into()))?;

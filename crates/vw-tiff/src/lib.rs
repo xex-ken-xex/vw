@@ -10,9 +10,14 @@
 //! - 向き（Orientation）のタグに従って画素を並べ替える
 //! - TIFF のタグ（カメラ名、作成ソフトなど）を EXIF と同じ形でメタデータにする
 
+mod decompress;
+mod fax;
+mod lab;
 mod layout;
+mod logluv;
 mod odd_bits;
 mod write;
+mod ycbcr;
 
 pub use write::encode;
 
@@ -98,18 +103,31 @@ impl DecoderPlugin for TiffPlugin {
     }
 
     fn frame_count(&self, data: &[u8]) -> Result<usize, DecodeError> {
-        Ok(pages(&repaired(data)?)?.len())
+        Ok(frames(&repaired(data)?)?.len())
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
         let data = &repaired(data)?;
-        let pages = pages(data)?;
-        let ifd = *pages
+        let frames = frames(data)?;
+        let Frame { page, ifd, band } = *frames
             .get(frame)
             .ok_or_else(|| DecodeError::Invalid(format!("no page {frame}")))?;
+        let page_count = frames.last().map_or(1, |f| f.page + 1);
+        let uncompressed = decompress::uncompressed(data, ifd)?;
         let mut decoder = open(data)?;
         decoder.seek_to_image(ifd).map_err(invalid)?;
-        let metadata = metadata(&mut decoder, data, frame, pages.len());
+        // メタデータは元のファイルから読む（圧縮の欄に、ほどく前の方式を出すため）。
+        let mut metadata = metadata(&mut decoder, data, page, page_count);
+        if let Some(band) = band {
+            metadata.push(
+                "TIFF",
+                "Band",
+                format!("{} / {}", band.index + 1, band.count),
+            );
+        }
+        let data = uncompressed.as_deref().unwrap_or(data);
+        let mut decoder = open(data)?;
+        decoder.seek_to_image(ifd).map_err(invalid)?;
         let orientation = decoder
             .find_tag_unsigned::<u32>(Tag::Orientation)
             .ok()
@@ -119,12 +137,20 @@ impl DecoderPlugin for TiffPlugin {
             .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
             .map_err(invalid)?;
         check_size(&mut decoder)?;
-        let mut img = if let Some(bits) = odd_bits::bits(&mut decoder) {
+        let mut img = if logluv::is_sgilog(&mut decoder) {
+            logluv::pixels(data, ifd)?
+        } else if let Some(band) = band {
+            band_pixels(data, ifd, &mut decoder, band)?
+        } else if let Some(bits) = odd_bits::bits(&mut decoder) {
             odd_bits::pixels(data, ifd, &mut decoder, bits)?
-        } else if photometric == Some(PALETTE) {
-            palette(data, ifd, &mut decoder)?
+        } else if let Some(sub) = ycbcr::subsampling(&mut decoder) {
+            ycbcr::pixels(data, ifd, &mut decoder, sub)?
         } else {
-            pixels(&mut decoder)?
+            match photometric {
+                Some(PALETTE) => palette(data, ifd, &mut decoder)?,
+                Some(p @ (lab::CIELAB | lab::ICCLAB | lab::ITULAB)) => lab_pixels(data, ifd, p)?,
+                _ => pixels(&mut decoder)?,
+            }
         };
         img.metadata = metadata;
         img.gamut = icc_profile(&mut decoder).and_then(|icc| vw_core::icc::gamut(&icc));
@@ -135,10 +161,11 @@ impl DecoderPlugin for TiffPlugin {
     /// 画素を読まずに、1 ページ目のタグだけを読む。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
         let data = &repaired(data)?;
-        let pages = pages(data)?;
+        let frames = frames(data)?;
+        let page_count = frames.last().map_or(1, |f| f.page + 1);
         let mut decoder = open(data)?;
-        decoder.seek_to_image(pages[0]).map_err(invalid)?;
-        Ok(metadata(&mut decoder, data, 0, pages.len()))
+        decoder.seek_to_image(frames[0].ifd).map_err(invalid)?;
+        Ok(metadata(&mut decoder, data, 0, page_count))
     }
 }
 
@@ -146,17 +173,20 @@ impl DecoderPlugin for TiffPlugin {
 /// 直せるのに設定で止めているときは、設定の場所を添えて断る（tiff クレートの素のエラーでは、
 /// 何を ON にすれば読めるのか分からないため）。
 fn repaired(data: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, DecodeError> {
-    match layout::with_strip_byte_counts(data) {
+    let data = match layout::with_strip_byte_counts(data) {
         Some(fixed) if REPAIR_STRIP_BYTE_COUNTS.load(Ordering::Relaxed) => {
-            Ok(std::borrow::Cow::Owned(fixed))
+            std::borrow::Cow::Owned(fixed)
         }
-        Some(_) => Err(DecodeError::Unsupported(REPAIR_HINT.into())),
-        None => Ok(std::borrow::Cow::Borrowed(data)),
-    }
+        Some(_) => return Err(DecodeError::Unsupported(REPAIR_HINT.into())),
+        None => std::borrow::Cow::Borrowed(data),
+    };
+    Ok(logluv::hidden_from_the_crate(data))
 }
 
 /// PhotometricInterpretation の、パレット（カラーマップの番号）を表す値。
 const PALETTE: u16 = 3;
+const BLACK_IS_ZERO: u16 = 1;
+const RGB: u16 = 2;
 
 fn open(data: &[u8]) -> Result<Decoder<Cursor<&[u8]>>, DecodeError> {
     // 既定の上限（256 MiB）は、スキャンした図面や顕微鏡の画像のような大きな TIFF で
@@ -176,11 +206,27 @@ fn invalid(e: tiff::TiffError) -> DecodeError {
     }
 }
 
-/// ページとして見せる IFD の番号。縮小版（NewSubfileType の 1 ビット目）は飛ばす。
+/// コマとして見せるもの。多バンドのページは、バンドを 1 つずつコマにする。
+#[derive(Clone, Copy)]
+struct Frame {
+    /// 何ページ目か（縮小版を飛ばして数える）。
+    page: usize,
+    ifd: usize,
+    band: Option<Band>,
+}
+
+#[derive(Clone, Copy)]
+struct Band {
+    index: usize,
+    count: usize,
+}
+
+/// コマの並び。縮小版（NewSubfileType の 1 ビット目）は飛ばす。
 /// 縮小版はピラミッド形式の TIFF などで本体の後ろに並び、同じ絵が何枚も続いて見えるため。
-fn pages(data: &[u8]) -> Result<Vec<usize>, DecodeError> {
+fn frames(data: &[u8]) -> Result<Vec<Frame>, DecodeError> {
     let mut decoder = open(data)?;
-    let mut pages = Vec::new();
+    let mut frames = Vec::new();
+    let mut page = 0;
     for ifd in 0..MAX_PAGES {
         let subfile = decoder
             .find_tag_unsigned::<u32>(Tag::NewSubfileType)
@@ -188,17 +234,116 @@ fn pages(data: &[u8]) -> Result<Vec<usize>, DecodeError> {
             .flatten()
             .unwrap_or(0);
         if subfile & 1 == 0 {
-            pages.push(ifd);
+            match band_count(&mut decoder) {
+                Some(count) => frames.extend((0..count).map(|index| Frame {
+                    page,
+                    ifd,
+                    band: Some(Band { index, count }),
+                })),
+                None => frames.push(Frame {
+                    page,
+                    ifd,
+                    band: None,
+                }),
+            }
+            page += 1;
         }
         // 後ろのページが壊れていても、読めたページは見せる。
         if !decoder.more_images() || decoder.next_image().is_err() {
             break;
         }
     }
-    if pages.is_empty() {
+    if frames.is_empty() {
         return Err(DecodeError::Invalid("no full-size image".into()));
     }
-    Ok(pages)
+    Ok(frames)
+}
+
+/// 色として見せられない数のサンプルを持つページ（衛星のマルチスペクトルなど）なら、そのバンドの数。
+///
+/// 先頭の 3 つを RGB として見せる案は採らない。どのバンドが何の波長かはファイルごとに違い、
+/// 色にすると見る人が思うのと違う絵になるため。
+fn band_count(decoder: &mut Decoder<Cursor<&[u8]>>) -> Option<usize> {
+    if logluv::is_sgilog(decoder) {
+        return None;
+    }
+    let tag = |d: &mut Decoder<Cursor<&[u8]>>, t| d.find_tag_unsigned::<u32>(t).ok().flatten();
+    let samples = tag(decoder, Tag::SamplesPerPixel).unwrap_or(1) as usize;
+    let alpha = decoder
+        .find_tag_unsigned_vec::<u16>(Tag::ExtraSamples)
+        .ok()
+        .flatten()
+        .is_some_and(|e| matches!(e.first(), Some(1 | 2)));
+    match tag(decoder, Tag::PhotometricInterpretation)? {
+        // グレーとアルファの 2 つは、グレーの画像として見せる。
+        0 | 1 if samples == 2 && alpha => None,
+        0 | 1 if samples >= 2 => Some(samples),
+        2 if samples >= 5 => Some(samples),
+        _ => None,
+    }
+}
+
+/// 多バンドのページの、1 つのバンドをグレーとして。
+///
+/// RGB と書かれたものは写しをグレーに書き換えて、tiff クレートにサンプルを並べたまま読ませる。
+/// 毎回すべてのバンドを読むが、バンドごとのストリップを自前で拾う処理を持たずに済むため。
+fn band_pixels(
+    data: &[u8],
+    ifd: usize,
+    decoder: &mut Decoder<Cursor<&[u8]>>,
+    band: Band,
+) -> Result<VwImage, DecodeError> {
+    let is_rgb = decoder
+        .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
+        .ok()
+        .flatten()
+        == Some(RGB);
+    let patched = if is_rgb {
+        Some(
+            layout::with_photometric(data, ifd, BLACK_IS_ZERO)
+                .ok_or_else(|| DecodeError::Invalid("broken IFD".into()))?,
+        )
+    } else {
+        None
+    };
+    let mut decoder = open(patched.as_deref().unwrap_or(data))?;
+    decoder.seek_to_image(ifd).map_err(invalid)?;
+    let decoder = &mut decoder;
+    let (width, height) = decoder.dimensions().map_err(invalid)?;
+    if decoder.colortype().map_err(invalid)?.bit_depth() < 8 {
+        return Err(DecodeError::Unsupported(
+            "TIFF bands with fewer than 8 bits".into(),
+        ));
+    }
+    fn pick<T: Copy>(v: Vec<T>, band: Band) -> Vec<T> {
+        v.into_iter().skip(band.index).step_by(band.count).collect()
+    }
+    let pixels = match all_planes(decoder)? {
+        DecodingResult::U8(v) => PixelData::U8(pick(v, band)),
+        DecodingResult::U16(v) => PixelData::U16(pick(v, band)),
+        other => PixelData::F32(pick(to_f32(other), band)),
+    };
+    VwImage::new(width, height, ColorModel::Gray, pixels).map_err(DecodeError::Invalid)
+}
+
+/// L*a*b* のページ。写しを RGB と書き換えて 3 つのサンプルを読み、色に直す。
+fn lab_pixels(data: &[u8], ifd: usize, kind: u16) -> Result<VwImage, DecodeError> {
+    let patched = layout::with_photometric(data, ifd, RGB)
+        .ok_or_else(|| DecodeError::Invalid("broken IFD".into()))?;
+    let mut decoder = open(&patched)?;
+    decoder.seek_to_image(ifd).map_err(invalid)?;
+    let mut img = pixels(&mut decoder)?;
+    let channels = match img.color {
+        ColorModel::Rgb => 3,
+        ColorModel::Rgba => 4,
+        _ => return Err(DecodeError::Unsupported("TIFF L*a*b* layout".into())),
+    };
+    img.data = lab::to_srgb(
+        std::mem::replace(&mut img.data, PixelData::U8(Vec::new())),
+        channels,
+        kind,
+    )?;
+    Ok(img)
 }
 
 /// 画素を読む前に、幅・高さ・色の種類から要るメモリを確かめる。tiff クレートの上限でも止まるが、
@@ -230,6 +375,8 @@ fn pixels(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<VwImage, DecodeError> 
     let (model, channels) = match color {
         ColorType::Gray(_) => (ColorModel::Gray, 1),
         ColorType::GrayA(_) => (ColorModel::GrayAlpha, 2),
+        // 多バンドとして返るのは、アルファ付きのグレーだけ（ほかは band_pixels で読む）。
+        ColorType::Multiband { num_samples: 2, .. } => (ColorModel::GrayAlpha, 2),
         ColorType::RGB(_) | ColorType::YCbCr(_) => (ColorModel::Rgb, 3),
         ColorType::RGBA(_) => (ColorModel::Rgba, 4),
         ColorType::CMYK(_) => (ColorModel::Rgb, 4),
@@ -362,7 +509,7 @@ fn palette(
     decoder: &mut Decoder<Cursor<&[u8]>>,
 ) -> Result<VwImage, DecodeError> {
     let map = decoder.get_tag_u16_vec(Tag::ColorMap).map_err(invalid)?;
-    let patched = layout::with_gray_photometric(data, ifd)
+    let patched = layout::with_photometric(data, ifd, BLACK_IS_ZERO)
         .ok_or_else(|| DecodeError::Invalid("broken IFD".into()))?;
     let mut gray = open(&patched)?;
     gray.seek_to_image(ifd).map_err(invalid)?;
@@ -403,7 +550,10 @@ fn metadata(
     if let Some(c) = unsigned(decoder, Tag::Compression) {
         m.push("TIFF", "Compression", compression(c));
     }
-    if let Some(p) = unsigned(decoder, Tag::PhotometricInterpretation) {
+    if logluv::is_sgilog(decoder) {
+        let color = unsigned(decoder, Tag::SamplesPerPixel) == Some(3);
+        m.push("TIFF", "Photometric", if color { "LogLuv" } else { "LogL" });
+    } else if let Some(p) = unsigned(decoder, Tag::PhotometricInterpretation) {
         m.push("TIFF", "Photometric", photometric(p));
     }
     if let Ok(Some(bits)) = decoder.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample) {
@@ -461,6 +611,9 @@ fn compression(c: u32) -> String {
         34925 => "LZMA".into(),
         50000 => "Zstandard".into(),
         50001 => "WebP".into(),
+        32771 => "CCITT RLE (word aligned)".into(),
+        34676 => "SGILog".into(),
+        34677 => "SGILog24".into(),
         other => other.to_string(),
     }
 }
@@ -475,6 +628,8 @@ fn photometric(p: u32) -> String {
         5 => "CMYK".into(),
         6 => "YCbCr".into(),
         8 => "CIE L*a*b*".into(),
+        9 => "ICC L*a*b*".into(),
+        10 => "ITU L*a*b*".into(),
         other => other.to_string(),
     }
 }
