@@ -243,6 +243,7 @@ pub struct VwApp {
     sky: crate::sky_window::SkyWindow,
     subframes: crate::subframes_window::SubframesWindow,
     stitch: crate::stitch_window::StitchWindow,
+    duplicates: crate::duplicates_window::DuplicatesWindow,
     compare: crate::compare::CompareWindow,
     compare_dialog: Option<compare_dialog::CompareDialog>,
     similar: similar::Similar,
@@ -874,6 +875,7 @@ impl VwApp {
             sky: Default::default(),
             subframes: Default::default(),
             stitch: Default::default(),
+            duplicates: Default::default(),
             compare: Default::default(),
             compare_dialog: None,
             similar: Default::default(),
@@ -1176,6 +1178,8 @@ impl VwApp {
             }
             Action::ToggleSubframes => self.subframes.open = !self.subframes.open,
             Action::StitchImages => self.stitch.open = !self.stitch.open,
+            Action::ToggleDuplicateFinder => self.duplicates.open = !self.duplicates.open,
+            Action::PinDuplicateOrigin => self.duplicates.toggle_pin(),
             Action::UndoPosition => self.undo(),
             Action::ShowAbout => self.about.open = true,
             Action::ShowSystemInfo => self.display.info_open = true,
@@ -1472,6 +1476,7 @@ impl eframe::App for VwApp {
         self.compare.forget_while_closed();
         self.subframes.forget_while_closed();
         self.stitch.forget_while_closed();
+        self.duplicates.forget_while_closed();
         self.sync_tool_panes();
         self.ai_ui(&ctx);
         self.qr_ui();

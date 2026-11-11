@@ -2738,6 +2738,54 @@ impl SubframesSettings {
     }
 }
 
+/// 重複データ探索（`[duplicates]`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DuplicatesSettings {
+    /// 比べないファイル名の正規表現。
+    pub ignore_names: String,
+    /// これより小さいファイルは比べない。
+    pub min_file_bytes: u64,
+    /// 起点が変わってから探し始めるまでの待ち（ミリ秒）。ツリーを矢印キーで送るたびに
+    /// 探し始めないため。
+    pub follow_delay_ms: u64,
+}
+
+impl Default for DuplicatesSettings {
+    fn default() -> Self {
+        Self {
+            ignore_names: r"^(Thumbs\.db|desktop\.ini|\.DS_Store)$".into(),
+            min_file_bytes: 1024,
+            follow_delay_ms: 300,
+        }
+    }
+}
+
+impl DuplicatesSettings {
+    pub const DELAY_RANGE: std::ops::RangeInclusive<u64> = 0..=5000;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("duplicates");
+        Self {
+            ignore_names: r
+                .get_valid(
+                    "ignore_names",
+                    |v: &String| regex::Regex::new(v).is_ok(),
+                    "not a valid regular expression",
+                )
+                .unwrap_or(d.ignore_names),
+            min_file_bytes: r.get("min_file_bytes").unwrap_or(d.min_file_bytes),
+            follow_delay_ms: r
+                .get_valid(
+                    "follow_delay_ms",
+                    |v: &u64| Self::DELAY_RANGE.contains(v),
+                    "must be 0 to 5000",
+                )
+                .unwrap_or(d.follow_delay_ms),
+        }
+    }
+}
+
 /// 貼り合わせの重なった所の混ぜ方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2952,6 +3000,7 @@ pub struct Settings {
     pub map: MapSettings,
     pub sky: SkySettings,
     pub subframes: SubframesSettings,
+    pub duplicates: DuplicatesSettings,
     pub stitch: StitchSettings,
     pub repair: Repair,
     pub slot_bar: SlotBar,
@@ -3077,6 +3126,7 @@ impl Settings {
         let map = MapSettings::read(&mut r);
         let sky = SkySettings::read(&mut r);
         let subframes = SubframesSettings::read(&mut r);
+        let duplicates = DuplicatesSettings::read(&mut r);
         let stitch = StitchSettings::read(&mut r);
         let repair = Repair::read(&mut r);
         let slot_bar = read_slot_bar(&mut r);
@@ -3120,6 +3170,7 @@ impl Settings {
                 map,
                 sky,
                 subframes,
+                duplicates,
                 stitch,
                 repair,
                 slot_bar,
@@ -3992,6 +4043,23 @@ ae_title = "PACS"
         let (s, problems) = Settings::from_toml("[similar]\nburst_seconds = 600\n").unwrap();
         assert_eq!(s.similar.burst_seconds, 2);
         assert_eq!(problems.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_finder_settings_are_read_and_bad_values_fall_back() {
+        let (s, problems) = Settings::from_toml(
+            "[duplicates]\nignore_names = \"^x$\"\nmin_file_bytes = 0\nfollow_delay_ms = 1000\n",
+        )
+        .unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(s.duplicates.ignore_names, "^x$");
+        assert_eq!(s.duplicates.min_file_bytes, 0);
+        assert_eq!(s.duplicates.follow_delay_ms, 1000);
+        let (s, problems) =
+            Settings::from_toml("[duplicates]\nignore_names = \"(\"\nfollow_delay_ms = 99999\n")
+                .unwrap();
+        assert_eq!(s.duplicates, DuplicatesSettings::default());
+        assert_eq!(problems.len(), 2);
     }
 
     #[test]

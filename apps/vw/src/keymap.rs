@@ -125,6 +125,8 @@ pub enum Action {
     ToggleSkyChart,
     ToggleSubframes,
     StitchImages,
+    ToggleDuplicateFinder,
+    PinDuplicateOrigin,
     UndoPosition,
     ShowAbout,
     ShowSystemInfo,
@@ -302,6 +304,8 @@ impl Action {
         Action::ToggleSkyChart,
         Action::ToggleSubframes,
         Action::StitchImages,
+        Action::ToggleDuplicateFinder,
+        Action::PinDuplicateOrigin,
         Action::UndoPosition,
         Action::ToggleTagging,
         Action::FlagGood,
@@ -471,6 +475,8 @@ impl Action {
             Action::ToggleSkyChart => "toggle_sky_chart",
             Action::ToggleSubframes => "toggle_subframes",
             Action::StitchImages => "stitch_images",
+            Action::ToggleDuplicateFinder => "toggle_duplicate_finder",
+            Action::PinDuplicateOrigin => "pin_duplicate_origin",
             Action::UndoPosition => "undo_position",
             Action::ShowAbout => "show_about",
             Action::ShowSystemInfo => "show_system_info",
@@ -615,6 +621,8 @@ impl Action {
             Action::ToggleSkyChart => "Show/hide sky chart",
             Action::ToggleSubframes => "Show/hide subframes",
             Action::StitchImages => "Stitch images...",
+            Action::ToggleDuplicateFinder => "Duplicate finder",
+            Action::PinDuplicateOrigin => "Pin the duplicate finder's origin",
             Action::UndoPosition => "Undo the last position change, flag clearing or trashing",
             Action::ShowAbout => "About vw Image Viewer",
             Action::ShowSystemInfo => "System information",
@@ -798,7 +806,9 @@ impl Action {
             | Action::ShowSlotOnMap
             | Action::ToggleSkyChart
             | Action::ToggleSubframes
-            | Action::StitchImages => KeyGroup::Windows,
+            | Action::StitchImages
+            | Action::ToggleDuplicateFinder
+            | Action::PinDuplicateOrigin => KeyGroup::Windows,
             Action::ToggleSettings
             | Action::OpenSettingsFolder
             | Action::ShowAbout
@@ -1027,6 +1037,8 @@ impl Action {
             Action::ToggleSkyChart => vec![],
             Action::ToggleSubframes => vec![KeyCombo::ctrl(B)],
             Action::StitchImages => vec![],
+            Action::ToggleDuplicateFinder => vec![KeyCombo::ctrl(F).with(true, true, false)],
+            Action::PinDuplicateOrigin => vec![],
             Action::UndoPosition => vec![KeyCombo::ctrl(Z)],
             Action::ShowAbout => vec![],
             Action::ShowSystemInfo => vec![],

@@ -190,6 +190,10 @@ impl VwApp {
                 if self.menu_item(ui, Action::StitchImages, Some(stitch)) {
                     chosen = Some(Action::StitchImages);
                 }
+                let duplicates = self.duplicates.open;
+                if self.menu_item(ui, Action::ToggleDuplicateFinder, Some(duplicates)) {
+                    chosen = Some(Action::ToggleDuplicateFinder);
+                }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Settings"), |ui| {
                 if self.menu_item(ui, Action::ToggleSettings, Some(self.show_settings)) {
