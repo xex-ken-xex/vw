@@ -212,7 +212,56 @@ fn open(data: &[u8], header_only: bool) -> Result<DefaultDicomObject, DecodeErro
     }
     options
         .from_reader(Cursor::new(data))
-        .map_err(|e| DecodeError::Invalid(e.to_string()))
+        .map_err(|e| DecodeError::Invalid(error_chain(&e)))
+}
+
+/// エラーと、その原因をたどった全部を「: 」でつなぐ。dicom-rs の一番外のエラーは
+/// 「Could not read data set token」のように、どのタグで何が起きたかを持たず、それは原因の方にあるため。
+/// タグの番号には名前を添える。
+pub(crate) fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(s) = source {
+        let part = s.to_string();
+        if !text.ends_with(&part) {
+            text = format!("{text}: {part}");
+        }
+        source = s.source();
+    }
+    with_tag_names(&text)
+}
+
+/// 文の中の `(gggg,eeee)` の後ろに、辞書にあるタグの名前を足す。
+fn with_tag_names(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('(') {
+        out.push_str(&rest[..open]);
+        let candidate = rest.get(open + 1..open + 10);
+        let number = candidate.filter(|c| {
+            c.as_bytes()[4] == b','
+                && rest.as_bytes().get(open + 10) == Some(&b')')
+                && c.bytes()
+                    .enumerate()
+                    .all(|(i, b)| i == 4 || b.is_ascii_hexdigit())
+        });
+        match number {
+            Some(number) => {
+                out.push_str(&rest[open..open + 11]);
+                if let Some(name) = tag_name(&number.to_ascii_uppercase()) {
+                    out.push(' ');
+                    out.push_str(name);
+                }
+                rest = &rest[open + 11..];
+            }
+            None => {
+                out.push('(');
+                rest = &rest[open + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// 画素を展開する前に、Rows・Columns・Samples per Pixel・Bits Allocated から要るメモリを確かめる。
@@ -292,7 +341,7 @@ fn decode_one(
     }
     let px = obj
         .decode_pixel_data_frame(frame as u32)
-        .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
+        .map_err(|e| DecodeError::Unsupported(error_chain(&e)))?;
     to_image(&px, frame, colors)
 }
 
@@ -705,6 +754,24 @@ pub(crate) mod tests {
     use synth::{
         CT_IMAGE, JPEG_2000_LOSSLESS, JPEG_LS_LOSSLESS, JPEG_LS_NEAR_LOSSLESS, Synth, XA_IMAGE,
     };
+
+    #[test]
+    fn a_value_running_past_the_end_names_the_tag_it_belongs_to() {
+        let mut data = Synth::ct(2, 2).patient("Doe^Jane").bytes();
+        let at = data.windows(8).position(|w| w == b"Doe^Jane").unwrap();
+        // 患者名の長さの欄（値の直前の 2 バイト）を、ファイルの残りより長くする。
+        data[at - 2..at].copy_from_slice(&0xFFF0u16.to_le_bytes());
+        let err = DicomPlugin.read_metadata(&data).unwrap_err().to_string();
+        assert!(err.contains("(0010,0010) PatientName"), "{err}");
+    }
+
+    #[test]
+    fn tag_numbers_in_error_text_get_their_names() {
+        assert_eq!(
+            with_tag_names("bad (0028,0030) and (abcd,ef01) (not a tag)"),
+            "bad (0028,0030) PixelSpacing and (abcd,ef01) (not a tag)"
+        );
+    }
 
     #[test]
     fn huge_rows_and_columns_are_refused_before_decoding_pixels() {

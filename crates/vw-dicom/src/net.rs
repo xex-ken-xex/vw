@@ -139,7 +139,9 @@ fn from_reader(source: impl Read, header_only: bool) -> Result<DefaultDicomObjec
     if header_only {
         options = options.read_until(tags::PIXEL_DATA);
     }
-    options.from_reader(source).map_err(|e| e.to_string())
+    options
+        .from_reader(source)
+        .map_err(|e| crate::error_chain(&e))
 }
 
 /// 提案に使う属性を読むときに、長さを確かめる頭の大きさ。画素の手前まではふつう数 KB。

@@ -610,7 +610,7 @@ const ITEMS: &[Item] = &[
         section: Section::Log,
         key: UNTIL_RESTART,
         title: "Log file read errors in detail until restart",
-        description: "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file). For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
+        description: "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file), and show why a file could not be opened in the log too. For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
         widget: read_problems_widget,
     },
     Item {

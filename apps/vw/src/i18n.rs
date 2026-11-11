@@ -2182,8 +2182,8 @@ const JA: &[(&str, &str)] = &[
         "再起動するまでファイル読み出しエラーの詳細をログに出力する",
     ),
     (
-        "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file). For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
-        "vw を再起動するまで、ファイルのメタデータで読めなかった所と、何がおかしかったかを 1 か所 1 行でログに書きます（ログファイルにも書きます）。DICOM のファイルでは、値に患者の情報が入りうるため、タグと VR と長さだけを書き、値は書きません。次に起動するとオフに戻り、設定ファイルにも残しません。",
+        "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file), and show why a file could not be opened in the log too. For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
+        "vw を再起動するまで、ファイルのメタデータで読めなかった所と、何がおかしかったかを 1 か所 1 行でログに書きます（ログファイルにも書きます）。開けなかったファイルの理由もログウインドウに出します。DICOM のファイルでは、値に患者の情報が入りうるため、タグと VR と長さだけを書き、値は書きません。次に起動するとオフに戻り、設定ファイルにも残しません。",
     ),
     ("Wrap long lines", "長い行を折り返す"),
     (

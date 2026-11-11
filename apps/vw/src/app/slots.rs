@@ -324,10 +324,15 @@ impl VwApp {
         }
     }
 
-    /// 読み込めなかった 1 枚。数は状態の行に、理由はログファイルに。
+    /// 読み込めなかった 1 枚。数は状態の行に、理由はログファイルに。設定で読み取りの詳細を
+    /// 出すようにしていれば、理由をログ欄にも出す。
     fn load_failed(&mut self, path: &Path, error: &str) {
-        self.log
-            .detail(Level::Error, format!("{}: {error}", path.display()));
+        let line = format!("{}: {error}", path.display());
+        if crate::read_problems::enabled() {
+            self.log.error(line);
+        } else {
+            self.log.detail(Level::Error, line);
+        }
         self.load_stats.fail(file_label(path));
     }
 
