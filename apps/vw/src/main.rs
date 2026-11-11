@@ -32,6 +32,8 @@ mod derive;
 mod dicom_send;
 mod discard;
 mod displays;
+mod duplicates;
+mod duplicates_window;
 mod export;
 mod face_groups;
 mod face_store;

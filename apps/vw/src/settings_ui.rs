@@ -558,6 +558,27 @@ const ITEMS: &[Item] = &[
         widget: event_distance_widget,
     },
     Item {
+        section: Section::Datasets,
+        key: "duplicates.ignore_names",
+        title: "Duplicate finder: names not compared",
+        description: "Regular expression for file names that the duplicate finder (Tools menu) leaves out, such as thumbnail caches the OS writes. Files vw writes (labels, AI tags, search catalogs) and the recycle bin are always left out, so tagging a copy does not make it differ.",
+        widget: duplicate_ignore_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "duplicates.min_file_bytes",
+        title: "Duplicate finder: smallest file",
+        description: "Files smaller than this are not compared on their own (they are still compared as part of a folder). Tiny files such as empty text files are the same everywhere and would only fill the list.",
+        widget: duplicate_min_size_widget,
+    },
+    Item {
+        section: Section::Datasets,
+        key: "duplicates.follow_delay_ms",
+        title: "Duplicate finder: wait before comparing",
+        description: "After you click another folder or choose another file, the duplicate finder waits this long before comparing, so that stepping through the tree with the arrow keys does not start a comparison for every folder.",
+        widget: duplicate_delay_widget,
+    },
+    Item {
         section: Section::Log,
         key: "log.style",
         title: "Look",
@@ -3577,19 +3598,47 @@ fn dataset_fields_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) ->
 
 fn probe_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let id = ui.make_persistent_id("dicom.probe_extensions.edit");
-    extensions_pattern_widget(&mut s.dicom.probe_extensions, id, ui, lang)
+    let check = |t: &str| vw_core::ProbeExtensions::new(t).err();
+    pattern_widget(&mut s.dicom.probe_extensions, id, check, ui, lang)
 }
 
 fn hdf_extensions_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     let id = ui.make_persistent_id("netcdf.hdf_extensions.edit");
-    extensions_pattern_widget(&mut s.netcdf.hdf_extensions, id, ui, lang)
+    let check = |t: &str| vw_core::ProbeExtensions::new(t).err();
+    pattern_widget(&mut s.netcdf.hdf_extensions, id, check, ui, lang)
 }
 
-/// 拡張子の正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、
+fn duplicate_ignore_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("duplicates.ignore_names.edit");
+    let check = |t: &str| regex::Regex::new(t).err().map(|e| e.to_string());
+    pattern_widget(&mut s.duplicates.ignore_names, id, check, ui, lang)
+}
+
+fn duplicate_min_size_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.duplicates.min_file_bytes)
+            .speed(64.0)
+            .suffix(tr(lang, " bytes")),
+    )
+    .changed()
+}
+
+fn duplicate_delay_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.add(
+        egui::DragValue::new(&mut s.duplicates.follow_delay_ms)
+            .range(crate::settings::DuplicatesSettings::DELAY_RANGE)
+            .speed(10.0)
+            .suffix(tr(lang, " ms")),
+    )
+    .changed()
+}
+
+/// 正規表現を編集する。タグと同じく確定したときに反映する。1 文字ごとに反映すると、
 /// 打っている途中の正しくない式のたびにフォルダを読み直すことになるため。
-fn extensions_pattern_widget(
+fn pattern_widget(
     pattern: &mut String,
     id: egui::Id,
+    check: impl Fn(&str) -> Option<String>,
     ui: &mut egui::Ui,
     lang: Language,
 ) -> bool {
@@ -3601,7 +3650,7 @@ fn extensions_pattern_widget(
             .font(egui::TextStyle::Monospace)
             .desired_width(320.0),
     );
-    let error = vw_core::ProbeExtensions::new(&text).err();
+    let error = check(&text);
     if let Some(e) = &error {
         let first = e.lines().last().unwrap_or_default();
         ui.colored_label(

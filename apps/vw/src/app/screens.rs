@@ -579,6 +579,36 @@ impl VwApp {
         }
     }
 
+    /// 重複データ探索の欄。
+    pub(super) fn duplicates_pane(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let settings = &self.settings.settings;
+        let slot_path = self.active_image();
+        let inputs = crate::duplicates_window::Inputs {
+            lang: self.lang(),
+            roots: &settings.dataset.roots,
+            settings: &settings.duplicates,
+            folder: self.current.as_deref(),
+            slot: (self.active, slot_path.as_deref()),
+            loading: self.folder_load.is_some(),
+        };
+        let commands = self.duplicates.ui(ui, &inputs);
+        for problem in self.duplicates.take_problems() {
+            self.log.error(format!("Duplicate finder: {problem}"));
+        }
+        for command in commands {
+            match command {
+                crate::duplicates_window::Command::Go(path) if path.is_dir() => {
+                    self.open_folder(&ctx, path);
+                }
+                crate::duplicates_window::Command::Go(path) => self.open_and_select(&ctx, path),
+                crate::duplicates_window::Command::OpenInFileManager(dir) => {
+                    self.open_in_file_manager(&dir);
+                }
+            }
+        }
+    }
+
     /// 貼り合わせた画像を、空いたスロット（なければ新しいスロット）に出す。今のスロットの画像を
     /// 置き換えないのは、貼り合わせる前の画像と見比べたいことが多いため。
     fn show_stitched(&mut self, path: PathBuf) {
