@@ -150,7 +150,11 @@ impl VwApp {
                         Action::ToggleCalibration,
                     ],
                     &[Action::NextVariable, Action::PreviousVariable],
-                    &[Action::NextColorMap, Action::ToggleColorGauge],
+                    &[
+                        Action::NextColorMap,
+                        Action::ToggleColorGauge,
+                        Action::ToggleSupplementalPalette,
+                    ],
                     &[
                         Action::ToggleAutoStretch,
                         Action::ToggleClippingWarning,
@@ -165,8 +169,13 @@ impl VwApp {
                         ui.separator();
                     }
                     for &action in group {
-                        let checked =
-                            (action == Action::ToggleColorGauge).then_some(self.show_gauge);
+                        let checked = match action {
+                            Action::ToggleColorGauge => Some(self.show_gauge),
+                            Action::ToggleSupplementalPalette => {
+                                Some(self.settings().pipeline.dicom.supplemental_palette)
+                            }
+                            _ => None,
+                        };
                         if self.menu_item(ui, action, checked) {
                             chosen = Some(action);
                         }

@@ -20,6 +20,7 @@ mod exif_check;
 pub mod geo;
 pub mod icc;
 pub mod image;
+pub mod indexed;
 pub mod limits;
 pub mod palette;
 mod palette_tables;

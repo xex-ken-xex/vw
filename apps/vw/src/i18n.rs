@@ -703,6 +703,14 @@ const JA: &[(&str, &str)] = &[
     ("entries", "項目"),
     ("first value", "先頭の値"),
     ("segmented", "Segmented"),
+    (
+        "Supplemental Palette",
+        "補助のパレット（Supplemental Palette）",
+    ),
+    (
+        "Stored values inside the table are painted in its colors on top of the gray display (setting pipeline.dicom.supplemental_palette). The stages of this panel work on the gray values only.",
+        "表の範囲に入る格納値は、グレーの表示の上から表の色で塗ります（設定 pipeline.dicom.supplemental_palette）。このパネルの段は、グレーの値だけを扱います。",
+    ),
     ("YCbCr to RGB", "YCbCr → RGB"),
     ("Unknown", "不明"),
     ("Back to the file value", "ファイルの値に戻す"),
@@ -2905,6 +2913,11 @@ const JA: &[(&str, &str)] = &[
     ("Top", "上"),
     ("Bottom", "下"),
     ("Gauge on gray images", "グレーの画像のゲージ"),
+    ("Supplemental Palette colors", "補助のパレットの色を出す"),
+    (
+        "Some gray DICOM images carry a color table for part of their values (Supplemental Palette, such as overlays of fused or functional images). Show those values in the table's colors; the other values stay gray and still follow the window. The probe shows both the value and its color. The key for it is unassigned by default (Key bindings).",
+        "グレーの DICOM の画像には、一部の値だけに色を当てる表（Supplemental Palette。重ね合わせた画像や機能画像の色など）を持つものがあります。その値を表の色で出します。ほかの値はグレーのままで、WW/WL も効きます。十字には値と色の両方を出します。キーは初めは割り当てていません（キー割り当て）。",
+    ),
     ("Custom color maps", "自分で足す色の表"),
     (
         "Insert the color map stage into the pixel pipeline of gray images from the start, for the kinds of images turned on below. The stage turns brightness into colors and also changes the slot; probe, ROI and analysis values stay the file values. Each slot can still turn it on or off and pick another color map (right-click, Image menu, or the stage in the pixel pipeline).",

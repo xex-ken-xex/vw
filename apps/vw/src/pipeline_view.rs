@@ -2080,6 +2080,16 @@ fn gray_body(
         }
         Node::Display => {
             ui.label(tr(lang, "8-bit gray"));
+            if let Some(luts) = &info.supplemental {
+                ui.label(tr(lang, "Supplemental Palette"));
+                for (name, lut) in ["R", "G", "B"].iter().zip(luts) {
+                    ui.weak(palette_line(lang, name, lut));
+                }
+                ui.weak(tr(
+                    lang,
+                    "Stored values inside the table are painted in its colors on top of the gray display (setting pipeline.dicom.supplemental_palette). The stages of this panel work on the gray values only.",
+                ));
+            }
             for (x, y, t) in traces {
                 ui.monospace(format!("({x}, {y})  {}", t.display));
             }

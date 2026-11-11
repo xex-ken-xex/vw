@@ -51,6 +51,8 @@ pub struct Rules {
     palettes: Vec<Arc<Palette>>,
     /// 種類ごとに初めから入れる表。`None` は入れない。
     defaults: [(Kind, Option<String>); 5],
+    /// DICOM の Supplemental Palette の色を出すか。
+    supplemental_palette: bool,
 }
 
 impl Rules {
@@ -74,6 +76,7 @@ impl Rules {
                 (Kind::Dicom, node(s.dicom.color_node, &s.dicom.palette)),
                 (Kind::Gray, node(s.gray.color_node, &s.gray.palette)),
             ],
+            supplemental_palette: s.dicom.supplemental_palette,
         }
     }
 
@@ -201,6 +204,9 @@ impl Applied {
 pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied> {
     if !matches!(image.color, ColorModel::Gray | ColorModel::GrayAlpha) {
         return None;
+    }
+    if !look.rules.supplemental_palette {
+        image.value_colors = None;
     }
     let kind = Kind::of(plugin, &image.metadata);
     let file_window = display::window_of(image, &DisplayParams::default());
@@ -365,6 +371,26 @@ mod tests {
         let rules = Rules::new(&s);
         assert_eq!(rules.default_for(Kind::Fits), None);
         assert_eq!(rules.default_for(Kind::DicomPt), None);
+    }
+
+    #[test]
+    fn supplemental_palette_colors_are_dropped_only_when_turned_off() {
+        let colors = Arc::new(vw_core::indexed::ValueColors {
+            first: 0,
+            colors: vec![[65535, 0, 0]],
+            bits: 16,
+            slope: 1.0,
+            intercept: 0.0,
+            sign: 1.0,
+        });
+        let mut s = PipelineSettings::default();
+        let mut img = gray(vec![0.0, 1.0]);
+        img.value_colors = Some(colors);
+        prepare(&mut img, "DICOM", &look(&s, Choice::default()));
+        assert!(img.value_colors.is_some());
+        s.dicom.supplemental_palette = false;
+        prepare(&mut img, "DICOM", &look(&s, Choice::default()));
+        assert!(img.value_colors.is_none());
     }
 
     #[test]

@@ -437,6 +437,15 @@ pub fn standard_display(image: &VwImage) -> Vec<u8> {
         max_side: u32::MAX,
         ..Default::default()
     };
+    // 範囲の値だけに当てる色（Supplemental Palette）は外す。ノードは灰色の値を通すので、
+    // 色を塗った表示と比べると、色の画素が食い違って画像ごと当てられなくなるため。
+    if image.value_colors.is_some() {
+        let gray = VwImage {
+            value_colors: None,
+            ..image.clone()
+        };
+        return vw_core::display::to_display(&gray, &params).rgba;
+    }
     vw_core::display::to_display(image, &params).rgba
 }
 
