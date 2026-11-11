@@ -230,7 +230,10 @@ fn metadata<R: std::io::BufRead + std::io::Seek>(decoder: &mut WebPDecoder<R>) -
         "Alpha",
         if decoder.has_alpha() { "yes" } else { "no" },
     );
-    let icc = decoder.icc_profile().ok().flatten();
+    let icc = decoder.icc_profile().unwrap_or_else(|e| {
+        m.problem("WebP", "ICCP chunk", e);
+        None
+    });
     if icc.is_some() {
         m.push("WebP", "ICC profile", "present");
     }
@@ -249,10 +252,16 @@ fn metadata<R: std::io::BufRead + std::io::Seek>(decoder: &mut WebPDecoder<R>) -
     }
     let orientation = match decoder.exif_metadata() {
         Ok(Some(raw)) => vw_core::exif::push_exif(&mut m, raw),
-        _ => 1,
+        Ok(None) => 1,
+        Err(e) => {
+            m.problem("WebP", "EXIF chunk", e);
+            1
+        }
     };
-    if let Ok(Some(xmp)) = decoder.xmp_metadata() {
-        vw_core::xmp::push_xmp(&mut m, &xmp);
+    match decoder.xmp_metadata() {
+        Ok(Some(xmp)) => vw_core::xmp::push_xmp(&mut m, &xmp),
+        Ok(None) => {}
+        Err(e) => m.problem("WebP", "XMP chunk", e),
     }
     if let Some(icc) = icc {
         vw_core::icc::push_profile(&mut m, &icc);

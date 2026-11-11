@@ -2169,6 +2169,14 @@ const JA: &[(&str, &str)] = &[
         "Normal shows the time and the message in the usual font. Terminal shows the time since start and the message in a monospace font on black. Also switchable at the top right of the log.",
         "普通は時刻と本文を普通の字体で出します。ターミナル風は起動からの経過秒と本文を黒地に等幅の字体で出します。ログウインドウの右上でも切り替えられます。",
     ),
+    (
+        "Log file read errors in detail until restart",
+        "再起動するまでファイル読み出しエラーの詳細をログに出力する",
+    ),
+    (
+        "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file). For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
+        "vw を再起動するまで、ファイルのメタデータで読めなかった所と、何がおかしかったかを 1 か所 1 行でログに書きます（ログファイルにも書きます）。DICOM のファイルでは、値に患者の情報が入りうるため、タグと VR と長さだけを書き、値は書きません。次に起動するとオフに戻り、設定ファイルにも残しません。",
+    ),
     ("Wrap long lines", "長い行を折り返す"),
     (
         "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",

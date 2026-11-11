@@ -26,6 +26,7 @@ use vw_core::{ColorModel, DecodeError, DecoderPlugin, Metadata, PixelData, VwIma
 use charset::Charset;
 
 pub mod charset;
+mod check;
 pub mod color;
 pub mod frame_reader;
 pub mod net;
@@ -146,7 +147,9 @@ impl DecoderPlugin for DicomPlugin {
         ] {
             push_tag(&mut m, tag, value);
         }
-        all_tags(&obj, &charset_of(&obj, Charset::default()), &mut m);
+        let charset = charset_of(&obj, Charset::default());
+        all_tags(&obj, &charset, &mut m);
+        check::push_problems(&obj, &charset, 0, &mut m);
         Ok(m)
     }
 }
@@ -537,6 +540,7 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
     let ts_name = dicom_transfer_syntax_name(ts);
     m.push("DICOM", "Transfer syntax", ts_name.unwrap_or(ts));
     tag_listing(obj, &mut m);
+    check::push_problems(obj, &charset_of(obj, Charset::default()), 0, &mut m);
     m
 }
 

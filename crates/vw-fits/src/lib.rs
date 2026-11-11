@@ -745,6 +745,9 @@ fn push_cards(m: &mut Metadata, group: &str, hdu: &Hdu) {
         }
         m.push(group, card.key.as_str(), card.value.as_str());
     }
+    for (place, error) in &hdu.problems {
+        m.problem(group, place.as_str(), error);
+    }
 }
 
 #[cfg(test)]

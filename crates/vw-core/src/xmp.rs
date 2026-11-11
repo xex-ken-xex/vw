@@ -54,6 +54,13 @@ const GENERATIVE_AI: &[&str] = &[
 
 /// XMP の中身を読み、分かった項目を `m` の "XMP" に足す。
 pub fn push_xmp(m: &mut Metadata, xmp: &[u8]) {
+    if let Err(e) = std::str::from_utf8(xmp) {
+        m.problem(
+            "XMP",
+            "",
+            format!("not UTF-8 at byte {} of {}", e.valid_up_to(), xmp.len()),
+        );
+    }
     let text = String::from_utf8_lossy(xmp);
     if let Some(code) = digital_source_type(&text) {
         let value = match DIGITAL_SOURCE_TYPES.iter().find(|(c, _)| *c == code) {

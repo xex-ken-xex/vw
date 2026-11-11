@@ -116,6 +116,10 @@ impl Section {
 }
 
 /// 設定項目 1 つ。`widget` は値を編集する部品を描き、変更があれば true を返す。
+/// 設定ファイルに保存せず、起動するたびに既定に戻る項目の [`Item::key`]。設定ファイルの場所の代わりに
+/// これを項目の名前の横に出し、保存されないことが分かるようにする。
+const UNTIL_RESTART: &str = "(until restart, not saved)";
+
 struct Item {
     section: Section,
     /// 設定ファイルでの場所。
@@ -580,6 +584,13 @@ const ITEMS: &[Item] = &[
         title: "Wrap long lines",
         description: "Wrap long log lines at the width of the log. When off, scroll sideways to read them. Also switchable at the top right of the log.",
         widget: log_wrap_widget,
+    },
+    Item {
+        section: Section::Log,
+        key: UNTIL_RESTART,
+        title: "Log file read errors in detail until restart",
+        description: "Until vw is restarted, write to the log every place in a file's metadata that could not be read and what was wrong with it, one line each (also in the log file). For DICOM files the line has the tag, its VR and length but never the value, since values can hold patient information. Off again at the next start; not saved in the settings file.",
+        widget: read_problems_widget,
     },
     Item {
         section: Section::Quality,
@@ -2984,6 +2995,15 @@ fn log_wrap_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool 
     ui.checkbox(&mut s.log.wrap, tr(lang, "Enabled")).changed()
 }
 
+/// 設定ファイルには書かないので、変えても `false` を返す（保存させない）。
+fn read_problems_widget(_s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let mut on = crate::read_problems::enabled();
+    if ui.checkbox(&mut on, tr(lang, "Enabled")).changed() {
+        crate::read_problems::set_enabled(on);
+    }
+    false
+}
+
 fn ai_general_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     unit_widget(&mut s.ai.general_threshold, ui)
 }
@@ -4376,7 +4396,7 @@ mod tests {
     #[test]
     fn setting_keys_point_at_real_toml_entries() {
         let toml = Settings::default().to_toml();
-        for i in ITEMS {
+        for i in ITEMS.iter().filter(|i| i.key != UNTIL_RESTART) {
             let (table, field) = i.key.rsplit_once('.').unwrap();
             // 表の配列（検索のグループなど）は `[[table.field]]`、入れ子の表（判定の閾値）は
             // `[table.field]` の見出しで書かれる。

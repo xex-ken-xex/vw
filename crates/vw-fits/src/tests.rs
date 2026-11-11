@@ -1013,3 +1013,42 @@ fn a_written_image_reads_back_with_its_values_wcs_and_history() {
         back.metadata
     );
 }
+
+#[test]
+fn a_sound_header_has_no_metadata_problems() {
+    let mut cards = image_cards(8, &[2, 1]);
+    cards.push(card("FILTER", "'Ha'"));
+    let m = FitsPlugin::default()
+        .read_metadata(&fits(&cards, &[9, 8]))
+        .unwrap();
+    assert_eq!(m.problems, []);
+}
+
+#[test]
+fn a_card_with_bytes_outside_ascii_names_its_number_and_offset() {
+    let mut cards = image_cards(8, &[2, 1]);
+    cards.push(card("OBSERVER", "'Ana'"));
+    let mut file = fits(&cards, &[9, 8]);
+    let at = file.windows(3).position(|w| w == b"Ana").unwrap();
+    file[at] = 0xC1;
+    let n = cards.len() + 1; // SIMPLE の分
+    let m = FitsPlugin::default().read_metadata(&file).unwrap();
+    assert_eq!(m.problems.len(), 1, "{:?}", m.problems);
+    assert_eq!(
+        m.problems[0].place,
+        format!("card {n} OBSERVER (offset {})", (n - 1) * 80)
+    );
+    assert!(m.problems[0].error.starts_with("1 byte(s) outside ASCII"));
+}
+
+#[test]
+fn a_string_without_its_closing_quote_is_reported_and_still_shown() {
+    let mut cards = image_cards(8, &[2, 1]);
+    cards.push(card("OBJECT", "'M31"));
+    let m = FitsPlugin::default()
+        .read_metadata(&fits(&cards, &[9, 8]))
+        .unwrap();
+    assert_eq!(m.get(GROUP, "OBJECT"), Some("M31"));
+    assert_eq!(m.problems.len(), 1);
+    assert_eq!(m.problems[0].error, "string has no closing quote");
+}

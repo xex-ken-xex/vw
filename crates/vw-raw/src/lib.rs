@@ -51,7 +51,9 @@ impl DecoderPlugin for RawPlugin {
         let source = RawSource::new_from_slice(data);
         let decoder = decoder_for(&source)?;
         let params = RawDecodeParams::default();
-        let raw_metadata = decoder.raw_metadata(&source, &params).ok();
+        let read = decoder.raw_metadata(&source, &params);
+        let error = read.as_ref().err().map(ToString::to_string);
+        let raw_metadata = read.ok();
         let orientation = orientation(raw_metadata.as_ref());
         match decoder.preview_image(&source, &params) {
             Ok(Some(preview)) => {
@@ -59,7 +61,7 @@ impl DecoderPlugin for RawPlugin {
                 img.metadata = metadata(raw_metadata.as_ref(), Some(Shown::Preview));
                 img.apply_orientation(orientation.into());
                 img.develop_size = sensor_size(decoder.as_ref(), &source, &params, orientation);
-                Ok(img)
+                Ok(with_problem(img, error))
             }
             _ => developed(
                 decoder.as_ref(),
@@ -67,7 +69,8 @@ impl DecoderPlugin for RawPlugin {
                 &params,
                 raw_metadata.as_ref(),
                 None,
-            ),
+            )
+            .map(|img| with_problem(img, error)),
         }
     }
 
@@ -75,7 +78,9 @@ impl DecoderPlugin for RawPlugin {
         let source = RawSource::new_from_slice(data);
         let decoder = decoder_for(&source)?;
         let params = RawDecodeParams::default();
-        let raw_metadata = decoder.raw_metadata(&source, &params).ok();
+        let read = decoder.raw_metadata(&source, &params);
+        let error = read.as_ref().err().map(ToString::to_string);
+        let raw_metadata = read.ok();
         let preview = decoder.preview_image(&source, &params).ok().flatten();
         developed(
             decoder.as_ref(),
@@ -84,6 +89,7 @@ impl DecoderPlugin for RawPlugin {
             raw_metadata.as_ref(),
             preview.as_ref(),
         )
+        .map(|img| with_problem(img, error))
     }
 
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
@@ -317,6 +323,15 @@ fn decoder_for(source: &RawSource) -> Result<Box<dyn Decoder>, DecodeError> {
     rawler::get_decoder(source).map_err(|_| {
         DecodeError::Unsupported("not a camera RAW file, or the camera is not supported".into())
     })
+}
+
+/// 撮影情報を読めなかった理由を残す。画像（プレビューや現像）は撮影情報なしでも出せるので、失敗にはしない。
+fn with_problem(mut img: VwImage, error: Option<String>) -> VwImage {
+    if let Some(e) = error {
+        img.metadata
+            .problem("RAW", "", format!("camera metadata cannot be read: {e}"));
+    }
+    img
 }
 
 fn invalid(e: rawler::RawlerError) -> DecodeError {

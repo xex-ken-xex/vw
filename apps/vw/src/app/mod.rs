@@ -804,6 +804,7 @@ impl VwApp {
             .and_then(Path::parent)
             .map(|p| p.join("ai-tags"));
         let trace = log.detail_writer();
+        crate::read_problems::set_writer(log.detail_writer());
         let start_tool = base_tool(settings.settings.viewer.start_tool.tool(saved.tool));
         let mut app = Self {
             loader: Loader::new(registry, cc.egui_ctx.clone(), trace),

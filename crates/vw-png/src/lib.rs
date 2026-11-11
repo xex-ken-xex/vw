@@ -147,16 +147,20 @@ fn metadata(info: &png::Info) -> Metadata {
         m.push("Text", &t.keyword, &t.text);
     }
     for t in &info.compressed_latin1_text {
-        if let Ok(text) = t.get_text() {
-            m.push("Text", &t.keyword, text);
+        match t.get_text() {
+            Ok(text) => m.push("Text", &t.keyword, text),
+            Err(e) => m.problem("Text", format!("zTXt {:?}", t.keyword), e),
         }
     }
     for t in &info.utf8_text {
-        if let Ok(text) = t.get_text() {
-            if t.keyword == "XML:com.adobe.xmp" {
-                vw_core::xmp::push_xmp(&mut m, text.as_bytes());
+        match t.get_text() {
+            Ok(text) => {
+                if t.keyword == "XML:com.adobe.xmp" {
+                    vw_core::xmp::push_xmp(&mut m, text.as_bytes());
+                }
+                m.push("Text", &t.keyword, text);
             }
-            m.push("Text", &t.keyword, text);
+            Err(e) => m.problem("Text", format!("iTXt {:?}", t.keyword), e),
         }
     }
     match (&info.coding_independent_code_points, &info.icc_profile) {
@@ -228,6 +232,23 @@ mod tests {
         assert_eq!((img.width, img.height, img.color), (2, 1, ColorModel::Rgb));
         assert!(matches!(&img.data, PixelData::U8(v) if v == &[1, 2, 3, 4, 5, 6]));
         assert_eq!(img.metadata.get("Text", "Title"), Some("vw test"));
+    }
+
+    #[test]
+    fn compressed_text_that_cannot_be_inflated_is_reported_with_its_keyword() {
+        let png = encode_with(
+            1,
+            1,
+            ColorType::Grayscale,
+            BitDepth::Eight,
+            &[0],
+            |_| {},
+            &[(png::chunk::zTXt, b"Comment\0\0not deflate data")],
+        );
+        let img = PngPlugin.decode(&png).unwrap();
+        assert_eq!(img.metadata.get("Text", "Comment"), None);
+        assert_eq!(img.metadata.problems.len(), 1);
+        assert_eq!(img.metadata.problems[0].place, "zTXt \"Comment\"");
     }
 
     #[test]
