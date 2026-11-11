@@ -267,7 +267,8 @@ struct Known {
 }
 
 /// 計算したハッシュ。ウインドウを開いている間だけ覚えておき、ファイルは書かない。
-/// 大きさか更新日時が変わったファイルは計算し直す。
+/// 大きさか更新日時が変わったファイルは計算し直す。どちらも変えずに中身だけ書き換えたものは
+/// 見分けられないが、毎回中身を読み直して確かめると、覚えておく意味がなくなるため。
 #[derive(Debug, Default)]
 pub struct Hashes {
     known: Mutex<HashMap<PathBuf, (Stamp, Known)>>,
@@ -654,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_file_is_hashed_again() {
+    fn a_file_rewritten_with_a_new_modified_time_is_hashed_again() {
         let t = TempDir::new();
         let a = write(&t, "a", b"first");
         let b = write(&t, "b", b"first");
@@ -662,6 +663,14 @@ mod tests {
         let progress = Progress::default();
         assert!(hashes.same(&a, &b, &progress).unwrap());
         fs::write(&b, b"other").unwrap();
+        // 書き直しが同じ時刻の目盛りに収まるファイルシステムもあるので、時刻ははっきりずらす。
+        let later = SystemTime::now() + std::time::Duration::from_secs(10);
+        fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
         assert!(!hashes.same(&a, &b, &progress).unwrap());
     }
 
