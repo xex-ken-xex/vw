@@ -5,11 +5,16 @@
 //! - 非圧縮の YBR_FULL_422: 横に並んだ 2 画素が Cb・Cr を共有し、Y1 Y2 Cb Cr の 4 サンプルで並ぶ
 //!   （PS3.3 C.7.6.3.1.2）。dicom-pixeldata は 3 サンプル / 画素として数えてしまい読めない
 //! - 16bit の RGB・YBR_FULL: U16 の RGB で持つ
+//! - Supplemental Palette: MONOCHROME2 の画像に Palette Color LUT があれば、表の範囲の値だけを
+//!   その色で表示する（PS3.3 C.7.6.19）。灰色の画像のまま持ち、色は表示のときに塗る
 
 use dicom_core::Tag;
 use dicom_core::value::PrimitiveValue;
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
+use std::sync::Arc;
+
+use vw_core::indexed::{Indices, ValueColors};
 use vw_core::{ColorModel, DecodeError, PixelData, VwImage};
 
 /// 1 色分の Palette Color LUT。
@@ -93,7 +98,31 @@ impl Palette {
                     .collect(),
             )
         };
-        VwImage::new(columns, rows, ColorModel::Rgb, data).map_err(DecodeError::Invalid)
+        let mut img =
+            VwImage::new(columns, rows, ColorModel::Rgb, data).map_err(DecodeError::Invalid)?;
+        img.indices = Some(Arc::new(Indices::from_values(values)));
+        Ok(img)
+    }
+
+    /// Supplemental Palette として、灰色の画像の値に当てる色。`slope`・`intercept`・`sign` は、
+    /// 灰色の画像の値を格納値に戻すための値（[`ValueColors`]）。
+    ///
+    /// 範囲は Red の表の先頭と項目数で決める。規格は 3 色で揃えるよう求めているので、
+    /// 揃っていないファイルは短い色の端の色で埋まる。
+    pub fn value_colors(&self, slope: f64, intercept: f64, sign: f64) -> ValueColors {
+        let first = self.red.info.first;
+        let widen = |l: &Lut, v: u16| if l.info.bits > 8 { v } else { v.min(255) * 257 };
+        let colors = (0..self.red.info.entries as i64)
+            .map(|i| [&self.red, &self.green, &self.blue].map(|l| widen(l, l.lookup(first + i))))
+            .collect();
+        ValueColors {
+            first,
+            colors,
+            bits: if self.is_deep() { 16 } else { 8 },
+            slope,
+            intercept,
+            sign,
+        }
     }
 }
 

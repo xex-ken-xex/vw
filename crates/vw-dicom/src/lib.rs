@@ -253,6 +253,8 @@ enum Colors {
     /// dicom-pixeldata が展開した画素をそのまま使う。
     Decoded,
     Palette(color::Palette),
+    /// MONOCHROME2 の灰色の画像に、範囲の値だけ色を当てる表（Supplemental Palette）。
+    Supplemental(color::Palette),
     /// 非圧縮の YBR_FULL_422。dicom-pixeldata を通さず、画素データを自前で広げる。
     NativeYbr422,
 }
@@ -267,6 +269,14 @@ impl Colors {
                 Ok(Self::Decoded)
             }
             Some("YBR_FULL_422") => Ok(Self::NativeYbr422),
+            // 表が壊れていても灰色の画像としては読めるので、失敗にせず灰色だけで出す。
+            Some("MONOCHROME2")
+                if obj
+                    .get(tags::RED_PALETTE_COLOR_LOOKUP_TABLE_DESCRIPTOR)
+                    .is_some() =>
+            {
+                Ok(color::Palette::read(obj).map_or(Self::Decoded, Self::Supplemental))
+            }
             _ => Ok(Self::Decoded),
         }
     }
@@ -298,7 +308,8 @@ fn to_image(px: &DecodedPixelData, frame: usize, colors: &Colors) -> Result<VwIm
             let values = stored_values(raw, px.bits_allocated(), stored, signed, pixels)?;
             palette.apply(w, h, &values)
         }
-        (1, _) => gray_image(px, frame, raw, pixels),
+        (1, Colors::Supplemental(palette)) => gray_image(px, frame, raw, pixels, Some(palette)),
+        (1, _) => gray_image(px, frame, raw, pixels, None),
         (3, _) => color_image(px, raw, pixels),
         (n, _) => Err(DecodeError::Unsupported(format!("{n} samples per pixel"))),
     }
@@ -338,6 +349,7 @@ fn gray_image(
     frame: usize,
     raw: &[u8],
     pixels: usize,
+    supplemental: Option<&color::Palette>,
 ) -> Result<VwImage, DecodeError> {
     let stored = u32::from(px.bits_stored()).clamp(1, 32);
     let signed = px.pixel_representation() == PixelRepresentation::Signed;
@@ -384,6 +396,9 @@ fn gray_image(
     img.significant_bits = significant_bits;
     // MONOCHROME1 は値を反転して持つので、ウィンドウも反転する。
     img.window = window.map(|(lo, hi)| if invert { (-hi, -lo) } else { (lo, hi) });
+    let sign = if invert { -1.0 } else { 1.0 };
+    img.value_colors =
+        supplemental.map(|p| std::sync::Arc::new(p.value_colors(slope, intercept, sign)));
     Ok(img)
 }
 
@@ -536,6 +551,12 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
             Err(missing) => m.push("DICOM", SUV_NEEDS, missing.join(", ")),
         }
     }
+    if obj
+        .get(tags::ENHANCED_PALETTE_COLOR_LOOKUP_TABLE_SEQUENCE)
+        .is_some()
+    {
+        m.push("DICOM", NOT_APPLIED, ENHANCED_PALETTE);
+    }
     let ts = obj.meta().transfer_syntax().trim_end_matches('\0');
     let ts_name = dicom_transfer_syntax_name(ts);
     m.push("DICOM", "Transfer syntax", ts_name.unwrap_or(ts));
@@ -548,6 +569,11 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
 pub const SUV_FACTOR: &str = "SUVbw factor";
 /// SUVbw を出せないときに、足りない項目を並べるキー。
 pub const SUV_NEEDS: &str = "SUVbw needs";
+
+/// ファイルにあるが vw が当てていない表示の指定を書くキー。読み込んだときにログにも出す。
+pub const NOT_APPLIED: &str = "Not applied";
+/// Enhanced Palette Color LUT（PS3.3 C.7.6.23）は、ken の判断（2026-11-11）で作らず、灰色で出す。
+pub const ENHANCED_PALETTE: &str = "Enhanced Palette Color LUT (shown in gray)";
 
 /// メタデータ欄で全タグを並べるグループ。
 pub const TAG_LISTING: &str = "DICOM tags";
@@ -905,6 +931,68 @@ pub(crate) mod tests {
         let img = DicomPlugin.decode(&bytes).unwrap();
         let red: Vec<u16> = rgb_u16(&img).iter().step_by(3).copied().collect();
         assert_eq!(red, [0, 128 * 256, 255 * 256]);
+    }
+
+    #[test]
+    fn palette_color_keeps_the_index_of_each_pixel() {
+        let img = DicomPlugin
+            .decode(&four_color_palette(&[3, 0, 2]).bytes())
+            .unwrap();
+        let indices = img.indices.expect("palette images keep their indices");
+        assert_eq!(
+            (0..3).map(|i| indices.get(i)).collect::<Vec<_>>(),
+            [Some(3), Some(0), Some(2)]
+        );
+    }
+
+    /// 格納値 100〜101 を赤・緑にする Supplemental Palette の付いた、16bit の灰色の画像。
+    fn supplemental(values: &[u16]) -> Synth {
+        let pack = |a: u8, b: u8| u16::from_le_bytes([a, b]);
+        Synth::new(synth::SC_IMAGE, values.len() as u16, 1)
+            .pixels_u16(values, 12)
+            .lut(0, 2, 100, 8, &[pack(255, 0)], false)
+            .lut(1, 2, 100, 8, &[pack(0, 255)], false)
+            .lut(2, 2, 100, 8, &[pack(0, 0)], false)
+    }
+
+    #[test]
+    fn supplemental_palette_keeps_the_image_gray_and_colors_only_its_range() {
+        let img = DicomPlugin
+            .decode(&supplemental(&[99, 100, 101, 102]).bytes())
+            .unwrap();
+        assert_eq!(img.color, ColorModel::Gray);
+        assert!(matches!(&img.data, PixelData::U16(v) if v == &[99, 100, 101, 102]));
+        let colors = img
+            .value_colors
+            .expect("the palette is kept for the display");
+        assert_eq!(colors.range(), (100, 101));
+        assert_eq!(colors.color_of(99.0), None);
+        assert_eq!(colors.color_of(100.0), Some([65535, 0, 0]));
+        assert_eq!(colors.color_of(101.0), Some([0, 65535, 0]));
+    }
+
+    #[test]
+    fn supplemental_palette_follows_the_rescale_of_the_gray_values() {
+        let bytes = supplemental(&[100]).rescale(1.0, -1024.0).bytes();
+        let img = DicomPlugin.decode(&bytes).unwrap();
+        assert!(matches!(&img.data, PixelData::F32(v) if v == &[-924.0]));
+        assert_eq!(
+            img.value_colors.unwrap().color_of(-924.0),
+            Some([65535, 0, 0])
+        );
+    }
+
+    #[test]
+    fn enhanced_palette_is_noted_as_not_applied() {
+        let bytes = Synth::ct(1, 1)
+            .empty_sequence(tags::ENHANCED_PALETTE_COLOR_LOOKUP_TABLE_SEQUENCE)
+            .bytes();
+        let img = DicomPlugin.decode(&bytes).unwrap();
+        assert_eq!(img.color, ColorModel::Gray);
+        assert_eq!(
+            img.metadata.get("DICOM", NOT_APPLIED),
+            Some(ENHANCED_PALETTE)
+        );
     }
 
     #[test]

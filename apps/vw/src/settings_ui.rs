@@ -804,6 +804,13 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Pipeline,
+        key: "pipeline.dicom.supplemental_palette",
+        title: "Supplemental Palette colors",
+        description: "Some gray DICOM images carry a color table for part of their values (Supplemental Palette, such as overlays of fused or functional images). Show those values in the table's colors; the other values stay gray and still follow the window. The probe shows both the value and its color. The key for it is unassigned by default (Key bindings).",
+        widget: pipeline_supplemental_widget,
+    },
+    Item {
+        section: Section::Pipeline,
         key: "pipeline.dicom.pt",
         title: "DICOM PT",
         description: "PET images (Modality PT): insert the color map stage from the start, and its color map. Hot Iron, PET and Hot Metal Blue are the palettes defined by the DICOM standard.",
@@ -2174,6 +2181,14 @@ fn pipeline_dicom_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) ->
     p.dicom.color_node = node.color_node;
     p.dicom.palette = node.palette;
     changed
+}
+
+fn pipeline_supplemental_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(
+        &mut s.pipeline.dicom.supplemental_palette,
+        tr(lang, "Enabled"),
+    )
+    .changed()
 }
 
 fn pipeline_pt_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

@@ -427,6 +427,14 @@ impl VwApp {
         );
         log_read_problems(&mut self.log, &path, &loaded.info.metadata);
         let calibration_note = calibration_note(&path, &loaded.info.metadata);
+        if let Some(what) = loaded.info.metadata.get("DICOM", vw_dicom::NOT_APPLIED)
+            && self
+                .not_applied_logged
+                .insert(crate::frames::file_of(&path))
+        {
+            self.log
+                .warn(format!("{}: not supported: {what}", path.display()));
+        }
         let incoming = loading::Incoming {
             frames: loaded.info.frames,
             fps: frame_rate(&loaded.info.metadata),

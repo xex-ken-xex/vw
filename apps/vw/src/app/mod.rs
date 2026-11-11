@@ -201,6 +201,8 @@ pub struct VwApp {
     hdf_pattern: String,
     /// 校正の結果をログに出したフォルダ。同じフォルダのライトを次々に見ても 1 回だけ出す。
     calibration_logged: HashSet<PathBuf>,
+    /// 当てていない表示の指定（[`vw_dicom::NOT_APPLIED`]）をログに書いたファイル。フレームを送るたびに書かないため。
+    not_applied_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
     texture_options: TextureOptions,
     /// 色の表の段の、種類ごとの既定（設定 `[pipeline]` から作る）。変わったら灰色の画像を読み直す。
@@ -818,6 +820,7 @@ impl VwApp {
             hdf_extensions,
             hdf_pattern: settings.settings.netcdf.hdf_extensions.clone(),
             calibration_logged: Default::default(),
+            not_applied_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
             color_rules: Arc::new(crate::colormap::Rules::new(&settings.settings.pipeline)),
             color_settings: settings.settings.pipeline.clone(),
@@ -1331,6 +1334,17 @@ impl VwApp {
             Action::NextColorMap => self.next_color_map(i),
             Action::ShowSlotOnMap => self.show_slot_on_map(i),
             Action::ToggleColorGauge => self.show_gauge ^= true,
+            Action::ToggleSupplementalPalette => {
+                let dicom = &mut self.settings.settings.pipeline.dicom;
+                dicom.supplemental_palette = !dicom.supplemental_palette;
+                let on = if dicom.supplemental_palette {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.log.info(format!("Supplemental Palette colors: {on}"));
+                self.settings_changed(ctx);
+            }
             Action::ZoomIn => self.slots[i].zoom_by(KEY_ZOOM_FACTOR),
             Action::ZoomOut => self.slots[i].zoom_by(1.0 / KEY_ZOOM_FACTOR),
             Action::LayoutCustom => self.set_layout(ctx, self.settings().viewer.custom_layout),

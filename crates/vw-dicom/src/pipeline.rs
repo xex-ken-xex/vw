@@ -84,6 +84,8 @@ pub struct Gray {
     pub presentation: Presentation,
     /// PET の Bq/ml の画像なら、SUVbw に換算するのに使う値。表示の道からの枝として出す。
     pub suv: Option<crate::suv::Inputs>,
+    /// Supplemental Palette の Red・Green・Blue の表。表示のときに範囲の値だけを色にする。
+    pub supplemental: Option<[crate::color::LutInfo; 3]>,
 }
 
 /// カラー画像の段。
@@ -139,8 +141,13 @@ pub fn read(data: &[u8], frame: usize) -> Result<Pipeline, DecodeError> {
     let suv = (modality.modality.as_deref() == Some("PT")
         && modality.units.as_deref() == Some("BQML"))
     .then(|| crate::suv::read(&obj));
+    let supplemental = (stored.photometric == "MONOCHROME2")
+        .then(|| crate::color::Palette::read(&obj).ok())
+        .flatten()
+        .map(|p| p.info());
     Ok(Pipeline::Gray(Box::new(Gray {
         suv,
+        supplemental,
         modality,
         voi: voi(&obj, &groups),
         presentation: Presentation {

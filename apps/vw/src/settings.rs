@@ -1100,6 +1100,8 @@ impl ColorNode {
 pub struct DicomColorNodes {
     pub color_node: bool,
     pub palette: String,
+    /// 灰色の画像の一部の値だけに色を当てる表（Supplemental Palette）があれば、その色を出す。
+    pub supplemental_palette: bool,
     /// TOML では表になるので、値の項目より後に置く。
     pub pt: ColorNode,
 }
@@ -1350,6 +1352,7 @@ impl Default for PipelineSettings {
             dicom: DicomColorNodes {
                 color_node: false,
                 palette: vw_core::palette::GRAY.to_owned(),
+                supplemental_palette: true,
                 pt: ColorNode::new(true, "hot_iron"),
             },
             gray: ColorNode::new(false, vw_core::palette::GRAY),
@@ -1405,6 +1408,10 @@ impl PipelineSettings {
             dicom: DicomColorNodes {
                 color_node: dicom.color_node,
                 palette: dicom.palette,
+                supplemental_palette: r
+                    .at("pipeline.dicom")
+                    .get("supplemental_palette")
+                    .unwrap_or(d.dicom.supplemental_palette),
                 pt: ColorNode::read(r, "pipeline.dicom.pt", &d.dicom.pt, &palettes),
             },
             gray: ColorNode::read(r, "pipeline.gray", &d.gray, &palettes),
@@ -3725,6 +3732,7 @@ conditions = [{ on = "size", op = "equals", value = "1" }]
         s.pipeline.dicom.pt.palette = "Ice".into();
         s.pipeline.gauge_side = GaugeSide::Bottom;
         s.pipeline.fits.color_node = false;
+        s.pipeline.dicom.supplemental_palette = false;
         let text = s.to_toml();
         assert!(text.contains("[pipeline.dicom.pt]"), "{text}");
         let (back, problems) = Settings::from_toml(&text).unwrap();

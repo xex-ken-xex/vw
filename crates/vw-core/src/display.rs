@@ -3,6 +3,7 @@
 //! 階調変換（ウィンドウ幅/レベル）と、GPU のテクスチャ上限に収めるための縮小をここで行う。
 
 use crate::image::{ColorModel, Curve, PixelData, VwImage};
+use crate::indexed::ValueColors;
 
 /// GPU に転送する RGBA8 画像。行優先、アルファは乗算済みでない（ストレート）。
 #[derive(Clone, Debug)]
@@ -108,6 +109,18 @@ pub fn to_display16(img: &VwImage, params: &DisplayParams) -> DisplayImage16 {
 }
 
 fn render<T: Sample>(img: &VwImage, params: &DisplayParams) -> (u32, u32, Vec<T>) {
+    let mut out = render_shades::<T>(img, params);
+    if let Some(colors) = img
+        .value_colors
+        .as_deref()
+        .filter(|_| img.color == ColorModel::Gray)
+    {
+        paint_value_colors(img, params, colors, &mut out.2);
+    }
+    out
+}
+
+fn render_shades<T: Sample>(img: &VwImage, params: &DisplayParams) -> (u32, u32, Vec<T>) {
     let window = params.window.or(img.window);
     let curve = img.curve;
     match &img.data {
@@ -306,6 +319,34 @@ fn paint_missing<T: Sample>(
     }
 }
 
+/// 灰色に描いた画素のうち、[`ValueColors`] の範囲の値の画素を、その色で塗り直す。
+/// 窓（WW/WL）は灰色の部分にだけ効く（DICOM の Supplemental Palette の決まり）。
+fn paint_value_colors<T: Sample>(
+    img: &VwImage,
+    params: &DisplayParams,
+    colors: &ValueColors,
+    rgba: &mut [T],
+) {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let step = (img.width.max(img.height) as usize)
+        .div_ceil(params.max_side.max(1) as usize)
+        .max(1);
+    let ow = w.div_ceil(step);
+    let value = |i: usize| match &img.data {
+        PixelData::U8(v) => f32::from(v[i]),
+        PixelData::U16(v) => f32::from(v[i]),
+        PixelData::F32(v) => v[i],
+    };
+    for (oy, y) in (0..h).step_by(step).enumerate() {
+        for (ox, x) in (0..w).step_by(step).enumerate() {
+            if let Some(color) = colors.color_of(value(y * w + x)) {
+                let at = (oy * ow + ox) * 4;
+                rgba[at..at + 3].copy_from_slice(&color.map(T::from_u16));
+            }
+        }
+    }
+}
+
 /// 縦横どちらも `max_side` 以下になるよう、整数倍で縮小する。縮小しないで済むときは複製を返す。
 ///
 /// 縮小した 1 画素は、元の `n × n` 画素（端は残りの画素）の平均にする。
@@ -365,6 +406,25 @@ fn min_max(v: &[f32]) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_in_the_value_colors_range_are_painted_and_the_rest_follow_the_window() {
+        let mut img =
+            VwImage::new(3, 1, ColorModel::Gray, PixelData::U16(vec![10, 100, 200])).unwrap();
+        img.window = Some((0.0, 20.0));
+        img.value_colors = Some(std::sync::Arc::new(ValueColors {
+            first: 100,
+            colors: vec![[0, 65535, 0]; 50],
+            bits: 16,
+            slope: 1.0,
+            intercept: 0.0,
+            sign: 1.0,
+        }));
+        let d = to_display(&img, &DisplayParams::default());
+        assert_eq!(&d.rgba[0..4], &[128, 128, 128, 255]);
+        assert_eq!(&d.rgba[4..8], &[0, 255, 0, 255]);
+        assert_eq!(&d.rgba[8..12], &[255, 255, 255, 255]);
+    }
 
     #[test]
     fn display16_keeps_the_steps_that_8_bits_would_merge() {

@@ -87,6 +87,48 @@ pub fn value_text(
     }
 }
 
+/// 番号で色を引いた画像と、範囲の値だけ色を当てる灰色の画像（DICOM のパレット）の、十字の値の文字。
+/// 番号の画像は「#番号 → 色」、色を当てた灰色の値は「値 → 色」にする。2 つ目は色の値と
+/// そのビット数（色の見本に使う）。どちらでもない画素は `text` のまま。
+pub fn with_palette(
+    img: &VwImage,
+    x: u32,
+    y: u32,
+    text: String,
+    format: ColorFormat,
+) -> (String, Option<(Vec<f64>, u32)>) {
+    let at = y as usize * img.width as usize + x as usize;
+    let pixels = img.width as usize * img.height as usize;
+    if let Some(index) = img
+        .indices
+        .as_deref()
+        .filter(|i| i.len() == pixels)
+        .and_then(|i| i.get(at))
+    {
+        return (format!("#{index} → {text}"), None);
+    }
+    let colors = img
+        .value_colors
+        .as_deref()
+        .filter(|_| img.color == ColorModel::Gray);
+    let raw = match &img.data {
+        PixelData::U8(v) => v.get(at).map(|&s| f32::from(s)),
+        PixelData::U16(v) => v.get(at).map(|&s| f32::from(s)),
+        PixelData::F32(v) => v.get(at).copied(),
+    };
+    match colors
+        .zip(raw)
+        .and_then(|(c, v)| Some((c.table_color_of(v)?, c.bits)))
+    {
+        Some((color, bits)) => {
+            let rgb: Vec<f64> = color.iter().map(|&c| f64::from(c)).collect();
+            let shown = crate::color_text::text(&rgb, bits, format);
+            (format!("{text} → {shown}"), Some((rgb, bits)))
+        }
+        None => (text, None),
+    }
+}
+
 /// 画素の位置（地球の上か空の上）と、面（時刻・高さ）の札。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Place {
@@ -263,6 +305,41 @@ mod tests {
             value_text(ColorModel::Rgb, &meta(&[]), &values, ColorFormat::Hex, 8),
             "#0C2238"
         );
+    }
+
+    #[test]
+    fn palette_color_pixels_show_their_index_before_the_color() {
+        let mut img = VwImage::new(
+            2,
+            1,
+            ColorModel::Rgb,
+            PixelData::U8(vec![255, 0, 0, 0, 0, 255]),
+        )
+        .unwrap();
+        img.indices = Some(std::sync::Arc::new(vw_core::indexed::Indices::from_values(
+            &[7, 300],
+        )));
+        let (text, color) = with_palette(&img, 1, 0, "R 0 G 0 B 255".into(), ColorFormat::Rgb);
+        assert_eq!(text, "#300 → R 0 G 0 B 255");
+        assert_eq!(color, None);
+    }
+
+    #[test]
+    fn gray_values_in_the_supplemental_palette_show_their_color_after_the_value() {
+        let mut img = gray_f32(vec![5.0, 100.0]);
+        img.value_colors = Some(std::sync::Arc::new(vw_core::indexed::ValueColors {
+            first: 100,
+            colors: vec![[65535, 0, 0]],
+            bits: 8,
+            slope: 1.0,
+            intercept: 0.0,
+            sign: 1.0,
+        }));
+        let (text, color) = with_palette(&img, 1, 0, "100".into(), ColorFormat::Rgb);
+        assert_eq!(text, "100 → R 255 G 0 B 0");
+        assert_eq!(color, Some((vec![255.0, 0.0, 0.0], 8)));
+        let (text, color) = with_palette(&img, 0, 0, "5".into(), ColorFormat::Rgb);
+        assert_eq!((text.as_str(), color), ("5", None));
     }
 
     #[test]

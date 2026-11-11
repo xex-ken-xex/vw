@@ -88,6 +88,7 @@ pub enum Action {
     PreviousVariable,
     NextColorMap,
     ToggleColorGauge,
+    ToggleSupplementalPalette,
     TrashBadImages,
     ClearShownFlags,
     ClearFolderFlags,
@@ -269,6 +270,7 @@ impl Action {
         Action::PreviousVariable,
         Action::NextColorMap,
         Action::ToggleColorGauge,
+        Action::ToggleSupplementalPalette,
         Action::CopyImage,
         Action::ComposeColors,
         Action::AlignAndCompare,
@@ -445,6 +447,7 @@ impl Action {
             Action::PreviousVariable => "previous_variable",
             Action::NextColorMap => "next_color_map",
             Action::ToggleColorGauge => "toggle_color_gauge",
+            Action::ToggleSupplementalPalette => "toggle_supplemental_palette",
             Action::TrashBadImages => "trash_bad_images",
             Action::ClearShownFlags => "clear_shown_flags",
             Action::ClearFolderFlags => "clear_folder_flags",
@@ -559,6 +562,7 @@ impl Action {
             Action::PreviousVariable => "Previous variable or HDU",
             Action::NextColorMap => "Next color map",
             Action::ToggleColorGauge => "Color scale gauge",
+            Action::ToggleSupplementalPalette => "Supplemental Palette colors",
             Action::LayoutAuto => "Layout: auto",
             Action::Layout1x1 => "Layout: 1 x 1",
             Action::Layout1x2 => "Layout: 1 x 2",
@@ -717,6 +721,7 @@ impl Action {
             | Action::PreviousVariable
             | Action::NextColorMap
             | Action::ToggleColorGauge
+            | Action::ToggleSupplementalPalette
             | Action::CopyImage
             | Action::ComposeColors
             | Action::AlignAndCompare
@@ -968,6 +973,7 @@ impl Action {
             Action::PreviousVariable => vec![KeyCombo::plain(N).with(false, true, false)],
             Action::NextColorMap => vec![KeyCombo::plain(C)],
             Action::ToggleColorGauge => vec![KeyCombo::plain(G)],
+            Action::ToggleSupplementalPalette => vec![],
             Action::LayoutAuto => vec![KeyCombo::alt(Num0)],
             Action::Layout1x1 => vec![KeyCombo::alt(Num1)],
             Action::Layout1x2 => vec![KeyCombo::alt(Num2)],

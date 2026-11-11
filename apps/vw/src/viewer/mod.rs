@@ -1050,9 +1050,14 @@ impl Slot {
             self.colors.probe,
             bits,
         );
-        let swatch = matches!(full.image.color, ColorModel::Rgb | ColorModel::Rgba)
-            .then(|| crate::color_text::swatch(&values, bits))
-            .flatten();
+        let (text, palette_color) =
+            probe::with_palette(&full.image, mark.x, mark.y, text, self.colors.probe);
+        let swatch = match palette_color {
+            Some((rgb, bits)) => crate::color_text::swatch(&rgb, bits),
+            None => matches!(full.image.color, ColorModel::Rgb | ColorModel::Rgba)
+                .then(|| crate::color_text::swatch(&values, bits))
+                .flatten(),
+        };
         Some((text, swatch))
     }
 
