@@ -153,7 +153,8 @@ impl DecoderPlugin for TiffPlugin {
             }
         };
         img.metadata = metadata;
-        img.gamut = icc_profile(&mut decoder).and_then(|icc| vw_core::icc::gamut(&icc));
+        img.gamut = icc_profile(&mut decoder, &mut Metadata::default())
+            .and_then(|icc| vw_core::icc::gamut(&icc));
         img.apply_orientation(orientation);
         Ok(img)
     }
@@ -539,45 +540,50 @@ fn metadata(
     pages: usize,
 ) -> Metadata {
     let mut m = Metadata::default();
-    let unsigned =
-        |d: &mut Decoder<Cursor<&[u8]>>, tag| d.find_tag_unsigned::<u32>(tag).ok().flatten();
-    if let Ok((w, h)) = decoder.dimensions() {
-        m.push("TIFF", "Size", format!("{w} x {h}"));
+    let unsigned = |d: &mut Decoder<Cursor<&[u8]>>, m: &mut Metadata, tag| {
+        let read = d.find_tag_unsigned::<u32>(tag);
+        tag_or_problem(m, tag, read)
+    };
+    match decoder.dimensions() {
+        Ok((w, h)) => m.push("TIFF", "Size", format!("{w} x {h}")),
+        Err(e) => m.problem("TIFF", "ImageWidth / ImageLength", e),
     }
     if pages > 1 {
         m.push("TIFF", "Page", format!("{} / {pages}", page + 1));
     }
-    if let Some(c) = unsigned(decoder, Tag::Compression) {
+    if let Some(c) = unsigned(decoder, &mut m, Tag::Compression) {
         m.push("TIFF", "Compression", compression(c));
     }
     if logluv::is_sgilog(decoder) {
-        let color = unsigned(decoder, Tag::SamplesPerPixel) == Some(3);
+        let color = unsigned(decoder, &mut m, Tag::SamplesPerPixel) == Some(3);
         m.push("TIFF", "Photometric", if color { "LogLuv" } else { "LogL" });
-    } else if let Some(p) = unsigned(decoder, Tag::PhotometricInterpretation) {
+    } else if let Some(p) = unsigned(decoder, &mut m, Tag::PhotometricInterpretation) {
         m.push("TIFF", "Photometric", photometric(p));
     }
-    if let Ok(Some(bits)) = decoder.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample) {
+    let bits = decoder.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample);
+    if let Some(bits) = tag_or_problem(&mut m, Tag::BitsPerSample, bits) {
         let bits: Vec<String> = bits.iter().map(u16::to_string).collect();
         m.push("TIFF", "Bits per sample", bits.join(", "));
     }
-    if let Ok(Some(formats)) = decoder.find_tag_unsigned_vec::<u16>(Tag::SampleFormat)
+    let formats = decoder.find_tag_unsigned_vec::<u16>(Tag::SampleFormat);
+    if let Some(formats) = tag_or_problem(&mut m, Tag::SampleFormat, formats)
         && let Some(&f) = formats.first()
     {
         m.push("TIFF", "Sample format", sample_format(f));
     }
     if let (Some(w), Some(h)) = (
-        unsigned(decoder, Tag::TileWidth),
-        unsigned(decoder, Tag::TileLength),
+        unsigned(decoder, &mut m, Tag::TileWidth),
+        unsigned(decoder, &mut m, Tag::TileLength),
     ) {
         m.push("TIFF", "Tiles", format!("{w} x {h}"));
     }
     // 1 ページ目の IFD を EXIF として読む。2 ページ目以降のタグは読めないが、カメラや作成ソフトの
     // 情報はふつう 1 ページ目にしかないため、全ページに同じものを出す。
     vw_core::exif::push_exif_except(&mut m, data.to_vec(), HIDDEN_TAGS);
-    if let Some(xmp) = bytes_tag(decoder, Tag::Unknown(XMP)) {
+    if let Some(xmp) = bytes_tag(decoder, &mut m, Tag::Unknown(XMP)) {
         vw_core::xmp::push_xmp(&mut m, &xmp);
     }
-    if let Some(icc) = icc_profile(decoder) {
+    if let Some(icc) = icc_profile(decoder, &mut m) {
         m.push("TIFF", "ICC profile", "present");
         vw_core::icc::push_profile(&mut m, &icc);
     }
@@ -586,16 +592,29 @@ fn metadata(
 
 const XMP: u16 = 700;
 
-fn icc_profile(decoder: &mut Decoder<Cursor<&[u8]>>) -> Option<Vec<u8>> {
-    bytes_tag(decoder, Tag::IccProfile)
+fn icc_profile(decoder: &mut Decoder<Cursor<&[u8]>>, m: &mut Metadata) -> Option<Vec<u8>> {
+    bytes_tag(decoder, m, Tag::IccProfile)
 }
 
-fn bytes_tag(decoder: &mut Decoder<Cursor<&[u8]>>, tag: Tag) -> Option<Vec<u8>> {
-    decoder
-        .find_tag(tag)
-        .ok()
-        .flatten()
-        .and_then(|v| v.into_u8_vec().ok())
+fn bytes_tag(decoder: &mut Decoder<Cursor<&[u8]>>, m: &mut Metadata, tag: Tag) -> Option<Vec<u8>> {
+    let value = decoder.find_tag(tag);
+    let value = tag_or_problem(m, tag, value)?;
+    tag_or_problem(m, tag, value.into_u8_vec().map(Some))
+}
+
+/// タグの値。読めなければ（型が違う、値がファイルの外を指す、など）理由を `m` に残して `None`。
+fn tag_or_problem<T>(m: &mut Metadata, tag: Tag, read: tiff::TiffResult<Option<T>>) -> Option<T> {
+    match read {
+        Ok(value) => value,
+        Err(e) => {
+            let name = match tag {
+                Tag::Unknown(XMP) => "XMP".to_owned(),
+                other => format!("{other:?}"),
+            };
+            m.problem("TIFF", format!("(0x{:04X}) {name}", tag.to_u16()), e);
+            None
+        }
+    }
 }
 
 fn compression(c: u32) -> String {

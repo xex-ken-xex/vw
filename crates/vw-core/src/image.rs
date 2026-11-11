@@ -68,6 +68,44 @@ impl PixelData {
 #[derive(Clone, Debug, Default)]
 pub struct Metadata {
     pub entries: Vec<(String, String, String)>,
+    /// 読めなかったタグ。読めた分は `entries` に入れたうえで、ここに理由を残す。
+    ///
+    /// 読めないタグがあるときに読み取り全体を失敗にしないのは、メタデータの不備で画像を
+    /// 開けなくしないため。
+    pub problems: Vec<Problem>,
+}
+
+/// メタデータのうち、読めなかった 1 か所。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    /// [`Metadata::entries`] のグループと同じ見出し（"EXIF"、"FITS" など）。
+    pub group: String,
+    /// どのタグか（"IFD0 (0x8827) PhotographicSensitivity" など）。分からなければ空。
+    pub place: String,
+    /// 何が起きたか。
+    pub error: String,
+}
+
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.place.as_str() {
+            "" => write!(f, "{}: {}", self.group, self.error),
+            place => write!(f, "{} {place}: {}", self.group, self.error),
+        }
+    }
+}
+
+/// 読めなかった値をログに添えるときの上限（文字数）。長い値でログの行が埋まらないように切る。
+pub const PROBLEM_VALUE_MAX: usize = 256;
+
+/// [`Problem::error`] に添える値。[`PROBLEM_VALUE_MAX`] 文字を超えた分は切り、長さを書く。
+pub fn problem_value(value: &str) -> String {
+    let chars = value.chars().count();
+    if chars <= PROBLEM_VALUE_MAX {
+        return format!("{value:?}");
+    }
+    let head: String = value.chars().take(PROBLEM_VALUE_MAX).collect();
+    format!("{head:?}... ({chars} characters)")
 }
 
 impl Metadata {
@@ -82,6 +120,20 @@ impl Metadata {
             .iter()
             .find(|(g, k, _)| g == group && k == key)
             .map(|(_, _, v)| v.as_str())
+    }
+
+    /// 読めなかったタグを残す。
+    pub fn problem(
+        &mut self,
+        group: impl Into<String>,
+        place: impl Into<String>,
+        error: impl ToString,
+    ) {
+        self.problems.push(Problem {
+            group: group.into(),
+            place: place.into(),
+            error: error.to_string(),
+        });
     }
 }
 

@@ -181,6 +181,14 @@ const JA: &[(&str, &str)] = &[
         "Map: the map is turned on in the settings",
         "地図: 設定で地図を使うようにしました",
     ),
+    (
+        "Metadata problem in {}: {}",
+        "{} のメタデータを読めませんでした: {}",
+    ),
+    (
+        "Metadata could not be fully read in {} files (details in the log file)",
+        "{} ファイルでメタデータに読めない所がありました（詳しくはログファイル）",
+    ),
 ];
 
 /// ログに渡す訳の口。英語なら訳さない。

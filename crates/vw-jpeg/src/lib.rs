@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn broken_exif_does_not_stop_the_image_from_opening() {
+    fn broken_exif_does_not_stop_the_image_from_opening_and_is_reported() {
         let jpg = encode(
             4,
             4,
@@ -267,7 +267,14 @@ mod tests {
             &[0u8; 16],
             Some(b"II*\0garbage".to_vec()),
         );
-        assert!(JpegPlugin.decode(&jpg).is_ok());
+        let img = JpegPlugin.decode(&jpg).unwrap();
+        assert_eq!(
+            img.metadata.problems.len(),
+            1,
+            "{:?}",
+            img.metadata.problems
+        );
+        assert_eq!(img.metadata.problems[0].group, "EXIF");
     }
 
     #[test]

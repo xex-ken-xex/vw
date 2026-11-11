@@ -67,7 +67,11 @@ pub fn metadata(
     m.push(GROUP, crate::FORMAT, format);
     m.push(GROUP, crate::VARIABLE, &chosen.path);
     m.push(GROUP, crate::DIMENSIONS, dims_text(&chosen.dims));
-    if let Ok(var) = file.variable(&chosen.path) {
+    let chosen_var = file.variable(&chosen.path);
+    if let Err(e) = &chosen_var {
+        m.problem(GROUP, format!("variable {:?}", chosen.path), e);
+    }
+    if let Ok(var) = chosen_var {
         m.push(GROUP, crate::TYPE, type_name(&var.dtype));
         if let Some(units) = var.attribute("units").and_then(|a| a.value.as_string()) {
             m.push(GROUP, crate::UNITS, units.trim());
@@ -79,8 +83,13 @@ pub fn metadata(
         push_attrs(&mut m, VARIABLE_GROUP, &var.attributes);
     }
     for v in variables {
-        let units = file
-            .variable(&v.path)
+        let var = file.variable(&v.path);
+        if let Err(e) = &var
+            && v.path != chosen.path
+        {
+            m.problem(GROUP, format!("variable {:?}", v.path), e);
+        }
+        let units = var
             .ok()
             .and_then(|var| var.attribute("units")?.value.as_string())
             .unwrap_or_default();
@@ -92,22 +101,29 @@ pub fn metadata(
         };
         m.push(VARIABLES_GROUP, &v.path, text);
     }
-    if let Ok(attrs) = file.global_attributes() {
-        push_attrs(&mut m, GLOBAL_GROUP, attrs);
-    }
+    push_global_attrs(&mut m, file);
     m
+}
+
+fn push_global_attrs(m: &mut Metadata, file: &NcFile) {
+    match file.global_attributes() {
+        Ok(attrs) => push_attrs(m, GLOBAL_GROUP, attrs),
+        Err(e) => m.problem(GLOBAL_GROUP, "", e),
+    }
 }
 
 /// 検索カタログに入れる分。全体の属性と、変数ごとの名前・単位・`standard_name`。
 pub fn catalog(file: &NcFile, format: &str, variables: &[Variable]) -> Metadata {
     let mut m = Metadata::default();
     m.push(GROUP, crate::FORMAT, format);
-    if let Ok(attrs) = file.global_attributes() {
-        push_attrs(&mut m, GLOBAL_GROUP, attrs);
-    }
+    push_global_attrs(&mut m, file);
     for v in variables {
-        let Ok(var) = file.variable(&v.path) else {
-            continue;
+        let var = match file.variable(&v.path) {
+            Ok(var) => var,
+            Err(e) => {
+                m.problem(GROUP, format!("variable {:?}", v.path), e);
+                continue;
+            }
         };
         let text = |name: &str| {
             var.attribute(name)

@@ -29,6 +29,8 @@ pub struct Hdu {
     pub cards: Vec<Card>,
     pub data_start: usize,
     pub data_len: usize,
+    /// 規格に外れたカード。`(どのカードか, 何が外れたか)`。読めた分は `cards` に入れてある。
+    pub problems: Vec<(String, String)>,
 }
 
 impl Hdu {
@@ -99,7 +101,14 @@ pub fn hdus(data: &[u8]) -> Result<Vec<Hdu>, DecodeError> {
             }
             Err(e) if out.is_empty() => return Err(e),
             // 後ろに付いた余分なバイトや壊れた拡張は、最初の画像を見る邪魔にしない。
-            Err(_) => break,
+            Err(e) => {
+                let number = out.len();
+                out[0].problems.push((
+                    format!("HDU {number} (offset {at})"),
+                    format!("cannot be read, so it and the HDUs after it are skipped: {e}"),
+                ));
+                break;
+            }
         }
     }
     Ok(out)
@@ -118,12 +127,13 @@ pub(crate) fn hdu_at(data: &[u8], start: usize) -> Result<Hdu, DecodeError> {
         }
         lines.push(line);
     }
-    let cards = parse_cards(&lines);
+    let (cards, problems) = parse_cards(&lines, start);
     let data_start = (at - start).next_multiple_of(BLOCK) + start;
     let mut hdu = Hdu {
         cards,
         data_start,
         data_len: 0,
+        problems,
     };
     hdu.data_len = data_len(&hdu)
         .ok_or_else(|| DecodeError::Invalid("FITS header has broken NAXIS or BITPIX".into()))?;
@@ -148,21 +158,47 @@ fn data_len(hdu: &Hdu) -> Option<usize> {
         .checked_mul(count.checked_add(pcount)?)
 }
 
-fn parse_cards(lines: &[&[u8]]) -> Vec<Card> {
+/// `start` はヘッダの先頭の、ファイルの中の位置。規格に外れたカードの位置を書くのに使う。
+fn parse_cards(lines: &[&[u8]], start: usize) -> (Vec<Card>, Vec<(String, String)>) {
     let mut cards: Vec<Card> = Vec::new();
-    for line in lines {
+    let mut problems = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
         // ヘッダは ASCII の決まり。外れた文字を 1 文字に置き換え、位置で切り出せるようにする。
         let text: String = line
             .iter()
             .map(|&b| if b.is_ascii() { b as char } else { '?' })
             .collect();
         let key = text[..8.min(text.len())].trim_end();
+        let place = || format!("card {} {key} (offset {})", i + 1, start + i * CARD);
+        let outside = line.iter().filter(|b| !b.is_ascii()).count();
+        if outside > 0 {
+            problems.push((
+                place(),
+                format!(
+                    "{outside} byte(s) outside ASCII, shown as '?': {}",
+                    vw_core::image::problem_value(text.trim_end())
+                ),
+            ));
+        }
+        if !key
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        {
+            problems.push((
+                place(),
+                "keyword has characters other than A-Z, 0-9, '-' and '_'".to_owned(),
+            ));
+        }
         if key == "CONTINUE" {
             // 長い文字列の続き。前の文字列の末尾の & を外してつなぐ。
             if let Some(prev) = cards.last_mut().filter(|c| c.quoted)
                 && let Some(base) = prev.value.strip_suffix('&')
             {
-                let (more, _) = split_value(&text[8..]);
+                let more = split_value(&text[8..]);
+                if more.quote == Quote::Unclosed {
+                    problems.push((place(), "string has no closing quote".to_owned()));
+                }
+                let more = more.text;
                 prev.value = format!("{base}{more}");
                 continue;
             }
@@ -170,11 +206,14 @@ fn parse_cards(lines: &[&[u8]]) -> Vec<Card> {
         if key == "HIERARCH" {
             // ESO の長い名前。`HIERARCH ESO DET DIT = 1.0 / comment`
             if let Some((name, rest)) = text[8..].split_once('=') {
-                let (value, quoted) = split_value(rest);
+                let value = split_value(rest);
+                if value.quote == Quote::Unclosed {
+                    problems.push((place(), "string has no closing quote".to_owned()));
+                }
                 cards.push(Card {
                     key: format!("HIERARCH {}", name.trim()),
-                    value,
-                    quoted,
+                    quoted: value.quote != Quote::None,
+                    value: value.text,
                 });
                 continue;
             }
@@ -183,11 +222,14 @@ fn parse_cards(lines: &[&[u8]]) -> Vec<Card> {
             continue;
         }
         if text.get(8..10) == Some("= ") {
-            let (value, quoted) = split_value(&text[10..]);
+            let value = split_value(&text[10..]);
+            if value.quote == Quote::Unclosed {
+                problems.push((place(), "string has no closing quote".to_owned()));
+            }
             cards.push(Card {
                 key: key.to_owned(),
-                value,
-                quoted,
+                quoted: value.quote != Quote::None,
+                value: value.text,
             });
         } else {
             // COMMENT、HISTORY、空の名前の注記。本文をそのまま値にする。
@@ -198,14 +240,29 @@ fn parse_cards(lines: &[&[u8]]) -> Vec<Card> {
             });
         }
     }
-    cards
+    (cards, problems)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quote {
+    /// 文字列でない値（数や T/F）。
+    None,
+    Closed,
+    /// 閉じる引用符がないまま行が終わった。
+    Unclosed,
+}
+
+struct Value {
+    text: String,
+    quote: Quote,
 }
 
 /// `= ` の後ろを、値とコメントに分ける。文字列は引用符を外し、`''` を `'` に戻す。
-fn split_value(s: &str) -> (String, bool) {
+fn split_value(s: &str) -> Value {
     let s = s.trim_start();
     if let Some(body) = s.strip_prefix('\'') {
         let mut out = String::new();
+        let mut quote = Quote::Unclosed;
         let mut chars = body.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '\'' {
@@ -213,6 +270,7 @@ fn split_value(s: &str) -> (String, bool) {
                     chars.next();
                     out.push('\'');
                 } else {
+                    quote = Quote::Closed;
                     break;
                 }
             } else {
@@ -220,8 +278,13 @@ fn split_value(s: &str) -> (String, bool) {
             }
         }
         // 文字列の後ろの空白は意味を持たない（規格 4.2.1.1）。
-        return (out.trim_end().to_owned(), true);
+        return Value {
+            text: out.trim_end().to_owned(),
+            quote,
+        };
     }
-    let value = s.split('/').next().unwrap_or_default().trim();
-    (value.to_owned(), false)
+    Value {
+        text: s.split('/').next().unwrap_or_default().trim().to_owned(),
+        quote: Quote::None,
+    }
 }

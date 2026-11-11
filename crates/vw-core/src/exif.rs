@@ -5,8 +5,8 @@
 use crate::image::Metadata;
 
 /// EXIF の `raw`（TIFF の形、`Exif\0\0` を除いたもの）のタグを `m` の "EXIF" に足し、
-/// 向き（Orientation、1〜8）を返す（なければ 1）。読めない EXIF は無視する。
-/// 画像が表示できることを優先し、EXIF の不備で開けなくはしないため。
+/// 向き（Orientation、1〜8）を返す（なければ 1）。壊れたタグは飛ばして読めたタグだけを足し、
+/// 壊れた所は [`Metadata::problems`] に残す。画像が表示できることを優先し、EXIF の不備で開けなくはしないため。
 pub fn push_exif(m: &mut Metadata, raw: Vec<u8>) -> u32 {
     push_exif_except(m, raw, &[])
 }
@@ -14,7 +14,30 @@ pub fn push_exif(m: &mut Metadata, raw: Vec<u8>) -> u32 {
 /// [`push_exif`] の、タグ番号が `skip` のものを除く版。TIFF ファイルそのものを EXIF として
 /// 読むとき、画素の置き場所（StripOffsets など）の長い数の並びを出さないために使う。
 pub fn push_exif_except(m: &mut Metadata, raw: Vec<u8>, skip: &[u16]) -> u32 {
-    let Ok(exif) = exif::Reader::new().read_raw(raw) else {
+    // BigTIFF（42 の代わりに 43）は kamadak-exif が読めない形で、壊れているわけではないので何も残さない。
+    if raw.get(..4).is_some_and(|h| h == b"II+\0" || h == b"MM\0+") {
+        return 1;
+    }
+    let found = crate::exif_check::problems(&raw, "EXIF");
+    let read = exif::Reader::new().continue_on_error(true).read_raw(raw);
+    let exif = match read {
+        Ok(exif) => Some(exif),
+        Err(exif::Error::PartialResult(partial)) => {
+            let (exif, errors) = partial.into_inner();
+            if found.is_empty() {
+                push_reader_errors(m, &errors);
+            }
+            Some(exif)
+        }
+        Err(e) => {
+            if found.is_empty() {
+                push_reader_errors(m, &[e]);
+            }
+            None
+        }
+    };
+    m.problems.extend(found);
+    let Some(exif) = exif else {
         return 1;
     };
     for f in exif.fields() {
@@ -26,7 +49,31 @@ pub fn push_exif_except(m: &mut Metadata, raw: Vec<u8>, skip: &[u16]) -> u32 {
         {
             continue;
         }
-        m.push("EXIF", f.tag.to_string(), value(f, &exif));
+        let shown = value(f, &exif);
+        if let exif::Value::Ascii(parts) = &f.value
+            && parts.iter().any(|p| std::str::from_utf8(p).is_err())
+        {
+            // 撮影地点は人を特定しうるので、ログには値を出さない。
+            let error = match f.tag.context() {
+                exif::Context::Gps => "text is not UTF-8".to_owned(),
+                _ => format!(
+                    "text is not UTF-8, shown as {}",
+                    crate::image::problem_value(&shown)
+                ),
+            };
+            let ifd = match f.tag.context() {
+                exif::Context::Exif => "Exif IFD".to_owned(),
+                exif::Context::Gps => "GPS IFD".to_owned(),
+                exif::Context::Interop => "Interop IFD".to_owned(),
+                _ => format!("IFD{}", f.ifd_num.index()),
+            };
+            m.problem(
+                "EXIF",
+                format!("{ifd} (0x{:04X}) {}", f.tag.number(), f.tag),
+                error,
+            );
+        }
+        m.push("EXIF", f.tag.to_string(), shown);
     }
     if let Some(gps) = gps(&exif) {
         gps.push_to(m);
@@ -34,6 +81,16 @@ pub fn push_exif_except(m: &mut Metadata, raw: Vec<u8>, skip: &[u16]) -> u32 {
     exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
         .and_then(|f| f.value.get_uint(0))
         .unwrap_or(1)
+}
+
+/// IFD をたどって壊れた所が見つからなかったのに kamadak-exif が読めなかったときの理由。
+/// IFD を 8 つまでしか読まない kamadak-exif の決まりは、ファイルの不備ではないので除く。
+fn push_reader_errors(m: &mut Metadata, errors: &[exif::Error]) {
+    for e in errors {
+        if !matches!(e, exif::Error::InvalidFormat("Limit the IFD count to 8")) {
+            m.problem("EXIF", "", e);
+        }
+    }
 }
 
 /// 撮影地点。緯度・経度は度（北緯・東経が正）。
@@ -252,6 +309,36 @@ pub mod sample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tags_before_a_broken_one_are_kept_and_the_broken_one_is_reported() {
+        let mut raw = sample::gps(35.0, 139.0, None);
+        raw.truncate(raw.len() - 4);
+        let mut m = Metadata::default();
+        push_exif(&mut m, raw);
+        assert_eq!(m.get("EXIF", "GPSLatitudeRef"), Some("N"));
+        assert_eq!(m.problems.len(), 1, "{:?}", m.problems);
+        assert_eq!(m.problems[0].place, "GPS IFD (0x0004) GPSLongitude");
+    }
+
+    #[test]
+    fn a_sound_exif_has_no_problems() {
+        let mut m = Metadata::default();
+        push_exif(&mut m, sample::make(b"Cam"));
+        assert!(m.problems.is_empty());
+    }
+
+    #[test]
+    fn text_that_is_not_utf8_is_reported_with_its_value() {
+        let mut m = Metadata::default();
+        push_exif(&mut m, sample::make(b"C\xffm"));
+        assert_eq!(m.problems.len(), 1);
+        assert_eq!(m.problems[0].place, "IFD0 (0x010F) Make");
+        assert_eq!(
+            m.problems[0].error,
+            "text is not UTF-8, shown as \"C\u{fffd}m\""
+        );
+    }
 
     #[test]
     fn text_is_shown_without_quotes() {

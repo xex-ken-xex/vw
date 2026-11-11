@@ -998,3 +998,22 @@ fn damaged_files_of_the_new_kinds_are_errors_not_crashes() {
         }
     }
 }
+
+#[test]
+fn a_sound_file_has_no_metadata_problems() {
+    let mut tags = basic(&[8], 1);
+    tags.push((271, V::Ascii("VW Camera Co.")));
+    let tiff = build(&[page(2, 1, tags, vec![0, 0])]);
+    let m = TiffPlugin.read_metadata(&tiff).unwrap();
+    assert_eq!(m.problems, []);
+}
+
+#[test]
+fn a_tag_of_the_wrong_type_is_reported_with_its_number() {
+    let mut tags = basic(&[8], 1);
+    tags.push((700, V::Long(vec![70_000, 80_000])));
+    let tiff = build(&[page(2, 1, tags, vec![0, 0])]);
+    let m = TiffPlugin.read_metadata(&tiff).unwrap();
+    assert_eq!(m.problems.len(), 1, "{:?}", m.problems);
+    assert_eq!(m.problems[0].place, "(0x02BC) XMP");
+}

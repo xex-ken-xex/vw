@@ -137,6 +137,7 @@ impl VwApp {
         let places = self.place_names.as_ref()?;
         let m = vw_core::Metadata {
             entries: entries.to_vec(),
+            ..Default::default()
         };
         let gps = vw_core::exif::Gps::from_metadata(&m)?;
         let address = places.address(gps.latitude, gps.longitude)?;

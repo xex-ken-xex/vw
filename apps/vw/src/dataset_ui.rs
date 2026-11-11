@@ -658,6 +658,7 @@ impl DatasetDialog {
                     for p in &c.skipped {
                         log.warn(format!("Dataset \"{}\": {p}", c.name));
                     }
+                    log_catalog_read_problems(log);
                 }
                 self.outer = dataset_extract::outer_dataset(&dest);
                 self.extracted_to = Some(dest);
@@ -684,6 +685,7 @@ impl DatasetDialog {
                 for p in &c.skipped {
                     log.warn(format!("Dataset \"{}\": {p}", c.name));
                 }
+                log_catalog_read_problems(log);
                 Some(true)
             }
             Err(e) if e == "Cancelled" && self.kind == Kind::Extract => {
@@ -775,6 +777,16 @@ impl DatasetDialog {
 }
 
 /// 取り出しの出力先の初期値。`base` の下の、データセットのフォルダと同じ名前のまだないフォルダ。
+/// 設定でオンにしていれば、登録で読めないタグがあったファイルの数を 1 行で出す（タグごとの行はログファイルだけ）。
+fn log_catalog_read_problems(log: &mut Log) {
+    let files = crate::read_problems::take_catalog_files();
+    if files > 0 {
+        log.warn(format!(
+            "Metadata could not be fully read in {files} files (details in the log file)"
+        ));
+    }
+}
+
 fn default_destination(dir: &Path, base: &Path) -> String {
     let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
         return String::new();

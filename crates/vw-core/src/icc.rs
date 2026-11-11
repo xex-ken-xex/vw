@@ -160,6 +160,11 @@ pub fn push_profile(m: &mut Metadata, icc: &[u8]) -> Option<Gamut> {
                 "ICC profile",
                 format!("unreadable ({} bytes, {e:?})", icc.len()),
             );
+            m.problem(
+                GROUP,
+                "ICC profile",
+                format!("cannot be read ({e:?}; {} bytes)", icc.len()),
+            );
             return None;
         }
     };

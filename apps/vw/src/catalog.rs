@@ -678,6 +678,7 @@ fn triples(
     let (mut metadata, plugin) = registry
         .read_all_metadata_bytes(path, data)
         .map_err(|e| e.to_string())?;
+    crate::read_problems::record_catalog(path, &metadata);
     if let Some(p) = placed {
         labels::apply_position(&mut metadata, p);
     }

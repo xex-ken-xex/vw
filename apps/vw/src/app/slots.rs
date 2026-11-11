@@ -379,6 +379,7 @@ impl VwApp {
                 ms(info.convert),
             ),
         );
+        log_read_problems(&mut self.log, path, &loaded.info.metadata);
     }
 
     /// スロットで開いた画像の読み込み結果を受け取る。
@@ -424,6 +425,7 @@ impl VwApp {
                 ms(texture),
             ),
         );
+        log_read_problems(&mut self.log, &path, &loaded.info.metadata);
         let calibration_note = calibration_note(&path, &loaded.info.metadata);
         let incoming = loading::Incoming {
             frames: loaded.info.frames,
@@ -1759,5 +1761,17 @@ impl PartKind {
                 })
                 .collect(),
         })
+    }
+}
+
+/// 設定でオンにしていれば、表示した画像のメタデータで読めなかった所をログに書く。
+/// 同じファイルでも表示するたびに書く。1 度だけにしないのは、ファイルを直して開き直したときに、
+/// 直ったかどうかをログで確かめられるようにするため。
+fn log_read_problems(log: &mut crate::log::Log, path: &Path, metadata: &vw_core::Metadata) {
+    if !crate::read_problems::enabled() {
+        return;
+    }
+    for line in crate::read_problems::lines(path, metadata) {
+        log.warn(line);
     }
 }
