@@ -453,6 +453,9 @@ impl FrameStore {
         if count < 2 || first >= count {
             return None;
         }
+        // 形式の名前は、取り出しを始める前に決めておく。取り出し終えてから入れると、それまでに
+        // 渡した面が形式の名前なしで出て、形式ごとの色の表などが当たらない。
+        let plugin = registry.find(file, &bytes)?.name().to_owned();
         let entry = Arc::new(Entry {
             file: file.to_path_buf(),
             stamp,
@@ -460,6 +463,7 @@ impl FrameStore {
             state: Mutex::new(State {
                 file_size: bytes.len(),
                 read,
+                plugin,
                 ..State::default()
             }),
             ready: Condvar::new(),
@@ -511,16 +515,10 @@ impl FrameStore {
             entry.ready.notify_all();
             true
         });
-        match result {
-            Ok(plugin) => {
-                let mut state = entry.state();
-                state.plugin = plugin.to_owned();
-            }
-            Err(e) => {
-                let mut state = entry.state();
-                for &i in order {
-                    state.errors.entry(i).or_insert_with(|| e.to_string());
-                }
+        if let Err(e) = result {
+            let mut state = entry.state();
+            for &i in order {
+                state.errors.entry(i).or_insert_with(|| e.to_string());
             }
         }
     }
@@ -708,6 +706,68 @@ mod tests {
         assert!(store.frame(&registry, &file, 3).is_none());
         assert!(store.take_limited());
         assert!(!store.take_limited());
+    }
+
+    /// [`Frames`] と同じ形で、最初のフレームを渡した後は `release` が立つまで次を渡さない。
+    #[derive(Default)]
+    struct Slow {
+        release: AtomicBool,
+    }
+
+    impl DecoderPlugin for Slow {
+        fn name(&self) -> &str {
+            "Slow"
+        }
+        fn extensions(&self) -> &[&str] {
+            &["slow"]
+        }
+        fn probe(&self, _header: &[u8]) -> bool {
+            false
+        }
+        fn decode(&self, data: &[u8]) -> Result<VwImage, DecodeError> {
+            self.decode_frame(data, 0)
+        }
+        fn frame_count(&self, data: &[u8]) -> Result<usize, DecodeError> {
+            Ok(data[0] as usize)
+        }
+        fn decode_frame(&self, _data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
+            Ok(gray(frame as u8))
+        }
+        fn decode_frames(
+            &self,
+            _path: &Path,
+            _data: &[u8],
+            order: &[usize],
+            each: &mut dyn FnMut(usize, Result<VwImage, DecodeError>) -> bool,
+        ) {
+            for (n, &i) in order.iter().enumerate() {
+                if n > 0 {
+                    let until = Instant::now() + Duration::from_secs(5);
+                    while !self.release.load(Ordering::Relaxed) && Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                if !each(i, Ok(gray(i as u8))) {
+                    return;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frames_handed_out_while_the_rest_are_still_decoding_carry_the_format_name() {
+        let store: &'static FrameStore = Box::leak(Box::default());
+        store.set_budget(1 << 20);
+        let plugin = Arc::new(Slow::default());
+        let mut registry = Registry::new();
+        registry.register(plugin.clone());
+        let dir = std::env::temp_dir().join(format!("vw-frame-store-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cube.slow");
+        std::fs::write(&file, [4]).unwrap();
+        let frame = store.frame(&registry, &file, 0).unwrap().unwrap();
+        assert_eq!(frame.plugin, "Slow");
+        plugin.release.store(true, Ordering::Relaxed);
     }
 
     #[test]
