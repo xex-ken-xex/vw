@@ -61,6 +61,7 @@ mod people_graph_ui;
 mod people_ui;
 mod persist;
 mod playback;
+mod point_spectrum_pane;
 mod positions;
 mod qr_reading;
 mod roi_graph_pane;
@@ -241,6 +242,7 @@ pub struct VwApp {
     zoom_map: crate::zoom_map::ZoomMap,
     line_profile: line_profile_pane::LineProfilePane,
     roi_graph: roi_graph_pane::RoiGraphPane,
+    point_spectrum: point_spectrum_pane::PointSpectrumPane,
     map: crate::map_window::MapWindow,
     sky: crate::sky_window::SkyWindow,
     subframes: crate::subframes_window::SubframesWindow,
@@ -872,6 +874,7 @@ impl VwApp {
             zoom_map: Default::default(),
             line_profile: Default::default(),
             roi_graph: Default::default(),
+            point_spectrum: Default::default(),
             place_names: None,
             place_names_load: None,
             map: Default::default(),
@@ -1175,6 +1178,9 @@ impl VwApp {
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleLineProfile => self.line_profile.open = !self.line_profile.open,
             Action::ToggleRoiGraph => self.roi_graph.open = !self.roi_graph.open,
+            Action::TogglePointSpectrum => {
+                self.point_spectrum.open = !self.point_spectrum.open;
+            }
             Action::ToggleMap => self.toggle_map(),
             Action::ToggleSkyChart => {
                 self.sky.open = !self.sky.open && self.settings().sky.enabled;
@@ -1337,6 +1343,11 @@ impl VwApp {
             },
             Action::ToggleCalibration => self.toggle_calibration(i),
             Action::ToggleHotPixels => self.toggle_hot_pixels(i),
+            Action::ToggleContours => {
+                if self.slots[i].contours_possible() {
+                    self.slots[i].contours ^= true;
+                }
+            }
             Action::ClearCalibrationCache => self.clear_calibration_cache(),
             Action::NextVariable => self.step_variable(i, 1),
             Action::PreviousVariable => self.step_variable(i, -1),
@@ -1662,6 +1673,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleLineProfile => "Line profile",
         Action::ToggleRoiGraph => "ROI graph",
+        Action::TogglePointSpectrum => "Spectrum at crosses",
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
         Action::ToggleSubframes => "Subframes",

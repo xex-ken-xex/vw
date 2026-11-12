@@ -1313,3 +1313,76 @@ fn a_string_without_its_closing_quote_is_reported_and_still_shown() {
     assert_eq!(m.problems.len(), 1);
     assert_eq!(m.problems[0].error, "string has no closing quote");
 }
+
+#[test]
+fn the_spectrum_at_a_point_of_a_cube_runs_along_its_spectral_axis() {
+    // 3 本目が偏光（長さ 2）、4 本目が周波数（長さ 3）。面の並びは偏光が速く回る。
+    let mut cards = image_cards(-32, &[2, 2, 2, 3]);
+    cards.extend([
+        card("CTYPE3", "'STOKES'"),
+        card("CRVAL3", "1"),
+        card("CTYPE4", "'FREQ'"),
+        card("CRVAL4", "1.4E9"),
+        card("CRPIX4", "1"),
+        card("CDELT4", "1.0E6"),
+        card("CUNIT4", "'Hz'"),
+        card("BUNIT", "'Jy/beam'"),
+    ]);
+    let values: Vec<f32> = (0..6)
+        .flat_map(|plane| (0..4).map(move |i| (plane * 10 + i) as f32))
+        .collect();
+    let file = fits(&cards, &f32_bytes(&values));
+    let mut cube = cube::Cube::new(&file, None, false).unwrap();
+    // 面 3 = 偏光 2 本目・周波数 2 本目。画素 (1, 0) は 4 画素の 2 番目。
+    let point = cube.spectrum(3, 1, 0).unwrap().unwrap();
+    assert_eq!(&*point.spectrum.values, &[11.0, 31.0, 51.0]);
+    assert_eq!(point.channel, 1);
+    assert_eq!(point.spectrum.value_unit, "Jy/beam");
+    assert_eq!(
+        point.spectrum.axis.kind,
+        vw_core::spectrum::AxisKind::Frequency
+    );
+    assert!((point.spectrum.axis.value(2) - 1.402e9).abs() < 1.0);
+    assert_eq!(point.frame_of(2), 5);
+}
+
+#[test]
+fn rows_turned_upside_down_are_read_where_they_are_shown() {
+    let mut cards = image_cards(16, &[1, 2, 2]);
+    cards.push(card("ROWORDER", "'BOTTOM-UP'"));
+    let file = fits(&cards, &i16_bytes(&[1, 2, 3, 4]));
+    let mut cube = cube::Cube::new(&file, None, false).unwrap();
+    // 画面の上の行は、ファイルの 2 行目。
+    assert_eq!(
+        &*cube.spectrum(0, 0, 0).unwrap().unwrap().spectrum.values,
+        &[2.0, 4.0]
+    );
+}
+
+#[test]
+fn the_spectrum_of_a_tile_compressed_cube_matches_its_pixels() {
+    let file = fixture("int16-rice-cube.fz");
+    let mut cube = cube::Cube::new(&file, None, false).unwrap();
+    let point = cube.spectrum(0, 3, 2).unwrap().unwrap();
+    assert_eq!(&*point.spectrum.values, &[23.0, 123.0, 223.0, 323.0, 423.0]);
+    assert_eq!(
+        point.spectrum.axis.kind,
+        vw_core::spectrum::AxisKind::Velocity
+    );
+    // 2 点目は覚えた面から読む。
+    let other = cube.spectrum(4, 0, 1).unwrap().unwrap();
+    assert_eq!(&*other.spectrum.values, &[10.0, 110.0, 210.0, 310.0, 410.0]);
+    assert_eq!(other.channel, 4);
+}
+
+#[test]
+fn a_flat_image_has_no_spectrum_at_a_point() {
+    let file = fits(&image_cards(16, &[2, 2]), &i16_bytes(&[1, 2, 3, 4]));
+    assert!(
+        cube::Cube::new(&file, None, false)
+            .unwrap()
+            .spectrum(0, 0, 0)
+            .unwrap()
+            .is_none()
+    );
+}

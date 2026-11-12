@@ -101,3 +101,23 @@ Axis values follow the FITS WCS standard (Paper III): channels spaced in frequen
 - Hover over the graph to see the axis value, the value and the point number of the nearest point. With a rest frequency (RESTFRQ) or rest wavelength (RESTWAV), the line-of-sight velocity is shown too: the radio definition on a frequency axis, the optical definition on a wavelength axis. The velocity frame (SPECSYS, such as LSRK) is added in brackets
 - The line breaks at points without a value (NaN)
 - Turn off **Spectra as graphs** (`fits.spectrum_graph`, on by default) to show them as an image one pixel high
+
+### Contours
+
+Contour lines can be drawn over gray images (FITS, 16-bit PNG and so on; not color images). Toggle them per slot with the contours button in the tool column, the **Image** menu, or **Contours** in the slot's right-click menu (they are not kept across restarts). A key can be assigned under **Settings** → **Keys** (no key by default).
+
+- The levels are set by **Contour levels** (`contours.levels`, default `-3, 3, 6, 12, 24, 48, 96`). When **Contour levels are** (`contours.mode`) is **Multiples of the noise** (the default), each level is the median of the shown plane plus that many times the noise (1.4826 × the median distance from the median). With **Pixel values**, each level is drawn as written
+- Levels below the median (negative multiples of the noise) are drawn dashed, so negative bowls in radio images stand out
+- Lines are traced from the original values, not the display image. On cubes they are traced again for each plane. Images with a long side over 2048 pixels are traced on a thinned grid
+- The color is **Contour color** (`contours.color`, default `#00E5FF`) and the width **Contour line width** (`contours.width`, default 1)
+
+### Spectrum at crosses
+
+Place a cross with the [pixel probe](check.html) (**V**) on a FITS cube (two or more planes) and the **Spectrum at crosses** window opens, drawing the values of that point on every plane as a line (it can also be opened from the **View** menu).
+
+- Each cross gets one line in the cross's own color. Move a cross and its line follows
+- Crosses on a cube belong to the file, not the plane, so they stay in place as you step through planes
+- The horizontal axis is the frequency, velocity or wavelength axis (chosen even when a polarization axis comes first); the vertical unit is BUNIT. A vertical line marks the shown plane
+- Hover to see the axis value of that plane and the value of each cross. Click to move the slot to that plane
+- Tile-compressed (`.fz`) cubes are read too; the first read takes longer while the planes are decompressed
+- To stop the window from opening when a cross is placed, turn off **Open the spectrum after placing a cross on a cube** (`measure.open_spectrum`, on by default) under **Reports and graphs**

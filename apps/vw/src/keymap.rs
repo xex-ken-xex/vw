@@ -85,6 +85,7 @@ pub enum Action {
     ReadQrCodes,
     ToggleCalibration,
     ToggleHotPixels,
+    ToggleContours,
     ClearCalibrationCache,
     NextVariable,
     PreviousVariable,
@@ -122,6 +123,7 @@ pub enum Action {
     ToggleZoomMap,
     ToggleLineProfile,
     ToggleRoiGraph,
+    TogglePointSpectrum,
     ToggleMap,
     ShowSlotOnMap,
     ToggleSkyChart,
@@ -271,6 +273,7 @@ impl Action {
         Action::ReadQrCodes,
         Action::ToggleCalibration,
         Action::ToggleHotPixels,
+        Action::ToggleContours,
         Action::ClearCalibrationCache,
         Action::NextVariable,
         Action::PreviousVariable,
@@ -303,6 +306,7 @@ impl Action {
         Action::ToggleZoomMap,
         Action::ToggleLineProfile,
         Action::ToggleRoiGraph,
+        Action::TogglePointSpectrum,
         Action::ToggleMap,
         Action::ShowSlotOnMap,
         Action::ToggleSkyChart,
@@ -452,6 +456,7 @@ impl Action {
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
             Action::ToggleHotPixels => "toggle_hot_pixels",
+            Action::ToggleContours => "toggle_contours",
             Action::ClearCalibrationCache => "clear_calibration_cache",
             Action::NextVariable => "next_variable",
             Action::PreviousVariable => "previous_variable",
@@ -476,6 +481,7 @@ impl Action {
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleLineProfile => "toggle_line_profile",
             Action::ToggleRoiGraph => "toggle_roi_graph",
+            Action::TogglePointSpectrum => "toggle_point_spectrum",
             Action::ToggleMap => "toggle_map",
             Action::ShowSlotOnMap => "show_slot_on_map",
             Action::ToggleSkyChart => "toggle_sky_chart",
@@ -571,6 +577,7 @@ impl Action {
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
             Action::ToggleHotPixels => "Fill hot pixels",
+            Action::ToggleContours => "Contours",
             Action::ClearCalibrationCache => "Clear built calibration masters",
             Action::NextVariable => "Next variable or HDU",
             Action::PreviousVariable => "Previous variable or HDU",
@@ -624,6 +631,7 @@ impl Action {
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleLineProfile => "Show/hide line profile",
             Action::ToggleRoiGraph => "Show/hide ROI graph",
+            Action::TogglePointSpectrum => "Show/hide spectrum at crosses",
             Action::ToggleMap => "Show/hide map",
             Action::ShowSlotOnMap => "Show the slot's data on the map",
             Action::ToggleSkyChart => "Show/hide sky chart",
@@ -734,6 +742,7 @@ impl Action {
             | Action::ReadQrCodes
             | Action::ToggleCalibration
             | Action::ToggleHotPixels
+            | Action::ToggleContours
             | Action::ClearCalibrationCache
             | Action::NextVariable
             | Action::PreviousVariable
@@ -812,6 +821,7 @@ impl Action {
             | Action::ToggleZoomMap
             | Action::ToggleLineProfile
             | Action::ToggleRoiGraph
+            | Action::TogglePointSpectrum
             | Action::ToggleMap
             | Action::ShowSlotOnMap
             | Action::ToggleSkyChart
@@ -990,6 +1000,7 @@ impl Action {
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],
             Action::ToggleHotPixels => vec![],
+            Action::ToggleContours => vec![],
             Action::ClearCalibrationCache => vec![],
             Action::NextVariable => vec![KeyCombo::plain(N)],
             Action::PreviousVariable => vec![KeyCombo::plain(N).with(false, true, false)],
@@ -1044,6 +1055,7 @@ impl Action {
             Action::ToggleZoomMap => vec![],
             Action::ToggleLineProfile => vec![KeyCombo::ctrl(L)],
             Action::ToggleRoiGraph => vec![KeyCombo::ctrl(L).with(true, true, false)],
+            Action::TogglePointSpectrum => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ShowSlotOnMap => vec![],
             Action::ToggleSkyChart => vec![],
