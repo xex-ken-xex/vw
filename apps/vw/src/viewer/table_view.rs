@@ -110,7 +110,8 @@ enum Grab {
 /// スロットごとの表の見え方。表の場所が変わったら初めに戻す。
 #[derive(Debug, Clone, Default)]
 pub struct TableView {
-    path: Option<PathBuf>,
+    /// 表示中の表のファイルと、そのファイルの中の HDU の名前。
+    place: Option<(PathBuf, Option<String>)>,
     /// 表の代わりにスペクトルのグラフを描く（表がスペクトルとしても読めるときだけ効く）。
     pub graph: bool,
     /// いちばん上に見えている行（小数も可）。
@@ -137,12 +138,16 @@ struct Layout {
 }
 
 impl TableView {
-    /// 表示中の表の場所。違う表に変わったら、送り・幅・選択を初めに戻し、グラフで見るかを
-    /// `graph` にする。
-    pub fn follow(&mut self, path: &Path, graph: bool) {
-        if self.path.as_deref() != Some(path) {
+    /// 表示中の表の場所（ファイルと、その中の HDU の名前）。違う表に変わったら、送り・幅・選択を
+    /// 初めに戻し、グラフで見るかを `graph` にする。同じファイルの別の HDU も違う表。
+    pub fn follow(&mut self, path: &Path, part: Option<&str>, graph: bool) {
+        let same = self
+            .place
+            .as_ref()
+            .is_some_and(|(p, h)| p == path && h.as_deref() == part);
+        if !same {
             *self = Self {
-                path: Some(path.to_path_buf()),
+                place: Some((path.to_path_buf(), part.map(str::to_owned))),
                 graph,
                 ..Self::default()
             };
@@ -540,13 +545,23 @@ mod tests {
     #[test]
     fn another_table_starts_from_the_top_with_nothing_selected() {
         let mut v = TableView::default();
-        v.follow(Path::new("/a.fits"), true);
+        v.follow(Path::new("/a.fits"), None, true);
         v.selection = Selection::only(3);
         v.top = 10.0;
         v.graph = false;
-        v.follow(Path::new("/a.fits"), true);
+        v.follow(Path::new("/a.fits"), None, true);
         assert_eq!((v.top, v.graph), (10.0, false), "same table keeps its view");
-        v.follow(Path::new("/b.fits"), true);
+        v.follow(Path::new("/b.fits"), None, true);
         assert_eq!((v.top, v.graph, v.selection.is_empty()), (0.0, true, true));
+    }
+
+    #[test]
+    fn another_table_of_the_same_file_starts_from_the_top_with_nothing_selected() {
+        let mut v = TableView::default();
+        v.follow(Path::new("/a.fits"), Some("1 CATALOG"), false);
+        v.selection = Selection::only(3);
+        v.top = 10.0;
+        v.follow(Path::new("/a.fits"), Some("2 SOURCES"), false);
+        assert_eq!((v.top, v.selection.is_empty()), (0.0, true));
     }
 }

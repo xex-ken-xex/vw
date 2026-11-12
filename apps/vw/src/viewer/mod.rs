@@ -1908,7 +1908,11 @@ impl Slot {
             .shown()
             .and_then(|s| Some((s.path.clone(), s.info.table.clone()?)));
         if let Some((path, _)) = &table {
-            self.table_view.follow(path, table_graph);
+            let part = self
+                .shown()
+                .and_then(|s| s.info.metadata.get(vw_fits::GROUP, vw_fits::HDU))
+                .map(str::to_owned);
+            self.table_view.follow(path, part.as_deref(), table_graph);
         }
         let has_spectrum = self.shown().is_some_and(|s| s.info.spectrum.is_some());
         let graph = has_spectrum

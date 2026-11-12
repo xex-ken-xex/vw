@@ -544,28 +544,11 @@ fn is_flux_column(name: &str) -> bool {
 /// 横軸の単位を基本の単位（波長は m、周波数は Hz、速度は m/s）にする倍率。
 /// 単位がない波長は Å とみなす（可視の分光の表は Å で書くものがほとんどのため）。
 fn axis_factor(kind: &AxisKind, unit: &str) -> f64 {
-    let u = unit.trim();
+    use crate::spectral::{frequency_factor, velocity_factor, wavelength_factor};
     match kind {
-        AxisKind::Wavelength => match u {
-            "m" => 1.0,
-            "cm" => 1e-2,
-            "mm" => 1e-3,
-            "um" | "micron" | "microns" | "µm" => 1e-6,
-            "nm" => 1e-9,
-            _ => 1e-10,
-        },
-        AxisKind::Frequency => match u {
-            "kHz" => 1e3,
-            "MHz" => 1e6,
-            "GHz" => 1e9,
-            "THz" => 1e12,
-            _ => 1.0,
-        },
-        AxisKind::Velocity => match u.to_ascii_lowercase().as_str() {
-            "km/s" | "km s-1" | "km.s-1" | "km s^-1" => 1e3,
-            "cm/s" => 1e-2,
-            _ => 1.0,
-        },
+        AxisKind::Wavelength => wavelength_factor(unit).unwrap_or(1e-10),
+        AxisKind::Frequency => frequency_factor(unit).unwrap_or(1.0),
+        AxisKind::Velocity => velocity_factor(unit).unwrap_or(1.0),
         AxisKind::Other { .. } => 1.0,
     }
 }

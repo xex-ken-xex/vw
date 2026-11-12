@@ -37,6 +37,17 @@ struct Request {
     frame: usize,
     points: Vec<(u32, u32)>,
     flip_rows: bool,
+    /// 見ている HDU の名前（メタデータの `HDU`）。同じファイルで HDU を切り替えたら読み直すため。
+    hdu: Option<String>,
+}
+
+/// 開いたキューブが、どのファイルのどの読み方か。どれかが変われば開き直す。
+#[derive(Debug, Clone, PartialEq)]
+struct Opened {
+    file: PathBuf,
+    flip_rows: bool,
+    hdu: Option<String>,
+    modified: Option<std::time::SystemTime>,
 }
 
 struct Found {
@@ -55,7 +66,7 @@ impl Worker {
         let (tx, requests) = channel::<Request>();
         let (answers, rx) = channel();
         std::thread::spawn(move || {
-            let mut open: Option<(PathBuf, bool, vw_fits::cube::Cube)> = None;
+            let mut open: Option<(Opened, vw_fits::cube::Cube)> = None;
             while let Ok(mut request) = requests.recv() {
                 // 十字をドラッグしている間に溜まった頼みは、最後の 1 つだけ読む。
                 while let Ok(newer) = requests.try_recv() {
@@ -73,20 +84,26 @@ impl Worker {
 }
 
 fn read(
-    open: &mut Option<(PathBuf, bool, vw_fits::cube::Cube)>,
+    open: &mut Option<(Opened, vw_fits::cube::Cube)>,
     request: &Request,
     choices: &vw_fits::Choices,
 ) -> Found {
-    let fresh = open
-        .as_ref()
-        .is_some_and(|(f, flip, _)| *f == request.file && *flip == request.flip_rows);
+    let wanted = Opened {
+        file: request.file.clone(),
+        flip_rows: request.flip_rows,
+        hdu: request.hdu.clone(),
+        modified: std::fs::metadata(&request.file)
+            .and_then(|m| m.modified())
+            .ok(),
+    };
+    let fresh = open.as_ref().is_some_and(|(o, _)| *o == wanted);
     let mut problem = None;
     if !fresh {
         *open = match std::fs::read(&request.file) {
             Ok(bytes) => {
                 let chosen = choices.get(&bytes);
                 match vw_fits::cube::Cube::new(&bytes, chosen, request.flip_rows) {
-                    Ok(cube) => Some((request.file.clone(), request.flip_rows, cube)),
+                    Ok(cube) => Some((wanted, cube)),
                     Err(e) => {
                         problem = Some(e.to_string());
                         None
@@ -100,7 +117,7 @@ fn read(
         };
     }
     let mut points = Vec::new();
-    if let Some((_, _, cube)) = open {
+    if let Some((_, cube)) = open {
         for &(x, y) in &request.points {
             match cube.spectrum(request.frame, x, y) {
                 Ok(p) => points.push(p),
@@ -236,6 +253,11 @@ impl VwApp {
             frame,
             points,
             flip_rows: self.fits.get().flip_rows,
+            hdu: shown
+                .info
+                .metadata
+                .get(vw_fits::GROUP, vw_fits::HDU)
+                .map(str::to_owned),
         })
     }
 
@@ -257,5 +279,66 @@ impl VwApp {
         };
         let full = self.cell_needs_full();
         self.start_load(index, path, full);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 80 文字のカードを並べた HDU。データは `data`。
+    fn hdu(cards: &[(&str, &str)], data: &[u8]) -> Vec<u8> {
+        let mut text = String::new();
+        for (k, v) in cards {
+            text.push_str(&format!("{:<80}", format!("{k:<8}= {v:>20}")));
+        }
+        text.push_str(&format!("{:<80}", "END"));
+        let mut out = text.into_bytes();
+        out.resize(out.len().next_multiple_of(2880), b' ');
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(2880), 0);
+        out
+    }
+
+    /// 1 × 1 画素 × 3 面のキューブを 2 つ持つファイル。HDU 1 は値 1、HDU 2 は値 2。
+    fn two_cubes() -> Vec<u8> {
+        let mut file = hdu(&[("SIMPLE", "T"), ("BITPIX", "8"), ("NAXIS", "0")], &[]);
+        for value in [1u8, 2] {
+            file.extend(hdu(
+                &[
+                    ("XTENSION", "'IMAGE   '"),
+                    ("BITPIX", "8"),
+                    ("NAXIS", "3"),
+                    ("NAXIS1", "1"),
+                    ("NAXIS2", "1"),
+                    ("NAXIS3", "3"),
+                ],
+                &[value; 3],
+            ));
+        }
+        file
+    }
+
+    #[test]
+    fn switching_to_another_hdu_of_the_same_file_reads_that_hdu() {
+        let bytes = two_cubes();
+        let file = std::env::temp_dir().join(format!("vw-point-{}.fits", std::process::id()));
+        std::fs::write(&file, &bytes).unwrap();
+        let choices = vw_fits::Choices::default();
+        let mut open = None;
+        let mut request = Request {
+            file: file.clone(),
+            frame: 0,
+            points: vec![(0, 0)],
+            flip_rows: false,
+            hdu: Some("1".into()),
+        };
+        let value = |found: &Found| found.points[0].as_ref().unwrap().spectrum.values[0];
+        assert_eq!(value(&read(&mut open, &request, &choices)), 1.0);
+        choices.set(&bytes, 2usize);
+        request.hdu = Some("2".into());
+        let found = read(&mut open, &request, &choices);
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(value(&found), 2.0);
     }
 }

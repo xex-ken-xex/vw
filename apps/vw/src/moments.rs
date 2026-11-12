@@ -89,14 +89,27 @@ pub fn title(path: &Path) -> Option<String> {
 /// 覚えておく図の数。
 const KEPT: usize = 6;
 
-type Made = (PathBuf, Arc<Vec<u8>>);
+/// 作った図。元のキューブの大きさと更新時刻が変わっていたら、同じパスでも作り直す。
+type Made = (PathBuf, Option<Stamp>, Arc<Vec<u8>>);
+
+/// ファイルの大きさと更新時刻。
+type Stamp = (u64, std::time::SystemTime);
+
+fn stamp(file: &Path) -> Option<Stamp> {
+    let m = std::fs::metadata(file).ok()?;
+    Some((m.len(), m.modified().ok()?))
+}
 
 static MADE: Mutex<VecDeque<Made>> = Mutex::new(VecDeque::new());
 
 /// `path` の図の FITS のバイト列。覚えていなければキューブを読んで作る。
 pub fn bytes(path: &Path) -> Result<Arc<Vec<u8>>, String> {
     let spec = split(path).ok_or_else(|| format!("{}: not a moment map", path.display()))?;
-    if let Some((_, b)) = made().iter().find(|(p, _)| p == path) {
+    let source = stamp(&spec.file);
+    if let Some((_, _, b)) = made()
+        .iter()
+        .find(|(p, s, _)| p == path && *s == source && source.is_some())
+    {
         return Ok(b.clone());
     }
     let data = std::fs::read(&spec.file).map_err(|e| format!("{}: {e}", spec.file.display()))?;
@@ -105,10 +118,11 @@ pub fn bytes(path: &Path) -> Result<Arc<Vec<u8>>, String> {
             .map_err(|e| format!("{}: {e}", spec.file.display()))?,
     );
     let mut list = made();
+    list.retain(|(p, _, _)| p != path);
     if list.len() >= KEPT {
         list.pop_front();
     }
-    list.push_back((path.to_path_buf(), bytes.clone()));
+    list.push_back((path.to_path_buf(), source, bytes.clone()));
     Ok(bytes)
 }
 
@@ -187,6 +201,61 @@ mod tests {
         let p = path(&spec(None, None));
         assert_eq!(p.parent(), Some(Path::new("/data/radio")));
         assert_eq!(title(&p).as_deref(), Some("disk cube · moment 2"));
+    }
+
+    /// 1 × 1 画素 × 2 面のキューブ（値は `values`）。
+    fn cube(values: [f32; 2]) -> Vec<u8> {
+        let cards = [
+            ("SIMPLE", "T"),
+            ("BITPIX", "-32"),
+            ("NAXIS", "3"),
+            ("NAXIS1", "1"),
+            ("NAXIS2", "1"),
+            ("NAXIS3", "2"),
+            ("CTYPE3", "'VRAD'"),
+            ("CRVAL3", "0.0"),
+            ("CDELT3", "1000.0"),
+            ("CRPIX3", "1.0"),
+        ];
+        let mut text = String::new();
+        for (k, v) in cards {
+            text.push_str(&format!("{:<80}", format!("{k:<8}= {v:>20}")));
+        }
+        text.push_str(&format!("{:<80}", "END"));
+        let mut out = text.into_bytes();
+        out.resize(out.len().next_multiple_of(2880), b' ');
+        out.extend(values.iter().flat_map(|v| v.to_be_bytes()));
+        out.resize(out.len().next_multiple_of(2880), 0);
+        out
+    }
+
+    #[test]
+    fn a_rewritten_cube_gives_a_new_map() {
+        let file = std::env::temp_dir().join(format!("vw-moment-{}.fits", std::process::id()));
+        std::fs::write(&file, cube([1.0, 1.0])).unwrap();
+        let spec = Spec {
+            file: file.clone(),
+            options: Options {
+                order: Order::Zero,
+                channels: None,
+                clip: 0.0,
+                frame: 0,
+                hdu: None,
+            },
+        };
+        let first = bytes(&path(&spec)).unwrap();
+        std::fs::write(&file, cube([5.0, 5.0])).unwrap();
+        // 書き換えが同じ時刻に見える粗い時計でも、違う時刻にする。
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let second = bytes(&path(&spec)).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        assert_ne!(first, second);
     }
 
     #[test]

@@ -82,42 +82,61 @@ impl Kind {
     /// `CUNIT` の単位の値を基本の単位（SI）にする倍率。書いていない・読めない単位は、
     /// 規格の既定の SI として 1 倍。
     fn si_factor(self, unit: &str) -> f64 {
-        let unit = unit.trim();
         match self {
-            Kind::Freq => match unit {
-                "kHz" => 1e3,
-                "MHz" => 1e6,
-                "GHz" => 1e9,
-                "THz" => 1e12,
-                _ => 1.0,
+            Kind::Freq => frequency_factor(unit),
+            Kind::Ener => match unit.trim() {
+                "eV" => Some(ELECTRON_VOLT_J),
+                "keV" => Some(ELECTRON_VOLT_J * 1e3),
+                "MeV" => Some(ELECTRON_VOLT_J * 1e6),
+                "erg" => Some(1e-7),
+                _ => None,
             },
-            Kind::Ener => match unit {
-                "eV" => ELECTRON_VOLT_J,
-                "keV" => ELECTRON_VOLT_J * 1e3,
-                "MeV" => ELECTRON_VOLT_J * 1e6,
-                "erg" => 1e-7,
-                _ => 1.0,
+            Kind::Wavn => match unit.trim() {
+                "1/cm" | "/cm" | "cm-1" | "cm^-1" => Some(100.0),
+                _ => None,
             },
-            Kind::Wavn => match unit {
-                "1/cm" | "/cm" | "cm-1" | "cm^-1" => 100.0,
-                _ => 1.0,
-            },
-            Kind::Vrad | Kind::Vopt | Kind::Velo => match unit.to_lowercase().as_str() {
-                "km/s" | "km s-1" | "km.s-1" | "km s^-1" => 1e3,
-                "cm/s" => 1e-2,
-                _ => 1.0,
-            },
-            Kind::Wave | Kind::Awav => match unit {
-                "cm" => 1e-2,
-                "mm" => 1e-3,
-                "um" => 1e-6,
-                "nm" => 1e-9,
-                "Angstrom" | "angstrom" | "A" => 1e-10,
-                _ => 1.0,
-            },
-            Kind::Zopt | Kind::Beta => 1.0,
+            Kind::Vrad | Kind::Vopt | Kind::Velo => velocity_factor(unit),
+            Kind::Wave | Kind::Awav => wavelength_factor(unit),
+            Kind::Zopt | Kind::Beta => None,
         }
+        .unwrap_or(1.0)
     }
+}
+
+/// 波長の単位を m にする倍率。読めない単位は `None`。画像の軸と表の列で同じ書き方の揺れを読む。
+pub(crate) fn wavelength_factor(unit: &str) -> Option<f64> {
+    Some(match unit.trim() {
+        "m" => 1.0,
+        "cm" => 1e-2,
+        "mm" => 1e-3,
+        "um" | "micron" | "microns" | "µm" | "μm" => 1e-6,
+        "nm" => 1e-9,
+        "Angstrom" | "angstrom" | "Angstroms" | "angstroms" | "A" | "Å" | "0.1nm" => 1e-10,
+        _ => return None,
+    })
+}
+
+/// 周波数の単位を Hz にする倍率。読めない単位は `None`。
+pub(crate) fn frequency_factor(unit: &str) -> Option<f64> {
+    Some(match unit.trim() {
+        "Hz" => 1.0,
+        "kHz" => 1e3,
+        "MHz" => 1e6,
+        "GHz" => 1e9,
+        "THz" => 1e12,
+        _ => return None,
+    })
+}
+
+/// 速度の単位を m/s にする倍率。読めない単位は `None`。
+pub(crate) fn velocity_factor(unit: &str) -> Option<f64> {
+    let u = unit.trim().to_ascii_lowercase();
+    Some(match u.as_str() {
+        "m/s" | "m s-1" | "m.s-1" | "m s^-1" | "m.s**-1" => 1.0,
+        "km/s" | "km s-1" | "km.s-1" | "km s^-1" | "km.s**-1" => 1e3,
+        "cm/s" | "cm s-1" | "cm.s-1" => 1e-2,
+        _ => return None,
+    })
 }
 
 /// 静止周波数と静止波長。どちらか一方だけ書いてあれば、もう一方はそれから出す。
