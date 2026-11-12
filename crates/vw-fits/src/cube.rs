@@ -24,12 +24,12 @@ pub struct Cube {
 }
 
 /// スペクトルを出す軸（3 本目以降のどれか）。
-struct Channels {
+pub(crate) struct Channels {
     /// 3 本目の軸を 0 とした番号。
-    index: usize,
-    count: usize,
+    pub(crate) index: usize,
+    pub(crate) count: usize,
     /// 面の番号で、この軸の 1 つ分の幅。
-    stride: usize,
+    pub(crate) stride: usize,
 }
 
 impl Cube {
@@ -140,7 +140,7 @@ impl Point {
 }
 
 /// スペクトルを出す軸。スペクトルの軸として読めるものがあればそれ、なければ長さ 2 以上の最初の軸。
-fn channels(hdu: &Hdu, extra_axes: &[usize]) -> Option<Channels> {
+pub(crate) fn channels(hdu: &Hdu, extra_axes: &[usize]) -> Option<Channels> {
     let mut stride = 1;
     let mut found: Vec<(bool, Channels)> = Vec::new();
     for (index, &n) in extra_axes.iter().enumerate() {
@@ -162,7 +162,7 @@ fn channels(hdu: &Hdu, extra_axes: &[usize]) -> Option<Channels> {
 }
 
 /// スペクトルの軸として読めない軸は、`CRVAL + (i − CRPIX) × CDELT` で、名前と単位をそのまま見出しにする。
-fn linear_axis(hdu: &Hdu, axis: usize, n: usize) -> Axis {
+pub(crate) fn linear_axis(hdu: &Hdu, axis: usize, n: usize) -> Axis {
     let key = |k: &str| format!("{k}{axis}");
     let name = hdu
         .get(&key("CTYPE"))

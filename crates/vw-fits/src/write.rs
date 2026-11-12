@@ -16,6 +16,19 @@ pub fn encode(
     cards: &[(String, String)],
     history: &[String],
 ) -> Result<Vec<u8>, String> {
+    encode_rows(img, cards, history, Some("TOP-DOWN"))
+}
+
+/// [`encode`] の、`ROWORDER` を `row_order` にする（`None` は書かない）版。`img` の行は
+/// ファイルに並べる順のまま書く。元のファイルの行の並びをそのまま引き継ぐ画像（キューブから
+/// 作った図）に使う。`ROWORDER` のないファイルから作った図に `TOP-DOWN` と書くと、設定で
+/// 上下を返して見ている人には、元の画像と上下が逆に出るため。
+pub(crate) fn encode_rows(
+    img: &VwImage,
+    cards: &[(String, String)],
+    history: &[String],
+    row_order: Option<&str>,
+) -> Result<Vec<u8>, String> {
     let (w, h) = (img.width as usize, img.height as usize);
     let (color, alpha) = match img.color {
         ColorModel::Gray => (1, false),
@@ -42,7 +55,9 @@ pub fn encode(
     if color == 3 {
         header.push(card_number("NAXIS3", "3"));
     }
-    header.push(card_string("ROWORDER", "TOP-DOWN"));
+    if let Some(order) = row_order {
+        header.push(card_string("ROWORDER", order));
+    }
     for (key, value) in cards {
         let reserved = [
             "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "ROWORDER", "END",

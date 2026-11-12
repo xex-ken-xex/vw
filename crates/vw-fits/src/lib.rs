@@ -16,6 +16,7 @@ pub mod calibration;
 pub mod cube;
 mod hcompress;
 mod header;
+pub mod moments;
 mod plio;
 pub mod radio;
 mod sky;

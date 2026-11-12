@@ -59,6 +59,21 @@ fn axis_title(kind: &AxisKind, lang: Language) -> String {
     }
 }
 
+/// 点 `index` の横軸の値を短く書いたもの（「#12  1.4204 GHz  10.55 km/s」）。
+pub fn point_text(axis: &vw_core::spectrum::Axis, index: usize) -> String {
+    let Some(&at) = axis.values.get(index) else {
+        return format!("#{}", index + 1);
+    };
+    let unit = unit_for(&axis.kind, at.abs());
+    let mut text = format!("#{}  {} {}", index + 1, short(at / unit.divide), unit.name);
+    if axis.kind != AxisKind::Velocity
+        && let Some(v) = axis.velocity(at)
+    {
+        text.push_str(&format!("  {} km/s", short(v / 1e3)));
+    }
+    text.trim_end().to_owned()
+}
+
 /// `lo`〜`hi` に多くても `most` 本入る、1・2・5 × 10 の累乗の刻みの目盛り。
 pub fn ticks(lo: f64, hi: f64, most: usize) -> Vec<f64> {
     let span = hi - lo;
@@ -124,11 +139,20 @@ pub fn paint(
             spectrum: s,
             color: LINE,
         }],
-        None,
+        Marks::default(),
         lang,
         visuals,
         hover,
     );
+}
+
+/// グラフに重ねる印。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Marks {
+    /// 縦線を引く点（表示中の面）。
+    pub plane: Option<usize>,
+    /// 塗る点の範囲（両端を含む、どちらが先でもよい）。モーメント図に使うチャンネル。
+    pub band: Option<(usize, usize)>,
 }
 
 /// 重ねて描く 1 本の線。
@@ -138,13 +162,13 @@ pub struct Series<'a> {
 }
 
 /// `body` に `series` を重ねて描く。横軸は 1 本目のもの（同じキューブの点なら全部同じ）。
-/// `marker` の点（表示中の面）に縦線を引く。`hover` がグラフの上なら、いちばん近い点の値を出し、
+/// `marks` の点（表示中の面）に縦線を引き、範囲を塗る。`hover` がグラフの上なら、いちばん近い点の値を出し、
 /// その点の番号を返す（クリックでその面に飛ぶため）。
 pub fn paint_series(
     painter: &Painter,
     body: Rect,
     series: &[Series],
-    marker: Option<usize>,
+    marks: Marks,
     lang: Language,
     visuals: &egui::Visuals,
     hover: Option<Pos2>,
@@ -295,7 +319,20 @@ pub fn paint_series(
         }
         flush(&mut run);
     }
-    if let Some(m) = marker.filter(|&m| m < n) {
+    if let Some((a, b)) = marks.band {
+        let (a, b) = (a.min(b).min(n - 1), a.max(b).min(n - 1));
+        let (xa, xb) = (to_x(s.axis.value(a)), to_x(s.axis.value(b)));
+        if xa.is_finite() && xb.is_finite() {
+            // 端の点が見えるよう、隣の点との間の半分ずつ広げる。
+            let half = plot.width() / (2.0 * (n - 1) as f32);
+            let band = Rect::from_x_y_ranges(
+                (xa.min(xb) - half).max(plot.left())..=(xa.max(xb) + half).min(plot.right()),
+                plot.y_range(),
+            );
+            painter.rect_filled(band, 0.0, text.gamma_multiply(0.12));
+        }
+    }
+    if let Some(m) = marks.plane.filter(|&m| m < n) {
         let x = to_x(s.axis.value(m));
         if x.is_finite() {
             painter.line_segment(

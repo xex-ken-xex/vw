@@ -23,6 +23,11 @@ pub(super) struct PointSpectrumPane {
     asked: Option<Request>,
     /// 最後に届いたもの。
     found: Option<Found>,
+    /// グラフをドラッグして選んだチャンネルの範囲（キューブのファイル、両端）。モーメント図を
+    /// 作る窓の初めの範囲にする。
+    pub range: Option<(PathBuf, usize, usize)>,
+    /// ドラッグを始めたチャンネル。
+    drag_from: Option<usize>,
 }
 
 /// 裏で読む頼み。
@@ -165,21 +170,44 @@ impl VwApp {
             return;
         };
         // 届いた答えが前の面のものでも、縦線は表示中の面に引く。
-        let marker = (request.frame >= first.frame_of(0)).then(|| {
+        let plane = (request.frame >= first.frame_of(0)).then(|| {
             (request.frame - first.frame_of(0))
                 / first.frame_of(1).saturating_sub(first.frame_of(0)).max(1)
         });
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-        let hover = response.hover_pos();
+        let band = pane
+            .range
+            .as_ref()
+            .filter(|(f, _, _)| *f == request.file)
+            .map(|&(_, a, b)| (a, b));
+        // マウスを乗せたときの説明にすると、値の読み取りの上に重なって軸が読めなくなるので、上に出す。
+        ui.weak(tr(
+            lang,
+            "Click to show that plane. Drag to choose the channels for moment maps; double-click to clear them.",
+        ));
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let hover = response.interact_pointer_pos().or(response.hover_pos());
         let painter = ui.painter_at(rect);
+        let marks = spectrum_view::Marks { plane, band };
         let hovered =
-            spectrum_view::paint_series(&painter, rect, &series, marker, lang, ui.visuals(), hover);
-        if response.clicked()
-            && let Some(channel) = hovered
+            spectrum_view::paint_series(&painter, rect, &series, marks, lang, ui.visuals(), hover);
+        let jump = hovered.map(|c| first.frame_of(c));
+        if response.drag_started() {
+            pane.drag_from = hovered;
+        }
+        if response.dragged()
+            && let (Some(from), Some(to)) = (pane.drag_from, hovered)
         {
-            let frame = first.frame_of(channel);
-            let file = request.file.clone();
-            self.jump_to_frame(self.active, &file, frame);
+            pane.range = Some((request.file.clone(), from.min(to), from.max(to)));
+        }
+        if response.drag_stopped() {
+            pane.drag_from = None;
+        }
+        if response.double_clicked() {
+            pane.range = None;
+        } else if response.clicked()
+            && let Some(frame) = jump
+        {
+            self.jump_to_frame(self.active, &request.file, frame);
         }
     }
 

@@ -374,6 +374,9 @@ fn load_look(
     if let Some(files) = compose::split(path) {
         return load_composite(registry, &files, (thumb, full), fit_side, look);
     }
+    if crate::moments::split(path).is_some() {
+        return load_moment(registry, path, (thumb, full), fit_side, look);
+    }
     if crate::stitch::is_stitched(path) {
         let plan = crate::stitch::split(path).ok_or_else(|| {
             "the stitched image is gone since vw restarted: stitch the images again".to_owned()
@@ -443,6 +446,29 @@ fn load_look(
     Ok(loaded)
 }
 
+/// キューブから作ったモーメント図（[`crate::moments`]）。作った FITS を、ほかの FITS と同じに読む。
+fn load_moment(
+    registry: &Registry,
+    path: &Path,
+    (thumb, full): (bool, bool),
+    fit_side: Option<u32>,
+    look: Option<&Look>,
+) -> Result<Loaded, String> {
+    let t0 = Instant::now();
+    let (image, plugin, size) = crate::moments::decode(registry, path)?;
+    Ok(finish(
+        image,
+        &plugin,
+        1,
+        size,
+        (Duration::ZERO, t0.elapsed()),
+        thumb,
+        full,
+        fit_side,
+        look,
+    ))
+}
+
 /// 灰色の画像 `files`（赤・緑・青）を読んで重ねる。
 fn load_composite(
     registry: &Registry,
@@ -459,6 +485,12 @@ fn load_composite(
         let Some(file) = file else {
             continue;
         };
+        if crate::moments::split(file).is_some() {
+            let (image, _, bytes) = crate::moments::decode(registry, file)?;
+            size += bytes;
+            images[c] = Some((file.clone(), image));
+            continue;
+        }
         let start = Instant::now();
         let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
         read += start.elapsed();

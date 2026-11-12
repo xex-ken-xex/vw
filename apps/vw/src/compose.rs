@@ -73,6 +73,9 @@ pub fn title(path: &Path) -> Option<String> {
     if let Some(t) = crate::stitch::title(path) {
         return Some(t);
     }
+    if let Some(t) = crate::moments::title(path) {
+        return Some(t);
+    }
     let files = split(path)?;
     let parts: Vec<String> = files
         .iter()

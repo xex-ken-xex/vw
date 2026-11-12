@@ -685,6 +685,53 @@ impl ContourSettings {
     }
 }
 
+/// モーメント図（[`crate::moments`]）。作る窓の初めの値。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MomentSettings {
+    /// 初めに選んでおく次数（0・1・2）。
+    pub orders: Vec<u8>,
+    /// しきい値（雑音の何倍か）。0 は全部の値を足す。
+    pub clip: f64,
+}
+
+impl Default for MomentSettings {
+    fn default() -> Self {
+        Self {
+            orders: vec![0, 1, 2],
+            clip: 3.0,
+        }
+    }
+}
+
+impl MomentSettings {
+    pub const CLIP_RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("moments");
+        Self {
+            orders: r
+                .get_valid(
+                    "orders",
+                    |v: &Vec<u8>| Self::valid_orders(v),
+                    "must be some of 0, 1 and 2",
+                )
+                .unwrap_or(d.orders),
+            clip: r
+                .get_valid(
+                    "clip",
+                    |c: &f64| Self::CLIP_RANGE.contains(c),
+                    "must be 0 to 100",
+                )
+                .unwrap_or(d.clip),
+        }
+    }
+
+    pub fn valid_orders(orders: &[u8]) -> bool {
+        !orders.is_empty() && orders.iter().all(|o| *o <= 2)
+    }
+}
+
 /// 名前とキーの組の並びを読む。誤った組だけを外し、残りは使えるようにする。
 fn read_groups(r: &mut crate::toml_reader::Section<'_, '_>, key: &str) -> Option<Vec<SearchGroup>> {
     let groups = r.get::<Vec<SearchGroup>>(key)?;
@@ -3083,6 +3130,7 @@ pub struct Settings {
     pub roi: RoiSettings,
     pub measure: MeasureSettings,
     pub contours: ContourSettings,
+    pub moments: MomentSettings,
     pub report: ReportSettings,
     pub labels: Labels,
     pub dicom: Dicom,
@@ -3210,6 +3258,7 @@ impl Settings {
         let roi = RoiSettings::read(&mut r);
         let measure = MeasureSettings::read(&mut r);
         let contours = ContourSettings::read(&mut r);
+        let moments = MomentSettings::read(&mut r);
         let report = ReportSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
@@ -3255,6 +3304,7 @@ impl Settings {
                 roi,
                 measure,
                 contours,
+                moments,
                 report,
                 labels,
                 dicom,

@@ -331,6 +331,11 @@ pub fn image_headers_of_file(path: &Path) -> Result<Vec<ImageHeader>, String> {
         .collect())
 }
 
+/// ファイルの全部の HDU のヘッダ。データ部は読み飛ばす。
+pub(crate) fn headers_of_file_all(path: &Path) -> Result<Vec<Hdu>, String> {
+    headers_of_file(path, Until::End)
+}
+
 /// ヘッダをどこまで読むか。
 #[derive(Clone, Copy, PartialEq)]
 enum Until {

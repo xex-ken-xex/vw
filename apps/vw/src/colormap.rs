@@ -10,6 +10,9 @@ use vw_core::{ColorModel, Curve, DisplayParams, Metadata, Palette, VwImage, disp
 use crate::quantity::Quantity;
 use crate::settings::PipelineSettings;
 
+/// FITS の画像に勧める色の表を書くメタデータの鍵（キューブから作った速度の図など）。値は表の名前。
+pub const SUGGESTED_PALETTE: &str = "Suggested color map";
+
 /// 設定の分け方での画像の種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -224,11 +227,12 @@ pub fn prepare(image: &mut VwImage, plugin: &str, look: &Look) -> Option<Applied
     let name = match &look.choice.pick {
         // 偏差の変数は、色の表の段を入れる設定のときだけ、0 を真ん中にした表を勧めのとおり使う。
         Pick::Auto => look.rules.default_for(kind).map(|d| {
-            image
-                .metadata
-                .get(vw_netcdf::GROUP, vw_netcdf::COLOR_MAP)
-                .filter(|_| kind == Kind::Netcdf)
-                .unwrap_or(d)
+            let suggested = match kind {
+                Kind::Netcdf => image.metadata.get(vw_netcdf::GROUP, vw_netcdf::COLOR_MAP),
+                Kind::Fits => image.metadata.get(vw_fits::GROUP, SUGGESTED_PALETTE),
+                _ => None,
+            };
+            suggested.unwrap_or(d)
         }),
         Pick::Off => None,
         Pick::Palette(name) => Some(name.as_str()),
@@ -351,6 +355,20 @@ mod tests {
         assert_eq!(Kind::of("DICOM", &dicom("PT")), Kind::DicomPt);
         assert_eq!(Kind::of("DICOM", &dicom("CT")), Kind::Dicom);
         assert_eq!(Kind::of("PNG", &Metadata::default()), Kind::Gray);
+    }
+
+    #[test]
+    fn a_fits_image_that_suggests_a_color_map_gets_it_while_fits_maps_are_on() {
+        let mut img = gray(vec![-1.0, 0.0, 1.0]);
+        img.metadata
+            .push(vw_fits::GROUP, SUGGESTED_PALETTE, "coolwarm");
+        let on = PipelineSettings::default();
+        let applied = prepare(&mut img.clone(), "FITS", &look(&on, Choice::default())).unwrap();
+        assert_eq!(applied.palette_name(), Some("coolwarm"));
+        let mut off = PipelineSettings::default();
+        off.fits.color_node = false;
+        let applied = prepare(&mut img, "FITS", &look(&off, Choice::default())).unwrap();
+        assert_eq!(applied.palette_name(), None);
     }
 
     #[test]

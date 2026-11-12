@@ -154,6 +154,10 @@ pub enum Action {
     /// 画像をクリップボードへコピーする。
     CopyImage,
     ComposeColors,
+    /// FITS のキューブからモーメント図を作る。
+    MakeMoments,
+    /// メモリの上の図（モーメント図）を FITS で保存する。
+    SaveAsFits,
     AlignAndCompare,
     SetQualityReference,
     AiTagImage,
@@ -282,6 +286,8 @@ impl Action {
         Action::ToggleSupplementalPalette,
         Action::CopyImage,
         Action::ComposeColors,
+        Action::MakeMoments,
+        Action::SaveAsFits,
         Action::AlignAndCompare,
         Action::SetQualityReference,
         Action::LayoutAuto,
@@ -523,6 +529,8 @@ impl Action {
             Action::CopyMeasurement => "copy_measurement",
             Action::CopyImage => "copy_image",
             Action::ComposeColors => "compose_colors",
+            Action::MakeMoments => "make_moments",
+            Action::SaveAsFits => "save_as_fits",
             Action::AlignAndCompare => "align_and_compare",
             Action::SetQualityReference => "set_quality_reference",
             Action::AiTagImage => "ai_tag_image",
@@ -680,6 +688,8 @@ impl Action {
             Action::CopyMeasurement => "Copy selected probe point value or ROI statistics",
             Action::CopyImage => "Copy image",
             Action::ComposeColors => "Compose colors...",
+            Action::MakeMoments => "Make moment maps...",
+            Action::SaveAsFits => "Save as FITS...",
             Action::AlignAndCompare => "Align and compare...",
             Action::SetQualityReference => "Use as evaluation reference",
             Action::AiTagImage => "Add AI tags to this image",
@@ -751,6 +761,8 @@ impl Action {
             | Action::ToggleSupplementalPalette
             | Action::CopyImage
             | Action::ComposeColors
+            | Action::MakeMoments
+            | Action::SaveAsFits
             | Action::AlignAndCompare
             | Action::SetQualityReference => KeyGroup::Image,
             Action::CopyFolderPath
@@ -1097,6 +1109,8 @@ impl Action {
             Action::CopyMeasurement
             | Action::CopyImage
             | Action::ComposeColors
+            | Action::MakeMoments
+            | Action::SaveAsFits
             | Action::AlignAndCompare
             | Action::SetQualityReference
             | Action::AiTagImage
