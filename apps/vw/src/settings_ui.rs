@@ -1170,14 +1170,14 @@ const ITEMS: &[Item] = &[
         section: Section::Fits,
         key: "fits.calibration.hot_pixels",
         title: "Fill hot pixels",
-        description: "Pixels of the master dark brighter than its median by the sigma below are filled with the median of their neighbours (of the same color on a color camera). Needs a dark.",
+        description: "Pixels of the master dark brighter than their neighbours by the sigma below are filled in the light with the median of their neighbours (of the same color on a color camera). Needs a dark.",
         widget: calib_hot_widget,
     },
     Item {
         section: Section::Fits,
         key: "fits.calibration.hot_pixel_sigma",
         title: "Hot pixel threshold",
-        description: "How far above the median of the master dark a pixel must be to count as hot, in sigma.",
+        description: "How far above its neighbours in the master dark a pixel must be to count as hot, in sigma.",
         widget: calib_hot_sigma_widget,
     },
     Item {

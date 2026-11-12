@@ -1143,13 +1143,13 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Fill hot pixels", "ホットピクセルを埋める"),
     (
-        "Pixels of the master dark brighter than its median by the sigma below are filled with the median of their neighbours (of the same color on a color camera). Needs a dark.",
-        "マスターダークで、中央値より下の σ の倍数だけ明るい画素を、周りの画素（カラーカメラでは同じ色の画素）の中央値で埋めます。ダークが要ります。",
+        "Pixels of the master dark brighter than their neighbours by the sigma below are filled in the light with the median of their neighbours (of the same color on a color camera). Needs a dark.",
+        "マスターダークで周りの画素より下の σ の倍数だけ明るい画素を、ライトでは周りの画素（カラーカメラでは同じ色の画素）の中央値で埋めます。ダークが要ります。",
     ),
     ("Hot pixel threshold", "ホットピクセルのしきい値"),
     (
-        "How far above the median of the master dark a pixel must be to count as hot, in sigma.",
-        "マスターダークの中央値よりどれだけ明るければホットピクセルとみなすか（σ の倍数）。",
+        "How far above its neighbours in the master dark a pixel must be to count as hot, in sigma.",
+        "マスターダークで周りの画素よりどれだけ明るければホットピクセルとみなすか（σ の倍数）。",
     ),
     (
         "Clear built calibration masters",
