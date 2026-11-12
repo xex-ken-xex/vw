@@ -119,6 +119,46 @@ pub struct LoadResult {
     pub request: u64,
     pub path: PathBuf,
     pub result: Result<Loaded, String>,
+    /// 画像は読めなかったが、タグ（メタデータ）は読めたときのそれ。
+    pub tags: Option<FailedTags>,
+}
+
+/// 画像は読めなかったファイルの、メタデータ欄に出すもの。
+#[derive(Debug, Clone)]
+pub struct FailedTags {
+    pub plugin: String,
+    pub file_size: u64,
+    pub metadata: Metadata,
+}
+
+/// 画像を読めなかった `path` の、メタデータだけを読む。DICOMDIR や構造化レポートのように画素の
+/// ない DICOM や、メタ情報が規格に外れて画像を開けない DICOM でも、タグは見たいため（ken 2026-11-12）。
+/// 合成や貼り合わせのように 1 つのファイルでないもの、メタデータも読めないものは `None`。
+pub fn read_tags_of_failed(registry: &Registry, path: &Path) -> Option<FailedTags> {
+    if compose::split(path).is_some() || crate::stitch::is_stitched(path) {
+        return None;
+    }
+    let file = frames::file_of(path);
+    let file_size = std::fs::metadata(&file).ok()?.len();
+    if let Some(metadata) = crate::series::read_header(registry, &file) {
+        return Some(FailedTags {
+            plugin: "DICOM".into(),
+            file_size,
+            metadata,
+        });
+    }
+    let bytes = std::fs::read(&file).ok()?;
+    let plugin = registry.find(&file, &bytes)?;
+    // DICOM は上で読めなかったのだから、もう一度読んでも同じ。
+    if plugin.name() == "DICOM" {
+        return None;
+    }
+    let metadata = plugin.read_metadata(&bytes).ok()?;
+    Some(FailedTags {
+        plugin: plugin.name().to_owned(),
+        file_size,
+        metadata,
+    })
 }
 
 /// 読み込み要求。
@@ -316,12 +356,22 @@ fn worker(
             }
         }))
         .unwrap_or_else(|panic| Err(format!("internal error: {}", panic_text(&panic))));
+        let tags = (result.is_err() && !job.develop)
+            .then(|| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    read_tags_of_failed(registry, &job.path)
+                }))
+                .ok()
+                .flatten()
+            })
+            .flatten();
         running.fetch_sub(1, Ordering::Relaxed);
         let sent = tx.send(LoadResult {
             slot: job.slot,
             request: job.request,
             path: job.path,
             result,
+            tags,
         });
         if sent.is_err() {
             return; // アプリが終わった。
@@ -642,6 +692,50 @@ mod tests {
             panic.is_none_or(|p| p.as_str() == Some("unwind")),
             "{panic:?}"
         );
+    }
+
+    #[test]
+    fn a_dicom_with_a_broken_meta_fails_to_load_but_its_tags_are_read() {
+        use vw_dicom::synth::{Synth, add_meta_element};
+        let dir = TempDir::new();
+        let path = dir.path().join("long-ae.dcm");
+        let good = Synth::ct(2, 2).patient("Yamada^Taro").bytes();
+        std::fs::write(
+            &path,
+            add_meta_element(&good, 0x0016, b"AE", b"WORKSTATION-123456"),
+        )
+        .unwrap();
+        let registry = crate::test_util::all_registry();
+        let Err(error) = load(&registry, &path, true, false) else {
+            panic!("the image must not load");
+        };
+        assert!(error.contains("(0002,0016)"), "{error}");
+        let tags = read_tags_of_failed(&registry, &path).unwrap();
+        assert_eq!(tags.plugin, "DICOM");
+        assert_eq!(tags.metadata.get("Patient", "Name"), Some("Yamada^Taro"));
+    }
+
+    #[test]
+    fn a_dicom_without_pixel_data_fails_to_load_but_its_tags_are_read() {
+        use vw_dicom::synth::{SC_IMAGE, Synth};
+        let dir = TempDir::new();
+        let path = dir.path().join("DICOMDIR");
+        Synth::new(SC_IMAGE, 1, 1)
+            .patient("Yamada^Taro")
+            .write(&path)
+            .unwrap();
+        let registry = crate::test_util::all_registry();
+        assert!(load(&registry, &path, true, false).is_err());
+        let tags = read_tags_of_failed(&registry, &path).unwrap();
+        assert_eq!(tags.metadata.get("Patient", "Name"), Some("Yamada^Taro"));
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_image_at_all_has_no_tags() {
+        let dir = TempDir::new();
+        let path = dir.touch("broken.png");
+        std::fs::write(&path, b"not a png").unwrap();
+        assert!(read_tags_of_failed(&png_registry(), &path).is_none());
     }
 
     #[test]

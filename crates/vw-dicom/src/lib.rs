@@ -29,6 +29,7 @@ pub mod charset;
 mod check;
 pub mod color;
 pub mod frame_reader;
+mod lenient;
 pub mod net;
 pub mod pipeline;
 pub mod structure;
@@ -129,13 +130,23 @@ impl DecoderPlugin for DicomPlugin {
     }
 
     /// 画素データの手前で読むのをやめるので、大きなファイルでも速い。
+    ///
+    /// メタ情報が規格に外れて開けないファイルも、タグは [`lenient`] で読む。画像は読めないままにする。
     fn read_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
-        Ok(metadata(&open(data, true)?))
+        Ok(match open_for_tags(data)? {
+            ForTags::Strict(obj) => metadata(&obj),
+            ForTags::Lenient(l) => {
+                let mut m = metadata_with(&l.obj, &l.meta_rows());
+                l.push_problems(&mut m);
+                m
+            }
+        })
     }
 
     /// 画素データなどの大きなバイナリを除いた全タグ。グループは `DICOM`、キーは `0010,0020` の形。
     fn read_all_metadata(&self, data: &[u8]) -> Result<Metadata, DecodeError> {
-        let obj = open(data, true)?;
+        let opened = open_for_tags(data)?;
+        let obj = opened.obj();
         let mut m = Metadata::default();
         let meta = obj.meta();
         for (tag, value) in [
@@ -147,9 +158,12 @@ impl DecoderPlugin for DicomPlugin {
         ] {
             push_tag(&mut m, tag, value);
         }
-        let charset = charset_of(&obj, Charset::default());
-        all_tags(&obj, &charset, &mut m);
-        check::push_problems(&obj, &charset, 0, &mut m);
+        let charset = charset_of(obj, Charset::default());
+        all_tags(obj, &charset, &mut m);
+        check::push_problems(obj, &charset, 0, &mut m);
+        if let ForTags::Lenient(l) = &opened {
+            l.push_problems(&mut m);
+        }
         Ok(m)
     }
 }
@@ -213,6 +227,32 @@ fn open(data: &[u8], header_only: bool) -> Result<DefaultDicomObject, DecodeErro
     options
         .from_reader(Cursor::new(data))
         .map_err(|e| DecodeError::Invalid(error_chain(&e)))
+}
+
+/// タグを読むために開いたファイル。
+enum ForTags {
+    Strict(DefaultDicomObject),
+    Lenient(lenient::Opened),
+}
+
+impl ForTags {
+    fn obj(&self) -> &DefaultDicomObject {
+        match self {
+            ForTags::Strict(obj) => obj,
+            ForTags::Lenient(l) => &l.obj,
+        }
+    }
+}
+
+/// 画素データの手前まで開く。dicom-rs が開けなければ [`lenient`] で開き直す。どちらでも
+/// 開けなければ、dicom-rs のエラーを返す（何が外れているかを一番よく言うのはそちらのため）。
+fn open_for_tags(data: &[u8]) -> Result<ForTags, DecodeError> {
+    match open(data, true) {
+        Ok(obj) => Ok(ForTags::Strict(obj)),
+        Err(strict) => lenient::open(data, true)
+            .map(ForTags::Lenient)
+            .map_err(|_| strict),
+    }
 }
 
 /// エラーと、その原因をたどった全部を「: 」でつなぐ。dicom-rs の一番外のエラーは
@@ -545,6 +585,11 @@ fn color_image(px: &DecodedPixelData, raw: &[u8], pixels: usize) -> Result<VwIma
 
 /// 表示するメタデータ。検査やシリーズの並べ替えに使う UID もここから読む。
 fn metadata(obj: &DefaultDicomObject) -> Metadata {
+    metadata_with(obj, &file_meta_rows(obj))
+}
+
+/// `meta_rows` は「DICOM tags」の頭に出すメタ情報の要素。
+fn metadata_with(obj: &DefaultDicomObject, meta_rows: &[(Tag, String)]) -> Metadata {
     let mut m = Metadata::default();
     let fields: &[(&str, &str, Tag)] = &[
         ("Patient", "Name", tags::PATIENT_NAME),
@@ -609,7 +654,7 @@ fn metadata(obj: &DefaultDicomObject) -> Metadata {
     let ts = obj.meta().transfer_syntax().trim_end_matches('\0');
     let ts_name = dicom_transfer_syntax_name(ts);
     m.push("DICOM", "Transfer syntax", ts_name.unwrap_or(ts));
-    tag_listing(obj, &mut m);
+    tag_listing(obj, meta_rows, &mut m);
     check::push_problems(obj, &charset_of(obj, Charset::default()), 0, &mut m);
     m
 }
@@ -635,34 +680,35 @@ const LISTED_VALUE_MAX: usize = 2048;
 ///
 /// 主なタグを名前で出す上のグループとは別に持つのは、そちらを分かりやすい名前のまま残したいのと、
 /// シリーズの並べ替えなどがそちらのキーを読むため。
-fn tag_listing(obj: &DefaultDicomObject, m: &mut Metadata) {
+fn tag_listing(obj: &DefaultDicomObject, meta_rows: &[(Tag, String)], m: &mut Metadata) {
+    for (tag, value) in meta_rows {
+        m.push(TAG_LISTING, listed_key(*tag, 0), listed_value(value));
+    }
+    list_elements(obj, &charset_of(obj, Charset::default()), 0, m);
+}
+
+/// dicom-rs が読んだメタ情報のうち、欄に出す要素。
+fn file_meta_rows(obj: &DefaultDicomObject) -> Vec<(Tag, String)> {
     let meta = obj.meta();
-    let file_meta = [
+    let mut rows = vec![
         (
             tags::MEDIA_STORAGE_SOP_CLASS_UID,
-            meta.media_storage_sop_class_uid.as_str(),
+            meta.media_storage_sop_class_uid.clone(),
         ),
         (
             tags::MEDIA_STORAGE_SOP_INSTANCE_UID,
-            meta.media_storage_sop_instance_uid.as_str(),
+            meta.media_storage_sop_instance_uid.clone(),
         ),
-        (tags::TRANSFER_SYNTAX_UID, meta.transfer_syntax.as_str()),
+        (tags::TRANSFER_SYNTAX_UID, meta.transfer_syntax.clone()),
         (
             tags::IMPLEMENTATION_CLASS_UID,
-            meta.implementation_class_uid.as_str(),
+            meta.implementation_class_uid.clone(),
         ),
     ];
-    for (tag, value) in file_meta {
-        m.push(TAG_LISTING, listed_key(tag, 0), listed_value(value));
-    }
     if let Some(name) = &meta.implementation_version_name {
-        m.push(
-            TAG_LISTING,
-            listed_key(tags::IMPLEMENTATION_VERSION_NAME, 0),
-            listed_value(name),
-        );
+        rows.push((tags::IMPLEMENTATION_VERSION_NAME, name.clone()));
     }
-    list_elements(obj, &charset_of(obj, Charset::default()), 0, m);
+    rows
 }
 
 fn list_elements(

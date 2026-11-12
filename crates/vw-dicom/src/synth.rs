@@ -429,3 +429,27 @@ impl Synth {
             .put(DataElement::new(tag, VR::US, PrimitiveValue::from(value)));
     }
 }
+/// `file`（[`Synth::bytes`] の形）のメタ情報の終わりに、2 バイトの長さを持つ VR の要素
+/// (0002,`element`) を足し、グループ長を合わせる。dicom-rs は規格に外れた値を書けないので、
+/// 外れたメタ情報を持つファイルはこれで作る。値の長さは偶数に揃えない（揃えるかは呼ぶ側が決める）。
+pub fn add_meta_element(file: &[u8], element: u16, vr: &[u8; 2], value: &[u8]) -> Vec<u8> {
+    const GROUP_LENGTH_VALUE: usize = 128 + 4 + 8;
+    let length = u32::from_le_bytes(
+        file[GROUP_LENGTH_VALUE..GROUP_LENGTH_VALUE + 4]
+            .try_into()
+            .expect("4 bytes"),
+    );
+    let end = GROUP_LENGTH_VALUE + 4 + length as usize;
+    let mut element_bytes = Vec::new();
+    element_bytes.extend(0x0002u16.to_le_bytes());
+    element_bytes.extend(element.to_le_bytes());
+    element_bytes.extend(vr);
+    element_bytes.extend((value.len() as u16).to_le_bytes());
+    element_bytes.extend(value);
+    let mut out = file[..end].to_vec();
+    let new_length = length + element_bytes.len() as u32;
+    out[GROUP_LENGTH_VALUE..GROUP_LENGTH_VALUE + 4].copy_from_slice(&new_length.to_le_bytes());
+    out.extend(element_bytes);
+    out.extend(&file[end..]);
+    out
+}
