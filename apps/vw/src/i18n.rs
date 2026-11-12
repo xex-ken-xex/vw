@@ -1181,6 +1181,20 @@ const JA: &[(&str, &str)] = &[
         "Tables with a wavelength (or frequency) column and a flux column open as a spectrum graph instead of as a table. Either way, the slot's right-click menu switches between the two.",
         "波長（または周波数）の列と流量の列を持つ表を、表ではなくスペクトルのグラフで開きます。どちらで開いても、スロットの右クリックで切り替えられます。",
     ),
+    ("Mosaic", "モザイク"),
+    (
+        "Detector mosaics as one image",
+        "検出器を並べたカメラの画像を 1 枚に組み立てる",
+    ),
+    (
+        "Files from cameras with several detectors (each HDU has DETSEC) open as one image with the detectors put in place. The overscan level (BIASSEC) of each amplifier is subtracted and the gaps are drawn in the missing color. Single detectors can still be chosen from the slot's right-click menu (HDU).",
+        "検出器を何枚も並べたカメラのファイル（HDU ごとに DETSEC がある）を、検出器を元の位置に並べた 1 枚で開きます。増幅器ごとにオーバースキャン（BIASSEC）の値を引き、検出器のすきまは欠損の色で描きます。検出器 1 つずつも、スロットの右クリック（HDU）で選べます。",
+    ),
+    ("Largest detector mosaic", "組み立てる画像の大きさの上限"),
+    (
+        "Mosaics larger than this are reduced by averaging 2 x 2 pixels until they fit. The sky coordinates at the cursor are still read from the WCS of each detector.",
+        "これより大きいときは、収まるまで 2 × 2 画素ずつ平均して縮めます。カーソルの位置の空の座標は、縮めても検出器ごとの WCS から出します。",
+    ),
     (
         "Sums the planes of the cube pixel by pixel along its spectral axis. Each map opens in a new slot; the file is not changed.",
         "キューブの面を、スペクトルの軸に沿って画素ごとにまとめます。図は 1 枚ずつ新しいスロットに出し、ファイルは変えません。",

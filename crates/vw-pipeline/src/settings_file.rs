@@ -244,6 +244,14 @@ fn read_options(r: &mut Section<'_>) -> vw_fits::Options {
             .get("same_window_for_planes")
             .unwrap_or(d.same_window_for_planes),
         missing,
+        mosaic: r.get("mosaic").unwrap_or(d.mosaic),
+        mosaic_max_megapixels: r
+            .get_valid(
+                "mosaic_max_megapixels",
+                |v: &f32| (1.0..=4000.0).contains(v),
+                "must be 1 to 4000",
+            )
+            .unwrap_or(d.mosaic_max_megapixels),
     }
 }
 

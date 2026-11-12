@@ -1954,3 +1954,174 @@ fn the_channels_of_a_tab_cube_file_come_from_its_table() {
     assert_eq!(channels.count, 4);
     assert_eq!(channels.axis.values[3], 1406e6);
 }
+
+/// 検出器 1 つの拡張。`values` は `w` × `h`（最初の行が FITS の y = 1）。
+fn detector(w: usize, h: usize, values: &[f32], cards: &[String]) -> Vec<u8> {
+    let mut ext = vec![card("XTENSION", "'IMAGE   '")];
+    ext.extend(image_cards(-32, &[w, h]));
+    ext.extend(cards.iter().cloned());
+    hdu_bytes(&ext, &[], &f32_bytes(values))
+}
+
+fn empty_primary_with(cards: &[String]) -> Vec<u8> {
+    let mut c = vec![card("BITPIX", "8"), card("NAXIS", "0")];
+    c.extend(cards.iter().cloned());
+    fits(&c, &[])
+}
+
+fn sec(key: &str, section: &str) -> String {
+    card(key, &format!("'{section}'"))
+}
+
+/// 3 × 2 画素の検出器 2 つ。1〜2 列目が画素、3 列目がオーバースキャン（左は 5、右は 7）。
+fn two_amplifiers(left: &str, right: &str) -> Vec<u8> {
+    let mut file = empty_primary_with(&[]);
+    for (detsec, bias, base) in [(left, 5.0, 10.0), (right, 7.0, 20.0)] {
+        let values = [base, base + 1.0, bias, base + 2.0, base + 3.0, bias];
+        file.extend(detector(
+            3,
+            2,
+            &values,
+            &[
+                sec("DETSEC", detsec),
+                sec("DATASEC", "[1:2,1:2]"),
+                sec("BIASSEC", "[3:3,1:2]"),
+            ],
+        ));
+    }
+    file
+}
+
+#[test]
+fn detectors_are_put_in_place_by_detsec_after_subtracting_the_overscan() {
+    let img = decode(&two_amplifiers("[1:2,1:2]", "[3:4,1:2]"));
+    assert_eq!((img.width, img.height), (4, 2));
+    assert_eq!(f32s(&img), [5.0, 6.0, 13.0, 14.0, 7.0, 8.0, 15.0, 16.0]);
+    assert!(
+        img.metadata
+            .get(GROUP, MOSAIC)
+            .unwrap()
+            .starts_with("2 detectors")
+    );
+    assert_eq!(img.metadata.get(GROUP, HDU), Some(MOSAIC));
+}
+
+#[test]
+fn a_reversed_detsec_turns_the_detector_around() {
+    let img = decode(&two_amplifiers("[1:2,1:2]", "[4:3,2:1]"));
+    assert_eq!(f32s(&img), [5.0, 6.0, 16.0, 15.0, 7.0, 8.0, 14.0, 13.0]);
+}
+
+#[test]
+fn gaps_between_detectors_are_missing() {
+    let img = decode(&two_amplifiers("[1:2,1:2]", "[5:6,1:2]"));
+    assert_eq!((img.width, img.height), (6, 2));
+    let v = f32s(&img);
+    assert!(v[2].is_nan() && v[3].is_nan() && v[8].is_nan());
+    assert_eq!(v[4], 13.0);
+}
+
+#[test]
+fn files_that_cannot_be_assembled_show_the_first_detector() {
+    // 重なる DETSEC。
+    let img = decode(&two_amplifiers("[1:2,1:2]", "[2:3,1:2]"));
+    assert_eq!((img.width, img.height), (3, 2));
+    assert!(img.metadata.get(GROUP, MOSAIC).is_none());
+    // DETSEC のない画像がある。
+    let mut file = empty_primary_with(&[]);
+    file.extend(detector(1, 1, &[1.0], &[sec("DETSEC", "[1:1,1:1]")]));
+    file.extend(detector(1, 1, &[2.0], &[]));
+    assert_eq!(f32s(&decode(&file)), [1.0]);
+    assert!(parts(&file).unwrap().iter().all(|p| p.name != MOSAIC));
+}
+
+#[test]
+fn the_mosaic_comes_first_in_the_list_and_single_detectors_can_still_be_chosen() {
+    let file = two_amplifiers("[1:2,1:2]", "[3:4,1:2]");
+    let names: Vec<String> = parts(&file).unwrap().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, [MOSAIC, "1", "2"]);
+    let choices = Choices::default();
+    let plugin = FitsPlugin::default().with_choices(choices.clone());
+    choices.set(&file, 2usize);
+    assert_eq!(plugin.decode(&file).unwrap().width, 3);
+    choices.set(&file, mosaic::MOSAIC);
+    assert_eq!(plugin.decode(&file).unwrap().width, 4);
+}
+
+#[test]
+fn the_setting_off_opens_the_first_detector_but_the_mosaic_can_be_chosen() {
+    let file = two_amplifiers("[1:2,1:2]", "[3:4,1:2]");
+    let off = Options {
+        mosaic: false,
+        ..Options::default()
+    };
+    assert_eq!(decode_opts(&file, off).width, 3);
+    let chosen = decode_with(&file, 0, off, None, None, Some(mosaic::MOSAIC)).unwrap();
+    assert_eq!(chosen.width, 4);
+}
+
+#[test]
+fn large_mosaics_are_reduced_by_averaging_2_by_2() {
+    let file = two_amplifiers("[1:2,1:2]", "[3:4,1:2]");
+    let hdus = header::hdus(&file).unwrap();
+    let layout = mosaic::layout(&hdus).unwrap();
+    let a = mosaic::assemble(&file, &hdus, &layout, 4).unwrap();
+    assert_eq!((a.width, a.height, a.bin), (2, 1, 2));
+    assert_eq!(a.values, [6.5, 14.5]);
+}
+
+#[test]
+fn the_mosaic_sky_is_that_of_the_detector_under_the_pixel() {
+    let wcs = |crval1: &str| {
+        vec![
+            card("CTYPE1", "'RA---TAN'"),
+            card("CTYPE2", "'DEC--TAN'"),
+            card("CRPIX1", "1.0"),
+            card("CRPIX2", "1.0"),
+            card("CRVAL1", crval1),
+            card("CRVAL2", "10.0"),
+            card("CDELT1", "-0.001"),
+            card("CDELT2", "0.001"),
+        ]
+    };
+    let mut file = empty_primary_with(&[]);
+    for (detsec, crval1) in [("[1:2,1:2]", "150.0"), ("[4:3,1:2]", "151.0")] {
+        let mut cards = wcs(crval1);
+        cards.push(sec("DETSEC", detsec));
+        file.extend(detector(2, 2, &[1.0, 2.0, 3.0, 4.0], &cards));
+    }
+    let flipped = Options {
+        flip_rows: true,
+        ..Options::default()
+    };
+    let turned = decode_opts(&file, flipped).sky.unwrap();
+    let sky = decode(&file).sky.unwrap();
+    assert_eq!(turned.at(3.0, 0.0), sky.at(3.0, 1.0));
+    // 2 × 2 に縮めた画素は、まとめた 4 画素の真ん中。
+    let hdus = header::hdus(&file).unwrap();
+    let layout = mosaic::layout(&hdus).unwrap();
+    let binned = mosaic::MosaicSky::read(&hdus, &layout, 2, 1, false).unwrap();
+    assert_eq!(
+        vw_core::sky::SkyMap::at(&binned, 0.0, 0.0),
+        sky.at(0.5, 0.5)
+    );
+    // 左の検出器の左下、右の検出器の左下（DETSEC が逆向きなので全体の右端）。
+    let left = sky.at(0.0, 0.0).unwrap();
+    assert!((left[0] - 150.0).abs() < 1e-9 && (left[1] - 10.0).abs() < 1e-9);
+    let right = sky.at(3.0, 0.0).unwrap();
+    assert!((right[0] - 151.0).abs() < 1e-9, "{right:?}");
+    // 2 列目（検出器の x = 2）は 1 列目より西（赤経が小さい）。
+    assert!(sky.at(1.0, 0.0).unwrap()[0] < left[0]);
+    assert!(sky.at(2.0, 0.0).unwrap()[0] < right[0]);
+}
+
+#[test]
+fn sections_are_read_in_either_direction() {
+    let s = mosaic::Section::parse(" [2048:1, 1:4096] ").unwrap();
+    assert_eq!(
+        (s.x, s.y, s.width(), s.height()),
+        ((2048, 1), (1, 4096), 2048, 4096)
+    );
+    assert!(mosaic::Section::parse("[0:10,1:2]").is_none());
+    assert!(mosaic::Section::parse("1:10,1:2").is_none());
+}

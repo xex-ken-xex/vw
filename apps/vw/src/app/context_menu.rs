@@ -468,7 +468,8 @@ fn variable_item(ui: &mut egui::Ui, cx: &MenuContext, target: &Target, out: &mut
                 PartKind::Hdu => detail,
                 PartKind::Variable => "",
             };
-            let item = vw_ui::menu::item(current == Some(name), name, right);
+            let label = crate::i18n::tr_text(cx.lang, name);
+            let item = vw_ui::menu::item(current == Some(name), &label, right);
             if ui.add(item).on_hover_text(detail).clicked() {
                 out.push(Picked::Variable(*index, name.to_owned()));
                 ui.close();
