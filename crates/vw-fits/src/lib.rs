@@ -23,6 +23,7 @@ mod sky;
 mod spectral;
 pub mod spectrum;
 pub mod stretch;
+pub mod table;
 mod tile;
 mod write;
 
@@ -173,6 +174,8 @@ pub const PLANES_WINDOW: &str = "Black and white of planes";
 pub const PLANES_WINDOW_SAME: &str = "Same for all planes";
 /// 1 次元のスペクトルとして読んだとき、点の数と横軸の種類を書く鍵（[`spectrum`]）。
 pub const SPECTRUM: &str = "Spectrum";
+/// 表を見せているとき、表の種類と大きさを書く鍵（[`Part::detail`]）。
+pub const TABLE: &str = "Table";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -195,7 +198,10 @@ impl DecoderPlugin for FitsPlugin {
         let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        Ok(find_image(&hdus, chosen)?.planes)
+        Ok(match find_target(&hdus, chosen)? {
+            Target::Image(image) => image.planes,
+            Target::Table(_) => 1,
+        })
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
@@ -229,8 +235,10 @@ impl DecoderPlugin for FitsPlugin {
         let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        let image = find_image(&hdus, chosen)?;
-        Ok(metadata(&hdus, &image, 0))
+        Ok(match find_target(&hdus, chosen)? {
+            Target::Image(image) => metadata(&hdus, &image, 0),
+            Target::Table(index) => table_metadata(&hdus, index, None),
+        })
     }
 }
 
@@ -270,30 +278,59 @@ impl Image<'_> {
     }
 
     fn part(&self) -> Part {
-        let name = match self
-            .hdu
-            .get("EXTNAME")
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-        {
-            Some(name) => match self.hdu.int("EXTVER").filter(|&v| v > 1) {
-                Some(version) => format!("{} {name},{version}", self.index),
-                None => format!("{} {name}", self.index),
-            },
-            None => self.index.to_string(),
-        };
         Part {
             index: self.index,
-            name,
+            name: part_name(self.hdu, self.index),
             width: self.width,
             height: self.height,
             planes: self.planes,
             bitpix: self.bitpix,
+            table: None,
         }
     }
 }
 
-/// 画像として見られる HDU の 1 つ（[`parts`]）。
+/// HDU の番号と `EXTNAME`（`EXTVER` が 2 以上ならそれも）。
+fn part_name(hdu: &Hdu, index: usize) -> String {
+    match hdu.get("EXTNAME").map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => match hdu.int("EXTVER").filter(|&v| v > 1) {
+            Some(version) => format!("{index} {name},{version}"),
+            None => format!("{index} {name}"),
+        },
+        None => index.to_string(),
+    }
+}
+
+/// 表の HDU を、選べるものの 1 つにする。幅と高さは列と行の数。
+fn table_part(hdus: &[Hdu], index: usize) -> Option<Part> {
+    let hdu = hdus.get(index)?;
+    let kind = table::kind(hdu)?;
+    Some(Part {
+        index,
+        name: part_name(hdu, index),
+        width: hdu
+            .int("TFIELDS")
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0),
+        height: hdu
+            .int("NAXIS2")
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0),
+        planes: 1,
+        bitpix: 0,
+        table: Some(kind.name()),
+    })
+}
+
+/// `index` の HDU を、選べるものにする（画像か表）。どちらでもなければ `None`。
+fn part_at(hdus: &[Hdu], index: usize) -> Option<Part> {
+    match image_at(hdus, index, 1) {
+        Ok(Some(image)) => Some(image.part()),
+        _ => table_part(hdus, index),
+    }
+}
+
+/// 見られる HDU の 1 つ（[`parts`]）。画像か表。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Part {
     /// Primary を 0 とした HDU の番号。
@@ -305,11 +342,19 @@ pub struct Part {
     /// 3 次元目以降の面の数。
     pub planes: usize,
     pub bitpix: i64,
+    /// 表なら、その種類（`BINTABLE`・`TABLE`）。幅が列の数、高さが行の数。
+    pub table: Option<&'static str>,
 }
 
 impl Part {
-    /// 大きさと型（`2048 x 2048 x 3  -32`）。
+    /// 大きさと型（`2048 x 2048 x 3  -32`、表は `BINTABLE 5 columns x 4,000 rows`）。
     pub fn detail(&self) -> String {
+        if let Some(kind) = self.table {
+            return format!(
+                "{kind} {}",
+                vw_core::table::size_text(self.width, self.height)
+            );
+        }
         let planes = if self.planes > 1 {
             format!(" x {}", self.planes)
         } else {
@@ -319,17 +364,34 @@ impl Part {
     }
 }
 
-/// 画像として見られる HDU の一覧。表（BINTABLE）や空の HDU は入らない。
+/// 見られる HDU（画像と表）の一覧。空の HDU は入らない。
 pub fn parts(data: &[u8]) -> Result<Vec<Part>, DecodeError> {
     let data = gunzip(data)?;
     let hdus = header::hdus(&data)?;
-    let mut out = Vec::new();
-    for index in 0..hdus.len() {
-        if let Ok(Some(image)) = image_at(&hdus, index, 1) {
-            out.push(image.part());
-        }
+    Ok((0..hdus.len()).filter_map(|i| part_at(&hdus, i)).collect())
+}
+
+/// 見せるもの。画像か表。
+enum Target<'a> {
+    Image(Image<'a>),
+    /// 表の HDU の番号。
+    Table(usize),
+}
+
+/// `chosen` の HDU が表ならそれ。そうでなければ [`find_image`]、画像がなければ最初の表。
+fn find_target(hdus: &[Hdu], chosen: Option<usize>) -> Result<Target<'_>, DecodeError> {
+    if let Some(index) = chosen
+        && hdus.get(index).and_then(table::kind).is_some()
+    {
+        return Ok(Target::Table(index));
     }
-    Ok(out)
+    match find_image(hdus, chosen) {
+        Ok(image) => Ok(Target::Image(image)),
+        Err(e) => (0..hdus.len())
+            .find(|&i| table::kind(&hdus[i]).is_some())
+            .map(Target::Table)
+            .ok_or(e),
+    }
 }
 
 /// 見せる画像。`chosen` の HDU が画像ならそれ、そうでなければ [`default_image`]。
@@ -421,7 +483,10 @@ fn decode_with(
     chosen: Option<usize>,
 ) -> Result<VwImage, DecodeError> {
     let hdus = header::hdus(data)?;
-    let image = find_image(&hdus, chosen)?;
+    let image = match find_target(&hdus, chosen)? {
+        Target::Image(image) => image,
+        Target::Table(index) => return decode_table(data, &hdus, index, frame),
+    };
     let default = default_image(&hdus).is_ok_and(|d| d.index == image.index);
     if frame >= image.planes {
         return Err(DecodeError::Invalid(format!("no frame {frame}")));
@@ -488,7 +553,7 @@ fn decode_with(
     img.sky = sky::ImageSky::read(&lookup, h, flipped)
         .map(|s| Arc::new(s) as Arc<dyn vw_core::sky::SkyMap>);
     img.metadata = metadata(&hdus, &image, frame);
-    push_parts(&mut img.metadata, &hdus, &image);
+    push_parts(&mut img.metadata, &hdus, image.index);
     if flipped {
         img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
     }
@@ -726,16 +791,58 @@ fn metadata(hdus: &[Hdu], image: &Image, frame: usize) -> Metadata {
     m
 }
 
-/// 画像の HDU が 2 つ以上あれば、見ている HDU（[`HDU`]）と、選べる HDU の一覧（[`PARTS_GROUP`]）を書く。
-fn push_parts(m: &mut Metadata, hdus: &[Hdu], image: &Image) {
-    let parts: Vec<Part> = (0..hdus.len())
-        .filter_map(|i| image_at(hdus, i, 1).ok().flatten())
-        .map(|i| i.part())
-        .collect();
+/// 表を見せる「画像」。画素は 1 つだけで、アプリは画素の代わりに [`VwImage::table`] を描く。
+fn decode_table(
+    data: &[u8],
+    hdus: &[Hdu],
+    index: usize,
+    frame: usize,
+) -> Result<VwImage, DecodeError> {
+    if frame > 0 {
+        return Err(DecodeError::Invalid(format!("no frame {frame}")));
+    }
+    let hdu = &hdus[index];
+    let table = table::read(data, hdu)?
+        .ok_or_else(|| DecodeError::Unsupported("FITS HDU is not a table".into()))?;
+    let mut img = VwImage::new(1, 1, ColorModel::Gray, PixelData::U8(vec![0]))
+        .map_err(DecodeError::Invalid)?;
+    let spectrum = table::spectrum(&table, hdu);
+    img.metadata = table_metadata(hdus, index, spectrum.as_ref());
+    push_parts(&mut img.metadata, hdus, index);
+    img.spectrum = spectrum.map(Arc::new);
+    img.table = Some(Arc::new(table));
+    Ok(img)
+}
+
+/// 表の大きさと、全カード。
+fn table_metadata(
+    hdus: &[Hdu],
+    index: usize,
+    spectrum: Option<&vw_core::spectrum::Spectrum>,
+) -> Metadata {
+    let mut m = Metadata::default();
+    if let Some(part) = table_part(hdus, index) {
+        m.push(GROUP, TABLE, part.detail());
+    }
+    if let Some(s) = spectrum {
+        m.push(GROUP, SPECTRUM, spectrum::summary(s));
+    }
+    push_cards(&mut m, GROUP, &hdus[0]);
+    if index > 0 {
+        push_cards(&mut m, &format!("{GROUP} HDU {index}"), &hdus[index]);
+    }
+    m
+}
+
+/// 見られる HDU（画像と表）が 2 つ以上あれば、見ている HDU（[`HDU`]）と、選べる HDU の一覧（[`PARTS_GROUP`]）を書く。
+fn push_parts(m: &mut Metadata, hdus: &[Hdu], current: usize) {
+    let parts: Vec<Part> = (0..hdus.len()).filter_map(|i| part_at(hdus, i)).collect();
     if parts.len() < 2 {
         return;
     }
-    m.push(GROUP, HDU, image.part().name);
+    if let Some(part) = parts.iter().find(|p| p.index == current) {
+        m.push(GROUP, HDU, part.name.as_str());
+    }
     for part in parts {
         m.push(PARTS_GROUP, part.name.as_str(), part.detail());
     }

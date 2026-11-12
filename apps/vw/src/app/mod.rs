@@ -1094,10 +1094,12 @@ impl VwApp {
                     self.copy_text(ctx, text, "measurement");
                 }
             }
+            Action::CopyImage if self.slots[i].shows_table() => self.copy_table_rows(ctx, i),
             Action::CopyImage => self.copy_image(ctx, i),
             Action::ComposeColors => self.open_compose_dialog(i),
             Action::MakeMoments => self.open_moments_dialog(i),
             Action::SaveAsFits => self.open_fits_save(i),
+            Action::ToggleTableGraph => self.slots[i].toggle_table_graph(),
             Action::AlignAndCompare => self.open_compare_dialog(i),
             Action::SetQualityReference => self.set_quality_reference(i),
             Action::AiTagImage => {

@@ -205,13 +205,11 @@ fn jwst_like() -> Vec<u8> {
 }
 
 #[test]
-fn every_image_hdu_can_be_chosen_but_tables_cannot() {
-    let names: Vec<String> = parts(&jwst_like())
-        .unwrap()
-        .into_iter()
-        .map(|p| p.name)
-        .collect();
-    assert_eq!(names, ["1 SCI", "2 ERR", "3 DQ"]);
+fn every_image_and_table_hdu_can_be_chosen() {
+    let parts = parts(&jwst_like()).unwrap();
+    let names: Vec<&str> = parts.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["1 SCI", "2 ERR", "3 DQ", "4 ASDF"]);
+    assert_eq!(parts[3].detail(), "BINTABLE 1 column x 1 row");
 }
 
 #[test]
@@ -229,12 +227,29 @@ fn the_chosen_hdu_is_shown_with_its_own_cards() {
 }
 
 #[test]
-fn a_choice_that_is_not_an_image_falls_back_to_the_first_image() {
+fn a_choice_that_is_neither_an_image_nor_a_table_falls_back_to_the_first_image() {
+    let file = jwst_like();
+    let choices = Choices::default();
+    let plugin = FitsPlugin::default().with_choices(choices.clone());
+    choices.set(&file, 9usize);
+    assert_eq!(f32s(&plugin.decode(&file).unwrap()), [1.5, 2.5]);
+}
+
+#[test]
+fn a_chosen_table_is_shown_as_a_table() {
     let file = jwst_like();
     let choices = Choices::default();
     let plugin = FitsPlugin::default().with_choices(choices.clone());
     choices.set(&file, 4usize);
-    assert_eq!(f32s(&plugin.decode(&file).unwrap()), [1.5, 2.5]);
+    let img = plugin.decode(&file).unwrap();
+    let table = img.table.expect("a table");
+    assert_eq!((table.rows(), table.columns().len()), (1, 1));
+    assert_eq!(img.metadata.get(GROUP, HDU), Some("4 ASDF"));
+    assert_eq!(
+        img.metadata.get(GROUP, TABLE),
+        Some("BINTABLE 1 column x 1 row")
+    );
+    assert_eq!(plugin.frame_count(&file).unwrap(), 1);
 }
 
 #[test]
@@ -272,7 +287,7 @@ fn hdus_of_the_same_name_carry_their_version() {
 }
 
 #[test]
-fn file_without_an_image_is_unsupported() {
+fn file_without_an_image_or_a_table_is_unsupported() {
     let file = fits(&image_cards(8, &[]), &[]);
     assert!(matches!(
         FitsPlugin::default().decode(&file),
@@ -1526,4 +1541,416 @@ fn the_channels_of_a_cube_are_read_from_its_header_alone() {
     )
     .unwrap();
     assert!(moments::channels_of_file(&flat, None).is_none());
+}
+
+/// 表の列 1 つ。`(TTYPE, TFORM, ほかのカード（鍵の頭, 値）)`。
+type TestColumn<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+/// 表の HDU。`data` は行のバイト列を並べ、その後ろにヒープ（`heap` バイト）を付けたもの。
+fn table_hdu(
+    xtension: &str,
+    row_len: usize,
+    rows: usize,
+    columns: &[TestColumn],
+    extra: &[String],
+    data: &[u8],
+    heap: usize,
+) -> Vec<u8> {
+    let mut cards = vec![
+        card("XTENSION", &format!("'{xtension}'")),
+        card("BITPIX", "8"),
+        card("NAXIS", "2"),
+        card("NAXIS1", &row_len.to_string()),
+        card("NAXIS2", &rows.to_string()),
+        card("PCOUNT", &heap.to_string()),
+        card("GCOUNT", "1"),
+        card("TFIELDS", &columns.len().to_string()),
+    ];
+    for (i, (name, form, more)) in columns.iter().enumerate() {
+        let n = i + 1;
+        cards.push(card(&format!("TTYPE{n}"), &format!("'{name}'")));
+        cards.push(card(&format!("TFORM{n}"), &format!("'{form}'")));
+        for (k, v) in more.iter() {
+            cards.push(card(&format!("{k}{n}"), v));
+        }
+    }
+    cards.extend_from_slice(extra);
+    hdu_bytes(&cards, &[], data)
+}
+
+fn empty_primary() -> Vec<u8> {
+    fits(&[card("BITPIX", "8"), card("NAXIS", "0")], &[])
+}
+
+fn table_of(file: &[u8]) -> Arc<dyn vw_core::table::Table> {
+    FitsPlugin::default()
+        .decode(file)
+        .unwrap()
+        .table
+        .expect("a table")
+}
+
+fn row_cells(table: &dyn vw_core::table::Table, row: usize) -> Vec<String> {
+    (0..table.columns().len())
+        .map(|c| table.cell(row, c))
+        .collect()
+}
+
+#[test]
+fn binary_table_cells_follow_their_types_scales_and_nulls() {
+    // 1J（TNULL -1）、1I（TSCAL 0.5、TZERO 10）、1I（符号なし、TZERO 32768）、6A、1L、3E、1D、1PE（ヒープ）、4X
+    let row_len = 4 + 2 + 2 + 6 + 1 + 12 + 8 + 8 + 1;
+    let mut data = Vec::new();
+    let mut heap = Vec::new();
+    for (j, i, u, a, l, arr, d, var, x) in [
+        (
+            7i32,
+            4i16,
+            -32768i16,
+            *b"M31\0\0\0",
+            b'T',
+            [1.5f32, 2.25, 3.0],
+            0.1f64,
+            vec![9.5f32, 8.5],
+            0b1010_0000u8,
+        ),
+        (
+            -1,
+            -2,
+            32767,
+            *b"NGC 22",
+            b'F',
+            [f32::NAN, 0.0, -1.0],
+            1e20,
+            vec![],
+            0b0101_0000,
+        ),
+    ] {
+        data.extend(j.to_be_bytes());
+        data.extend(i.to_be_bytes());
+        data.extend(u.to_be_bytes());
+        data.extend(a);
+        data.push(l);
+        for v in arr {
+            data.extend(v.to_be_bytes());
+        }
+        data.extend(d.to_be_bytes());
+        data.extend((var.len() as u32).to_be_bytes());
+        data.extend((heap.len() as u32).to_be_bytes());
+        for v in &var {
+            heap.extend(v.to_be_bytes());
+        }
+        data.push(x);
+    }
+    let heap_len = heap.len();
+    data.extend(heap);
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        row_len,
+        2,
+        &[
+            ("ID", "1J", &[("TNULL", "-1")]),
+            (
+                "MAG",
+                "1I",
+                &[("TSCAL", "0.5"), ("TZERO", "10"), ("TUNIT", "'mag'")],
+            ),
+            ("COUNT", "1I", &[("TZERO", "32768")]),
+            ("NAME", "6A", &[]),
+            ("GOOD", "1L", &[]),
+            ("RGB", "3E", &[]),
+            ("TIME", "1D", &[]),
+            ("SERIES", "1PE(2)", &[]),
+            ("BITS", "4X", &[]),
+        ],
+        &[],
+        &data,
+        heap_len,
+    ));
+    let table = table_of(&file);
+    assert_eq!(table.columns()[1].unit, "mag");
+    assert_eq!(table.columns()[3].format, "6A");
+    assert_eq!(
+        row_cells(&*table, 0),
+        [
+            "7",
+            "12",
+            "0",
+            "M31",
+            "T",
+            "[3] 1.5, 2.25, 3",
+            "0.1",
+            "[2] 9.5, 8.5",
+            "1010"
+        ]
+    );
+    assert_eq!(
+        row_cells(&*table, 1),
+        [
+            "",
+            "9",
+            "65535",
+            "NGC 22",
+            "F",
+            "[3] NaN, 0, -1",
+            "1e20",
+            "[0] ",
+            "0101"
+        ]
+    );
+}
+
+#[test]
+fn long_array_cells_show_only_their_first_values() {
+    let values: Vec<f32> = (1..=10).map(|v| v as f32).collect();
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        40,
+        1,
+        &[("FLUX", "10E", &[])],
+        &[],
+        &f32_bytes(&values),
+        0,
+    ));
+    assert_eq!(table_of(&file).cell(0, 0), "[10] 1, 2, 3, 4, …");
+}
+
+#[test]
+fn ascii_table_cells_are_read_from_their_columns() {
+    let rows = b"Vega   0.03  1.2E+01Sirius***** -1.5D+00";
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "TABLE   ",
+        20,
+        2,
+        &[
+            ("STAR", "A6", &[("TBCOL", "1")]),
+            ("V", "F6.2", &[("TBCOL", "7"), ("TNULL", "'*****'")]),
+            ("FLUX", "E8.1", &[("TBCOL", "13"), ("TSCAL", "2")]),
+        ],
+        &[],
+        rows,
+        0,
+    ));
+    let table = table_of(&file);
+    assert_eq!(row_cells(&*table, 0), ["Vega", "0.03", "24"]);
+    assert_eq!(row_cells(&*table, 1), ["Sirius", "", "-3"]);
+    assert_eq!(table.summary(), "TABLE 3 columns x 2 rows");
+}
+
+#[test]
+fn a_file_with_only_a_table_opens_the_table() {
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        4,
+        1,
+        &[("X", "1J", &[])],
+        &[],
+        &7i32.to_be_bytes(),
+        0,
+    ));
+    let img = FitsPlugin::default().decode(&file).unwrap();
+    assert_eq!(img.table.unwrap().cell(0, 0), "7");
+    assert_eq!(
+        img.metadata.get(GROUP, TABLE),
+        Some("BINTABLE 1 column x 1 row")
+    );
+    assert_eq!(img.metadata.get(GROUP, HDU), None, "only one thing to see");
+}
+
+#[test]
+fn a_table_of_wavelengths_and_fluxes_is_also_a_spectrum() {
+    let mut data = Vec::new();
+    for (w, f) in [(6000.0f32, 1.0f32), (6001.0, 2.0), (6002.0, 3.0)] {
+        data.extend(w.to_be_bytes());
+        data.extend(f.to_be_bytes());
+        data.extend(0.1f32.to_be_bytes());
+    }
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        12,
+        3,
+        &[
+            ("WAVELENGTH", "1E", &[("TUNIT", "'Angstrom'")]),
+            ("FLUX", "1E", &[("TUNIT", "'erg/s/cm2/A'")]),
+            ("FLUX_ERR", "1E", &[]),
+        ],
+        &[],
+        &data,
+        0,
+    ));
+    let img = FitsPlugin::default().decode(&file).unwrap();
+    let s = img.spectrum.expect("a spectrum");
+    assert_eq!(s.axis.kind, vw_core::spectrum::AxisKind::Wavelength);
+    assert!((s.axis.values[1] - 6001e-10).abs() < 1e-16);
+    assert_eq!(&*s.values, [1.0, 2.0, 3.0]);
+    assert_eq!(s.value_unit, "erg/s/cm2/A");
+    assert!(img.table.is_some(), "the table stays the main view");
+}
+
+#[test]
+fn a_one_row_table_of_arrays_is_a_spectrum_of_its_arrays() {
+    let mut data = Vec::new();
+    for v in [3.6f32, 3.7, 3.8] {
+        data.extend(v.to_be_bytes());
+    }
+    data.extend(f32_bytes(&[5.0, 6.0, 7.0]));
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        24,
+        1,
+        &[("LOGLAM", "3E", &[]), ("FLUX", "3E", &[])],
+        &[],
+        &data,
+        0,
+    ));
+    let s = FitsPlugin::default()
+        .decode(&file)
+        .unwrap()
+        .spectrum
+        .unwrap();
+    assert!((s.axis.values[0] / (10f64.powf(3.6f32 as f64) * 1e-10) - 1.0).abs() < 1e-9);
+    assert_eq!(&*s.values, [5.0, 6.0, 7.0]);
+}
+
+#[test]
+fn a_table_without_wavelengths_is_not_a_spectrum() {
+    let mut file = empty_primary();
+    file.extend(table_hdu(
+        "BINTABLE",
+        4,
+        1,
+        &[("FLUX", "1E", &[])],
+        &[],
+        &f32_bytes(&[1.0]),
+        0,
+    ));
+    assert!(
+        FitsPlugin::default()
+            .decode(&file)
+            .unwrap()
+            .spectrum
+            .is_none()
+    );
+}
+
+/// 1 次元のスペクトル（5 点）の軸を `-TAB` で書いたファイル。`index` なら番号の列も付ける。
+fn tab_spectrum(index: bool) -> Vec<u8> {
+    let mut cards = image_cards(-32, &[5]);
+    cards.extend([
+        card("CTYPE1", "'WAVE-TAB'"),
+        card("CUNIT1", "'nm'"),
+        card("CRPIX1", "1"),
+        card("CRVAL1", "1"),
+        card("CDELT1", "1"),
+        card("PS1_0", "'WCS-TAB'"),
+        card("PS1_1", "'COORDS'"),
+    ]);
+    if index {
+        cards.push(card("PS1_2", "'INDEX'"));
+    }
+    let mut file = fits(&cards, &f32_bytes(&[1.0, 2.0, 3.0, 4.0, 5.0]));
+    // 波長は等間隔でない（500, 501, 503, 507, 515 nm）。
+    let coords = [500.0f64, 501.0, 503.0, 507.0, 515.0];
+    let mut data: Vec<u8> = coords.iter().flat_map(|v| v.to_be_bytes()).collect();
+    let mut columns: Vec<TestColumn> = vec![("COORDS", "5D", &[("TDIM", "'(1,5)'")])];
+    if index {
+        // 番号の列は 0.5 刻み: 画素 1 → 番号 1、画素 2 → 番号 1.5（座標の 1 番目と 2 番目の間）…
+        data.extend(
+            [1.0f64, 3.0, 5.0, 7.0, 9.0]
+                .iter()
+                .flat_map(|v| v.to_be_bytes()),
+        );
+        columns.push(("INDEX", "5D", &[]));
+    }
+    let row_len = data.len();
+    file.extend(table_hdu(
+        "BINTABLE",
+        row_len,
+        1,
+        &columns,
+        &[card("EXTNAME", "'WCS-TAB'")],
+        &data,
+        0,
+    ));
+    file
+}
+
+#[test]
+fn a_tab_axis_takes_its_values_from_the_table() {
+    let s = decode(&tab_spectrum(false)).spectrum.expect("a spectrum");
+    let nm: Vec<f64> = s
+        .axis
+        .values
+        .iter()
+        .map(|v| (v * 1e9 * 1e6).round() / 1e6)
+        .collect();
+    assert_eq!(nm, [500.0, 501.0, 503.0, 507.0, 515.0]);
+}
+
+#[test]
+fn a_tab_axis_with_an_index_column_looks_up_the_index_first() {
+    let s = decode(&tab_spectrum(true)).spectrum.expect("a spectrum");
+    let nm: Vec<f64> = s
+        .axis
+        .values
+        .iter()
+        .map(|v| (v * 1e9 * 1e6).round() / 1e6)
+        .collect();
+    // 画素 p の値 ψ = p。番号の列 [1,3,5,7,9] の中で ψ の所 → 座標の列を引く。
+    assert_eq!(nm, [500.0, 500.5, 501.0, 502.0, 503.0]);
+}
+
+/// 2 x 1 画素、4 面のキューブ。3 本目の軸（周波数）を `-TAB` で書く（等間隔でない）。
+fn tab_cube() -> Vec<u8> {
+    let mut cards = image_cards(-32, &[2, 1, 4]);
+    cards.extend([
+        card("CTYPE3", "'FREQ-TAB'"),
+        card("CUNIT3", "'MHz'"),
+        card("CRPIX3", "1"),
+        card("CRVAL3", "1"),
+        card("CDELT3", "1"),
+        card("PS3_0", "'WCS-TAB'"),
+        card("PS3_1", "'COORDS'"),
+    ]);
+    let planes: Vec<f32> = (0..8).map(|v| v as f32).collect();
+    let mut file = fits(&cards, &f32_bytes(&planes));
+    let coords: Vec<u8> = [1400.0f64, 1401.0, 1403.0, 1406.0]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    file.extend(table_hdu(
+        "BINTABLE",
+        32,
+        1,
+        &[("COORDS", "4D", &[("TDIM", "'(1,4)'")])],
+        &[card("EXTNAME", "'WCS-TAB'")],
+        &coords,
+        0,
+    ));
+    file
+}
+
+#[test]
+fn the_spectrum_at_a_cross_follows_a_tab_axis() {
+    let mut cube = cube::Cube::new(&tab_cube(), None, false).unwrap();
+    let point = cube.spectrum(0, 1, 0).unwrap().expect("a cube");
+    let mhz: Vec<f64> = point.spectrum.axis.values.iter().map(|v| v / 1e6).collect();
+    assert_eq!(mhz, [1400.0, 1401.0, 1403.0, 1406.0]);
+    assert_eq!(&*point.spectrum.values, [1.0, 3.0, 5.0, 7.0]);
+}
+
+#[test]
+fn the_channels_of_a_tab_cube_file_come_from_its_table() {
+    let path = std::env::temp_dir().join(format!("vw-fits-{}-tab-cube.fits", std::process::id()));
+    std::fs::write(&path, tab_cube()).unwrap();
+    let channels = moments::channels_of_file(&path, None).expect("a cube");
+    std::fs::remove_file(&path).ok();
+    assert_eq!(channels.count, 4);
+    assert_eq!(channels.axis.values[3], 1406e6);
 }

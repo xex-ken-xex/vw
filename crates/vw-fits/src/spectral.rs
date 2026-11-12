@@ -150,7 +150,7 @@ impl Rest {
 }
 
 /// 中間の座標 x から軸が線形な量 X への式。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Algorithm {
     /// 書いてある量そのものが線形。
     Linear,
@@ -160,6 +160,11 @@ enum Algorithm {
     Through { x: Basic, x_ref: f64, dx_ds: f64 },
     /// `-GRI`・`-GRA`: グリズムの式で、X（波長）に直す。
     Grism { x: Basic, w: [f64; 5] },
+    /// `-TAB`: 表の列から引く（[`crate::header::Lookup`]）。値は SI にしてある。
+    Table {
+        index: Option<std::sync::Arc<[f64]>>,
+        coords: std::sync::Arc<[f64]>,
+    },
 }
 
 /// 1 本のスペクトルの軸。
@@ -178,8 +183,8 @@ pub(crate) struct SpectralAxis {
     pub(crate) frame: String,
 }
 
-/// `hdu` の `axis` 本目（1 から）が、スペクトルの軸なら読む。読めない書き方（`-TAB` など）や、
-/// 必要な静止周波数がないときは `None`。
+/// `hdu` の `axis` 本目（1 から）が、スペクトルの軸なら読む。読めない書き方や、必要な静止周波数が
+/// ないとき、`-TAB` の表が見つからないときは `None`。
 pub(crate) fn read(hdu: &Hdu, axis: usize) -> Option<SpectralAxis> {
     let key = |k: &str| format!("{k}{axis}");
     let ctype = hdu.get(&key("CTYPE"))?.trim().to_uppercase();
@@ -217,12 +222,15 @@ pub(crate) fn read(hdu: &Hdu, axis: usize) -> Option<SpectralAxis> {
         _ => (Kind::read(base)?, code),
     };
     let factor = kind.si_factor(&unit);
-    let crval = hdu.float(&key("CRVAL")).unwrap_or(0.0) * factor;
+    let lookup = code.trim_start_matches('-').trim() == "TAB";
+    // `-TAB` の CRVAL と CDELT は表の番号の上の値で、単位は表の値の方に付く。
+    let scale = if lookup { 1.0 } else { factor };
+    let crval = hdu.float(&key("CRVAL")).unwrap_or(0.0) * scale;
     let cdelt = hdu
         .float(&key("CDELT"))
         .or_else(|| hdu.float(&format!("CD{axis}_{axis}")))
         .unwrap_or(1.0)
-        * factor;
+        * scale;
     let rest = Rest::read(hdu);
     let mut spectral = SpectralAxis {
         kind,
@@ -238,6 +246,13 @@ pub(crate) fn read(hdu: &Hdu, axis: usize) -> Option<SpectralAxis> {
     spectral.algorithm = match code.trim_start_matches('-').trim() {
         "" => Algorithm::Linear,
         "LOG" => Algorithm::Log,
+        "TAB" => {
+            let table = hdu.lookups.iter().find(|(a, _)| *a == axis)?;
+            Algorithm::Table {
+                index: table.1.index.as_deref().map(Into::into),
+                coords: table.1.coords.iter().map(|v| v * factor).collect(),
+            }
+        }
         "GRI" | "GRA" => {
             let x = if code.ends_with('I') {
                 Basic::Wavelength
@@ -333,17 +348,25 @@ impl SpectralAxis {
             )?;
             p_to_s(self.kind, p, self.rest)
         };
-        let v = match self.algorithm {
+        let v = match &self.algorithm {
             Algorithm::Linear => Some(self.crval + x),
             Algorithm::Log => (self.crval != 0.0).then(|| self.crval * (x / self.crval).exp()),
             Algorithm::Through {
                 x: basic,
                 x_ref,
                 dx_ds,
-            } => from_x(basic, x_ref + dx_ds * x),
+            } => from_x(*basic, x_ref + dx_ds * x),
             Algorithm::Grism { x: basic, w } => {
                 let beta = (w[0] + x * w[1]).atan() + w[2];
-                from_x(basic, (beta.sin() + w[3]) * w[4])
+                from_x(*basic, (beta.sin() + w[3]) * w[4])
+            }
+            Algorithm::Table { index, coords } => {
+                let psi = self.crval + x;
+                let at = match index {
+                    Some(index) => position_in(index, psi)?,
+                    None => psi,
+                };
+                interpolate(coords, at)
             }
         }?;
         v.is_finite().then_some(v)
@@ -388,6 +411,33 @@ impl SpectralAxis {
             frame: self.frame.clone(),
         }
     }
+}
+
+/// 1 から数えた番号 `at`（小数も可）の値。点の間は直線でつなぎ、両端の外は半点まで延ばす。
+fn interpolate(values: &[f64], at: f64) -> Option<f64> {
+    let n = values.len();
+    if n == 0 || !(0.5..=n as f64 + 0.5).contains(&at) {
+        return None;
+    }
+    if n == 1 {
+        return Some(values[0]);
+    }
+    let k = ((at - 1.0).floor() as isize).clamp(0, n as isize - 2) as usize;
+    let t = at - 1.0 - k as f64;
+    Some(values[k] + (values[k + 1] - values[k]) * t)
+}
+
+/// 単調に並んだ `index` の中で、値が `value` になる所の番号（1 から、小数も可）。
+fn position_in(index: &[f64], value: f64) -> Option<f64> {
+    let n = index.len();
+    if n == 1 {
+        return (index[0] == value).then_some(1.0);
+    }
+    (0..n - 1).find_map(|k| {
+        let (a, b) = (index[k], index[k + 1]);
+        let inside = (a <= value && value <= b) || (b <= value && value <= a);
+        (inside && a != b).then(|| k as f64 + 1.0 + (value - a) / (b - a))
+    })
 }
 
 /// 書いてある量 S → 基本の量 P。

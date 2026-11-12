@@ -1014,6 +1014,13 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Fits,
+        key: "fits.table_graph",
+        title: "Spectrum tables as graphs first",
+        description: "Tables with a wavelength (or frequency) column and a flux column open as a spectrum graph instead of as a table. Either way, the slot's right-click menu switches between the two.",
+        widget: fits_table_graph_widget,
+    },
+    Item {
+        section: Section::Fits,
         key: "fits.sky_coordinates",
         title: "Sky coordinates at the cross",
         description: "How the right ascension and declination of the pixel are written at the cross and at the cursor, for images with a WCS in the header. Copying a cross always gives decimal degrees.",
@@ -2915,6 +2922,11 @@ fn fits_sky_coordinates_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Langua
 
 fn fits_spectrum_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.spectrum_graph, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn fits_table_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.table_graph, tr(lang, "Enabled"))
         .changed()
 }
 

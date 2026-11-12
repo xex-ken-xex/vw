@@ -1183,6 +1183,7 @@ impl VwApp {
             let similar = self.similar.mark(self.slots[i].id);
             let beam = self.settings().fits.beam;
             let spectrum_graph = self.settings().fits.spectrum_graph;
+            let table_graph = self.settings().fits.table_graph;
             let sky_format = self.settings().fits.sky_coordinates.format();
             let contours = self.settings().contours.style();
             let resp = self.slots[i].ui(
@@ -1208,6 +1209,7 @@ impl VwApp {
                     bar: &self.settings.settings.slot_bar,
                     beam,
                     spectrum_graph,
+                    table_graph,
                     sky_format,
                     contours: &contours,
                 },
@@ -1336,6 +1338,7 @@ impl VwApp {
                         bar: &self.settings.settings.slot_bar,
                         beam: self.settings().fits.beam,
                         spectrum_graph: self.settings().fits.spectrum_graph,
+                        table_graph: self.settings().fits.table_graph,
                         sky_format: self.settings().fits.sky_coordinates.format(),
                         contours: &self.settings().contours.style(),
                     },

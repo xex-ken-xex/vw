@@ -86,6 +86,10 @@ impl VwApp {
                 format!("{w} x {h}{kind}")
             }),
         ];
+        if info.table.is_some() {
+            // 表は画素を持たない（読み込みのための 1 画素の画像だけ）ので、画素の行は出さない。
+            file_rows.truncate(3);
+        }
         if let Some((_, i)) = frame {
             let total = self.slots[index]
                 .sequence

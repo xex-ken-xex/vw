@@ -84,6 +84,18 @@ impl VwApp {
         ))
     }
 
+    /// 表を見せているスロット `index` の、選んだ行をコピーする。
+    pub(super) fn copy_table_rows(&mut self, ctx: &egui::Context, index: usize) {
+        match self.slots[index].selected_table_text() {
+            Some((text, rows)) => self.copy_text(ctx, text, &format!("{rows} table rows")),
+            None => {
+                let lang = self.lang();
+                self.log
+                    .info(tr(lang, "Click rows of the table to choose what to copy.").to_owned());
+            }
+        }
+    }
+
     /// コピーしたことをログとカーソル付近の表示で知らせる。
     pub(super) fn copied(&mut self, ctx: &egui::Context, what: &str) {
         self.log.info(format!("Copied {what}"));
@@ -127,7 +139,9 @@ impl VwApp {
             }
             Focus::Images => {
                 let slot = &self.slots[self.active];
-                if let Some(text) = slot.selected_mark_text() {
+                if slot.shows_table() {
+                    self.copy_table_rows(ctx, self.active);
+                } else if let Some(text) = slot.selected_mark_text() {
                     self.copy_text(ctx, text, "probe point");
                 } else if let Some(text) = slot.selected_roi_text() {
                     self.copy_text(ctx, text, "ROI statistics");

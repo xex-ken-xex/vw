@@ -6,6 +6,7 @@
 pub mod chrome;
 pub mod geometry;
 pub mod input;
+pub mod table_view;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -332,6 +333,8 @@ pub struct Slot {
     /// 等高線を重ねる。起動をまたいでは残さない。
     pub contours: bool,
     contour_cache: Option<ContourCache>,
+    /// 表を見せているときの、送り・列の幅・選んだ行。
+    pub table_view: table_view::TableView,
     /// 十字と ROI の色の値の書き方。描くたびに [`SlotLook::colors`] から受け取り、
     /// コピー（描画の外から呼ばれる）でも同じ書き方にする。
     colors: Colors,
@@ -395,6 +398,8 @@ pub struct SlotLook<'a> {
     pub beam: bool,
     /// スペクトルを画像ではなくグラフで描く。
     pub spectrum_graph: bool,
+    /// スペクトルとしても読める表を、初めはグラフで描く（スロットごとに切り替えられる）。
+    pub table_graph: bool,
     /// 十字とカーソルの所に出す空の座標の書き方。
     pub sky_format: SkyFormat,
     /// 等高線の水準と色（線を引くかはスロットごとの [`Slot::contours`]）。
@@ -791,10 +796,11 @@ impl Slot {
     }
 
     /// 見出しと下の帯の部品を出す出さないに関わる、今の状態。
+    /// `graph` はグラフか表を描いている（画素を描いていない）。
     fn facts(&self, graph: bool, derivable: bool, similar: bool) -> chrome::Facts {
         let shown = self.shown();
         chrome::Facts {
-            image: shown.is_some(),
+            image: shown.is_some() && !graph,
             folder: self.folder().is_some(),
             developable: self.developable(),
             raw_faces: shown.is_some_and(|s| s.other.is_some()),
@@ -838,6 +844,7 @@ impl Slot {
             marks: Vec::new(),
             contours: false,
             contour_cache: None,
+            table_view: Default::default(),
             colors: Colors::default(),
             selected_mark: None,
             rois: Vec::new(),
@@ -1159,6 +1166,31 @@ impl Slot {
             mark.x,
             mark.y,
         )
+    }
+
+    /// 表を見せているとき、選んだ行をコピーするときの文字（見出しの行を先頭にしたタブ区切り）と行の数。
+    pub fn selected_table_text(&self) -> Option<(String, usize)> {
+        let table = self.shown()?.info.table.as_ref()?;
+        self.table_view.selected_text(&**table)
+    }
+
+    /// 表を見せている（グラフに切り替えていない）か。
+    pub fn shows_table(&self) -> bool {
+        self.shown().is_some_and(|s| s.info.table.is_some())
+            && !(self.table_view.graph && self.shown().is_some_and(|s| s.info.spectrum.is_some()))
+    }
+
+    /// 表がスペクトルとしても読めるか（表とグラフを切り替えられるか）。
+    pub fn table_has_graph(&self) -> bool {
+        self.shown()
+            .is_some_and(|s| s.info.table.is_some() && s.info.spectrum.is_some())
+    }
+
+    /// 表とスペクトルのグラフを切り替える。
+    pub fn toggle_table_graph(&mut self) {
+        if self.table_has_graph() {
+            self.table_view.graph = !self.table_view.graph;
+        }
     }
 
     /// 選んでいる十字をコピーするときの文字。
@@ -1864,25 +1896,39 @@ impl Slot {
             bar,
             beam,
             spectrum_graph,
+            table_graph,
             sky_format,
             contours,
         } = look;
         self.colors = colors;
         let mut out = SlotFrame::default();
         let visuals = ui.visuals().clone();
-        // グラフには画素がないので、十字・ROI・色導出は当てない。
-        let graph = spectrum_graph && self.shown().is_some_and(|s| s.info.spectrum.is_some());
+        let table = self
+            .shown()
+            .and_then(|s| Some((s.path.clone(), s.info.table.clone()?)));
+        if let Some((path, _)) = &table {
+            self.table_view.follow(path, table_graph);
+        }
+        let has_spectrum = self.shown().is_some_and(|s| s.info.spectrum.is_some());
+        let graph = has_spectrum
+            && match table {
+                Some(_) => self.table_view.graph,
+                None => spectrum_graph,
+            };
+        let table = table.map(|(_, t)| t).filter(|_| !graph);
+        // グラフと表には画素がないので、十字・ROI・色導出は当てない。
+        let pixels = !graph && table.is_none();
         let tool = match tool {
-            Tool::Probe | Tool::Roi | Tool::Measure if graph => Tool::Hand,
+            Tool::Probe | Tool::Roi | Tool::Measure if !pixels => Tool::Hand,
             tool => tool,
         };
-        // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
-        let (gauge, beam) = (gauge.filter(|_| !graph), beam && !graph);
-        let draw_contours = self.contours && !graph;
+        // ゲージとビームは画像の色と大きさのためのもので、グラフや表に重ねると隠れる。
+        let (gauge, beam) = (gauge.filter(|_| pixels), beam && pixels);
+        let draw_contours = self.contours && pixels;
         if draw_contours {
             self.refresh_contours(contours);
         }
-        let derivable = !graph && self.shown().is_some_and(is_derivable);
+        let derivable = pixels && self.shown().is_some_and(is_derivable);
         if !derivable {
             self.derive = None;
         }
@@ -1898,7 +1944,7 @@ impl Slot {
         }
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
         let hovering = ui.rect_contains_pointer(rect);
-        let facts = self.facts(graph, derivable, similar.is_some());
+        let facts = self.facts(!pixels, derivable, similar.is_some());
         let top_chips = chrome::items(bar, chrome::Edge::Top, &facts);
         let bottom_chips = chrome::items(bar, chrome::Edge::Bottom, &facts);
         let bar_fits = !bottom_chips.is_empty() && rect.height() > HEADER + 3.0 * DERIVE_BAR;
@@ -1978,7 +2024,11 @@ impl Slot {
         if pointer.double_clicked && tool.maximizes_on_double_click() {
             out.push(SlotCommand::ToggleMaximize);
         }
-        if pointer.hovered {
+        let mut table_wheel = (0.0, 0.0);
+        if pointer.hovered && table.is_some() {
+            // 表の上のホイールは、画像を送らずに行と列を送る。
+            table_wheel = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
+        } else if pointer.hovered {
             let (wheel, shifted) = ui.input(|i| split_wheel(&i.events, i.viewport_rect().height()));
             let step = wheel_steps(&mut self.wheel, wheel);
             if step != 0 {
@@ -1993,7 +2043,10 @@ impl Slot {
         self.last_body = Some(body.size());
         let base = self.base_scale(body);
         // `content` だけを借りて、パンや ROI の描きかけなどほかの欄を変えられるようにする。
-        if let Content::Image(shown) = &self.content {
+        if let Some(table) = &table {
+            self.table_view
+                .ui(ui, &response, body, &**table, table_wheel);
+        } else if let Content::Image(shown) = &self.content {
             let drag = tool.drag();
             match drag {
                 Drag::Pan if pointer.dragged => {
@@ -2530,7 +2583,8 @@ impl Slot {
             }
             labels_right = button_rect.left();
         }
-        if self.shown().is_some() {
+        // グラフと表は倍率で描かないので、倍率を出さない。
+        if pixels && self.shown().is_some() {
             let galley = painter.layout_no_wrap(
                 format!("{:.0}%", base * self.zoom * 100.0),
                 egui::FontId::proportional(12.0),
@@ -2745,6 +2799,7 @@ pub mod test_support {
             gamut: None,
             frame_delays: None,
             spectrum: None,
+            table: None,
             geo: None,
             sky: None,
         }

@@ -27,6 +27,7 @@ mod palette_tables;
 pub mod plugin;
 pub mod sky;
 pub mod spectrum;
+pub mod table;
 pub mod xmp;
 
 pub use display::{DisplayImage, DisplayImage16, DisplayParams};

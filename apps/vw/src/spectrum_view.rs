@@ -94,6 +94,15 @@ pub fn ticks(lo: f64, hi: f64, most: usize) -> Vec<f64> {
 
 /// 目盛りの字。刻みに合わせて小数の桁を決め、`-0` は `0` にする。
 fn label(v: f64, step: f64) -> String {
+    // 刻みがとても細かい・値がとても大きいときは指数で書く。小数のままだと流量（1e-15 など）の
+    // 目盛りが 0 の並びになり、幅にも入らない。
+    if step > 0.0 && (step < 1e-3 || v.abs() >= 1e6) {
+        if v.abs() < step / 2.0 {
+            return "0".to_owned();
+        }
+        let digits = (v.abs().log10().floor() - step.log10().floor()).max(0.0) as usize;
+        return format!("{v:.digits$e}");
+    }
     let decimals = if step >= 1.0 {
         0
     } else {
@@ -436,6 +445,14 @@ mod tests {
         assert_eq!(label(101.8, 0.1), "101.8");
         assert_eq!(label(20.0, 5.0), "20");
         assert_eq!(label(-0.0, 0.5), "0");
+    }
+
+    #[test]
+    fn labels_of_tiny_or_huge_values_are_written_with_exponents() {
+        assert_eq!(label(3.5e-15, 5e-16), "3.5e-15");
+        assert_eq!(label(4e-15, 1e-15), "4e-15");
+        assert_eq!(label(1e-17, 5e-16), "0");
+        assert_eq!(label(1.42e9, 2e7), "1.42e9");
     }
 
     #[test]

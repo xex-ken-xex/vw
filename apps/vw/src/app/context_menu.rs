@@ -50,6 +50,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
         Act(Action::AlignAndCompare),
         Act(Action::MakeMoments),
         Act(Action::SaveAsFits),
+        Act(Action::ToggleTableGraph),
     ],
     &[Act(Action::SetQualityReference), Act(Action::ReadQrCodes)],
     &[
@@ -166,7 +167,29 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
     let slot = target.slot();
     let folder = target.folder();
     let in_archive = folder.is_some_and(|(_, kind)| kind != FolderKind::Plain);
+    let table = slot
+        .and_then(|s| s.shown())
+        .is_some_and(|s| s.info.table.is_some());
     match action {
+        // 表には画素がないので、画像のための操作は出さない。
+        Action::CopyImage if table => {
+            shown_if(slot.is_some_and(|s| !s.table_view.selection.is_empty()))
+        }
+        Action::FitImage
+        | Action::ComposeColors
+        | Action::AlignAndCompare
+        | Action::ToggleContours
+        | Action::TogglePixelPipeline
+        | Action::SetQualityReference
+        | Action::ReadQrCodes
+        | Action::AiTagImage
+        | Action::FindFacesImage
+        | Action::RemoveAiTagsImage
+            if table =>
+        {
+            Hidden
+        }
+        Action::ToggleTableGraph => shown_if(slot.is_some_and(|s| s.table_has_graph())),
         Action::CopyMeasurement | Action::DeleteProbePoint => {
             shown_if(slot.is_some_and(|s| measurement_text(s).is_some()))
         }
@@ -259,6 +282,7 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         .slot()
         .is_some_and(|s| s.selected_roi_text().is_some());
     match action {
+        Action::CopyImage if target.slot().is_some_and(|s| s.shows_table()) => "Copy rows",
         Action::CopyImage | Action::CopyFolderPath => "Copy",
         Action::AiTagImage => "Add AI tags",
         Action::FindFacesImage => "Find faces",
@@ -266,6 +290,10 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         Action::CopyMeasurement if mark => "Copy point value",
         Action::CopyMeasurement if roi => "Copy ROI statistics",
         Action::CopyMeasurement => "Copy line values",
+        Action::ToggleTableGraph if target.slot().is_some_and(|s| s.shows_table()) => {
+            "Show as spectrum graph"
+        }
+        Action::ToggleTableGraph => "Show as table",
         Action::DeleteProbePoint if mark => "Delete point",
         Action::DeleteProbePoint if roi => "Delete ROI",
         Action::DeleteProbePoint => "Delete line",
@@ -400,7 +428,7 @@ fn entry_shows(entry: Entry, target: &Target, cx: &MenuContext) -> bool {
         Entry::ColorMap => target
             .slot()
             .and_then(|s| s.shown())
-            .is_some_and(|s| s.info.look.is_some()),
+            .is_some_and(|s| s.info.look.is_some() && s.info.table.is_none()),
         Entry::Variable => target
             .slot()
             .and_then(|s| s.shown())

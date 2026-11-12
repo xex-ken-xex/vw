@@ -158,6 +158,8 @@ pub enum Action {
     MakeMoments,
     /// メモリの上の図（モーメント図）を FITS で保存する。
     SaveAsFits,
+    /// スペクトルとしても読める表を、表とグラフで切り替える。
+    ToggleTableGraph,
     AlignAndCompare,
     SetQualityReference,
     AiTagImage,
@@ -288,6 +290,7 @@ impl Action {
         Action::ComposeColors,
         Action::MakeMoments,
         Action::SaveAsFits,
+        Action::ToggleTableGraph,
         Action::AlignAndCompare,
         Action::SetQualityReference,
         Action::LayoutAuto,
@@ -531,6 +534,7 @@ impl Action {
             Action::ComposeColors => "compose_colors",
             Action::MakeMoments => "make_moments",
             Action::SaveAsFits => "save_as_fits",
+            Action::ToggleTableGraph => "toggle_table_graph",
             Action::AlignAndCompare => "align_and_compare",
             Action::SetQualityReference => "set_quality_reference",
             Action::AiTagImage => "ai_tag_image",
@@ -690,6 +694,7 @@ impl Action {
             Action::ComposeColors => "Compose colors...",
             Action::MakeMoments => "Make moment maps...",
             Action::SaveAsFits => "Save as FITS...",
+            Action::ToggleTableGraph => "Table or spectrum graph",
             Action::AlignAndCompare => "Align and compare...",
             Action::SetQualityReference => "Use as evaluation reference",
             Action::AiTagImage => "Add AI tags to this image",
@@ -763,6 +768,7 @@ impl Action {
             | Action::ComposeColors
             | Action::MakeMoments
             | Action::SaveAsFits
+            | Action::ToggleTableGraph
             | Action::AlignAndCompare
             | Action::SetQualityReference => KeyGroup::Image,
             Action::CopyFolderPath
@@ -1111,6 +1117,7 @@ impl Action {
             | Action::ComposeColors
             | Action::MakeMoments
             | Action::SaveAsFits
+            | Action::ToggleTableGraph
             | Action::AlignAndCompare
             | Action::SetQualityReference
             | Action::AiTagImage

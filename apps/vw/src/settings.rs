@@ -1561,6 +1561,8 @@ pub struct Fits {
     pub beam: bool,
     /// 軸が 1 本だけのデータ（スペクトル）を、高さ 1 画素の画像ではなく折れ線のグラフで描く。
     pub spectrum_graph: bool,
+    /// 波長（周波数）と流量の列を持つ表を、初めは表ではなくスペクトルのグラフで描く。
+    pub table_graph: bool,
     /// 十字に出す空の座標（赤経・赤緯）の書き方。
     pub sky_coordinates: SkyCoordinates,
     /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
@@ -1584,6 +1586,7 @@ impl Default for Fits {
             },
             beam: true,
             spectrum_graph: true,
+            table_graph: false,
             sky_coordinates: SkyCoordinates::default(),
             calibration: FitsCalibration::default(),
         }
@@ -1629,6 +1632,7 @@ impl Fits {
                 .unwrap_or_else(|| d.missing_color.clone()),
             beam: r.get("beam").unwrap_or(d.beam),
             spectrum_graph: r.get("spectrum_graph").unwrap_or(d.spectrum_graph),
+            table_graph: r.get("table_graph").unwrap_or(d.table_graph),
             sky_coordinates: r.get("sky_coordinates").unwrap_or(d.sky_coordinates),
             calibration: FitsCalibration::read(r.reader()),
         }
