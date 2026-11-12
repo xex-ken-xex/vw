@@ -133,6 +133,8 @@ pub fn with_palette(
 #[derive(Debug, Clone, PartialEq)]
 pub struct Place {
     pub at: Where,
+    /// モザイクカメラの、画素が乗っている検出器と、その中の画素（`CCD2A (x 120, y 455)`）。
+    pub part: Option<String>,
     pub plane: Option<String>,
 }
 
@@ -162,6 +164,9 @@ impl Place {
         y: u32,
     ) -> Option<Self> {
         let (px, py) = (f64::from(x), f64::from(y));
+        let part = sky
+            .and_then(|s| s.part(px, py))
+            .map(|(name, [dx, dy])| format!("{name} (x {}, y {})", dx.round(), dy.round()));
         let at = match (geo, sky) {
             (Some(geo), _) => {
                 let (lat, lon) = geo.at(px, py)?;
@@ -182,7 +187,7 @@ impl Place {
             .get(vw_netcdf::GROUP, vw_fits::PLANE)
             .or_else(|| meta.get(vw_fits::GROUP, vw_fits::PLANE))
             .map(str::to_owned);
-        Some(Self { at, plane })
+        Some(Self { at, part, plane })
     }
 
     /// 位置と面の札を 1 行にした文字。
@@ -203,10 +208,11 @@ impl Place {
                 }
             }
         };
-        match &self.plane {
-            Some(plane) => format!("{at}  {plane}"),
-            None => at,
-        }
+        [Some(at), self.part.clone(), self.plane.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("  ")
     }
 
     /// 計算に使える、符号付きの度の小数（緯度・経度、または赤経・赤緯と、あれば銀河経度・銀河緯度）。
@@ -418,6 +424,7 @@ mod tests {
                 lat: 35.68,
                 lon: 139.77,
             },
+            part: None,
             plane: Some("time = 2020-01-01".to_owned()),
         }
     }
@@ -437,6 +444,7 @@ mod tests {
                 lat: -12.5,
                 lon: -45.25,
             },
+            part: None,
             plane: None,
         };
         assert_eq!(
@@ -470,6 +478,7 @@ mod tests {
                     lat: 40.0,
                     lon: 20.0
                 },
+                part: None,
                 plane: Some("level = 500 hPa".to_owned())
             })
         );
@@ -509,6 +518,28 @@ mod tests {
                 .label(),
             "α 83.820000°  δ -5.390000°"
         );
+    }
+
+    /// 2 枚の検出器を並べた空。x が 10 より左は CCD1、右は CCD2（どちらも左端が 0 列目）。
+    #[derive(Debug)]
+    struct TwoDetectors;
+
+    impl SkyMap for TwoDetectors {
+        fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+            Orion.at(x % 10.0, y)
+        }
+
+        fn part(&self, x: f64, y: f64) -> Option<(String, [f64; 2])> {
+            let name = if x < 10.0 { "CCD1" } else { "CCD2" };
+            Some((name.to_owned(), [x % 10.0, y]))
+        }
+    }
+
+    #[test]
+    fn mosaic_images_show_the_detector_and_its_pixel() {
+        let m = meta(&[]);
+        let place = Place::at(None, Some(&TwoDetectors), SkyFormat::Degrees, &m, 12, 3).unwrap();
+        assert_eq!(place.label(), "α 83.819444°  δ -5.390833°  CCD2 (x 2, y 3)");
     }
 
     /// (0, 0) が銀河中心の、銀河座標の画像。

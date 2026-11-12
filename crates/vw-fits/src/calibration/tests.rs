@@ -667,6 +667,42 @@ fn a_built_master_is_used_once_the_background_work_is_done() {
 }
 
 #[test]
+fn the_name_of_a_built_master_does_not_depend_on_the_build_of_vw() {
+    // FNV-1a の決まった値（"abc" → e71fa2190541574b）。
+    let mut h = stack::Fnv::default();
+    h.write(b"abc");
+    assert_eq!(h.0, 0xe71f_a219_0541_574b);
+}
+
+#[test]
+fn masters_are_built_one_at_a_time() {
+    let dir = temp_dir("one-at-a-time");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    single_darks(&dir, 3);
+    let (p, calibration) = plugin(Options {
+        wait_for_masters: false,
+        ..building(&dir.join("cache"))
+    });
+    // ほかのマスターを作っている間は、順番を待つ。
+    let turn = calibration.0.build_turn.lock().unwrap();
+    let before = calibration.generation();
+    open(&p, &light);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        calibration.generation(),
+        before,
+        "built while another was building"
+    );
+    drop(turn);
+    let start = std::time::Instant::now();
+    while calibration.generation() == before {
+        assert!(start.elapsed().as_secs() < 10, "the master was not built");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(state(&open(&p, &light)), Some(APPLIED));
+}
+
+#[test]
 fn adding_a_frame_gives_a_new_master() {
     let dir = temp_dir("added");
     single_darks(&dir, 3);

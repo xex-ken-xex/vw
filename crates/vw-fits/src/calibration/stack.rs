@@ -3,8 +3,6 @@
 //! 重ね方は、画素ごとに中央値から σ（中央値からの外れの中央値 × 1.4826）の何倍も外れた値を
 //! 除いた平均（σ クリップ平均）。宇宙線や、撮影中に横切った人工衛星の筋を消す。
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use vw_core::{ColorModel, PixelData, VwImage};
@@ -81,22 +79,29 @@ pub(super) fn groups(frames: &[Frame]) -> Vec<Group<'_>> {
 impl Group<'_> {
     /// キャッシュのファイル名。元のファイル（パス・大きさ・更新時刻）と σ が変われば変わるので、
     /// 撮り足した・撮り直したときは作り直す。
+    ///
+    /// 標準のハッシュ（`DefaultHasher`）を使わないのは、計算が Rust の版で変わってよいことに
+    /// なっていて、vw を新しくするたびに名前が変わり、作ったマスターを作り直してしまうため。
     pub fn file_name(&self, sigma: f64) -> String {
-        let mut h = DefaultHasher::new();
+        let mut h = Fnv::default();
         let mut paths: Vec<&PathBuf> = self.frames.iter().map(|f| &f.path).collect();
         paths.sort();
         for p in paths {
-            p.hash(&mut h);
+            h.write(p.as_os_str().as_encoded_bytes());
+            h.write(&[0]);
             if let Ok(m) = std::fs::metadata(p) {
-                m.len().hash(&mut h);
-                if let Ok(t) = m.modified() {
-                    t.hash(&mut h);
+                h.write(&m.len().to_le_bytes());
+                if let Ok(t) = m.modified()
+                    && let Ok(since) = t.duration_since(std::time::UNIX_EPOCH)
+                {
+                    h.write(&since.as_secs().to_le_bytes());
+                    h.write(&since.subsec_nanos().to_le_bytes());
                 }
             }
         }
-        sigma.to_bits().hash(&mut h);
+        h.write(&sigma.to_bits().to_le_bytes());
         let kind = self.kind.name().replace(' ', "");
-        format!("{PREFIX}{kind}-{:016x}.fits", h.finish())
+        format!("{PREFIX}{kind}-{:016x}.fits", h.0)
     }
 
     /// 重ねて `out` に書く。途中のファイルは別の名前で書いてから置き換えるので、書きかけを読まない。
@@ -172,6 +177,23 @@ impl Group<'_> {
             }
         }
         write(self, &master, sigma, out)
+    }
+}
+
+/// 64 ビットの FNV-1a。どの版の vw でも、同じバイト列から同じ値になる。
+pub(super) struct Fnv(pub(super) u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Fnv {
+    pub(super) fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
     }
 }
 

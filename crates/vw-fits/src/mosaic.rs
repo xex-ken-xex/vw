@@ -264,11 +264,21 @@ fn median_in(pixels: &[f32], width: usize, section: &Section) -> f32 {
     *v.select_nth_unstable_by(mid, f32::total_cmp).1
 }
 
+/// 空の座標を出す検出器 1 つ。
+#[derive(Debug)]
+struct SkyDetector {
+    detsec: Section,
+    datasec: Section,
+    /// その HDU の WCS（上下を返さない向き）。
+    sky: crate::sky::ImageSky,
+    /// `EXTNAME`（なければ `HDU n`）。
+    name: String,
+}
+
 /// 組み立てた全体の画素と空の座標。カーソルの下の検出器の WCS で出す。
 #[derive(Debug)]
 pub(crate) struct MosaicSky {
-    /// 検出器ごとの、`DETSEC` と `DATASEC` と、その HDU の WCS（上下を返さない向き）。
-    detectors: Vec<(Section, Section, crate::sky::ImageSky)>,
+    detectors: Vec<SkyDetector>,
     origin: (i64, i64),
     /// 描く画像の高さ（縮めた後）。
     rows: usize,
@@ -292,11 +302,16 @@ impl MosaicSky {
                 let lookup =
                     |key: &str| hdu.get(key).or_else(|| hdus[0].get(key)).map(str::to_owned);
                 let height = hdu.int("NAXIS2")? as usize;
-                Some((
-                    d.detsec,
-                    d.datasec,
-                    crate::sky::ImageSky::read(&lookup, height, false)?,
-                ))
+                Some(SkyDetector {
+                    detsec: d.detsec,
+                    datasec: d.datasec,
+                    sky: crate::sky::ImageSky::read(&lookup, height, false)?,
+                    name: hdu
+                        .get("EXTNAME")
+                        .map(|n| n.trim().to_owned())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| format!("HDU {}", d.index)),
+                })
             })
             .collect();
         (!detectors.is_empty()).then_some(Self {
@@ -309,7 +324,7 @@ impl MosaicSky {
     }
 
     /// 表示の画素（0 から）を、その下の検出器と、その HDU の画素（0 から、ファイルの並び）にする。
-    fn detector_pixel(&self, x: f64, y: f64) -> Option<(&crate::sky::ImageSky, f64, f64)> {
+    fn detector_pixel(&self, x: f64, y: f64) -> Option<(&SkyDetector, f64, f64)> {
         // 縮めた画像の中で上下を戻してから、縮める前の画素（まとめた画素の真ん中）にする。
         let y = if self.flipped {
             self.rows as f64 - 1.0 - y
@@ -321,7 +336,8 @@ impl MosaicSky {
         let fy = (y + 0.5) * bin - 0.5;
         let dx = self.origin.0 as f64 + mx;
         let dy = self.origin.1 as f64 + fy;
-        self.detectors.iter().find_map(|(det, data, sky)| {
+        self.detectors.iter().find_map(|detector| {
+            let (det, data) = (&detector.detsec, &detector.datasec);
             let (x0, x1) = det.x_range();
             let (y0, y1) = det.y_range();
             let inside = |v: f64, a: i64, b: i64| v >= a as f64 - 0.5 && v <= b as f64 + 0.5;
@@ -345,19 +361,24 @@ impl MosaicSky {
             };
             let sx = place(along(dx, det.x), data.x) - 1.0;
             let sy = place(along(dy, det.y), data.y) - 1.0;
-            Some((sky, sx, sy))
+            Some((detector, sx, sy))
         })
     }
 }
 
 impl SkyMap for MosaicSky {
     fn at(&self, x: f64, y: f64) -> Option<[f64; 2]> {
-        let (sky, x, y) = self.detector_pixel(x, y)?;
-        sky.at(x, y)
+        let (d, x, y) = self.detector_pixel(x, y)?;
+        d.sky.at(x, y)
+    }
+
+    fn part(&self, x: f64, y: f64) -> Option<(String, [f64; 2])> {
+        let (d, x, y) = self.detector_pixel(x, y)?;
+        Some((d.name.clone(), [x, y]))
     }
 
     fn galactic(&self, x: f64, y: f64) -> Option<[f64; 2]> {
-        let (sky, x, y) = self.detector_pixel(x, y)?;
-        sky.galactic(x, y)
+        let (d, x, y) = self.detector_pixel(x, y)?;
+        d.sky.galactic(x, y)
     }
 }

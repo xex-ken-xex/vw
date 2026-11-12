@@ -193,6 +193,9 @@ struct Shared {
     hot_off: RwLock<HashSet<PathBuf>>,
     /// 裏で作っている・作れなかったマスター（キャッシュのファイルのパス）。
     building: Mutex<HashSet<PathBuf>>,
+    /// マスターを作る順番。作るのは 1 つずつにする。1 つ作るのに最大 1 GB 読むので、組が
+    /// いくつもあるフォルダを開いたときに、全部を一度に作るとメモリが足りなくなるため。
+    build_turn: Mutex<()>,
     failed: Mutex<HashMap<PathBuf, String>>,
     /// マスターができるたびに 1 つ進む。アプリは変わったら FITS を読み直す。
     generation: AtomicU64,
@@ -327,7 +330,15 @@ impl Calibration {
                     continue;
                 }
                 if o.wait_for_masters {
-                    if let Err(e) = build(kind, &singles, o.master_rejection_sigma, &path) {
+                    let result = {
+                        let _turn = self.0.build_turn.lock().unwrap_or_else(|e| e.into_inner());
+                        if path.exists() {
+                            Ok(())
+                        } else {
+                            build(kind, &singles, o.master_rejection_sigma, &path)
+                        }
+                    };
+                    if let Err(e) = result {
                         self.0
                             .failed
                             .lock()
@@ -377,7 +388,10 @@ impl Calibration {
         }
         let shared = self.0.clone();
         std::thread::spawn(move || {
-            let result = build(kind, &singles, sigma, &path);
+            let result = {
+                let _turn = shared.build_turn.lock().unwrap_or_else(|e| e.into_inner());
+                build(kind, &singles, sigma, &path)
+            };
             if let Err(e) = result {
                 shared
                     .failed

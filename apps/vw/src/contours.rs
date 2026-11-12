@@ -146,7 +146,7 @@ pub fn trace(values: &[f32], width: usize, levels: &[(f64, bool)]) -> Vec<Contou
 fn squares(values: &[f32], width: usize, height: usize, step: usize, level: f32) -> Segments {
     let mut out = Vec::new();
     let mut edges = Vec::new();
-    if width <= step || height <= step {
+    if width < 2 || height < 2 {
         return (out, edges);
     }
     let at = |x: usize, y: usize| values[y * width + x];
@@ -160,11 +160,12 @@ fn squares(values: &[f32], width: usize, height: usize, step: usize, level: f32)
         };
         [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
     };
+    // 間引いた幅で割り切れない右端と下端は、最後の画素までの狭いマスにする（線が欠けないため）。
     let mut y = 0;
-    while y + step < height {
+    while y + 1 < height {
         let mut x = 0;
-        while x + step < width {
-            let (x1, y1) = (x + step, y + step);
+        while x + 1 < width {
+            let (x1, y1) = ((x + step).min(width - 1), (y + step).min(height - 1));
             // 左上・右上・右下・左下の順。
             let corners = [(x, y), (x1, y), (x1, y1), (x, y1)];
             let v = corners.map(|(cx, cy)| at(cx, cy));
@@ -295,6 +296,18 @@ mod tests {
         // 縦の線 1 本。間引いた格子でも 1 マスに 1 本で、高さの分だけ出る。
         let lines = trace(&v, w, &[(1000.5, false)]);
         assert_eq!(lines[0].segments.len(), 1);
+    }
+
+    #[test]
+    fn a_thinned_grid_still_reaches_the_right_and_bottom_edges() {
+        // 4,098 列を 3 画素おきに見ると、最後の 2 列が割り切れずに余る。
+        let (w, h) = (MAX_GRID * 2 + 2, 5);
+        let v: Vec<f32> = (0..w * h).map(|i| (i % w) as f32).collect();
+        let near_right = trace(&v, w, &[((w - 2) as f64 + 0.5, false)]);
+        assert_eq!(near_right[0].segments.len(), 2, "one per band of rows");
+        let rows: Vec<f32> = (0..w * h).map(|i| (i / w) as f32).collect();
+        let near_bottom = trace(&rows, w, &[(3.5, false)]);
+        assert!(!near_bottom[0].segments.is_empty());
     }
 
     #[test]

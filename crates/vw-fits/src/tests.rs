@@ -979,6 +979,46 @@ fn velocity_and_wavelength_axes_are_kept_in_base_units() {
     assert!(matches!(other.kind, AxisKind::Other { .. }));
 }
 
+#[test]
+fn wavelength_units_are_read_the_same_on_image_axes_and_table_columns() {
+    // ヘッダは ASCII なので、µm はここでは試さない。
+    for unit in ["um", "micron", "microns"] {
+        let mut c = image_cards(-32, &[2]);
+        c.extend([
+            card("CTYPE1", "'WAVE    '"),
+            card("CUNIT1", &format!("'{unit}'")),
+            card("CRVAL1", "2.0"),
+            card("CDELT1", "1.0"),
+        ]);
+        let axis = decode(&fits(&c, &f32_bytes(&[0.0, 1.0])))
+            .spectrum
+            .unwrap()
+            .axis
+            .clone();
+        assert!(
+            (axis.value(0) - 2e-6).abs() < 1e-18,
+            "{unit}: {}",
+            axis.value(0)
+        );
+        let tunit = format!("'{unit}'");
+        let mut file = empty_primary();
+        file.extend(table_hdu(
+            "BINTABLE",
+            8,
+            2,
+            &[
+                ("WAVELENGTH", "1E", &[("TUNIT", tunit.as_str())]),
+                ("FLUX", "1E", &[]),
+            ],
+            &[],
+            &f32_bytes(&[2.0, 1.0, 3.0, 1.0]),
+            0,
+        ));
+        let axis = decode(&file).spectrum.unwrap().axis.clone();
+        assert!((axis.value(0) - 2e-6).abs() < 1e-18, "{unit} in a table");
+    }
+}
+
 /// 256 点のスペクトルの FITS の、`cards` の軸の 1・38・200 画素目の値。
 fn spectral_values(ctype: &str, cards: &[(&str, &str)]) -> (vw_core::spectrum::Axis, [f64; 3]) {
     let mut c = image_cards(-32, &[256]);
@@ -2113,6 +2153,31 @@ fn the_mosaic_sky_is_that_of_the_detector_under_the_pixel() {
     // 2 列目（検出器の x = 2）は 1 列目より西（赤経が小さい）。
     assert!(sky.at(1.0, 0.0).unwrap()[0] < left[0]);
     assert!(sky.at(2.0, 0.0).unwrap()[0] < right[0]);
+}
+
+#[test]
+fn a_mosaic_pixel_tells_its_detector_and_the_pixel_there() {
+    let wcs = [
+        card("CTYPE1", "'RA---TAN'"),
+        card("CTYPE2", "'DEC--TAN'"),
+        card("CRPIX1", "1.0"),
+        card("CRPIX2", "1.0"),
+        card("CRVAL1", "150.0"),
+        card("CRVAL2", "10.0"),
+        card("CDELT1", "-0.001"),
+        card("CDELT2", "0.001"),
+    ];
+    let mut file = empty_primary_with(&[]);
+    for (detsec, name) in [("[1:2,1:2]", "'CCD1    '"), ("[4:3,1:2]", "'CCD2    '")] {
+        let mut cards = wcs.to_vec();
+        cards.push(sec("DETSEC", detsec));
+        cards.push(card("EXTNAME", name));
+        file.extend(detector(2, 2, &[1.0; 4], &cards));
+    }
+    let sky = decode(&file).sky.unwrap();
+    assert_eq!(sky.part(1.0, 1.0), Some(("CCD1".to_owned(), [1.0, 1.0])));
+    // 右の検出器は DETSEC が逆向きなので、全体の右端がその検出器の 1 列目。
+    assert_eq!(sky.part(3.0, 0.0), Some(("CCD2".to_owned(), [0.0, 0.0])));
 }
 
 #[test]
