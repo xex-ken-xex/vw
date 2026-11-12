@@ -77,6 +77,10 @@ impl VwApp {
                     self.choose_calibration(self.active, role, file);
                     continue;
                 }
+                Command::ToggleHotPixels => {
+                    self.toggle_hot_pixels(self.active);
+                    continue;
+                }
                 Command::ToggleCalibration => {
                     self.toggle_calibration(self.active);
                     continue;

@@ -283,6 +283,7 @@ fn read_calibration(r: &mut Section<'_>) -> calibration::Options {
     use calibration as c;
     let d = c::Options::default();
     let tolerance = |v: &f64| TOLERANCE_RANGE.contains(v);
+    let sigma = |v: &f64| (1.0..=10.0).contains(v);
     c::Options {
         apply: r.get("apply").map_or(d.apply, |a: Apply| a == Apply::Auto),
         search_nearby: r.get("search_nearby").unwrap_or(d.search_nearby),
@@ -327,6 +328,16 @@ fn read_calibration(r: &mut Section<'_>) -> calibration::Options {
                 "must be empty or a number",
             )
             .map_or(d.synthetic_bias, |v| bias_value(&v).ok().flatten()),
+        build_masters: r.get("build_masters").unwrap_or(d.build_masters),
+        master_rejection_sigma: r
+            .get_valid("master_rejection_sigma", sigma, "must be 1 to 10")
+            .unwrap_or(d.master_rejection_sigma),
+        hot_pixels: r.get("hot_pixels").unwrap_or(d.hot_pixels),
+        hot_pixel_sigma: r
+            .get_valid("hot_pixel_sigma", sigma, "must be 1 to 10")
+            .unwrap_or(d.hot_pixel_sigma),
+        cache_dir: None,
+        wait_for_masters: false,
     }
 }
 

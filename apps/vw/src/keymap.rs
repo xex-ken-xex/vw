@@ -84,6 +84,8 @@ pub enum Action {
     ToggleGamutWarning,
     ReadQrCodes,
     ToggleCalibration,
+    ToggleHotPixels,
+    ClearCalibrationCache,
     NextVariable,
     PreviousVariable,
     NextColorMap,
@@ -268,6 +270,8 @@ impl Action {
         Action::ToggleGamutWarning,
         Action::ReadQrCodes,
         Action::ToggleCalibration,
+        Action::ToggleHotPixels,
+        Action::ClearCalibrationCache,
         Action::NextVariable,
         Action::PreviousVariable,
         Action::NextColorMap,
@@ -447,6 +451,8 @@ impl Action {
             Action::ToggleGamutWarning => "toggle_gamut_warning",
             Action::ReadQrCodes => "read_qr_codes",
             Action::ToggleCalibration => "toggle_calibration",
+            Action::ToggleHotPixels => "toggle_hot_pixels",
+            Action::ClearCalibrationCache => "clear_calibration_cache",
             Action::NextVariable => "next_variable",
             Action::PreviousVariable => "previous_variable",
             Action::NextColorMap => "next_color_map",
@@ -564,6 +570,8 @@ impl Action {
             Action::ToggleGamutWarning => "Show colors outside sRGB",
             Action::ReadQrCodes => "Read QR codes",
             Action::ToggleCalibration => "Apply dark and flat",
+            Action::ToggleHotPixels => "Fill hot pixels",
+            Action::ClearCalibrationCache => "Clear built calibration masters",
             Action::NextVariable => "Next variable or HDU",
             Action::PreviousVariable => "Previous variable or HDU",
             Action::NextColorMap => "Next color map",
@@ -725,6 +733,8 @@ impl Action {
             | Action::ToggleGamutWarning
             | Action::ReadQrCodes
             | Action::ToggleCalibration
+            | Action::ToggleHotPixels
+            | Action::ClearCalibrationCache
             | Action::NextVariable
             | Action::PreviousVariable
             | Action::NextColorMap
@@ -979,6 +989,8 @@ impl Action {
             Action::ToggleGamutWarning => vec![KeyCombo::plain(O).with(false, true, false)],
             Action::ReadQrCodes => vec![],
             Action::ToggleCalibration => vec![],
+            Action::ToggleHotPixels => vec![],
+            Action::ClearCalibrationCache => vec![],
             Action::NextVariable => vec![KeyCombo::plain(N)],
             Action::PreviousVariable => vec![KeyCombo::plain(N).with(false, true, false)],
             Action::NextColorMap => vec![KeyCombo::plain(C)],

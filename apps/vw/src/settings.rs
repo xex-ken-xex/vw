@@ -1719,6 +1719,13 @@ pub struct FitsCalibration {
     pub equalize_cfa: bool,
     /// バイアスがないときに引く定数。空なら引かない。
     pub synthetic_bias: String,
+    /// 1 枚ずつの校正画像しかないとき、重ねてマスターを作る。
+    pub build_masters: bool,
+    /// マスターを作るときの σ クリップ。
+    pub master_rejection_sigma: f64,
+    /// マスターダークでホットピクセルを探して埋める。
+    pub hot_pixels: bool,
+    pub hot_pixel_sigma: f64,
 }
 
 impl Default for FitsCalibration {
@@ -1739,17 +1746,24 @@ impl Default for FitsCalibration {
             flat_normalize: FlatNormalize::Median,
             equalize_cfa: d.equalize_cfa,
             synthetic_bias: String::new(),
+            build_masters: d.build_masters,
+            master_rejection_sigma: d.master_rejection_sigma,
+            hot_pixels: d.hot_pixels,
+            hot_pixel_sigma: d.hot_pixel_sigma,
         }
     }
 }
 
 impl FitsCalibration {
     pub const TOLERANCE_RANGE: std::ops::RangeInclusive<f64> = 0.0..=3600.0;
+    /// σ の倍数として書ける範囲。1 より小さいと外れでない値まで除き、10 を超えると何も除かない。
+    pub const SIGMA_RANGE: std::ops::RangeInclusive<f64> = 1.0..=10.0;
 
     fn read(r: &mut Reader<'_>) -> Self {
         let d = Self::default();
         let mut r = r.at("fits.calibration");
         let tolerance = |v: &f64| FitsCalibration::TOLERANCE_RANGE.contains(v);
+        let sigma = |v: &f64| FitsCalibration::SIGMA_RANGE.contains(v);
         Self {
             apply: r.get("apply").unwrap_or(d.apply),
             search_nearby: r.get("search_nearby").unwrap_or(d.search_nearby),
@@ -1775,6 +1789,14 @@ impl FitsCalibration {
                     "must be empty or a number",
                 )
                 .unwrap_or(d.synthetic_bias),
+            build_masters: r.get("build_masters").unwrap_or(d.build_masters),
+            master_rejection_sigma: r
+                .get_valid("master_rejection_sigma", sigma, "must be 1 to 10")
+                .unwrap_or(d.master_rejection_sigma),
+            hot_pixels: r.get("hot_pixels").unwrap_or(d.hot_pixels),
+            hot_pixel_sigma: r
+                .get_valid("hot_pixel_sigma", sigma, "must be 1 to 10")
+                .unwrap_or(d.hot_pixel_sigma),
         }
     }
 
@@ -1827,6 +1849,12 @@ impl FitsCalibration {
             },
             equalize_cfa: self.equalize_cfa,
             synthetic_bias: Self::bias_value(&self.synthetic_bias).ok().flatten(),
+            build_masters: self.build_masters,
+            master_rejection_sigma: self.master_rejection_sigma,
+            hot_pixels: self.hot_pixels,
+            hot_pixel_sigma: self.hot_pixel_sigma,
+            cache_dir: None,
+            wait_for_masters: false,
         }
     }
 }
@@ -3222,6 +3250,18 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    /// 校正の決め方。作ったマスターは、設定ファイルと同じフォルダの下に置く。
+    pub fn calibration_options(&self) -> vw_fits::calibration::Options {
+        vw_fits::calibration::Options {
+            cache_dir: self
+                .path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(|d| d.join(vw_fits::calibration::CACHE_FOLDER)),
+            ..self.settings.fits.calibration.options()
+        }
+    }
+
     pub fn default_path() -> Option<PathBuf> {
         config_path(cfg!(windows), |name| std::env::var_os(name))
     }

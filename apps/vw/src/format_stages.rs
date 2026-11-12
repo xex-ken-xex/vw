@@ -16,6 +16,8 @@ pub struct Stage {
     pub note: Option<&'static str>,
     /// 図の中で切り替えられる段（FITS の校正）の、いまの状態。
     pub switch: Option<bool>,
+    /// `switch` が、校正の全部ではなくホットピクセルを埋めるかを切り替える。
+    pub switch_hot_pixels: bool,
     /// 図の中で選び直せるファイル（FITS の校正のマスター）。
     pub choices: Vec<Pick>,
     /// 値が長い段（ファイル名など）。名前の下に値を折り返して出す。
@@ -43,6 +45,7 @@ impl Stage {
             lines: Vec::new(),
             note: None,
             switch: None,
+            switch_hot_pixels: false,
             choices: Vec::new(),
             stacked: false,
             levels: false,
@@ -342,7 +345,9 @@ fn gray_levels(bits_per_sample: u32, significant_bits: u32) -> Stage {
 /// 当てていなければ、当てられなかったわけを 1 つの段に出す。
 /// 校正用の画像そのもの（ダークなど）には段を出さない。
 fn calibration(m: &vw_core::Metadata) -> Vec<Stage> {
-    use vw_fits::calibration::{APPLIED, CHOSEN, GROUP, NOT_APPLIED, Role, STATE};
+    use vw_fits::calibration::{
+        APPLIED, CHOSEN, GROUP, HOT_PIXELS, HOT_PIXELS_OFF, NOT_APPLIED, Role, STATE,
+    };
     let Some(state) = m.get(GROUP, STATE) else {
         return Vec::new();
     };
@@ -385,6 +390,7 @@ fn calibration(m: &vw_core::Metadata) -> Vec<Stage> {
     let candidate_keys: Vec<&str> = Role::ALL.iter().map(|r| r.candidate_key()).collect();
     let mut subtract = Stage::new("Dark subtraction");
     let mut divide = Stage::new("Flat division");
+    let mut hot = Stage::new("Hot pixels");
     // 式と前後の中央値は、当てた全部の結果なので最後の段に出す。
     let mut summary = Vec::new();
     for (key, value) in &entries {
@@ -397,6 +403,7 @@ fn calibration(m: &vw_core::Metadata) -> Vec<Stage> {
                 continue;
             }
             "Flat" | "Flat dark" | "Flat (1-99 %)" => &mut divide,
+            HOT_PIXELS => &mut hot,
             _ => &mut subtract,
         };
         into.lines.push((key.to_string(), file_name_only(value)));
@@ -417,6 +424,16 @@ fn calibration(m: &vw_core::Metadata) -> Vec<Stage> {
         stage.stacked = true;
         stage.choices = roles.into_iter().filter_map(pick).collect();
         out.push(stage);
+    }
+    // ホットピクセルは引いて割った後に埋めるので、その後ろの段。埋められる（ダークがある）
+    // ときだけ切り替えを出す。
+    if let Some((_, value)) = hot.lines.first() {
+        let on = value.ends_with("sigma)");
+        if on || value == HOT_PIXELS_OFF {
+            hot.switch = Some(on);
+            hot.switch_hot_pixels = true;
+        }
+        out.push(hot);
     }
     if let Some(last) = out.last_mut() {
         last.lines.extend(summary);

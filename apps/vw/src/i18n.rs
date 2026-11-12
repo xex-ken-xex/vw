@@ -1125,6 +1125,37 @@ const JA: &[(&str, &str)] = &[
         "マスターバイアスがないときに、代わりに引く値（例 2048）。空なら引きません。",
     ),
     ("Apply dark and flat", "ダーク・フラットを当てる"),
+    (
+        "Build masters from single frames",
+        "1 枚ずつの画像からマスターを作る",
+    ),
+    (
+        "When only single darks, flats, biases or dark flats are found, stack them into a master in the background (sigma-clipped mean) and keep it in the calibration-cache folder next to the settings file. Lights are shown as they are until it is ready. Single frames are never changed.",
+        "1 枚ずつのダーク・フラット・バイアス・ダークフラットしか見つからないとき、裏で重ねてマスターを作り（σ クリップ平均）、設定ファイルの隣の calibration-cache フォルダに残します。できるまでライトは素のまま出します。1 枚ずつの画像は変えません。",
+    ),
+    (
+        "Rejection when building masters",
+        "マスターを作るときの外れ値の除き方",
+    ),
+    (
+        "Values further than this many sigma from the median of each pixel (cosmic rays, satellite trails) are left out of the built master.",
+        "画素ごとの中央値からこの σ の倍数より外れた値（宇宙線、人工衛星の筋）を、作るマスターから除きます。",
+    ),
+    ("Fill hot pixels", "ホットピクセルを埋める"),
+    (
+        "Pixels of the master dark brighter than their neighbours by the sigma below are filled in the light with the median of their neighbours (of the same color on a color camera). Needs a dark.",
+        "マスターダークで周りの画素より下の σ の倍数だけ明るい画素を、ライトでは周りの画素（カラーカメラでは同じ色の画素）の中央値で埋めます。ダークが要ります。",
+    ),
+    ("Hot pixel threshold", "ホットピクセルのしきい値"),
+    (
+        "How far above its neighbours in the master dark a pixel must be to count as hot, in sigma.",
+        "マスターダークで周りの画素よりどれだけ明るければホットピクセルとみなすか（σ の倍数）。",
+    ),
+    (
+        "Clear built calibration masters",
+        "作った校正のマスターを消す",
+    ),
+    ("Hot pixels", "ホットピクセル"),
     ("Bayer demosaic", "Bayer のデモザイク"),
     (
         "Each pixel gets the two missing colors from its neighbours.",

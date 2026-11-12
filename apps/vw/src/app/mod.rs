@@ -201,6 +201,8 @@ pub struct VwApp {
     hdf_pattern: String,
     /// 校正の結果をログに出したフォルダ。同じフォルダのライトを次々に見ても 1 回だけ出す。
     calibration_logged: HashSet<PathBuf>,
+    /// 最後に見た、裏で作ったマスターの数（[`vw_fits::Calibration::generation`]）。
+    calibration_generation: u64,
     /// 当てていない表示の指定（[`vw_dicom::NOT_APPLIED`]）をログに書いたファイル。フレームを送るたびに書かないため。
     not_applied_logged: HashSet<PathBuf>,
     /// いまのテクスチャの拡大・縮小の設定。設定が変わったら読み込み済みのテクスチャにも当てる。
@@ -773,7 +775,7 @@ impl VwApp {
 
         registry.set_probe_extensions(settings.settings.dicom.probe());
         fits.set(settings.settings.fits.options());
-        calibration.set_options(settings.settings.fits.calibration.options());
+        calibration.set_options(settings.calibration_options());
         netcdf.set(settings.settings.netcdf.options());
         hdf_extensions.set(settings.settings.netcdf.hdf_extensions());
         vw_core::limits::set_max_image_bytes(settings.settings.viewer.image_size_limit_bytes());
@@ -821,6 +823,7 @@ impl VwApp {
             hdf_extensions,
             hdf_pattern: settings.settings.netcdf.hdf_extensions.clone(),
             calibration_logged: Default::default(),
+            calibration_generation: 0,
             not_applied_logged: Default::default(),
             texture_options: settings.settings.viewer.texture_options(),
             color_rules: Arc::new(crate::colormap::Rules::new(&settings.settings.pipeline)),
@@ -1333,6 +1336,8 @@ impl VwApp {
                 None => self.log.warn("No image to read QR codes from"),
             },
             Action::ToggleCalibration => self.toggle_calibration(i),
+            Action::ToggleHotPixels => self.toggle_hot_pixels(i),
+            Action::ClearCalibrationCache => self.clear_calibration_cache(),
             Action::NextVariable => self.step_variable(i, 1),
             Action::PreviousVariable => self.step_variable(i, -1),
             Action::NextColorMap => self.next_color_map(i),
@@ -1442,6 +1447,7 @@ impl eframe::App for VwApp {
         self.autoplay_animation();
         self.drive_playback(&ctx);
         self.reload_settings(&ctx);
+        self.follow_built_masters(&ctx);
         self.reload_presets();
         self.system_info_ui(&ctx);
         self.gradation_test_ui(&ctx);

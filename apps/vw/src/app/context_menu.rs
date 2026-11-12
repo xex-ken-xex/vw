@@ -57,6 +57,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
     &[
         Act(Action::DevelopRaw),
         Act(Action::ToggleCalibration),
+        Act(Action::ToggleHotPixels),
         Entry::Variable,
         Entry::ColorMap,
         Act(Action::TogglePixelPipeline),
@@ -179,6 +180,7 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
         Action::ComposeColors => shown_if(slot.is_some_and(composable)),
         Action::DevelopRaw => shown_if(slot.is_some_and(developable)),
         Action::ToggleCalibration => shown_if(slot.and_then(calibration_on).is_some()),
+        Action::ToggleHotPixels => shown_if(slot.and_then(|s| s.hot_pixels_on()).is_some()),
         Action::AiTagImage | Action::FindFacesImage => ai(),
         // 展開した ZIP の中には書けないので、AI タグとデータセットの操作は出さない。
         Action::AiTagFolder | Action::FindFacesFolder if in_archive => Hidden,
@@ -432,6 +434,7 @@ fn action_item(
     let lang = cx.lang;
     let checked = match action {
         Action::ToggleCalibration => target.slot().and_then(calibration_on) == Some(true),
+        Action::ToggleHotPixels => target.slot().and_then(|s| s.hot_pixels_on()) == Some(true),
         _ => false,
     };
     let shortcut = cx
