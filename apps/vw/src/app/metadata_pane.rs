@@ -56,6 +56,9 @@ impl VwApp {
                         .unwrap_or(&shown.path)
                         .display()
                         .to_string()
+                } else if let Some(spec) = crate::moments::split(&shown.path) {
+                    // モーメント図はメモリの上にしかないので、作った元のキューブを出す。
+                    spec.file.display().to_string()
                 } else {
                     frames::file_of(&shown.path).display().to_string()
                 },

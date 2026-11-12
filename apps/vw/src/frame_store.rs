@@ -116,6 +116,9 @@ impl Entry {
 /// フレームの場所だけを読める形式はその場所だけを読み、それ以外はファイル全体を読む。
 /// 表示の置き場（[`STORE`]）には入れない。見ている画像の先読みを追い出さないため。
 pub fn decode_path(registry: &Registry, path: &Path) -> Result<(VwImage, String, usize), String> {
+    if crate::moments::split(path).is_some() {
+        return crate::moments::decode(registry, path);
+    }
     let (file, frame) = crate::frames::split(path).unwrap_or((path.to_path_buf(), 0));
     let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", file.display());
     if let Some((source, plugin)) = STORE.source(registry, &file) {

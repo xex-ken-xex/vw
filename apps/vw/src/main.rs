@@ -65,6 +65,7 @@ mod map_window;
 mod marks;
 mod memory;
 mod meta_view;
+mod moments;
 use vw_pipeline::{expr, nodes};
 mod owned_windows;
 mod packaged;

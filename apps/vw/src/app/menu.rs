@@ -161,7 +161,7 @@ impl VwApp {
                         Action::ToggleColorGauge,
                         Action::ToggleSupplementalPalette,
                     ],
-                    &[Action::ToggleContours],
+                    &[Action::ToggleContours, Action::MakeMoments],
                     &[
                         Action::ToggleAutoStretch,
                         Action::ToggleClippingWarning,

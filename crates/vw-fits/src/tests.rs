@@ -1386,3 +1386,144 @@ fn a_flat_image_has_no_spectrum_at_a_point() {
             .is_none()
     );
 }
+
+/// 2 x 1 画素、5 チャンネルの速度のキューブ（VRAD、-20 から 10 km/s ずつ）。左の画素は 0 km/s に
+/// 高さ 4 の山（その両隣に 2）、右の画素は全部 0。
+fn velocity_cube(extra: &[String]) -> Vec<u8> {
+    velocity_cube_with(extra, [0.0; 5])
+}
+
+/// [`velocity_cube`] の、右の画素の値を `right` にしたもの。
+fn velocity_cube_with(extra: &[String], right: [f32; 5]) -> Vec<u8> {
+    let mut cards = image_cards(-32, &[2, 1, 5]);
+    cards.extend([
+        card("CTYPE1", "'RA---SIN'"),
+        card("CRVAL1", "202.5"),
+        card("CRPIX1", "1"),
+        card("CDELT1", "-0.001"),
+        card("CTYPE2", "'DEC--SIN'"),
+        card("CRVAL2", "47.2"),
+        card("CRPIX2", "1"),
+        card("CDELT2", "0.001"),
+        card("CTYPE3", "'VRAD'"),
+        card("CRVAL3", "-20000"),
+        card("CRPIX3", "1"),
+        card("CDELT3", "10000"),
+        card("CUNIT3", "'m/s'"),
+        card("BUNIT", "'Jy/beam'"),
+        card("BMAJ", "0.002"),
+    ]);
+    cards.extend(extra.iter().cloned());
+    let left = [0.0f32, 2.0, 4.0, 2.0, 0.0];
+    let values: Vec<f32> = left.iter().zip(right).flat_map(|(&l, r)| [l, r]).collect();
+    fits(&cards, &f32_bytes(&values))
+}
+
+fn moment(file: &[u8], order: moments::Order, clip: f64) -> VwImage {
+    let options = moments::Options {
+        order,
+        channels: None,
+        clip,
+        frame: 0,
+        hdu: None,
+    };
+    decode(&moments::make(file, &options).unwrap())
+}
+
+#[test]
+fn moment_zero_is_the_line_area_in_value_times_km_per_s() {
+    let img = moment(&velocity_cube(&[]), moments::Order::Zero, 0.0);
+    // (2 + 4 + 2) × 10 km/s。
+    assert_eq!(f32s(&img), vec![80.0, 0.0]);
+    assert_eq!(img.metadata.get(GROUP, "BUNIT"), Some("Jy/beam.km/s"));
+}
+
+#[test]
+fn moment_one_is_the_weighted_velocity_and_two_its_spread() {
+    let file = velocity_cube(&[]);
+    let one = f32s(&moment(&file, moments::Order::One, 0.0));
+    assert!(one[0].abs() < 1e-4, "{one:?}");
+    assert!(one[1].is_nan(), "no signal, no velocity");
+    let two = f32s(&moment(&file, moments::Order::Two, 0.0));
+    // 重み 2・4・2 で -10・0・10 km/s: 分散は (2·100 + 2·100) / 8 = 50。
+    assert!((two[0] - 50f32.sqrt()).abs() < 1e-4, "{two:?}");
+    assert_eq!(
+        moment(&file, moments::Order::One, 0.0)
+            .metadata
+            .get(GROUP, "BUNIT"),
+        Some("km/s")
+    );
+}
+
+#[test]
+fn values_under_the_threshold_are_left_out() {
+    // 全部の値の中央値は 1、雑音は 1.4826。1 倍のしきい値 2.48 を超えるのは左の山の頂上の 4 だけ。
+    let file = velocity_cube_with(&[], [1.0, -1.0, 1.0, -1.0, 1.0]);
+    let img = moment(&file, moments::Order::Zero, 1.0);
+    assert_eq!(f32s(&img), vec![40.0, 0.0]);
+    let all = moment(&file, moments::Order::Zero, 0.0);
+    assert_eq!(f32s(&all), vec![80.0, 10.0]);
+}
+
+#[test]
+fn a_chosen_channel_range_sums_only_those_channels() {
+    let options = moments::Options {
+        order: moments::Order::Zero,
+        channels: Some((2, 3)),
+        clip: 0.0,
+        frame: 0,
+        hdu: None,
+    };
+    let img = decode(&moments::make(&velocity_cube(&[]), &options).unwrap());
+    assert_eq!(f32s(&img), vec![60.0, 0.0]);
+    let outside = moments::Options {
+        channels: Some((3, 9)),
+        ..options
+    };
+    assert!(moments::make(&velocity_cube(&[]), &outside).is_err());
+}
+
+#[test]
+fn a_moment_map_keeps_the_sky_coordinates_beam_and_row_order() {
+    let file = velocity_cube(&[card("ROWORDER", "'BOTTOM-UP'")]);
+    let img = moment(&file, moments::Order::Zero, 0.0);
+    assert!(img.sky.is_some());
+    assert_eq!(img.metadata.get(GROUP, "BMAJ"), Some("0.002"));
+    assert_eq!(img.metadata.get(GROUP, "ROWORDER"), Some("BOTTOM-UP"));
+    assert_eq!(img.metadata.get(GROUP, "NAXIS"), Some("2"));
+}
+
+#[test]
+fn a_frequency_cube_with_a_rest_frequency_gives_velocities() {
+    let mut cards = image_cards(-32, &[1, 1, 3]);
+    cards.extend([
+        card("CTYPE3", "'FREQ'"),
+        card("CRVAL3", "1.42E9"),
+        card("CRPIX3", "2"),
+        card("CDELT3", "-1.0E5"),
+        card("RESTFRQ", "1.42E9"),
+    ]);
+    let file = fits(&cards, &f32_bytes(&[0.0, 0.0, 1.0]));
+    let one = f32s(&moment(&file, moments::Order::One, 0.0));
+    // 3 チャンネル目は 1.4199 GHz: 電波の定義で c × 1e5 / 1.42e9 ≈ 21.1 km/s。
+    let expected = 299_792.458 * 1.0e5 / 1.42e9;
+    assert!((f64::from(one[0]) - expected).abs() < 1e-3, "{one:?}");
+}
+
+#[test]
+fn the_channels_of_a_cube_are_read_from_its_header_alone() {
+    let dir = std::env::temp_dir().join(format!("vw-fits-moments-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cube.fits");
+    std::fs::write(&path, velocity_cube(&[])).unwrap();
+    let found = moments::channels_of_file(&path, None).unwrap();
+    assert_eq!(found.count, 5);
+    assert!((found.axis.value(4) - 20_000.0).abs() < 1e-6);
+    let flat = dir.join("flat.fits");
+    std::fs::write(
+        &flat,
+        fits(&image_cards(16, &[2, 2]), &i16_bytes(&[1, 2, 3, 4])),
+    )
+    .unwrap();
+    assert!(moments::channels_of_file(&flat, None).is_none());
+}

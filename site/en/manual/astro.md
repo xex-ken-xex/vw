@@ -119,5 +119,20 @@ Place a cross with the [pixel probe](check.html) (**V**) on a FITS cube (two or 
 - Crosses on a cube belong to the file, not the plane, so they stay in place as you step through planes
 - The horizontal axis is the frequency, velocity or wavelength axis (chosen even when a polarization axis comes first); the vertical unit is BUNIT. A vertical line marks the shown plane
 - Hover to see the axis value of that plane and the value of each cross. Click to move the slot to that plane
+- Drag sideways to shade and choose a range of channels; [moment maps](#moment-maps) start from it. Double-click to clear it
 - Tile-compressed (`.fz`) cubes are read too; the first read takes longer while the planes are decompressed
 - To stop the window from opening when a cross is placed, turn off **Open the spectrum after placing a cross on a cube** (`measure.open_spectrum`, on by default) under **Reports and graphs**
+
+### Moment maps
+
+You can sum the planes of a FITS cube pixel by pixel along its spectral axis. Open the window with **Make moment maps...** in the slot's right-click menu or the **Image** menu (a key can be assigned under **Settings** → **Keys**; no key by default).
+
+- **Moment 0 (integrated intensity)**: the sum of value × channel width in velocity. The unit is BUNIT·km/s (such as Jy/beam.km/s)
+- **Moment 1 (velocity)**: the value-weighted mean velocity (km/s), shown with the blue-white-red color map, symmetric around the middle velocity
+- **Moment 2 (velocity spread)**: the value-weighted standard deviation of the velocity (km/s)
+- Velocities come from the rest frequency (RESTFRQ) with the radio definition on a frequency axis, and from the rest wavelength with the optical definition on a wavelength axis. Axes that cannot be turned into velocities are used as they are (Hz and so on)
+- Choose the range with **First channel** and **Last channel** (all channels at first). If you dragged a range across the [Spectrum at crosses](#spectrum-at-crosses) graph, the window starts from it. Double-click the graph to clear it
+- **Threshold**: only values above the median plus this many times the noise (1.4826 × the median distance from the median) are summed. 0 sums every value
+- Each chosen map opens in a new slot after the cube's slot. The maps live in memory only; the file is not changed. They keep the sky coordinates (WCS) and the beam, so the sky chart and the sky coordinates at crosses work on them
+- **Save as FITS...** in a map's right-click menu writes it as FITS where you choose (an existing file of the same name is not overwritten)
+- The orders and threshold chosen at first are **Moment maps to make** (`moments.orders`, default 0, 1 and 2) and **Moment map threshold** (`moments.clip`, default 3) under **Astronomy images (FITS)**

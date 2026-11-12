@@ -56,6 +56,7 @@ mod map_consent;
 mod memory_hint;
 mod menu;
 mod metadata_pane;
+mod moments_dialog;
 mod open_folder;
 mod people_graph_ui;
 mod people_ui;
@@ -287,6 +288,8 @@ pub struct VwApp {
     /// 消してよいか確かめている、フォルダと AI タグの記録がある画像。
     ai_remove: Option<(PathBuf, Vec<PathBuf>)>,
     compose_dialog: Option<compose_dialog::ComposeDialog>,
+    moments_dialog: Option<moments_dialog::MomentsDialog>,
+    fits_save: Option<moments_dialog::FitsSave>,
     /// 「AI タグの整理」。
     ai_tidy: Option<ai_tidy::TidyWindow>,
     /// メタデータ欄の AI タグのグループ名と、その行ごとのタグ名（タグでない行は `None`）。
@@ -857,6 +860,8 @@ impl VwApp {
             graph_window: Default::default(),
             ai_remove: None,
             compose_dialog: None,
+            moments_dialog: None,
+            fits_save: None,
             ai_tidy: None,
             meta_show_hidden: false,
             meta_closed,
@@ -1091,6 +1096,8 @@ impl VwApp {
             }
             Action::CopyImage => self.copy_image(ctx, i),
             Action::ComposeColors => self.open_compose_dialog(i),
+            Action::MakeMoments => self.open_moments_dialog(i),
+            Action::SaveAsFits => self.open_fits_save(i),
             Action::AlignAndCompare => self.open_compare_dialog(i),
             Action::SetQualityReference => self.set_quality_reference(i),
             Action::AiTagImage => {
@@ -1586,6 +1593,8 @@ impl eframe::App for VwApp {
         }
         self.resume_offer_dialog(&ctx);
         self.compose_dialog_ui(&ctx);
+        self.moments_dialog_ui(&ctx);
+        self.fits_save_ui(&ctx);
         self.compare_dialog_ui(&ctx);
         self.finish_trash_job();
         self.finish_restore_job();

@@ -48,6 +48,8 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
         Act(Action::CopyImage),
         Act(Action::ComposeColors),
         Act(Action::AlignAndCompare),
+        Act(Action::MakeMoments),
+        Act(Action::SaveAsFits),
     ],
     &[Act(Action::SetQualityReference), Act(Action::ReadQrCodes)],
     &[
@@ -180,6 +182,14 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
             None => Yes,
         },
         Action::ComposeColors => shown_if(slot.is_some_and(composable)),
+        Action::MakeMoments => shown_if(
+            slot.and_then(|s| s.shown())
+                .is_some_and(|sh| crate::viewer::is_fits_cube(&sh.info)),
+        ),
+        Action::SaveAsFits => shown_if(
+            slot.and_then(|s| s.shown())
+                .is_some_and(|sh| crate::moments::split(&sh.path).is_some()),
+        ),
         Action::DevelopRaw => shown_if(slot.is_some_and(developable)),
         Action::ToggleCalibration => shown_if(slot.and_then(calibration_on).is_some()),
         Action::ToggleHotPixels => shown_if(slot.and_then(|s| s.hot_pixels_on()).is_some()),
@@ -276,6 +286,9 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
 fn hint(action: Action) -> Option<&'static str> {
     match action {
         Action::ComposeColors => Some("Put two or three gray images on red, green and blue."),
+        Action::MakeMoments => Some(
+            "Sum the planes of this cube into maps of line strength, velocity and velocity spread.",
+        ),
         Action::AlignAndCompare => {
             Some("Line up similar images with this one and measure how they differ.")
         }

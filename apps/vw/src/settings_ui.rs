@@ -656,6 +656,20 @@ const ITEMS: &[Item] = &[
         widget: contour_width_widget,
     },
     Item {
+        section: Section::Fits,
+        key: "moments.orders",
+        title: "Moment maps to make",
+        description: "Which moment maps are chosen at first in Make moment maps: 0 = integrated intensity, 1 = velocity, 2 = velocity spread.",
+        widget: moment_orders_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "moments.clip",
+        title: "Moment map threshold",
+        description: "Only values above the median plus this many times the noise are summed into moment maps. 0 sums every value.",
+        widget: moment_clip_widget,
+    },
+    Item {
         section: Section::Reports,
         key: "measure.open_profile",
         title: "Open the line graph after drawing a line",
@@ -3648,6 +3662,41 @@ fn contour_width_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) ->
             .range(crate::settings::ContourSettings::WIDTH_RANGE)
             .speed(0.05)
             .fixed_decimals(1),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
+}
+
+fn moment_orders_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        for (order, label) in [(0u8, "Moment 0"), (1, "Moment 1"), (2, "Moment 2")] {
+            let mut on = s.moments.orders.contains(&order);
+            // 最後の 1 つは外せない（何も選ばない既定は、窓で選び直すことになるだけなので）。
+            let only = on && s.moments.orders.len() == 1;
+            if ui
+                .add_enabled(!only, egui::Checkbox::new(&mut on, tr(lang, label)))
+                .changed()
+            {
+                if on {
+                    s.moments.orders.push(order);
+                    s.moments.orders.sort_unstable();
+                } else {
+                    s.moments.orders.retain(|o| *o != order);
+                }
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+fn moment_clip_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.moments.clip)
+            .range(crate::settings::MomentSettings::CLIP_RANGE)
+            .speed(0.1)
+            .max_decimals(2)
+            .suffix(tr(lang, " x noise")),
     );
     (r.changed() && !r.dragged()) || r.drag_stopped()
 }
