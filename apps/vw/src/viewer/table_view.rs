@@ -49,11 +49,11 @@ impl Selection {
     }
 
     fn only(row: usize) -> Self {
-        Self(vec![row..=row])
+        Self(std::iter::once(row..=row).collect())
     }
 
     fn range(a: usize, b: usize) -> Self {
-        Self(vec![a.min(b)..=a.max(b)])
+        Self(std::iter::once(a.min(b)..=a.max(b)).collect())
     }
 
     /// `row` を選んでいれば外し、選んでいなければ足す。
