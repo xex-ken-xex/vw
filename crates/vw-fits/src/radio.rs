@@ -2,12 +2,10 @@
 //! ビーム（分解能）の楕円。
 
 use vw_core::Metadata;
+use vw_core::spectrum::AxisKind;
 
 use crate::header::Hdu;
 use crate::sky::{cd_matrix, number};
-
-/// 光の速さ（km/s）。周波数から電波の定義の速度を出すのに使う。
-const LIGHT_KM_S: f64 = 299_792.458;
 
 /// キューブの `frame` 枚目の面が、3 次元目以降の軸でどこにあたるかの文。
 /// 長さ 1 の軸は書かない。軸の値が読めなければ `None`。
@@ -31,6 +29,9 @@ pub(crate) fn plane_text(hdu: &Hdu, extra_axes: &[usize], frame: usize) -> Optio
 fn axis_text(hdu: &Hdu, axis: usize, index: usize) -> Option<String> {
     let key = |k: &str| format!("{k}{axis}");
     let ctype = hdu.get(&key("CTYPE"))?.trim().to_uppercase();
+    if let Some(spectral) = crate::spectral::read(hdu, axis) {
+        return spectral_text(&spectral, index);
+    }
     let unit = hdu
         .get(&key("CUNIT"))
         .map(|u| u.trim().to_owned())
@@ -42,44 +43,50 @@ fn axis_text(hdu: &Hdu, axis: usize, index: usize) -> Option<String> {
         .or_else(|| hdu.float(&format!("CD{axis}_{axis}")))
         .unwrap_or(1.0);
     let value = crval + (index as f64 + 1.0 - crpix) * cdelt;
-    let kind = ctype.split('-').next().unwrap_or_default();
-    Some(match kind {
-        "STOKES" => stokes(value),
-        "FREQ" => {
-            let hz = value * unit_factor(&unit, "Hz");
-            let rest = hdu.float("RESTFRQ").or_else(|| hdu.float("RESTFREQ"));
-            match rest.filter(|f| *f > 0.0) {
-                Some(f0) => format!(
-                    "{}, {:.2} km/s",
-                    frequency(hz),
-                    LIGHT_KM_S * (1.0 - hz / f0)
-                ),
-                None => frequency(hz),
-            }
-        }
-        "VRAD" | "VOPT" | "VELO" | "FELO" | "VELOCITY" => {
-            let m_s = value * unit_factor(&unit, "m/s");
-            format!("{:.2} km/s", m_s / 1000.0)
-        }
-        _ => {
-            let unit = if unit.is_empty() {
-                String::new()
-            } else {
-                format!(" {unit}")
-            };
-            format!("{ctype} {}{unit}", short(value))
-        }
-    })
+    if ctype.split('-').next() == Some("STOKES") {
+        return Some(stokes(value));
+    }
+    let unit = if unit.is_empty() {
+        String::new()
+    } else {
+        format!(" {unit}")
+    };
+    Some(format!("{ctype} {}{unit}", short(value)))
 }
 
-/// `unit` を基本の単位 `base`（Hz か m/s）にする倍率。書いていなければ規格の既定（基本の単位）。
-fn unit_factor(unit: &str, base: &str) -> f64 {
-    match (base, unit.trim()) {
-        ("Hz", "kHz") => 1e3,
-        ("Hz", "MHz") => 1e6,
-        ("Hz", "GHz") => 1e9,
-        ("m/s", "km/s") | ("m/s", "KM/S") => 1e3,
-        _ => 1.0,
+/// スペクトルの軸の面の見出し。周波数・波長は、静止の値があれば視線速度も添える
+/// （周波数は電波の定義、波長は光学の定義）。速度の基準（`SPECSYS`）は括弧で後ろに。
+fn spectral_text(spectral: &crate::spectral::SpectralAxis, index: usize) -> Option<String> {
+    let axis = spectral.axis(0);
+    let value = spectral.value(index as f64)?;
+    // 0 の近くの小さな負の値を「-0.00」と書かないよう、表示の桁より小さければ 0 にする。
+    let km_s = |m_s: f64| {
+        let v = m_s / 1000.0;
+        format!("{:.2} km/s", if v.abs() < 0.005 { 0.0 } else { v })
+    };
+    let mut text = match &axis.kind {
+        AxisKind::Frequency => frequency(value),
+        AxisKind::Wavelength => wavelength(value),
+        AxisKind::Velocity => km_s(value),
+        AxisKind::Other { name, unit } if unit.is_empty() => format!("{name} {}", short(value)),
+        AxisKind::Other { name, unit } => format!("{name} {} {unit}", short(value)),
+    };
+    if let Some(v) = axis.velocity(value) {
+        text.push_str(&format!(", {}", km_s(v)));
+    }
+    if !spectral.frame.is_empty() {
+        text.push_str(&format!(" ({})", spectral.frame));
+    }
+    Some(text)
+}
+
+fn wavelength(m: f64) -> String {
+    if m.abs() >= 1e-3 {
+        format!("{:.4} mm", m * 1e3)
+    } else if m.abs() >= 1e-6 {
+        format!("{:.5} µm", m * 1e6)
+    } else {
+        format!("{:.4} nm", m * 1e9)
     }
 }
 

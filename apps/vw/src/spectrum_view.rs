@@ -135,8 +135,18 @@ pub fn paint(
         body.shrink(4.0)
     };
 
-    let (a, b) = (s.axis.value(0.0), s.axis.value((n - 1) as f64));
-    let (x_lo, x_hi) = (a.min(b), a.max(b));
+    // 非線形の軸でも、値の出せない点（NaN）を除いた端から端までを横軸にする。
+    let (x_lo, x_hi) = s
+        .axis
+        .values
+        .iter()
+        .filter(|v| v.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    if !x_lo.is_finite() {
+        return;
+    }
     let unit = unit_for(&s.axis.kind, x_lo.abs().max(x_hi.abs()));
     let (y_lo, y_hi) = match s.value_range() {
         Some((lo, hi)) if hi > lo => (f64::from(lo), f64::from(hi)),
@@ -237,8 +247,9 @@ pub fn paint(
         run.clear();
     };
     for (i, &v) in s.values.iter().enumerate() {
-        if v.is_finite() {
-            run.push(pos2(to_x(s.axis.value(i as f64)), to_y(f64::from(v))));
+        let at = s.axis.value(i);
+        if v.is_finite() && at.is_finite() {
+            run.push(pos2(to_x(at), to_y(f64::from(v))));
         } else {
             flush(&mut run);
         }
@@ -250,10 +261,8 @@ pub fn paint(
     };
     let t = f64::from((p.x - plot.left()) / plot.width());
     let x = x_lo + (x_hi - x_lo) * t;
-    let index = (((x - s.axis.reference) / s.axis.step) + s.axis.reference_pixel - 1.0)
-        .round()
-        .clamp(0.0, (n - 1) as f64) as usize;
-    let at = s.axis.value(index as f64);
+    let index = s.axis.nearest(x).min(n - 1);
+    let at = s.axis.value(index);
     let sx = to_x(at);
     painter.line_segment(
         [pos2(sx, plot.top()), pos2(sx, plot.bottom())],
@@ -265,8 +274,13 @@ pub fn paint(
             .trim_end()
             .to_owned(),
     ];
-    if let Some(vel) = s.radio_velocity(at) {
-        lines.push(format!("{} km/s", short(vel / 1e3)));
+    if let Some(vel) = s.axis.velocity(at) {
+        let frame = if s.axis.frame.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", s.axis.frame)
+        };
+        lines.push(format!("{} km/s{frame}", short(vel / 1e3)));
     }
     if v.is_finite() {
         painter.circle_filled(pos2(sx, to_y(f64::from(v))), 3.0, LINE);

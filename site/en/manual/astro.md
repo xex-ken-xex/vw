@@ -13,7 +13,7 @@ Make faint images easy to see, then calibrate, select and finish them.
 **View → Sky chart** opens the sky chart window. It outlines where on the sky each astronomy image (FITS) was taken, over stars (to magnitude 6) and constellation lines, borders and names. No network is used.
 
 - The outline depends on what the header tells
-  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN, ARC, STG and ZEA projections and the all-sky CAR, AIT and MOL are read, with the optical distortion polynomials (`-SIP` and `TPV`). Coordinates may be right ascension and declination (`RA` `DEC`) or galactic (`GLON` `GLAT`)
+  - **Solid yellow**: images with WCS in the header (`CTYPE` `CRVAL` `CRPIX` `CD`...). The exact area is known. TAN, SIN (including the slanted form and the older NCP), ARC, STG and ZEA projections and the all-sky CAR, AIT, MOL and SFL (including the older GLS) are read, with the optical distortion polynomials (`-SIP` and `TPV`). Coordinates may be right ascension and declination (`RA` `DEC`) or galactic (`GLON` `GLAT`)
   - **Dotted red**: images with the mount pointing (`RA` `DEC`, or `OBJCTRA` `OBJCTDEC`), focal length (`FOCALLEN`) and pixel size (`XPIXSZ` `YPIXSZ`). The area estimated from the field of view is drawn with north up (rotation unknown)
   - **Red cross**: images with only the mount pointing
   - **Yellow cross**: images wider than a hemisphere, such as all-sky maps or bands around the sky. No outline is drawn; the cross marks the centre
@@ -94,6 +94,8 @@ Radio images (FITS) can have values crossing 0 and many planes (one per frequenc
 
 FITS files with only one axis (NAXIS=1, or every other axis of length 1) are drawn as a **line graph**. The horizontal axis follows CTYPE1 as **frequency, velocity or wavelength**, in units that fit the values such as GHz, km/s or mm. The vertical unit is BUNIT.
 
-- Hover over the graph to see the axis value, the value and the point number of the nearest point. On a frequency axis with a rest frequency (RESTFRQ), the radio velocity is shown too
+Axis values follow the FITS WCS standard (Paper III): channels spaced in frequency but written as wavelength or velocity (`WAVE-F2W`, `VOPT-F2W`, `FREQ-V2F` and the rest of the 12 forms), logarithmic axes (`-LOG`), grism axes (`-GRI`, `-GRA`), air wavelengths (`AWAV`), energy (`ENER`), wave number (`WAVN`), redshift (`ZOPT`), and the older `FELO-HEL` and `VELO-LSR`. Cube plane labels (frequency, velocity) use the same formulas.
+
+- Hover over the graph to see the axis value, the value and the point number of the nearest point. With a rest frequency (RESTFRQ) or rest wavelength (RESTWAV), the line-of-sight velocity is shown too: the radio definition on a frequency axis, the optical definition on a wavelength axis. The velocity frame (SPECSYS, such as LSRK) is added in brackets
 - The line breaks at points without a value (NaN)
 - Turn off **Spectra as graphs** (`fits.spectrum_graph`, on by default) to show them as an image one pixel high
