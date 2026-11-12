@@ -38,12 +38,34 @@ For images with a WCS in the header, the cross of [pixel value check](check.html
 
 JWST and HST images and mosaic camera images hold several image HDUs (extensions) in one file (SCI, ERR and DQ for JWST, one per detector for a mosaic camera). The first image with data (SCI for JWST and HST) is shown first.
 
-- **N** / **Shift+N** switch to the next / previous HDU (the same keys as NetCDF variables). They can also be picked from right-click **HDU**, which lists their sizes and types
+- **N** / **Shift+N** switch to the next / previous HDU (the same keys as NetCDF variables). They can also be picked from right-click **HDU**, which lists their sizes and types. Table HDUs (BINTABLE, TABLE) are listed too, with their numbers of columns and rows ([View tables](#view-tables))
 - An HDU is named by its number (the primary is 0) and `EXTNAME` (`1 SCI`, or `2 SCI,2` when names repeat)
 - The chosen HDU is remembered per file until vw is closed
 - Black and white are chosen again for each HDU. Black and white set by hand are not carried to the next HDU (errors and flags have different ranges from the image)
 - Darks and flats are applied only to the image shown first
 - The metadata shows the primary's cards, the cards of the HDU on show (**FITS HDU n**) and the list of HDUs to choose from (**FITS HDUs**)
+
+## View tables
+
+FITS tables (`BINTABLE` and ASCII `TABLE`) are drawn as a table inside the slot. Catalog and spectrum files without an image open on their first table. In files with both images and tables, switch to a table with right-click **HDU** or **N**.
+
+- The heading is the column name (`TTYPE`), with the unit (`TUNIT`) and type (`TFORM`) below it. The leftmost column is the row number
+- Values have `TSCAL` and `TZERO` applied. `TNULL` cells are blank. Unsigned integers (such as `TZERO = 32768`) stay integers
+- Array cells show their count and first four values (`[2000] 6400, 6400.15, …`). Variable-length arrays (`P`, `Q`) are read too
+- Cells that do not fit end in "…"
+- **Wheel** scrolls rows and **Shift+wheel** scrolls columns. The bars on the right and bottom can be dragged as well. Only the visible rows are drawn, even in a table of a million rows
+- Drag a column border in the heading to change the column width
+- Click a row to select it, **Shift+click** for a range and **Ctrl+click** to add or remove single rows. Dragging selects a range too
+- **Ctrl+C** (right-click **Copy rows**) copies the selected rows, with the heading row, as tab-separated text that pastes straight into a spreadsheet
+
+### Spectrum tables
+
+A table with a wavelength (`WAVE…`, `LAMBDA`, `LOGLAM`), frequency (`FREQ…`) or velocity (`VELO…`) column and a flux column (`FLUX…` and similar) switches to a spectrum graph with right-click **Show as spectrum graph** (and back with **Show as table**). Both layouts are read: arrays in one row (the first row's arrays are used) and one point per row.
+
+- Wavelength units follow `TUNIT`. Without a unit, Å is assumed. `LOGLAM` is raised to the power of 10 and read as Å
+- With a rest wavelength (RESTWAV) or rest frequency (RESTFRQ), the line-of-sight velocity under the cursor is shown too
+- Turn on **Spectrum tables as graphs first** (`fits.table_graph`, off by default) to open them as graphs
+- The key binding **Table or spectrum graph** switches too (no key by default)
 
 ## Apply darks and flats
 
@@ -96,7 +118,7 @@ Radio images (FITS) can have values crossing 0 and many planes (one per frequenc
 
 FITS files with only one axis (NAXIS=1, or every other axis of length 1) are drawn as a **line graph**. The horizontal axis follows CTYPE1 as **frequency, velocity or wavelength**, in units that fit the values such as GHz, km/s or mm. The vertical unit is BUNIT.
 
-Axis values follow the FITS WCS standard (Paper III): channels spaced in frequency but written as wavelength or velocity (`WAVE-F2W`, `VOPT-F2W`, `FREQ-V2F` and the rest of the 12 forms), logarithmic axes (`-LOG`), grism axes (`-GRI`, `-GRA`), air wavelengths (`AWAV`), energy (`ENER`), wave number (`WAVN`), redshift (`ZOPT`), and the older `FELO-HEL` and `VELO-LSR`. Cube plane labels (frequency, velocity) use the same formulas.
+Axis values follow the FITS WCS standard (Paper III): channels spaced in frequency but written as wavelength or velocity (`WAVE-F2W`, `VOPT-F2W`, `FREQ-V2F` and the rest of the 12 forms), logarithmic axes (`-LOG`), grism axes (`-GRI`, `-GRA`), air wavelengths (`AWAV`), energy (`ENER`), wave number (`WAVN`), redshift (`ZOPT`), and the older `FELO-HEL` and `VELO-LSR`. Axes looked up in a table (`-TAB`) take their values from the coordinate column `PSi_1` and the index column `PSi_2` of the table named by `PSi_0`. Cube plane labels (frequency, velocity) and the spectrum at crosses use the same formulas.
 
 - Hover over the graph to see the axis value, the value and the point number of the nearest point. With a rest frequency (RESTFRQ) or rest wavelength (RESTWAV), the line-of-sight velocity is shown too: the radio definition on a frequency axis, the optical definition on a wavelength axis. The velocity frame (SPECSYS, such as LSRK) is added in brackets
 - The line breaks at points without a value (NaN)

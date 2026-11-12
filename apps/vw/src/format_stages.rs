@@ -532,6 +532,7 @@ mod tests {
             gamut: None,
             frame_delays: None,
             spectrum: None,
+            table: None,
             geo: None,
             sky: None,
         }

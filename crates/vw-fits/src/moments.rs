@@ -59,7 +59,17 @@ pub struct Channels {
 
 /// ファイルのキューブのスペクトルの軸。データは読まず、ヘッダだけを読む。キューブでなければ `None`。
 pub fn channels_of_file(path: &std::path::Path, hdu: Option<usize>) -> Option<Channels> {
-    let hdus = crate::sky::headers_of_file_all(path).ok()?;
+    let mut hdus = crate::sky::headers_of_file_all(path).ok()?;
+    // `-TAB` の軸の値は表の HDU のデータにあるので、そのときだけファイルを全部読む。
+    let lookup = hdus.iter().any(|h| {
+        h.cards.iter().any(|c| {
+            c.key.starts_with("CTYPE") && c.value.trim().to_ascii_uppercase().ends_with("-TAB")
+        })
+    });
+    if lookup {
+        let data = std::fs::read(path).ok()?;
+        hdus = header::hdus(&crate::gunzip(&data).ok()?).ok()?;
+    }
     let image = crate::find_image(&hdus, hdu).ok()?;
     let found = crate::cube::channels(image.hdu, &image.extra_axes)?;
     Some(Channels {

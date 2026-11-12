@@ -198,6 +198,8 @@ pub struct VwImage {
     pub geo: Option<std::sync::Arc<crate::geo::GeoGrid>>,
     /// 画素ごとの空の位置が分かるとき（WCS のある天体の画像）。
     pub sky: Option<std::sync::Arc<dyn crate::sky::SkyMap>>,
+    /// 表として読んだとき（FITS の BINTABLE など）。あれば画素ではなく表を描く。
+    pub table: Option<std::sync::Arc<dyn crate::table::Table>>,
     /// 番号を色に変えた画像の、元の番号（[`crate::indexed::Indices`]）。並びは画素と同じ。
     pub indices: Option<std::sync::Arc<crate::indexed::Indices>>,
     /// 灰色の画像で、決まった範囲の値だけに表示のときに当てる色（[`crate::indexed::ValueColors`]）。
@@ -240,6 +242,7 @@ impl VwImage {
             spectrum: None,
             geo: None,
             sky: None,
+            table: None,
             indices: None,
             value_colors: None,
         })

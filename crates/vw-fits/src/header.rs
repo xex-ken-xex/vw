@@ -31,6 +31,17 @@ pub struct Hdu {
     pub data_len: usize,
     /// 規格に外れたカード。`(どのカードか, 何が外れたか)`。読めた分は `cards` に入れてある。
     pub problems: Vec<(String, String)>,
+    /// `-TAB` の軸の、表から引いた値。`(軸の番号（1 から）, 表)`。
+    pub lookups: Vec<(usize, Lookup)>,
+}
+
+/// `-TAB` の軸の表（WCS の論文 III の 6 章）。どちらも表に書いたままの値。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lookup {
+    /// 番号の列（`PSi_2`）。なければ番号をそのまま使う。
+    pub index: Option<Vec<f64>>,
+    /// 座標の列（`PSi_1`）の値。
+    pub coords: Vec<f64>,
 }
 
 impl Hdu {
@@ -111,6 +122,7 @@ pub fn hdus(data: &[u8]) -> Result<Vec<Hdu>, DecodeError> {
             }
         }
     }
+    crate::table::resolve_lookups(data, &mut out);
     Ok(out)
 }
 
@@ -134,6 +146,7 @@ pub(crate) fn hdu_at(data: &[u8], start: usize) -> Result<Hdu, DecodeError> {
         data_start,
         data_len: 0,
         problems,
+        lookups: Vec::new(),
     };
     hdu.data_len = data_len(&hdu)
         .ok_or_else(|| DecodeError::Invalid("FITS header has broken NAXIS or BITPIX".into()))?;

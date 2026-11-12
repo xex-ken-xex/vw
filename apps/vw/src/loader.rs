@@ -79,6 +79,8 @@ pub struct ImageInfo {
     pub geo: Option<Arc<vw_core::geo::GeoGrid>>,
     /// 画素ごとの空の位置（WCS のある天体の画像）。
     pub sky: Option<Arc<dyn vw_core::sky::SkyMap>>,
+    /// 表として読んだとき（FITS の BINTABLE など）。画像の代わりに描く。
+    pub table: Option<Arc<dyn vw_core::table::Table>>,
 }
 
 impl ImageInfo {
@@ -621,6 +623,7 @@ fn finish(
         spectrum: image.spectrum.clone(),
         geo: image.geo.clone(),
         sky: image.sky.clone(),
+        table: image.table.clone(),
     };
     let full = full.map(|display| FullImage {
         image: Arc::new(image),

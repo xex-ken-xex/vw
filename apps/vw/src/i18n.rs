@@ -1163,6 +1163,25 @@ const JA: &[(&str, &str)] = &[
     ("Save as FITS...", "FITS で保存..."),
     ("Save as FITS", "FITS で保存"),
     (
+        "Table or spectrum graph",
+        "表とスペクトルのグラフの切り替え",
+    ),
+    ("Show as spectrum graph", "スペクトルのグラフで見る"),
+    ("Show as table", "表で見る"),
+    ("Copy rows", "行をコピー"),
+    (
+        "Click rows of the table to choose what to copy.",
+        "コピーする行を、表の行をクリックして選んでください。",
+    ),
+    (
+        "Spectrum tables as graphs first",
+        "スペクトルの表を、初めはグラフで描く",
+    ),
+    (
+        "Tables with a wavelength (or frequency) column and a flux column open as a spectrum graph instead of as a table. Either way, the slot's right-click menu switches between the two.",
+        "波長（または周波数）の列と流量の列を持つ表を、表ではなくスペクトルのグラフで開きます。どちらで開いても、スロットの右クリックで切り替えられます。",
+    ),
+    (
         "Sums the planes of the cube pixel by pixel along its spectral axis. Each map opens in a new slot; the file is not changed.",
         "キューブの面を、スペクトルの軸に沿って画素ごとにまとめます。図は 1 枚ずつ新しいスロットに出し、ファイルは変えません。",
     ),
