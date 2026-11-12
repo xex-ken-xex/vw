@@ -44,7 +44,7 @@ pub fn sky(lookup: &dyn Fn(&str) -> Option<String>) -> Option<Sky> {
         let outline = outline(size, &|x, y| wcs.to_sky(x, y));
         let center = wcs.to_sky((size[0] + 1.0) / 2.0, (size[1] + 1.0) / 2.0)?;
         let whole = outline.len() == 4 * EDGE_STEPS;
-        if whole || wcs.projection.theta0() == 0.0 {
+        if whole || wcs.projection.cylindrical() {
             let wide = !whole || spans_more_than_a_hemisphere(size, center, &wcs);
             return Some(Sky {
                 center,
@@ -188,6 +188,12 @@ pub fn wcs_through(
         ("CD2_1".to_owned(), number(cd[1][0])),
         ("CD2_2".to_owned(), number(cd[1][1])),
     ];
+    if let Projection::Sin { xi, eta } = wcs.projection
+        && (xi != 0.0 || eta != 0.0)
+    {
+        cards.push(("PV2_1".to_owned(), number(xi)));
+        cards.push(("PV2_2".to_owned(), number(eta)));
+    }
     // 既定の値は投影と基準点で変わるので、いつも書く。
     cards.push(("LONPOLE".to_owned(), number(wcs.lonpole)));
     cards.push(("LATPOLE".to_owned(), number(wcs.latpole)));
@@ -497,7 +503,11 @@ fn outline(size: [f64; 2], to_sky: &dyn Fn(f64, f64) -> Option<[f64; 2]>) -> Vec
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Projection {
     Tan,
-    Sin,
+    /// 傾けた SIN（`PV2_1` = ξ、`PV2_2` = η）。干渉計の古い書き方の NCP は、ξ = 0、η = cot δ0 の SIN。
+    Sin {
+        xi: f64,
+        eta: f64,
+    },
     Arc,
     Stg,
     Zea,
@@ -507,13 +517,36 @@ enum Projection {
     Ait,
     /// モルワイデ。
     Mol,
+    /// サンソン・フラムスティード（正弦曲線）。
+    Sfl,
+    /// 古い書き方の GLS。式は SFL と同じだが、基準の緯度 `CRVAL2` は格子を傾けず、
+    /// 地図をその緯度まで平行に動かすだけ（基準点の投影の球の緯度 θ0 = `CRVAL2` とした SFL）。
+    Gls {
+        theta0: f64,
+    },
 }
 
 impl Projection {
-    fn read(code: &str) -> Option<Self> {
+    /// `pv(m)` は緯度の軸の `PVi_m`、`lat0` は基準点の緯度（度）。
+    fn read(code: &str, pv: &dyn Fn(u32) -> Option<f64>, lat0: f64) -> Option<Self> {
         Some(match code {
             "TAN" | "TPV" => Projection::Tan,
-            "SIN" => Projection::Sin,
+            "SIN" => Projection::Sin {
+                xi: pv(1).unwrap_or(0.0),
+                eta: pv(2).unwrap_or(0.0),
+            },
+            "NCP" => {
+                let t = lat0.to_radians().tan();
+                if t.abs() < 1e-12 {
+                    return None;
+                }
+                Projection::Sin {
+                    xi: 0.0,
+                    eta: 1.0 / t,
+                }
+            }
+            "SFL" => Projection::Sfl,
+            "GLS" => Projection::Gls { theta0: lat0 },
             "ARC" => Projection::Arc,
             "STG" => Projection::Stg,
             "ZEA" => Projection::Zea,
@@ -528,22 +561,37 @@ impl Projection {
     fn code(self) -> &'static str {
         match self {
             Projection::Tan => "TAN",
-            Projection::Sin => "SIN",
+            Projection::Sin { .. } => "SIN",
             Projection::Arc => "ARC",
             Projection::Stg => "STG",
             Projection::Zea => "ZEA",
             Projection::Car => "CAR",
             Projection::Ait => "AIT",
             Projection::Mol => "MOL",
+            Projection::Sfl => "SFL",
+            Projection::Gls { .. } => "GLS",
         }
     }
 
     /// 基準点の投影の球の上の緯度 θ0（度）。天頂投影は極（90°）、円筒・擬円筒は赤道（0°）。
     fn theta0(self) -> f64 {
         match self {
-            Projection::Car | Projection::Ait | Projection::Mol => 0.0,
+            Projection::Gls { theta0 } => theta0,
+            _ if self.cylindrical() => 0.0,
             _ => 90.0,
         }
+    }
+
+    /// 円筒・擬円筒の投影（全天を 1 枚に描けるもの）か。
+    fn cylindrical(self) -> bool {
+        matches!(
+            self,
+            Projection::Car
+                | Projection::Ait
+                | Projection::Mol
+                | Projection::Sfl
+                | Projection::Gls { .. }
+        )
     }
 
     /// 投影面の座標 (x, y)（度）→ 投影の球の経度・緯度 (φ, θ)（ラジアン）。投影の外なら `None`。
@@ -553,7 +601,27 @@ impl Projection {
         let r = xr.hypot(yr);
         match self {
             Projection::Tan => zenithal(1.0f64.atan2(r)),
-            Projection::Sin => (r <= 1.0).then(|| r.acos()).and_then(zenithal),
+            Projection::Sin { xi, eta } if xi == 0.0 && eta == 0.0 => {
+                (r <= 1.0).then(|| r.acos()).and_then(zenithal)
+            }
+            Projection::Sin { xi, eta } => {
+                // 論文の式 (40)〜(41)。sin θ の 2 次式の解のうち、極（θ = 90°）に近い方。
+                let (dx, dy) = (xr - xi, yr - eta);
+                let a = xi * xi + eta * eta + 1.0;
+                let b = xi * dx + eta * dy;
+                let c = dx * dx + dy * dy - 1.0;
+                let disc = b * b - a * c;
+                if disc < 0.0 {
+                    return None;
+                }
+                let sin_theta = [(-b + disc.sqrt()) / a, (-b - disc.sqrt()) / a]
+                    .into_iter()
+                    .filter(|s| s.abs() <= 1.0 + 1e-12)
+                    .max_by(f64::total_cmp)?
+                    .clamp(-1.0, 1.0);
+                let k = 1.0 - sin_theta;
+                Some(((xr - xi * k).atan2(-(yr - eta * k)), sin_theta.asin()))
+            }
             Projection::Arc => zenithal(PI / 2.0 - r),
             Projection::Stg => zenithal(PI / 2.0 - 2.0 * (r / 2.0).atan()),
             Projection::Zea => (r <= 2.0)
@@ -586,8 +654,21 @@ impl Projection {
                 let t = (2.0 * gamma + (2.0 * gamma).sin()) / PI;
                 Some((phi, t.clamp(-1.0, 1.0).asin()))
             }
+            Projection::Sfl => sinusoidal(xr, yr),
+            // 基準点が (0, θ0) なので、投影面の原点を θ0 だけずらしてから SFL で戻す。
+            Projection::Gls { theta0 } => sinusoidal(xr, yr + theta0.to_radians()),
         }
     }
+}
+
+/// SFL の (x, y)（ラジアン）→ (φ, θ)。
+fn sinusoidal(x: f64, y: f64) -> Option<(f64, f64)> {
+    if y.abs() > PI / 2.0 + 1e-12 {
+        return None;
+    }
+    let c = y.cos();
+    let phi = if c < 1e-12 { 0.0 } else { x / c };
+    (phi.abs() <= PI + 1e-9).then_some((phi, y.clamp(-PI / 2.0, PI / 2.0)))
 }
 
 /// 座標系。内側では赤道座標（ICRS）に直して持つ。
@@ -796,9 +877,10 @@ impl Wcs {
                     }
                 })?;
         let code = c1.get(5..8)?;
-        let projection = Projection::read(code)?;
-        let cd = cd_matrix(&num)?;
         let (lon_axis, lat_axis) = if swapped { (2, 1) } else { (1, 2) };
+        let lat0 = num(&format!("CRVAL{lat_axis}"))?;
+        let projection = Projection::read(code, &|m| num(&format!("PV{lat_axis}_{m}")), lat0)?;
+        let cd = cd_matrix(&num)?;
         let cd = if swapped { [cd[1], cd[0]] } else { cd };
         let sip = c1.get(8..).is_some_and(|rest| rest.trim() == "-SIP");
         let mut distortion = Distortion::read(&num, sip, code == "TPV");
@@ -1463,6 +1545,115 @@ mod tests {
                 .unwrap();
             assert!(close(p, at_corner, 1e-7), "{code}: {p:?}");
         }
+    }
+
+    /// `code` の投影で、`size` の画像の中心を `crval` にした WCS のカード。
+    fn centred(
+        frame: (&str, &str),
+        code: &str,
+        size: [u32; 2],
+        step: f64,
+        crval: [f64; 2],
+    ) -> Vec<(&'static str, String)> {
+        vec![
+            ("CTYPE1", format!("{:-<5}{code}", frame.0)),
+            ("CTYPE2", format!("{:-<5}{code}", frame.1)),
+            ("CRPIX1", format!("{}", f64::from(size[0]) / 2.0 + 0.5)),
+            ("CRPIX2", format!("{}", f64::from(size[1]) / 2.0 + 0.5)),
+            ("CDELT1", format!("{}", -step)),
+            ("CDELT2", format!("{step}")),
+            ("CRVAL1", format!("{}", crval[0])),
+            ("CRVAL2", format!("{}", crval[1])),
+        ]
+    }
+
+    #[test]
+    fn ncp_and_slanted_sin_match_astropy() {
+        // astropy 8.0.2 の all_pix2world（NCP は wcslib が PV2_2 = cot δ0 の SIN に直して読む）。
+        let ncp = centred(("RA", "DEC"), "NCP", [200, 150], 0.01, [150.0, 35.0]);
+        let mut slanted = centred(("RA", "DEC"), "SIN", [200, 150], 0.01, [150.0, 35.0]);
+        slanted.push(("PV2_1", "0.2".into()));
+        slanted.push(("PV2_2", "-0.3".into()));
+        let expected = [
+            (
+                ncp,
+                [
+                    ([1.0, 1.0], [151.203_534_370_4, 34.229_354_992_1]),
+                    ([200.0, 150.0], [148.774_355_575_9, 35.720_003_219_7]),
+                    ([37.25, 120.5], [150.776_362_210_3, 35.440_119_055_5]),
+                ],
+            ),
+            (
+                slanted,
+                [
+                    ([1.0, 1.0], [151.200_633_256_2, 34.253_030_960_1]),
+                    ([200.0, 150.0], [148.770_653_920_9, 35.742_956_796_2]),
+                    ([37.25, 120.5], [150.775_157_816_8, 35.449_132_364_5]),
+                ],
+            ),
+        ];
+        for (cards, points) in expected {
+            let wcs = Wcs::read(&owned(&cards)).unwrap();
+            for ([x, y], sky) in points {
+                let p = wcs.to_sky(x, y).unwrap();
+                assert!(close(p, sky, 1e-8), "{} ({x}, {y}): {p:?}", cards[0].1);
+            }
+        }
+    }
+
+    #[test]
+    fn sfl_and_old_gls_match_astropy() {
+        // GLS は基準の緯度で格子を傾けず、地図を平行に動かすだけなので、SFL と値が違う。
+        let expected = [
+            (
+                ("RA", "DEC"),
+                "SFL",
+                [120.0, 30.0],
+                [
+                    ([1.0, 1.0], [168.329_272_605_2, -5.966_200_741_3]),
+                    ([400.0, 200.0], [47.945_180_836_3, 38.654_895_051_9]),
+                    ([77.5, 160.25], [161.196_816_554_1, 39.323_962_605_3]),
+                ],
+            ),
+            (
+                ("RA", "DEC"),
+                "GLS",
+                [120.0, 30.0],
+                [
+                    ([1.0, 1.0], [170.075_191_444_5, 5.125]),
+                    ([400.0, 200.0], [33.315_470_635_8, 54.875]),
+                    ([77.5, 160.25], [163.439_707_526_9, 44.9375]),
+                ],
+            ),
+            (
+                ("GLON", "GLAT"),
+                "GLS",
+                [30.0, -10.0],
+                [
+                    ([1.0, 1.0], [90.793_408_39, -34.875]),
+                    ([400.0, 200.0], [338.395_644_257, 14.875]),
+                    ([77.5, 160.25], [60.864_532_801_3, 4.9375]),
+                ],
+            ),
+        ];
+        for (frame, code, crval, points) in expected {
+            let wcs = Wcs::read(&owned(&centred(frame, code, [400, 200], 0.25, crval))).unwrap();
+            for ([x, y], at) in points {
+                let p = wcs.to_frame(x, y).unwrap();
+                assert!(close(p, at, 1e-8), "{code} ({x}, {y}): {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_slanted_sin_carried_through_a_shift_keeps_its_slant() {
+        let ncp = centred(("RA", "DEC"), "NCP", [200, 150], 0.01, [150.0, 35.0]);
+        let shifted = wcs_through(&owned(&ncp), [[1.0, 0.0, 10.0], [0.0, 1.0, 5.0]]).unwrap();
+        let again =
+            Wcs::read(&|k: &str| shifted.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()))
+                .unwrap();
+        let before = Wcs::read(&owned(&ncp)).unwrap().to_sky(30.0, 40.0).unwrap();
+        assert!(close(again.to_sky(20.0, 35.0).unwrap(), before, 1e-9));
     }
 
     #[test]

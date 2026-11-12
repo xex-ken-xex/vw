@@ -18,6 +18,7 @@ mod header;
 mod plio;
 pub mod radio;
 mod sky;
+mod spectral;
 pub mod spectrum;
 pub mod stretch;
 mod tile;

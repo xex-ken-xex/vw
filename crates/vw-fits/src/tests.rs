@@ -913,9 +913,9 @@ fn a_one_axis_file_is_read_as_a_spectrum() {
     assert_eq!(s.values.len(), 4);
     assert!(s.values[2].is_nan());
     assert_eq!(s.axis.kind, vw_core::spectrum::AxisKind::Frequency);
-    assert_eq!(s.axis.value(1.0), 110e9);
-    assert_eq!(s.axis.value(0.0), 110.5e9);
-    assert_eq!(s.radio_velocity(110e9), Some(0.0));
+    assert_eq!(s.axis.value(1), 110e9);
+    assert_eq!(s.axis.value(0), 110.5e9);
+    assert_eq!(s.axis.velocity(110e9), Some(0.0));
     assert_eq!(s.value_unit, "K");
     assert_eq!(
         img.metadata.get(GROUP, SPECTRUM),
@@ -956,12 +956,273 @@ fn velocity_and_wavelength_axes_are_kept_in_base_units() {
             .clone()
     };
     let v = axis("VRAD", "km/s");
-    assert_eq!((v.kind.clone(), v.reference), (AxisKind::Velocity, 3000.0));
+    assert_eq!((v.kind.clone(), v.value(0)), (AxisKind::Velocity, 3000.0));
     let w = axis("WAVE", "nm");
     assert_eq!(w.kind, AxisKind::Wavelength);
-    assert!((w.reference - 3e-9).abs() < 1e-20);
+    assert!((w.value(0) - 3e-9).abs() < 1e-20);
     let other = axis("PIXEL", "");
     assert!(matches!(other.kind, AxisKind::Other { .. }));
+}
+
+/// 256 点のスペクトルの FITS の、`cards` の軸の 1・38・200 画素目の値。
+fn spectral_values(ctype: &str, cards: &[(&str, &str)]) -> (vw_core::spectrum::Axis, [f64; 3]) {
+    let mut c = image_cards(-32, &[256]);
+    c.push(card("CTYPE1", &format!("'{ctype:<8}'")));
+    c.extend(cards.iter().map(|(k, v)| card(k, v)));
+    let axis = decode(&fits(&c, &f32_bytes(&[0.0; 256])))
+        .spectrum
+        .expect("a spectrum")
+        .axis
+        .clone();
+    let at = [0, 37, 199].map(|i| axis.value(i));
+    (axis, at)
+}
+
+/// `CTYPE1`、ほかのカード、1・38・200 画素目の値。
+type SpectralCase<'a> = (&'a str, &'a [(&'a str, &'a str)], [f64; 3]);
+
+#[test]
+fn nonlinear_spectral_axes_match_astropy() {
+    // astropy 8.0.2（wcslib）の all_pix2world の値。
+    let cases: [SpectralCase; 10] = [
+        (
+            "WAVE-F2W",
+            &[
+                ("CUNIT1", "'m'"),
+                ("CRVAL1", "0.2110611405"),
+                ("CDELT1", "1.5E-5"),
+                ("CRPIX1", "32"),
+            ],
+            [2.105971627141e-01, 2.111511788939e-01, 2.136115920454e-01],
+        ),
+        (
+            "VOPT-F2W",
+            &[
+                ("CUNIT1", "'m/s'"),
+                ("CRVAL1", "1.0E6"),
+                ("CDELT1", "5.0E3"),
+                ("CRPIX1", "10"),
+                ("RESTFRQ", "1.420405752E9"),
+            ],
+            [9.550067312096e+05, 1.140065191551e+06, 1.953009913960e+06],
+        ),
+        (
+            "FREQ-W2F",
+            &[
+                ("CUNIT1", "'Hz'"),
+                ("CRVAL1", "1.4E9"),
+                ("CDELT1", "-1.0E5"),
+                ("CRPIX1", "20"),
+            ],
+            [1.401902582076e+09, 1.398202311314e+09, 1.382228490832e+09],
+        ),
+        (
+            "VELO-F2V",
+            &[
+                ("CUNIT1", "'m/s'"),
+                ("CRVAL1", "-2.0E5"),
+                ("CDELT1", "1.0E4"),
+                ("CRPIX1", "5"),
+                ("RESTFRQ", "1.420405752E9"),
+            ],
+            [-2.399973279261e+05, 1.301818682228e+05, 1.756350272021e+06],
+        ),
+        (
+            "AWAV-W2A",
+            &[
+                ("CUNIT1", "'Angstrom'"),
+                ("CRVAL1", "6562.8"),
+                ("CDELT1", "0.5"),
+                ("CRPIX1", "100"),
+            ],
+            [6.513299998486e-07, 6.531799999408e-07, 6.612799998480e-07],
+        ),
+        (
+            "WAVE-A2W",
+            &[
+                ("CUNIT1", "'nm'"),
+                ("CRVAL1", "656.28"),
+                ("CDELT1", "0.05"),
+                ("CRPIX1", "100"),
+            ],
+            [6.513300001515e-07, 6.531800000592e-07, 6.612800001521e-07],
+        ),
+        (
+            "FREQ-V2F",
+            &[
+                ("CUNIT1", "'GHz'"),
+                ("CRVAL1", "115.0"),
+                ("CDELT1", "-0.002"),
+                ("CRPIX1", "64"),
+                ("RESTFRQ", "115.2712018E9"),
+            ],
+            [1.151260687762e+11, 1.150520117064e+11, 1.147283193983e+11],
+        ),
+        (
+            "ZOPT-F2W",
+            &[
+                ("CRVAL1", "0.5"),
+                ("CDELT1", "0.001"),
+                ("CRPIX1", "1"),
+                ("RESTWAV", "1215.67E-10"),
+            ],
+            [5.000000000000e-01, 5.379357484621e-01, 7.294388931591e-01],
+        ),
+        (
+            "WAVE-LOG",
+            &[
+                ("CUNIT1", "'m'"),
+                ("CRVAL1", "5.0E-7"),
+                ("CDELT1", "1.0E-10"),
+                ("CRPIX1", "1000"),
+            ],
+            [4.094472578022e-07, 4.124884058800e-07, 4.260718944831e-07],
+        ),
+        (
+            "WAVE-GRI",
+            &[
+                ("CUNIT1", "'m'"),
+                ("CRVAL1", "6.0E-7"),
+                ("CDELT1", "2.0E-10"),
+                ("CRPIX1", "512"),
+                ("PV1_0", "1.0E5"),
+                ("PV1_1", "1"),
+                ("PV1_2", "20.0"),
+                ("PV1_3", "1.5"),
+                ("PV1_4", "1000.0"),
+                ("PV1_6", "5.0"),
+            ],
+            [4.982047475943e-07, 5.055478900753e-07, 5.377500309465e-07],
+        ),
+    ];
+    for (ctype, cards, expected) in cases {
+        let (_, at) = spectral_values(ctype, cards);
+        for (got, want) in at.iter().zip(expected) {
+            assert!(
+                ((got - want) / want).abs() < 1e-9,
+                "{ctype}: {got:e} != {want:e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_old_felo_axis_is_an_optical_velocity_linear_in_frequency() {
+    let (axis, at) = spectral_values(
+        "FELO-HEL",
+        &[
+            ("CUNIT1", "'m/s'"),
+            ("CRVAL1", "1.5E6"),
+            ("CDELT1", "-1.0E4"),
+            ("CRPIX1", "8"),
+            ("RESTFREQ", "1.420405752E9"),
+        ],
+    );
+    for (got, want) in at
+        .iter()
+        .zip([1.570016267047e+06, 1.200298415950e+06, -4.078421881993e+05])
+    {
+        assert!(((got - want) / want).abs() < 1e-9, "{got:e} != {want:e}");
+    }
+    assert_eq!(axis.kind, vw_core::spectrum::AxisKind::Velocity);
+    assert_eq!(axis.frame, "BARYCENT");
+}
+
+#[test]
+fn a_wavelength_axis_with_a_rest_wavelength_gives_optical_velocity() {
+    let (axis, _) = spectral_values(
+        "WAVE",
+        &[
+            ("CUNIT1", "'Angstrom'"),
+            ("CRVAL1", "6562.8"),
+            ("CDELT1", "1.0"),
+            ("CRPIX1", "1"),
+            ("RESTWAV", "6562.8E-10"),
+        ],
+    );
+    assert_eq!(axis.velocity(axis.value(0)), Some(0.0));
+    let one_angstrom = axis.velocity(axis.value(1)).unwrap();
+    assert!((one_angstrom - 45_681.0).abs() < 1.0, "{one_angstrom}");
+}
+
+#[test]
+fn an_air_wavelength_axis_compares_with_the_rest_wavelength_in_air() {
+    // 真空の 656.461 nm は、空気の中では約 656.280 nm。
+    let (axis, _) = spectral_values(
+        "AWAV",
+        &[
+            ("CUNIT1", "'Angstrom'"),
+            ("CRVAL1", "6562.80"),
+            ("CDELT1", "0.1"),
+            ("CRPIX1", "1"),
+            ("RESTWAV", "656.461E-9"),
+        ],
+    );
+    let v = axis.velocity(axis.value(0)).unwrap();
+    assert!(v.abs() < 1_000.0, "{v}");
+}
+
+#[test]
+fn energy_axes_keep_the_unit_they_are_written_in() {
+    let (axis, at) = spectral_values(
+        "ENER",
+        &[
+            ("CUNIT1", "'keV'"),
+            ("CRVAL1", "0.5"),
+            ("CDELT1", "0.01"),
+            ("CRPIX1", "1"),
+        ],
+    );
+    assert_eq!(
+        axis.kind,
+        vw_core::spectrum::AxisKind::Other {
+            name: "ENER".into(),
+            unit: "keV".into()
+        }
+    );
+    assert!((at[1] - 0.87).abs() < 1e-12, "{}", at[1]);
+}
+
+#[test]
+fn a_velocity_axis_without_a_rest_frequency_is_not_converted() {
+    let mut c = image_cards(-32, &[4]);
+    c.extend([
+        card("CTYPE1", "'VRAD-F2V'"),
+        card("CRVAL1", "0.0"),
+        card("CDELT1", "1.0"),
+    ]);
+    let s = decode(&fits(&c, &f32_bytes(&[0.0; 4]))).spectrum.unwrap();
+    // 静止周波数がなければ周波数に直せないので、軸の種類だけを書いたものとして読まない。
+    assert!(matches!(
+        s.axis.kind,
+        vw_core::spectrum::AxisKind::Other { .. }
+    ));
+}
+
+#[test]
+fn a_cube_plane_on_a_wavelength_axis_tells_its_optical_velocity_and_frame() {
+    let file = cube(
+        3,
+        &[
+            card("CTYPE3", "'WAVE-F2W'"),
+            card("CRVAL3", "0.2110611405"),
+            card("CRPIX3", "1"),
+            card("CDELT3", "1.0E-5"),
+            card("CUNIT3", "'m'"),
+            card("RESTFRQ", "1.420405752E9"),
+            card("SPECSYS", "'LSRK'"),
+        ],
+    );
+    let plane = |f| {
+        FitsPlugin::default()
+            .decode_frame(&file, f)
+            .unwrap()
+            .metadata
+            .get(GROUP, PLANE)
+            .map(str::to_owned)
+    };
+    assert_eq!(plane(0).as_deref(), Some("211.0611 mm, 0.00 km/s (LSRK)"));
+    assert_eq!(plane(1).as_deref(), Some("211.0711 mm, 14.20 km/s (LSRK)"));
 }
 
 #[test]
