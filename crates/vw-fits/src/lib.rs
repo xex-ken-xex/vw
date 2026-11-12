@@ -13,6 +13,7 @@
 
 mod bayer;
 pub mod calibration;
+pub mod cube;
 mod hcompress;
 mod header;
 mod plio;
@@ -249,7 +250,7 @@ fn gunzip(data: &[u8]) -> Result<Cow<'_, [u8]>, DecodeError> {
 }
 
 /// 表示する画像の HDU と、その形。
-struct Image<'a> {
+pub(crate) struct Image<'a> {
     index: usize,
     hdu: &'a Hdu,
     /// tile 圧縮（BINTABLE に入った画像）か。

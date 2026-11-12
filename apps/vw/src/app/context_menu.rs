@@ -41,6 +41,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
         Act(Action::DeleteProbePoint),
         Act(Action::ToggleLineProfile),
         Act(Action::ToggleRoiGraph),
+        Act(Action::TogglePointSpectrum),
     ],
     &[
         Act(Action::FitImage),
@@ -58,6 +59,7 @@ pub const SLOT_SECTIONS: &[&[Entry]] = &[
         Act(Action::DevelopRaw),
         Act(Action::ToggleCalibration),
         Act(Action::ToggleHotPixels),
+        Act(Action::ToggleContours),
         Entry::Variable,
         Entry::ColorMap,
         Act(Action::TogglePixelPipeline),
@@ -181,6 +183,15 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
         Action::DevelopRaw => shown_if(slot.is_some_and(developable)),
         Action::ToggleCalibration => shown_if(slot.and_then(calibration_on).is_some()),
         Action::ToggleHotPixels => shown_if(slot.and_then(|s| s.hot_pixels_on()).is_some()),
+        Action::ToggleContours => shown_if(slot.is_some_and(|s| s.contours_possible())),
+        Action::TogglePointSpectrum => match slot {
+            Some(s) => shown_if(
+                s.shown()
+                    .is_some_and(|sh| crate::viewer::is_fits_cube(&sh.info))
+                    && !s.marks.is_empty(),
+            ),
+            None => Yes,
+        },
         Action::AiTagImage | Action::FindFacesImage => ai(),
         // 展開した ZIP の中には書けないので、AI タグとデータセットの操作は出さない。
         Action::AiTagFolder | Action::FindFacesFolder if in_archive => Hidden,
@@ -250,6 +261,7 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         Action::DeleteProbePoint => "Delete line",
         Action::ToggleLineProfile => "Line profile",
         Action::ToggleRoiGraph => "ROI graph",
+        Action::TogglePointSpectrum => "Spectrum at crosses",
         Action::TogglePixelPipeline => "Pixel pipeline...",
         Action::OpenInFileManager => "Open in file manager",
         Action::CloseZip => "Close archive",
@@ -435,6 +447,7 @@ fn action_item(
     let checked = match action {
         Action::ToggleCalibration => target.slot().and_then(calibration_on) == Some(true),
         Action::ToggleHotPixels => target.slot().and_then(|s| s.hot_pixels_on()) == Some(true),
+        Action::ToggleContours => target.slot().is_some_and(|s| s.contours),
         _ => false,
     };
     let shortcut = cx

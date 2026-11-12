@@ -160,7 +160,7 @@ vw divides its main window into four windows.
 | Place | Contents |
 | --- | --- |
 | Menu bar | **File**, **View**, **Labels**, **AI tags**, **Image**, **Settings**, **Help**. Each item shows its key on the right. Once one menu is open, hovering over the next name switches to it. **Help** → **User guide (web)** (F1) opens this guide, and **Keyboard shortcuts** opens the key list in the settings |
-| Left column (tools) | From the top: select (arrow icon) / hand / zoom / pixel probe / ROI / measure, tagging mode, filter, add slot. The settings button is at the bottom |
+| Left column (tools) | From the top: select (arrow icon) / hand / zoom / pixel probe / ROI / measure, tagging mode, filter, contours, color gauge, add slot. The settings button is at the bottom |
 | Folders (left) | A tree of folders and ZIPs. Clicking a folder moves there and lays out its contents in the image window. Start from Home, each drive on Windows, or `/` on Linux |
 | Images (center) | The frames (slots) that show images |
 | Metadata (right) | File information and in-image information (EXIF and so on) of the selected slot's image |

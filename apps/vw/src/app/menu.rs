@@ -90,6 +90,10 @@ impl VwApp {
                 if self.menu_item(ui, Action::ToggleRoiGraph, Some(roi_graph)) {
                     chosen = Some(Action::ToggleRoiGraph);
                 }
+                let point_spectrum = self.point_spectrum.open;
+                if self.menu_item(ui, Action::TogglePointSpectrum, Some(point_spectrum)) {
+                    chosen = Some(Action::TogglePointSpectrum);
+                }
                 let map = self.map.open;
                 if self.menu_item(ui, Action::ToggleMap, Some(map)) {
                     chosen = Some(Action::ToggleMap);
@@ -133,7 +137,7 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Image"), |ui| {
-                let groups: [&[Action]; 9] = [
+                let groups: [&[Action]; 10] = [
                     &[Action::PreviousImage, Action::NextImage],
                     &[Action::PreviousSlot, Action::NextSlot],
                     &[Action::PreviousPage, Action::NextPage],
@@ -157,6 +161,7 @@ impl VwApp {
                         Action::ToggleColorGauge,
                         Action::ToggleSupplementalPalette,
                     ],
+                    &[Action::ToggleContours],
                     &[
                         Action::ToggleAutoStretch,
                         Action::ToggleClippingWarning,
@@ -173,6 +178,9 @@ impl VwApp {
                     for &action in group {
                         let checked = match action {
                             Action::ToggleColorGauge => Some(self.show_gauge),
+                            Action::ToggleContours => {
+                                Some(self.slots.get(self.active).is_some_and(|s| s.contours))
+                            }
                             Action::ToggleSupplementalPalette => {
                                 Some(self.settings().pipeline.dicom.supplemental_palette)
                             }
@@ -549,6 +557,26 @@ impl VwApp {
             {
                 let next = self.filter.next(&self.settings().labels.tags);
                 self.set_filter(ui.ctx(), next);
+            }
+            let contours = self.slots.get(self.active);
+            let (on, possible) = (
+                contours.is_some_and(|s| s.contours),
+                contours.is_some_and(|s| s.contours_possible()),
+            );
+            let tip = format!(
+                "{}\n{}",
+                self.with_key(tr(lang, "Contours"), Action::ToggleContours),
+                tr(
+                    lang,
+                    "Draws contour lines over the gray image of the active slot."
+                )
+            );
+            if tool_button(ui, on, possible, big(icon::TARGET))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                let i = self.active;
+                self.slots[i].contours ^= true;
             }
             let tip = self.with_key(tr(lang, "Color scale gauge"), Action::ToggleColorGauge);
             if tool_button(ui, self.show_gauge, true, big(icon::GRADIENT))

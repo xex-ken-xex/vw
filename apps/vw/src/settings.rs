@@ -585,6 +585,8 @@ impl ReportSettings {
 pub struct MeasureSettings {
     /// 線を引き終えたら、計測線のグラフの欄を開く。
     pub open_profile: bool,
+    /// キューブに十字を置いたら、十字のスペクトルの欄を開く。
+    pub open_spectrum: bool,
     /// ROI のヒストグラムの区間の数（値の幅がこれ以下の整数なら、1 つの値に 1 区間）。
     pub roi_bins: usize,
 }
@@ -593,6 +595,7 @@ impl Default for MeasureSettings {
     fn default() -> Self {
         Self {
             open_profile: true,
+            open_spectrum: true,
             roi_bins: 64,
         }
     }
@@ -604,10 +607,80 @@ impl MeasureSettings {
         let mut r = r.at("measure");
         Self {
             open_profile: r.get("open_profile").unwrap_or(d.open_profile),
+            open_spectrum: r.get("open_spectrum").unwrap_or(d.open_spectrum),
             roi_bins: r
                 .get::<usize>("roi_bins")
                 .filter(|n| (4..=4096).contains(n))
                 .unwrap_or(d.roi_bins),
+        }
+    }
+}
+
+/// 等高線（[`crate::contours`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ContourSettings {
+    /// 水準。`mode` が `noise` なら雑音（σ）の倍数、`values` なら画素の値。
+    pub levels: Vec<f64>,
+    pub mode: crate::contours::Mode,
+    /// 線の色（#RRGGBB）。
+    pub color: String,
+    /// 線の太さ（点）。
+    pub width: f32,
+}
+
+impl Default for ContourSettings {
+    fn default() -> Self {
+        Self {
+            levels: vec![-3.0, 3.0, 6.0, 12.0, 24.0, 48.0, 96.0],
+            mode: crate::contours::Mode::Noise,
+            color: "#00E5FF".into(),
+            width: 1.0,
+        }
+    }
+}
+
+impl ContourSettings {
+    /// 水準の数の上限。多すぎると線で画像が見えなくなり、引くのも重くなる。
+    pub const MAX_LEVELS: usize = 32;
+    pub const WIDTH_RANGE: std::ops::RangeInclusive<f32> = 0.5..=5.0;
+
+    fn read(r: &mut Reader<'_>) -> Self {
+        let d = Self::default();
+        let mut r = r.at("contours");
+        Self {
+            levels: r
+                .get_valid(
+                    "levels",
+                    |v: &Vec<f64>| Self::valid_levels(v),
+                    "must be 1 to 32 numbers",
+                )
+                .unwrap_or(d.levels),
+            mode: r.get("mode").unwrap_or(d.mode),
+            color: read_color(&mut r, "color", d.color),
+            width: r
+                .get_valid(
+                    "width",
+                    |w: &f32| Self::WIDTH_RANGE.contains(w),
+                    "must be 0.5 to 5",
+                )
+                .unwrap_or(d.width),
+        }
+    }
+
+    pub fn valid_levels(levels: &[f64]) -> bool {
+        (1..=Self::MAX_LEVELS).contains(&levels.len()) && levels.iter().all(|v| v.is_finite())
+    }
+
+    pub fn line_color(&self) -> Color32 {
+        parse_hex_color(&self.color).unwrap_or(Color32::from_rgb(0, 229, 255))
+    }
+
+    pub fn style(&self) -> crate::viewer::ContourStyle {
+        crate::viewer::ContourStyle {
+            levels: self.levels.clone(),
+            mode: self.mode,
+            color: self.line_color(),
+            width: self.width,
         }
     }
 }
@@ -3009,6 +3082,7 @@ pub struct Settings {
     pub metadata: MetadataSettings,
     pub roi: RoiSettings,
     pub measure: MeasureSettings,
+    pub contours: ContourSettings,
     pub report: ReportSettings,
     pub labels: Labels,
     pub dicom: Dicom,
@@ -3135,6 +3209,7 @@ impl Settings {
         let metadata = MetadataSettings::read(&mut r);
         let roi = RoiSettings::read(&mut r);
         let measure = MeasureSettings::read(&mut r);
+        let contours = ContourSettings::read(&mut r);
         let report = ReportSettings::read(&mut r);
         let labels = Labels::read(&mut r);
         let dicom = Dicom::read(&mut r);
@@ -3179,6 +3254,7 @@ impl Settings {
                 metadata,
                 roi,
                 measure,
+                contours,
                 report,
                 labels,
                 dicom,

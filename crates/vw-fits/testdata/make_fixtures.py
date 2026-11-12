@@ -68,3 +68,11 @@ mask[16, ::3] = 1
 fits.PrimaryHDU(mask).writeto("mask.fits", overwrite=True)
 c = fits.CompImageHDU(mask, compression_type="PLIO_1")
 fits.HDUList([fits.PrimaryHDU(), c]).writeto("mask-plio.fz", overwrite=True)
+
+# 面ごとにタイルにした RICE_1 のキューブ（4 x 3 x 5）。値 = 100 × 面 + 10 × y + x、3 本目の軸は電波の速度。
+plane, row, col = np.mgrid[0:5, 0:3, 0:4]
+h = fits.Header()
+h["CTYPE3"], h["CRVAL3"], h["CRPIX3"], h["CDELT3"], h["CUNIT3"] = "VRAD", 1000.0, 1.0, 500.0, "m/s"
+c = fits.CompImageHDU((100 * plane + 10 * row + col).astype(np.int16), header=h, compression_type="RICE_1",
+                      tile_shape=(1, 3, 4))
+fits.HDUList([fits.PrimaryHDU(), c]).writeto("int16-rice-cube.fz", overwrite=True)

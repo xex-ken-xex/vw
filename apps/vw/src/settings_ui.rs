@@ -628,11 +628,46 @@ const ITEMS: &[Item] = &[
         widget: report_theme_widget,
     },
     Item {
+        section: Section::Viewer,
+        key: "contours.levels",
+        title: "Contour levels",
+        description: "Levels of the contour lines drawn over gray images, separated by commas. Levels below the median are drawn dashed.",
+        widget: contour_levels_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "contours.mode",
+        title: "Contour levels are",
+        description: "Multiples of the noise: each level is the median plus that many times the noise (1.4826 x the median distance from the median) of the shown plane. Pixel values: each level is drawn as written.",
+        widget: contour_mode_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "contours.color",
+        title: "Contour color",
+        description: "Color of the contour lines (#RRGGBB).",
+        widget: contour_color_widget,
+    },
+    Item {
+        section: Section::Viewer,
+        key: "contours.width",
+        title: "Contour line width",
+        description: "Width of the contour lines in points.",
+        widget: contour_width_widget,
+    },
+    Item {
         section: Section::Reports,
         key: "measure.open_profile",
         title: "Open the line graph after drawing a line",
         description: "When a line is drawn with the measure tool, open the Line profile window that shows the values along it.",
         widget: open_profile_widget,
+    },
+    Item {
+        section: Section::Reports,
+        key: "measure.open_spectrum",
+        title: "Open the spectrum after placing a cross on a cube",
+        description: "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at crosses window that shows the values of that point on every plane.",
+        widget: open_spectrum_widget,
     },
     Item {
         section: Section::Reports,
@@ -3532,6 +3567,89 @@ fn report_theme_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> b
 fn open_profile_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.measure.open_profile, tr(lang, "Enabled"))
         .changed()
+}
+
+fn open_spectrum_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.measure.open_spectrum, tr(lang, "Enabled"))
+        .changed()
+}
+
+/// 水準をカンマ区切りで編集する。確定したときに正しい並びなら反映する（[`tags_widget`] と同じ）。
+fn contour_levels_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let id = ui.make_persistent_id("contours.levels.edit");
+    let joined = s
+        .contours
+        .levels
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut text: String = ui
+        .data_mut(|d| d.get_temp(id))
+        .unwrap_or_else(|| joined.clone());
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text("-3, 3, 6, 12, 24, 48, 96")
+            .desired_width(320.0),
+    );
+    let parsed: Option<Vec<f64>> = text
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| t.parse::<f64>().ok())
+        .collect();
+    let valid = parsed
+        .as_deref()
+        .is_some_and(crate::settings::ContourSettings::valid_levels);
+    if !valid {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            tr(lang, "Write 1 to 32 numbers separated by commas."),
+        );
+    }
+    let mut changed = false;
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        if r.lost_focus()
+            && valid
+            && let Some(levels) = parsed
+            && levels != s.contours.levels
+        {
+            s.contours.levels = levels;
+            changed = true;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    changed
+}
+
+fn contour_mode_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    use crate::contours::Mode;
+    let before = s.contours.mode;
+    ui.horizontal(|ui| {
+        ui.radio_value(
+            &mut s.contours.mode,
+            Mode::Noise,
+            tr(lang, "Multiples of the noise"),
+        );
+        ui.radio_value(&mut s.contours.mode, Mode::Values, tr(lang, "Pixel values"));
+    });
+    s.contours.mode != before
+}
+
+fn contour_color_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    hex_color_widget(&mut s.contours.color, Color32::from_rgb(0, 229, 255), ui)
+}
+
+fn contour_width_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(&mut s.contours.width)
+            .range(crate::settings::ContourSettings::WIDTH_RANGE)
+            .speed(0.05)
+            .fixed_decimals(1),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
 fn roi_bins_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {

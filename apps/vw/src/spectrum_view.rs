@@ -117,9 +117,42 @@ pub fn paint(
     visuals: &egui::Visuals,
     hover: Option<Pos2>,
 ) {
+    paint_series(
+        painter,
+        body,
+        &[Series {
+            spectrum: s,
+            color: LINE,
+        }],
+        None,
+        lang,
+        visuals,
+        hover,
+    );
+}
+
+/// 重ねて描く 1 本の線。
+pub struct Series<'a> {
+    pub spectrum: &'a Spectrum,
+    pub color: Color32,
+}
+
+/// `body` に `series` を重ねて描く。横軸は 1 本目のもの（同じキューブの点なら全部同じ）。
+/// `marker` の点（表示中の面）に縦線を引く。`hover` がグラフの上なら、いちばん近い点の値を出し、
+/// その点の番号を返す（クリックでその面に飛ぶため）。
+pub fn paint_series(
+    painter: &Painter,
+    body: Rect,
+    series: &[Series],
+    marker: Option<usize>,
+    lang: Language,
+    visuals: &egui::Visuals,
+    hover: Option<Pos2>,
+) -> Option<usize> {
+    let s = series.first()?.spectrum;
     let n = s.values.len();
     if n < 2 {
-        return;
+        return None;
     }
     let text = visuals.text_color();
     let faint = visuals.weak_text_color();
@@ -145,10 +178,14 @@ pub fn paint(
             (lo.min(v), hi.max(v))
         });
     if !x_lo.is_finite() {
-        return;
+        return None;
     }
     let unit = unit_for(&s.axis.kind, x_lo.abs().max(x_hi.abs()));
-    let (y_lo, y_hi) = match s.value_range() {
+    let range = series
+        .iter()
+        .filter_map(|l| l.spectrum.value_range())
+        .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
+    let (y_lo, y_hi) = match range {
         Some((lo, hi)) if hi > lo => (f64::from(lo), f64::from(hi)),
         Some((v, _)) => (f64::from(v) - 1.0, f64::from(v) + 1.0),
         None => (0.0, 1.0),
@@ -235,30 +272,40 @@ pub fn paint(
         }
     }
 
-    // 値のない点（NaN）で線を切る。
-    let mut run: Vec<Pos2> = Vec::new();
-    let flush = |run: &mut Vec<Pos2>| {
-        if run.len() >= 2 {
-            painter.add(egui::Shape::line(
-                std::mem::take(run),
-                Stroke::new(1.2, LINE),
-            ));
+    for line in series {
+        // 値のない点（NaN）で線を切る。
+        let mut run: Vec<Pos2> = Vec::new();
+        let flush = |run: &mut Vec<Pos2>| {
+            if run.len() >= 2 {
+                painter.add(egui::Shape::line(
+                    std::mem::take(run),
+                    Stroke::new(1.2, line.color),
+                ));
+            }
+            run.clear();
+        };
+        let l = line.spectrum;
+        for (i, &v) in l.values.iter().enumerate() {
+            let at = l.axis.value(i);
+            if v.is_finite() && at.is_finite() {
+                run.push(pos2(to_x(at), to_y(f64::from(v))));
+            } else {
+                flush(&mut run);
+            }
         }
-        run.clear();
-    };
-    for (i, &v) in s.values.iter().enumerate() {
-        let at = s.axis.value(i);
-        if v.is_finite() && at.is_finite() {
-            run.push(pos2(to_x(at), to_y(f64::from(v))));
-        } else {
-            flush(&mut run);
+        flush(&mut run);
+    }
+    if let Some(m) = marker.filter(|&m| m < n) {
+        let x = to_x(s.axis.value(m));
+        if x.is_finite() {
+            painter.line_segment(
+                [pos2(x, plot.top()), pos2(x, plot.bottom())],
+                Stroke::new(1.0, text.gamma_multiply(0.7)),
+            );
         }
     }
-    flush(&mut run);
 
-    let Some(p) = hover.filter(|p| plot.contains(*p)) else {
-        return;
-    };
+    let p = hover.filter(|p| plot.contains(*p))?;
     let t = f64::from((p.x - plot.left()) / plot.width());
     let x = x_lo + (x_hi - x_lo) * t;
     let index = s.axis.nearest(x).min(n - 1);
@@ -268,7 +315,6 @@ pub fn paint(
         [pos2(sx, plot.top()), pos2(sx, plot.bottom())],
         Stroke::new(1.0, faint),
     );
-    let v = s.values[index];
     let mut lines = vec![
         format!("{} {}", short(at / unit.divide), unit.name)
             .trim_end()
@@ -282,18 +328,39 @@ pub fn paint(
         };
         lines.push(format!("{} km/s{frame}", short(vel / 1e3)));
     }
-    if v.is_finite() {
-        painter.circle_filled(pos2(sx, to_y(f64::from(v))), 3.0, LINE);
-        lines.push(
-            format!("{} {}", short(f64::from(v)), s.value_unit)
+    for line in series {
+        let v = line.spectrum.values.get(index).copied().unwrap_or(f32::NAN);
+        if v.is_finite() {
+            painter.circle_filled(pos2(sx, to_y(f64::from(v))), 3.0, line.color);
+            let mut text = format!("{} {}", short(f64::from(v)), line.spectrum.value_unit)
                 .trim_end()
-                .to_owned(),
-        );
-    } else {
-        lines.push(tr(lang, "No value").to_owned());
+                .to_owned();
+            if series.len() > 1 {
+                text = format!("● {text}");
+            }
+            lines.push(text);
+        } else {
+            lines.push(tr(lang, "No value").to_owned());
+        }
     }
     lines.push(format!("#{}", index + 1));
-    let galley = painter.layout_no_wrap(lines.join("\n"), font, text);
+    // 線が 2 本以上なら、値の行の頭の印を線の色にする。
+    let first_value = lines.len() - series.len() - 1;
+    let mut job = egui::text::LayoutJob::default();
+    for (i, line) in lines.iter().enumerate() {
+        let color = i
+            .checked_sub(first_value)
+            .and_then(|k| series.get(k))
+            .filter(|_| series.len() > 1)
+            .map_or(text, |l| l.color);
+        let sep = if i + 1 < lines.len() { "\n" } else { "" };
+        job.append(
+            &format!("{line}{sep}"),
+            0.0,
+            egui::TextFormat::simple(font.clone(), color),
+        );
+    }
+    let galley = painter.layout_job(job);
     let size = galley.size() + vec2(8.0, 6.0);
     let mut corner = pos2(sx + 8.0, plot.top() + 4.0);
     if corner.x + size.x > plot.right() {
@@ -302,6 +369,7 @@ pub fn paint(
     let frame = Rect::from_min_size(corner, size);
     painter.rect_filled(frame, 3.0, visuals.extreme_bg_color.gamma_multiply(0.9));
     painter.galley(corner + vec2(4.0, 3.0), galley, text);
+    Some(index)
 }
 
 #[cfg(test)]

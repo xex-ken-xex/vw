@@ -1156,6 +1156,59 @@ const JA: &[(&str, &str)] = &[
         "作った校正のマスターを消す",
     ),
     ("Hot pixels", "ホットピクセル"),
+    ("Contours", "等高線"),
+    (
+        "Show/hide spectrum at crosses",
+        "十字のスペクトルの表示/非表示",
+    ),
+    ("Spectrum at crosses", "十字のスペクトル"),
+    ("Multiples of the noise", "雑音の倍数"),
+    ("Pixel values", "画素の値"),
+    (
+        "Write 1 to 32 numbers separated by commas.",
+        "1〜32 個の数をカンマで区切って書いてください。",
+    ),
+    (
+        "Draws contour lines over the gray image of the active slot.",
+        "アクティブなスロットの灰色の画像に、等高線を重ねて描きます。",
+    ),
+    ("Reading the cube...", "キューブを読んでいます..."),
+    (
+        "This file has no planes to follow.",
+        "このファイルには、たどる面がありません。",
+    ),
+    (
+        "Place crosses with the pixel probe on a FITS cube to see the values of those points on every plane.",
+        "FITS のキューブに画素値の確認で十字を置くと、その点の全部の面の値を出します。",
+    ),
+    ("Contour levels", "等高線の水準"),
+    (
+        "Levels of the contour lines drawn over gray images, separated by commas. Levels below the median are drawn dashed.",
+        "灰色の画像に重ねる等高線の水準を、カンマで区切って書きます。中央値より下の水準は破線で描きます。",
+    ),
+    ("Contour levels are", "等高線の水準の決め方"),
+    (
+        "Multiples of the noise: each level is the median plus that many times the noise (1.4826 x the median distance from the median) of the shown plane. Pixel values: each level is drawn as written.",
+        "雑音の倍数: 表示中の面の中央値に、雑音（中央値からの外れの中央値 × 1.4826）のその倍を足した値に引きます。画素の値: 書いた値そのものに引きます。",
+    ),
+    ("Contour color", "等高線の色"),
+    (
+        "Color of the contour lines (#RRGGBB).",
+        "等高線の色（#RRGGBB）。",
+    ),
+    ("Contour line width", "等高線の太さ"),
+    (
+        "Width of the contour lines in points.",
+        "等高線の太さ（点）。",
+    ),
+    (
+        "Open the spectrum after placing a cross on a cube",
+        "キューブに十字を置いたら、スペクトルを開く",
+    ),
+    (
+        "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at crosses window that shows the values of that point on every plane.",
+        "画素値の確認で FITS のキューブの面に十字を置いたとき、その点の全部の面の値を出す「十字のスペクトル」の窓を開きます。",
+    ),
     ("Bayer demosaic", "Bayer のデモザイク"),
     (
         "Each pixel gets the two missing colors from its neighbours.",

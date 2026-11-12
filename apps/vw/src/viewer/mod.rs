@@ -83,6 +83,21 @@ pub struct Shown {
 }
 
 /// カメラ RAW の片方の絵。埋め込みのプレビューか、現像した画像。
+impl Slot {
+    /// 等高線を引ける画像（灰色の画像。グラフで描くスペクトルは除く）を出しているか。
+    pub fn contours_possible(&self) -> bool {
+        self.shown()
+            .is_some_and(|s| s.info.color == ColorModel::Gray && s.info.spectrum.is_none())
+    }
+}
+
+impl Shown {
+    /// この画像の十字の鍵（[`mark_path`]）。
+    pub fn mark_path(&self) -> PathBuf {
+        mark_path(&self.path, &self.info)
+    }
+}
+
 pub struct RawFace {
     pub thumb: TextureHandle,
     pub info: ImageInfo,
@@ -312,7 +327,11 @@ pub struct Slot {
     /// 直前に描いた画像部分の大きさ。キー操作で倍率を変えるときに使う。
     last_body: Option<Vec2>,
     /// 画素値を確かめる十字の印。ファイルには書かず、スロットを閉じると消える。
+    /// 置いた画像は [`mark_path`]（キューブはファイル、ほかは面）。
     pub marks: Vec<Mark>,
+    /// 等高線を重ねる。起動をまたいでは残さない。
+    pub contours: bool,
+    contour_cache: Option<ContourCache>,
     /// 十字と ROI の色の値の書き方。描くたびに [`SlotLook::colors`] から受け取り、
     /// コピー（描画の外から呼ばれる）でも同じ書き方にする。
     colors: Colors,
@@ -378,6 +397,56 @@ pub struct SlotLook<'a> {
     pub spectrum_graph: bool,
     /// 十字とカーソルの所に出す空の座標の書き方。
     pub sky_format: SkyFormat,
+    /// 等高線の水準と色（線を引くかはスロットごとの [`Slot::contours`]）。
+    pub contours: &'a ContourStyle,
+}
+
+/// 等高線の引き方（設定 `[contours]`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourStyle {
+    pub levels: Vec<f64>,
+    pub mode: crate::contours::Mode,
+    pub color: Color32,
+    pub width: f32,
+}
+
+/// 1 つの水準の線（下側の水準か、つないだ折れ線）。
+type TracedLevel = (bool, Vec<Vec<[f32; 2]>>);
+
+/// 引いた等高線。同じ画像と水準なら引き直さない。
+struct ContourCache {
+    path: PathBuf,
+    levels: Vec<u64>,
+    mode: crate::contours::Mode,
+    lines: Arc<Vec<TracedLevel>>,
+}
+
+/// キューブの十字の色。十字ごとのスペクトルの線を同じ色で描くので、置いた順に別の色にする。
+pub const CROSS_COLORS: [Color32; 8] = [
+    Color32::from_rgb(255, 210, 0),
+    Color32::from_rgb(0, 220, 255),
+    Color32::from_rgb(255, 90, 200),
+    Color32::from_rgb(120, 230, 80),
+    Color32::from_rgb(255, 140, 40),
+    Color32::from_rgb(150, 150, 255),
+    Color32::from_rgb(255, 255, 255),
+    Color32::from_rgb(255, 80, 80),
+];
+
+/// 十字を置く画像の鍵。FITS のキューブは面を送っても同じ点を見続けたいので、面ではなく
+/// ファイルに置く。ほかの画像は今までどおり面（フレーム）ごと。
+pub fn mark_path(path: &Path, info: &ImageInfo) -> PathBuf {
+    if is_fits_cube(info) {
+        crate::frames::file_of(path)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// 面が 2 枚以上ある FITS（キューブ）か。`info.frames` は見ない: 1 面だけを指すパスで読むと 1 になるため。
+/// FITS の `Frame` はキューブの面にだけ付く。
+pub fn is_fits_cube(info: &ImageInfo) -> bool {
+    info.metadata.get(vw_fits::GROUP, "Frame").is_some()
 }
 
 /// 似た画像の組の印。同じ組のスロットには同じ番号と色を出す。
@@ -462,6 +531,8 @@ pub enum SlotCommand {
     Run(crate::keymap::Action),
     /// 計測線を引き終えた。
     LineDrawn,
+    /// キューブに十字を置いた。
+    CubeMarkAdded,
 }
 
 /// 1 フレーム分の操作結果。
@@ -765,6 +836,8 @@ impl Slot {
             page_wheel: 0.0,
             last_body: None,
             marks: Vec::new(),
+            contours: false,
+            contour_cache: None,
             colors: Colors::default(),
             selected_mark: None,
             rois: Vec::new(),
@@ -1040,9 +1113,10 @@ impl Slot {
     /// 表示中の画像に置いた十字のうち、選んでいるもの。
     fn selected_shown_mark(&self) -> Option<&Mark> {
         let shown = self.shown()?;
+        let key = shown.mark_path();
         self.selected_mark
             .and_then(|i| self.marks.get(i))
-            .filter(|m| m.path == shown.path)
+            .filter(|m| m.path == key)
     }
 
     /// 十字の位置の値。元の画像を読み込み中なら `None`。
@@ -1175,6 +1249,67 @@ impl Slot {
     }
 
     /// 表示中の画像に置いた十字と、その値を描く。
+    /// 等高線を表示中の画像で引き直す（同じ画像と水準なら引き直さない）。元の画像が届くまでは
+    /// 何もしない。灰色でない画像は線なしにする。
+    fn refresh_contours(&mut self, style: &ContourStyle) {
+        let Some((path, image)) = self
+            .shown()
+            .and_then(|s| Some((s.path.clone(), s.full.as_ref()?.image.clone())))
+        else {
+            return;
+        };
+        let key: Vec<u64> = style.levels.iter().map(|v| v.to_bits()).collect();
+        let fresh = self
+            .contour_cache
+            .as_ref()
+            .is_some_and(|c| c.path == path && c.levels == key && c.mode == style.mode);
+        if !fresh {
+            let lines = crate::contours::gray_values(&image)
+                .map(|values| {
+                    let levels = crate::contours::levels(&values, style.mode, &style.levels);
+                    crate::contours::trace(&values, image.width as usize, &levels)
+                        .into_iter()
+                        .map(|c| (c.below, c.polylines()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.contour_cache = Some(ContourCache {
+                path,
+                levels: key,
+                mode: style.mode,
+                lines: Arc::new(lines),
+            });
+        }
+    }
+
+    /// 引いた等高線を描く。
+    fn draw_contours(&self, ui: &egui::Ui, body: Rect, placed: &Placed, style: &ContourStyle) {
+        let Some(shown) = self.shown() else { return };
+        let (Some(cache), Some(full)) = (&self.contour_cache, &shown.full) else {
+            return;
+        };
+        if cache.path != shown.path {
+            return;
+        }
+        let painter = ui.painter_at(body);
+        let scale = placed.rect.width() / full.image.width.max(1) as f32;
+        let stroke = egui::Stroke::new(style.width, style.color);
+        let dash = 4.0 * style.width.max(1.0);
+        for (below, lines) in cache.lines.iter() {
+            for line in lines {
+                let points: Vec<Pos2> = line
+                    .iter()
+                    .map(|p| placed.rect.min + vec2(p[0], p[1]) * scale)
+                    .collect();
+                if *below {
+                    painter.extend(egui::Shape::dashed_line(&points, stroke, dash, dash));
+                } else {
+                    painter.add(egui::Shape::line(points, stroke));
+                }
+            }
+        }
+    }
+
     fn draw_marks(
         &self,
         ui: &egui::Ui,
@@ -1193,15 +1328,20 @@ impl Slot {
                 crate::quantity::missing_text(lang, m)
             )
         });
-        for mark in self.marks.iter().filter(|m| m.path == shown.path) {
+        let key = shown.mark_path();
+        let cube = is_fits_cube(&shown.info);
+        for (n, mark) in self.marks.iter().filter(|m| m.path == key).enumerate() {
             let at = placed.mark_pos(mark);
-            let color = if selected == Some(mark) {
-                ui.visuals().selection.stroke.color
-            } else {
-                Color32::from_rgb(255, 210, 0)
+            let chosen = selected == Some(mark);
+            // キューブの十字はスペクトルの線と同じ色のまま、選んだものを太くする。
+            let color = match (cube, chosen) {
+                (true, _) => CROSS_COLORS[n % CROSS_COLORS.len()],
+                (false, true) => ui.visuals().selection.stroke.color,
+                (false, false) => Color32::from_rgb(255, 210, 0),
             };
+            let line = if cube && chosen { 2.0 } else { 1.0 };
             // 明るい画像でも暗い画像でも見えるよう、黒い縁を付けて描く。
-            for (width, c) in [(3.0, Color32::from_black_alpha(180)), (1.0, color)] {
+            for (width, c) in [(line + 2.0, Color32::from_black_alpha(180)), (line, color)] {
                 let stroke = egui::Stroke::new(width, c);
                 painter.line_segment([at - vec2(MARK_ARM, 0.0), at + vec2(MARK_ARM, 0.0)], stroke);
                 painter.line_segment([at - vec2(0.0, MARK_ARM), at + vec2(0.0, MARK_ARM)], stroke);
@@ -1725,6 +1865,7 @@ impl Slot {
             beam,
             spectrum_graph,
             sky_format,
+            contours,
         } = look;
         self.colors = colors;
         let mut out = SlotFrame::default();
@@ -1737,6 +1878,10 @@ impl Slot {
         };
         // ゲージとビームは画像の色と大きさのためのもので、グラフに重ねると線が隠れる。
         let (gauge, beam) = (gauge.filter(|_| !graph), beam && !graph);
+        let draw_contours = self.contours && !graph;
+        if draw_contours {
+            self.refresh_contours(contours);
+        }
         let derivable = !graph && self.shown().is_some_and(is_derivable);
         if !derivable {
             self.derive = None;
@@ -1956,9 +2101,10 @@ impl Slot {
 
             let hits = Hits {
                 mark: pointer.pos.and_then(|p| {
-                    self.marks.iter().position(|m| {
-                        m.path == shown.path && placed.mark_pos(m).distance(p) <= MARK_HIT
-                    })
+                    let key = shown.mark_path();
+                    self.marks
+                        .iter()
+                        .position(|m| m.path == key && placed.mark_pos(m).distance(p) <= MARK_HIT)
                 }),
                 roi: pointer.pos.and_then(|p| {
                     self.rois.iter().position(|r| {
@@ -2041,8 +2187,11 @@ impl Slot {
                     }
                     Click::SelectMark(i) => self.selected_mark = Some(i),
                     Click::AddMark(x, y) => {
+                        if is_fits_cube(&shown.info) {
+                            out.push(SlotCommand::CubeMarkAdded);
+                        }
                         self.marks.push(Mark {
-                            path: shown.path.clone(),
+                            path: shown.mark_path(),
                             x,
                             y,
                         });
@@ -2093,7 +2242,15 @@ impl Slot {
                 };
                 draw_beam(ui, lang, clear, img_rect, scale, &shown.info.metadata);
             }
-            let has_marks = self.marks.iter().any(|m| m.path == shown.path);
+            if draw_contours {
+                // 線は元の画像の値から引くので、縮小画像で足りる大きさでも元の画像を持たせる。
+                out.wants_full = true;
+                self.draw_contours(ui, body, &placed, contours);
+            }
+            let has_marks = {
+                let key = shown.mark_path();
+                self.marks.iter().any(|m| m.path == key)
+            };
             let has_rois = self.rois.iter().any(|r| r.path == shown.path);
             let has_lines = self.lines.iter().any(|l| l.path == shown.path);
             // 値は元の画像から読むので、縮小画像で足りる大きさでも元の画像を持たせる。
@@ -2629,6 +2786,20 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crosses_on_any_plane_of_a_fits_cube_belong_to_the_file() {
+        let mut plane = test_support::info(4, 4, ColorModel::Gray);
+        plane
+            .metadata
+            .push(vw_fits::GROUP, "Frame", "34 / 64".to_owned());
+        let file = Path::new("/d/cube.fits");
+        let frame = crate::frames::frame_path(file, 33);
+        assert_eq!(mark_path(&frame, &plane), file);
+        assert_eq!(mark_path(file, &plane), file);
+        let flat = test_support::info(4, 4, ColorModel::Gray);
+        assert_eq!(mark_path(&frame, &flat), frame);
+    }
 
     #[test]
     fn a_long_name_keeps_its_head_and_its_numbered_end() {

@@ -1184,6 +1184,7 @@ impl VwApp {
             let beam = self.settings().fits.beam;
             let spectrum_graph = self.settings().fits.spectrum_graph;
             let sky_format = self.settings().fits.sky_coordinates.format();
+            let contours = self.settings().contours.style();
             let resp = self.slots[i].ui(
                 ui,
                 rect,
@@ -1208,6 +1209,7 @@ impl VwApp {
                     beam,
                     spectrum_graph,
                     sky_format,
+                    contours: &contours,
                 },
             );
             cells.push((rect, i));
@@ -1259,6 +1261,11 @@ impl VwApp {
                     SlotCommand::LineDrawn => {
                         if self.settings.settings.measure.open_profile {
                             self.line_profile.open = true;
+                        }
+                    }
+                    SlotCommand::CubeMarkAdded => {
+                        if self.settings.settings.measure.open_spectrum {
+                            self.point_spectrum.open = true;
                         }
                     }
                     SlotCommand::Run(action) => {
@@ -1330,6 +1337,7 @@ impl VwApp {
                         beam: self.settings().fits.beam,
                         spectrum_graph: self.settings().fits.spectrum_graph,
                         sky_format: self.settings().fits.sky_coordinates.format(),
+                        contours: &self.settings().contours.style(),
                     },
                 );
                 cells.push((rect, view.range.start + cell_index));

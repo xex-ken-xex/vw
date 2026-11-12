@@ -21,6 +21,7 @@ mod colormap;
 mod colormap_ui;
 mod compare;
 mod compose;
+mod contours;
 mod copy;
 mod dataset_extract;
 mod dataset_groups;
