@@ -36,7 +36,7 @@ For images with a WCS in the header, the cross of [pixel value check](check.html
 
 ## Switch extensions (HDUs)
 
-JWST and HST images and mosaic camera images hold several image HDUs (extensions) in one file (SCI, ERR and DQ for JWST, one per detector for a mosaic camera). The first image with data (SCI for JWST and HST) is shown first.
+JWST and HST images and mosaic camera images hold several image HDUs (extensions) in one file (SCI, ERR and DQ for JWST, one per detector for a mosaic camera). The first image with data (SCI for JWST and HST) is shown first. Files from mosaic cameras show the detectors put together in one image ([See detectors as one image](#see-detectors-as-one-image)).
 
 - **N** / **Shift+N** switch to the next / previous HDU (the same keys as NetCDF variables). They can also be picked from right-click **HDU**, which lists their sizes and types. Table HDUs (BINTABLE, TABLE) are listed too, with their numbers of columns and rows ([View tables](#view-tables))
 - An HDU is named by its number (the primary is 0) and `EXTNAME` (`1 SCI`, or `2 SCI,2` when names repeat)
@@ -44,6 +44,20 @@ JWST and HST images and mosaic camera images hold several image HDUs (extensions
 - Black and white are chosen again for each HDU. Black and white set by hand are not carried to the next HDU (errors and flags have different ranges from the image)
 - Darks and flats are applied only to the image shown first
 - The metadata shows the primary's cards, the cards of the HDU on show (**FITS HDU n**) and the list of HDUs to choose from (**FITS HDUs**)
+
+### See detectors as one image
+
+Files from cameras with several detectors (CCDs) give the place of each HDU in the whole (`DETSEC`). vw puts the detectors back in place and shows them as one image.
+
+- They are put together when there are two or more image HDUs, each with one plane and a `DETSEC`, and none overlap. Otherwise the first image is shown as before
+- For each amplifier, the median of its overscan (`BIASSEC`) is subtracted and only the pixels in use (`DATASEC`) are placed. Amplifiers read out the other way (a reversed `DETSEC` such as `[512:257,…]`) are turned around
+- The gaps between detectors are drawn in the missing color
+- Black and white are chosen once for the whole image
+- Sky coordinates at the cross and the cursor come from the WCS of the detector under them. None are shown over the gaps
+- **Mosaic** comes first in the list of HDUs, and single detectors can still be chosen
+- Mosaics larger than **Largest detector mosaic** (`fits.mosaic_max_megapixels`, 400 megapixels by default) are reduced by averaging 2 x 2 pixels until they fit. **Mosaic** in the metadata says how much
+- To turn this off, clear **Detector mosaics as one image** (`fits.mosaic`) in the settings. **Mosaic** can still be chosen from right-click **HDU**
+- Darks and flats are not applied to the assembled image
 
 ## View tables
 

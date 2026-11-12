@@ -1021,6 +1021,20 @@ const ITEMS: &[Item] = &[
     },
     Item {
         section: Section::Fits,
+        key: "fits.mosaic",
+        title: "Detector mosaics as one image",
+        description: "Files from cameras with several detectors (each HDU has DETSEC) open as one image with the detectors put in place. The overscan level (BIASSEC) of each amplifier is subtracted and the gaps are drawn in the missing color. Single detectors can still be chosen from the slot's right-click menu (HDU).",
+        widget: fits_mosaic_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.mosaic_max_megapixels",
+        title: "Largest detector mosaic",
+        description: "Mosaics larger than this are reduced by averaging 2 x 2 pixels until they fit. The sky coordinates at the cursor are still read from the WCS of each detector.",
+        widget: fits_mosaic_max_megapixels_widget,
+    },
+    Item {
+        section: Section::Fits,
         key: "fits.sky_coordinates",
         title: "Sky coordinates at the cross",
         description: "How the right ascension and declination of the pixel are written at the cross and at the cursor, for images with a WCS in the header. Copying a cross always gives decimal degrees.",
@@ -2923,6 +2937,26 @@ fn fits_sky_coordinates_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Langua
 fn fits_spectrum_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
     ui.checkbox(&mut s.fits.spectrum_graph, tr(lang, "Enabled"))
         .changed()
+}
+
+fn fits_mosaic_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.mosaic, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn fits_mosaic_max_megapixels_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::DragValue::new(&mut s.fits.mosaic_max_megapixels)
+                .range(crate::settings::Fits::MOSAIC_MEGAPIXELS)
+                .speed(1.0)
+                .max_decimals(0),
+        );
+        changed |= (r.changed() && !r.dragged()) || r.drag_stopped();
+        ui.label(tr(lang, "megapixels"));
+    });
+    changed
 }
 
 fn fits_table_graph_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {

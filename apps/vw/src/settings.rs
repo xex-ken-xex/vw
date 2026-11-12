@@ -1563,6 +1563,10 @@ pub struct Fits {
     pub spectrum_graph: bool,
     /// 波長（周波数）と流量の列を持つ表を、初めは表ではなくスペクトルのグラフで描く。
     pub table_graph: bool,
+    /// 検出器を並べたカメラ（`DETSEC`）のファイルを、初めは 1 枚に組み立てて描く。
+    pub mosaic: bool,
+    /// 組み立てた全体の画素数の上限（百万画素）。超えたら縮めて描く。
+    pub mosaic_max_megapixels: f32,
     /// 十字に出す空の座標（赤経・赤緯）の書き方。
     pub sky_coordinates: SkyCoordinates,
     /// ダーク・フラット・バイアスの当て方。TOML では表になるので、値の項目より後に置く。
@@ -1587,6 +1591,8 @@ impl Default for Fits {
             beam: true,
             spectrum_graph: true,
             table_graph: false,
+            mosaic: d.mosaic,
+            mosaic_max_megapixels: d.mosaic_max_megapixels,
             sky_coordinates: SkyCoordinates::default(),
             calibration: FitsCalibration::default(),
         }
@@ -1595,6 +1601,7 @@ impl Default for Fits {
 
 impl Fits {
     pub const PERCENT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+    pub const MOSAIC_MEGAPIXELS: std::ops::RangeInclusive<f32> = 1.0..=4000.0;
 
     fn read(r: &mut Reader<'_>) -> Self {
         let d = Self::default();
@@ -1633,6 +1640,14 @@ impl Fits {
             beam: r.get("beam").unwrap_or(d.beam),
             spectrum_graph: r.get("spectrum_graph").unwrap_or(d.spectrum_graph),
             table_graph: r.get("table_graph").unwrap_or(d.table_graph),
+            mosaic: r.get("mosaic").unwrap_or(d.mosaic),
+            mosaic_max_megapixels: r
+                .get_valid(
+                    "mosaic_max_megapixels",
+                    |v: &f32| Fits::MOSAIC_MEGAPIXELS.contains(v),
+                    "must be 1 to 4000",
+                )
+                .unwrap_or(d.mosaic_max_megapixels),
             sky_coordinates: r.get("sky_coordinates").unwrap_or(d.sky_coordinates),
             calibration: FitsCalibration::read(r.reader()),
         }
@@ -1648,6 +1663,8 @@ impl Fits {
             demosaic: self.demosaic,
             same_window_for_planes: self.same_window_for_planes,
             missing: missing_color(&self.missing_color),
+            mosaic: self.mosaic,
+            mosaic_max_megapixels: self.mosaic_max_megapixels,
         }
     }
 }

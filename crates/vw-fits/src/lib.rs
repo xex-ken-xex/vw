@@ -17,6 +17,7 @@ pub mod cube;
 mod hcompress;
 mod header;
 pub mod moments;
+pub mod mosaic;
 mod plio;
 pub mod radio;
 mod sky;
@@ -64,6 +65,10 @@ pub struct Options {
     pub same_window_for_planes: bool,
     /// 欠損（`BLANK`・NaN）を描く色（[`vw_core::VwImage::missing`]）。`None` は黒。
     pub missing: Option<[u8; 3]>,
+    /// 検出器を並べたカメラの HDU（`DETSEC`）を、何も選んでいないときに 1 枚に組み立てて見せる。
+    pub mosaic: bool,
+    /// 組み立てた全体の画素数の上限（百万画素）。超えたら 2 × 2 画素ずつまとめて縮める。
+    pub mosaic_max_megapixels: f32,
 }
 
 /// 欠損の色の既定。色の表のどの色とも見分けやすい、少し青みのある灰色。
@@ -80,6 +85,8 @@ impl Default for Options {
             demosaic: true,
             same_window_for_planes: true,
             missing: Some(MISSING_COLOR),
+            mosaic: true,
+            mosaic_max_megapixels: 400.0,
         }
     }
 }
@@ -176,6 +183,8 @@ pub const PLANES_WINDOW_SAME: &str = "Same for all planes";
 pub const SPECTRUM: &str = "Spectrum";
 /// 表を見せているとき、表の種類と大きさを書く鍵（[`Part::detail`]）。
 pub const TABLE: &str = "Table";
+/// 検出器を並べて組み立てた全体（HDU の一覧の名前と、メタデータの鍵）。
+pub const MOSAIC: &str = "Mosaic";
 
 impl DecoderPlugin for FitsPlugin {
     fn name(&self) -> &str {
@@ -198,10 +207,12 @@ impl DecoderPlugin for FitsPlugin {
         let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        Ok(match find_target(&hdus, chosen)? {
-            Target::Image(image) => image.planes,
-            Target::Table(_) => 1,
-        })
+        Ok(
+            match find_target(&hdus, chosen, self.options.get().mosaic)? {
+                Target::Image(image) => image.planes,
+                Target::Table(_) | Target::Mosaic(_) => 1,
+            },
+        )
     }
 
     fn decode_frame(&self, data: &[u8], frame: usize) -> Result<VwImage, DecodeError> {
@@ -235,10 +246,13 @@ impl DecoderPlugin for FitsPlugin {
         let chosen = self.choices.get(data);
         let data = gunzip(data)?;
         let hdus = header::hdus(&data)?;
-        Ok(match find_target(&hdus, chosen)? {
-            Target::Image(image) => metadata(&hdus, &image, 0),
-            Target::Table(index) => table_metadata(&hdus, index, None),
-        })
+        Ok(
+            match find_target(&hdus, chosen, self.options.get().mosaic)? {
+                Target::Image(image) => metadata(&hdus, &image, 0),
+                Target::Table(index) => table_metadata(&hdus, index, None),
+                Target::Mosaic(layout) => mosaic_metadata(&hdus, &layout, None),
+            },
+        )
     }
 }
 
@@ -368,7 +382,24 @@ impl Part {
 pub fn parts(data: &[u8]) -> Result<Vec<Part>, DecodeError> {
     let data = gunzip(data)?;
     let hdus = header::hdus(&data)?;
-    Ok((0..hdus.len()).filter_map(|i| part_at(&hdus, i)).collect())
+    Ok(all_parts(&hdus))
+}
+
+/// 組み立てられるならモザイク（[`mosaic::MOSAIC`]）を先頭に、続けて画像と表の HDU。
+fn all_parts(hdus: &[Hdu]) -> Vec<Part> {
+    let mosaic = mosaic::layout(hdus).map(|layout| Part {
+        index: mosaic::MOSAIC,
+        name: MOSAIC.to_owned(),
+        width: layout.width,
+        height: layout.height,
+        planes: 1,
+        bitpix: -32,
+        table: None,
+    });
+    mosaic
+        .into_iter()
+        .chain((0..hdus.len()).filter_map(|i| part_at(hdus, i)))
+        .collect()
 }
 
 /// 見せるもの。画像か表。
@@ -376,10 +407,24 @@ enum Target<'a> {
     Image(Image<'a>),
     /// 表の HDU の番号。
     Table(usize),
+    /// 検出器を並べて組み立てた全体。
+    Mosaic(mosaic::Layout),
 }
 
-/// `chosen` の HDU が表ならそれ。そうでなければ [`find_image`]、画像がなければ最初の表。
-fn find_target(hdus: &[Hdu], chosen: Option<usize>) -> Result<Target<'_>, DecodeError> {
+/// `chosen` がモザイク（[`mosaic::MOSAIC`]）か、何も選ばず `mosaic` がオンで組み立てられるなら、
+/// 組み立てた全体。`chosen` の HDU が表ならそれ。そうでなければ [`find_image`]、画像がなければ最初の表。
+fn find_target(
+    hdus: &[Hdu],
+    chosen: Option<usize>,
+    mosaic: bool,
+) -> Result<Target<'_>, DecodeError> {
+    let wants_mosaic = match chosen {
+        Some(index) => index == mosaic::MOSAIC,
+        None => mosaic,
+    };
+    if wants_mosaic && let Some(layout) = mosaic::layout(hdus) {
+        return Ok(Target::Mosaic(layout));
+    }
     if let Some(index) = chosen
         && hdus.get(index).and_then(table::kind).is_some()
     {
@@ -483,9 +528,10 @@ fn decode_with(
     chosen: Option<usize>,
 ) -> Result<VwImage, DecodeError> {
     let hdus = header::hdus(data)?;
-    let image = match find_target(&hdus, chosen)? {
+    let image = match find_target(&hdus, chosen, options.mosaic)? {
         Target::Image(image) => image,
         Target::Table(index) => return decode_table(data, &hdus, index, frame),
+        Target::Mosaic(layout) => return decode_mosaic(data, &hdus, &layout, frame, &options),
     };
     let default = default_image(&hdus).is_ok_and(|d| d.index == image.index);
     if frame >= image.planes {
@@ -814,6 +860,78 @@ fn decode_table(
     Ok(img)
 }
 
+/// 検出器を `layout` のとおりに並べた 1 枚。値は `BIASSEC` を引いた実数で、すきまは欠損。
+fn decode_mosaic(
+    data: &[u8],
+    hdus: &[Hdu],
+    layout: &mosaic::Layout,
+    frame: usize,
+    options: &Options,
+) -> Result<VwImage, DecodeError> {
+    if frame > 0 {
+        return Err(DecodeError::Invalid(format!("no frame {frame}")));
+    }
+    let max_pixels = (options.mosaic_max_megapixels.max(1.0) as f64 * 1e6) as usize;
+    let assembled = mosaic::assemble(data, hdus, layout, max_pixels)?;
+    let (w, h) = (assembled.width, assembled.height);
+    let mut img = VwImage::new(
+        w as u32,
+        h as u32,
+        ColorModel::Gray,
+        PixelData::F32(assembled.values),
+    )
+    .map_err(DecodeError::Invalid)?;
+    let first = &hdus[layout.detectors[0].index];
+    let flipped = bottom_up(first, options.flip_rows);
+    if flipped {
+        img.apply_orientation(4);
+    }
+    img.window = stretch::window(
+        &img.data,
+        options.stretch,
+        options.low_percent,
+        options.high_percent,
+    );
+    img.curve = options.curve;
+    img.missing = options.missing;
+    img.sky = mosaic::MosaicSky::read(hdus, layout, assembled.bin, h, flipped)
+        .map(|s| Arc::new(s) as Arc<dyn vw_core::sky::SkyMap>);
+    img.metadata = mosaic_metadata(hdus, layout, Some(assembled.bin));
+    push_parts(&mut img.metadata, hdus, mosaic::MOSAIC);
+    if flipped {
+        img.metadata.push(GROUP, ROWS, ROWS_FLIPPED);
+    }
+    img.metadata.push(GROUP, STRETCH, options.stretch.title());
+    if options.stretch == Stretch::Percentile {
+        for (key, percent) in [
+            (BLACK_PERCENTILE, options.low_percent),
+            (WHITE_PERCENTILE, options.high_percent),
+        ] {
+            img.metadata.push(GROUP, key, format!("{percent} %"));
+        }
+    }
+    Ok(img)
+}
+
+/// 組み立てた全体の大きさ、検出器の数、縮めた倍率（`bin`、読む前なら `None`）と、Primary のカード。
+fn mosaic_metadata(hdus: &[Hdu], layout: &mosaic::Layout, bin: Option<usize>) -> Metadata {
+    let mut m = Metadata::default();
+    let size = |bin: usize| format!("{} x {}", layout.width / bin, layout.height / bin);
+    m.push(GROUP, "Size", size(bin.unwrap_or(1)));
+    let mut text = format!(
+        "{} detectors, {} x {}",
+        layout.detectors.len(),
+        layout.width,
+        layout.height
+    );
+    if let Some(bin) = bin.filter(|&b| b > 1) {
+        text.push_str(&format!(", reduced 1/{bin}"));
+    }
+    m.push(GROUP, MOSAIC, text);
+    push_cards(&mut m, GROUP, &hdus[0]);
+    m
+}
+
 /// 表の大きさと、全カード。
 fn table_metadata(
     hdus: &[Hdu],
@@ -836,7 +954,7 @@ fn table_metadata(
 
 /// 見られる HDU（画像と表）が 2 つ以上あれば、見ている HDU（[`HDU`]）と、選べる HDU の一覧（[`PARTS_GROUP`]）を書く。
 fn push_parts(m: &mut Metadata, hdus: &[Hdu], current: usize) {
-    let parts: Vec<Part> = (0..hdus.len()).filter_map(|i| part_at(hdus, i)).collect();
+    let parts = all_parts(hdus);
     if parts.len() < 2 {
         return;
     }
