@@ -54,6 +54,33 @@ pub fn check(data: &[u8], total: u64, header_only: bool) -> Result<(), DecodeErr
     w.elements(None, 0, header_only).map(drop)
 }
 
+/// メタ情報の後ろの本体（`data` の `start` バイト目から）だけを、転送構文 `syntax_uid` で辿る。
+/// メタ情報が規格に外れていて [`check`] の前提（明示 VR のメタ情報）が立たないファイルのタグを
+/// 読むときに使う。`header_only` なら一番外の画素データの手前でやめ、その位置を返す。
+pub fn check_data_set(
+    data: &[u8],
+    start: usize,
+    syntax_uid: &str,
+    header_only: bool,
+) -> Result<Option<PixelDataAt>, DecodeError> {
+    let syntax = Syntax::of(syntax_uid);
+    if syntax.deflated {
+        return Err(DecodeError::Unsupported(
+            "a deflated data set behind broken file meta information".into(),
+        ));
+    }
+    let mut w = Walker {
+        data: data.get(start..).unwrap_or_default(),
+        base: start as u64,
+        total: data.len() as u64,
+        pos: 0,
+        syntax,
+        found: None,
+    };
+    w.elements(None, 0, header_only)?;
+    Ok(w.found)
+}
+
 /// 一番外の画素データの要素の位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PixelDataAt {

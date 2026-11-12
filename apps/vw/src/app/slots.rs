@@ -299,7 +299,7 @@ impl VwApp {
                 continue;
             };
             if delivery == loading::Delivery::First {
-                self.receive_image(ctx, index, r.path, r.result);
+                self.receive_image(ctx, index, r.path, r.result, r.tags);
             } else {
                 self.slots[index].full_request = None;
                 match r.result {
@@ -394,6 +394,7 @@ impl VwApp {
         index: usize,
         path: PathBuf,
         result: Result<Loaded, String>,
+        tags: Option<crate::loader::FailedTags>,
     ) {
         let keep_view_setting = self.settings().viewer.keep_view;
         let options = self.texture_options;
@@ -402,8 +403,11 @@ impl VwApp {
         let loaded = match result {
             Ok(loaded) => loaded,
             Err(e) => {
-                s.content = Content::Failed(e.clone());
+                s.content = Content::Failed(e.clone(), tags.clone().map(Box::new));
                 self.load_failed(&path, &e);
+                if let Some(t) = &tags {
+                    log_read_problems(&mut self.log, &path, &t.metadata);
+                }
                 return;
             }
         };

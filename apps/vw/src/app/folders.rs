@@ -30,7 +30,7 @@ impl VwApp {
         slot.path = Some(path.clone());
         slot.request = request;
         slot.loading = true;
-        if matches!(slot.content, Content::Failed(_)) {
+        if matches!(slot.content, Content::Failed(..)) {
             slot.content = Content::Empty;
         }
         slot.full_request = None;

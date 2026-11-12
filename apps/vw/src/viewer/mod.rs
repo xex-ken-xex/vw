@@ -47,7 +47,8 @@ pub enum Content {
     /// 何も出していない。案内の文を出す。
     Empty,
     /// 読めなかった。理由をスロットに出す（ログ欄には失敗の数だけを出すため）。
-    Failed(String),
+    /// タグだけは読めたなら、それをメタデータ欄に出す。
+    Failed(String, Option<Box<crate::loader::FailedTags>>),
     /// まだ開いていないフォルダ（ZIP も）。アイコンと名前だけを出す。
     Folder(PathBuf),
     Image(Shown),
@@ -2370,7 +2371,7 @@ impl Slot {
             let msg = match (&self.content, self.loading) {
                 (_, true) => tr(lang, "Loading...").to_owned(),
                 // 理由もスロットに出す。ログ欄には失敗の数だけを出し、理由はログファイルにしか書かないため。
-                (Content::Failed(e), false) => format!("{}\n{e}", tr(lang, "Failed to load")),
+                (Content::Failed(e, _), false) => format!("{}\n{e}", tr(lang, "Failed to load")),
                 _ => tr(lang, empty_hint).to_owned(),
             };
             let mut job = egui::text::LayoutJob::simple(

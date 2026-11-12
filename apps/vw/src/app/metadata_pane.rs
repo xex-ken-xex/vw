@@ -24,7 +24,8 @@ impl VwApp {
             .iter()
             .map(|s| SlotView {
                 id: s.id,
-                shown: s.shown().is_some(),
+                // 画像を読めずタグだけ読めたスロットも、タグを出すために画像のあるスロットと同じに扱う。
+                shown: s.shown().is_some() || matches!(s.content, Content::Failed(_, Some(_))),
                 loading: s.loading,
             })
             .collect();
@@ -37,7 +38,9 @@ impl VwApp {
     fn metadata_found(&mut self) -> Option<Vec<meta_view::Group>> {
         let lang = self.lang();
         let index = self.metadata_slot()?;
-        let shown = self.slots[index].shown()?;
+        let Some(shown) = self.slots[index].shown() else {
+            return self.failed_metadata(index);
+        };
         let info = &shown.info;
         let row =
             |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
@@ -97,13 +100,43 @@ impl VwApp {
                 .map_or(0, |q| q.paths.len());
             file_rows.insert(1, row("Frame", format!("{} / {total}", i + 1)));
         }
+        let path = shown.path.clone();
+        let metadata = info.metadata.clone();
+        Some(self.groups_with_file_rows(file_rows, path, metadata))
+    }
+
+    /// 画像を読めず、タグだけを読めたスロットのグループ。ファイル情報は画像に関わらない行だけ。
+    fn failed_metadata(&self, index: usize) -> Option<Vec<meta_view::Group>> {
+        let lang = self.lang();
+        let slot = &self.slots[index];
+        let Content::Failed(_, Some(tags)) = &slot.content else {
+            return None;
+        };
+        let path = slot.path.clone()?;
+        let row =
+            |k: &'static str, v: String| meta_view::Row::new(FILE, k, tr(lang, k).to_owned(), v);
+        let file_rows = vec![
+            row(PATH, frames::file_of(&path).display().to_string()),
+            row("Size", format!("{} bytes", tags.file_size)),
+            row("Plugin", tags.plugin.clone()),
+        ];
+        let metadata = tags.metadata.clone();
+        Some(self.groups_with_file_rows(file_rows, path, metadata))
+    }
+
+    /// ファイル情報の行に、AI タグ・QR コード・プラグインのメタデータのグループを続ける。
+    fn groups_with_file_rows(
+        &self,
+        file_rows: Vec<meta_view::Row>,
+        path: std::path::PathBuf,
+        mut metadata: vw_core::Metadata,
+    ) -> Vec<meta_view::Group> {
+        let lang = self.lang();
         let mut groups = vec![meta_view::Group::new(
             FILE,
             tr(lang, FILE).to_owned(),
             file_rows,
         )];
-        let path = shown.path.clone();
-        let mut metadata = info.metadata.clone();
         if let Some(p) = self.labels.get(&frames::file_of(&path)).position {
             crate::labels::apply_position(&mut metadata, p);
         }
@@ -136,7 +169,7 @@ impl VwApp {
         {
             group.rows.push(row);
         }
-        Some(groups)
+        groups
     }
 
     /// 撮影地点に一番近い町の名前（地名の表があるときだけ）。
