@@ -6,8 +6,8 @@ use super::frame::{is_calibration_folder, seconds};
 use super::*;
 use crate::{FitsPlugin, SharedOptions};
 
-const W: usize = 4;
-const H: usize = 2;
+const W: usize = 6;
+const H: usize = 4;
 
 /// テストごとの空のフォルダ。
 fn temp_dir(name: &str) -> PathBuf {
@@ -589,4 +589,245 @@ fn a_chosen_master_that_no_longer_fits_falls_back_to_the_automatic_one() {
     let img = open(&p, &light);
     assert_eq!(values(&img)[0], 490.0);
     assert_eq!(img.metadata.get(GROUP, CHOSEN), None);
+}
+
+fn building(cache: &Path) -> Options {
+    Options {
+        cache_dir: Some(cache.to_path_buf()),
+        wait_for_masters: true,
+        ..Options::default()
+    }
+}
+
+fn single_darks(dir: &Path, count: usize) {
+    for i in 0..count {
+        let mut v = filled(100.0 + i as f32 % 2.0);
+        if i == 0 {
+            v[3] = 10_000.0; // 宇宙線
+        }
+        write(
+            &dir.join(format!("darks/dark_{i:04}.fits")),
+            &[
+                ("IMAGETYP", "'DARK'"),
+                ("EXPTIME", "300.0"),
+                ("CCD-TEMP", "-10.2"),
+            ],
+            &v,
+        );
+    }
+}
+
+#[test]
+fn single_frames_are_stacked_into_a_master_that_rejects_outliers() {
+    let dir = temp_dir("stacked");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    single_darks(&dir, 5);
+    let (p, _) = plugin(building(&dir.join("cache")));
+    let img = open(&p, &light);
+    assert_eq!(state(&img), Some(APPLIED));
+    let v = values(&img);
+    // 5 枚の 100 と 101 の σ クリップ平均。宇宙線の 1 枚の値は除かれる。
+    assert!(v.iter().all(|x| (x - 399.6).abs() < 0.5), "{v:?}");
+    let note = img.metadata.get(GROUP, BUILT).unwrap();
+    assert!(note.contains("master dark from 5 single frames"), "{note}");
+    let made: Vec<_> = std::fs::read_dir(dir.join("cache"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(made.len(), 1, "{made:?}");
+    assert!(made[0].starts_with(stack::PREFIX));
+}
+
+#[test]
+fn a_built_master_is_used_once_the_background_work_is_done() {
+    let dir = temp_dir("background");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    single_darks(&dir, 3);
+    let (p, calibration) = plugin(Options {
+        wait_for_masters: false,
+        ..building(&dir.join("cache"))
+    });
+    let before = calibration.generation();
+    let first = open(&p, &light);
+    assert_eq!(state(&first), Some(NOT_APPLIED));
+    assert!(
+        first
+            .metadata
+            .get(GROUP, BUILT)
+            .unwrap()
+            .starts_with("building")
+    );
+    let start = std::time::Instant::now();
+    while calibration.generation() == before {
+        assert!(start.elapsed().as_secs() < 10, "the master was not built");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(state(&open(&p, &light)), Some(APPLIED));
+}
+
+#[test]
+fn adding_a_frame_gives_a_new_master() {
+    let dir = temp_dir("added");
+    single_darks(&dir, 3);
+    let frames = |dir: &Path| -> Vec<Frame> {
+        let mut index = search::Index::default();
+        index.frames_near(
+            &dir.join("lights/l.fits"),
+            &Places {
+                nearby: true,
+                library: &[],
+            },
+        )
+    };
+    let name = |frames: &[Frame]| stack::groups(frames)[0].file_name(3.0);
+    let before = name(&frames(&dir));
+    single_darks(&dir, 4);
+    assert_ne!(name(&frames(&dir)), before);
+}
+
+#[test]
+fn singles_with_their_own_master_are_not_stacked_again() {
+    let dir = temp_dir("has-master");
+    single_darks(&dir, 3);
+    write(
+        &dir.join("darks/master_dark.fits"),
+        &[
+            ("IMAGETYP", "'Master Dark'"),
+            ("EXPTIME", "300.0"),
+            ("CCD-TEMP", "-10.0"),
+        ],
+        &filled(100.0),
+    );
+    let mut index = search::Index::default();
+    let frames = index.frames_near(
+        &dir.join("lights/l.fits"),
+        &Places {
+            nearby: true,
+            library: &[],
+        },
+    );
+    assert!(stack::groups(&frames).is_empty());
+}
+
+#[test]
+fn single_flats_of_different_brightness_are_evened_out_before_stacking() {
+    let dir = temp_dir("flats");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(1100.0));
+    write(
+        &dir.join("darks/master_dark.fits"),
+        &[
+            ("IMAGETYP", "'Master Dark'"),
+            ("EXPTIME", "300.0"),
+            ("CCD-TEMP", "-10.0"),
+        ],
+        &filled(100.0),
+    );
+    for (i, level) in [1000.0f32, 2000.0, 1500.0].into_iter().enumerate() {
+        let mut flat = filled(level);
+        flat[0] = level / 2.0;
+        write(
+            &dir.join(format!("flats/flat_{i}.fits")),
+            &[("IMAGETYP", "'FLAT'"), ("FILTER", "'Ha'")],
+            &flat,
+        );
+    }
+    let (p, _) = plugin(building(&dir.join("cache")));
+    let v = values(&open(&p, &light));
+    assert!((v[1] - 1000.0).abs() < 1e-2, "{v:?}");
+    assert!((v[0] - 2000.0).abs() < 1e-2, "{v:?}");
+}
+
+#[test]
+fn clipped_mean_drops_values_far_from_the_median() {
+    let mut v = [10.0, 11.0, 9.0, 10.0, 500.0];
+    assert_eq!(stack::clipped_mean(&mut v, 3.0), 10.0);
+    assert_eq!(stack::clipped_mean(&mut [1.0, 3.0], 3.0), 2.0);
+    assert_eq!(stack::clipped_mean(&mut [7.0, 7.0, 7.0, 90.0], 3.0), 7.0);
+    assert!(stack::clipped_mean(&mut [], 3.0).is_nan());
+}
+
+fn hot_dark(dir: &Path) {
+    let mut dark = filled(100.0);
+    dark[7] = 5_100.0;
+    write(
+        &dir.join("darks/master_dark.fits"),
+        &[
+            ("IMAGETYP", "'Master Dark'"),
+            ("EXPTIME", "300.0"),
+            ("CCD-TEMP", "-10.0"),
+        ],
+        &dark,
+    );
+}
+
+#[test]
+fn hot_pixels_found_in_the_dark_are_filled_from_their_neighbours() {
+    let dir = temp_dir("hot");
+    let mut lit = filled(500.0);
+    lit[7] = 5_700.0; // ダークより少し明るく残るホットピクセル
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &lit);
+    hot_dark(&dir);
+    let (p, _) = plugin(Options {
+        hot_pixels: true,
+        ..Options::default()
+    });
+    let img = open(&p, &light);
+    assert_eq!(values(&img)[7], 400.0);
+    assert_eq!(
+        img.metadata.get(GROUP, HOT_PIXELS),
+        Some("1 filled (3 sigma)")
+    );
+    let (p, _) = plugin(Options::default());
+    assert_eq!(values(&open(&p, &light))[7], 600.0);
+}
+
+#[test]
+fn hot_pixels_can_be_left_for_one_image() {
+    let dir = temp_dir("hot-off");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    hot_dark(&dir);
+    let (p, calibration) = plugin(Options {
+        hot_pixels: true,
+        ..Options::default()
+    });
+    assert!(calibration.toggle_hot_pixels(&light));
+    let img = open(&p, &light);
+    assert_eq!(img.metadata.get(GROUP, HOT_PIXELS), Some(HOT_PIXELS_OFF));
+    assert!(!calibration.toggle_hot_pixels(&light));
+}
+
+#[test]
+fn a_bright_corner_of_the_dark_is_not_taken_for_hot_pixels() {
+    // 右上が明るくなるアンプグローに、ホットピクセルが 1 つ。
+    let (w, h) = (16, 12);
+    let mut dark: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            100.0 + 40.0 * (x + (h as f32 - y)) + (i % 3) as f32
+        })
+        .collect();
+    dark[5 * w + 4] += 3_000.0;
+    assert_eq!(hot_pixels(&dark, w, 1, 3.0), vec![5 * w + 4]);
+}
+
+#[test]
+fn hot_pixels_on_a_colour_mosaic_take_neighbours_of_the_same_colour() {
+    let mut v = vec![1.0, 9.0, 1.0, 9.0, 2.0, 8.0, 2.0, 8.0, 1.0, 9.0, 100.0, 9.0];
+    // 4 x 3 のモザイクの (2, 2)。同じ色は 2 画素おきの (0, 2) と (2, 0)、(0, 0)。
+    fill_hot_pixels(&mut v, 4, &[10], 2);
+    assert_eq!(v[10], 1.0);
+}
+
+#[test]
+fn clearing_the_cache_removes_only_the_built_masters() {
+    let dir = temp_dir("clear");
+    let light = write(&dir.join("lights/l.fits"), LIGHT, &filled(500.0));
+    single_darks(&dir, 3);
+    let cache = dir.join("cache");
+    let (p, calibration) = plugin(building(&cache));
+    open(&p, &light);
+    std::fs::write(cache.join("notes.txt"), "mine").unwrap();
+    assert_eq!(calibration.clear_cache(), Ok(1));
+    assert!(cache.join("notes.txt").exists());
 }

@@ -695,6 +695,19 @@ impl Slot {
             .is_some_and(|s| s.info.develop_size.is_some() && !s.developed && s.other.is_none())
     }
 
+    /// ホットピクセルを埋められる画像なら、今埋めているか。
+    pub fn hot_pixels_on(&self) -> Option<bool> {
+        let value = self.shown()?.info.metadata.get(
+            vw_fits::calibration::GROUP,
+            vw_fits::calibration::HOT_PIXELS,
+        )?;
+        if value == vw_fits::calibration::HOT_PIXELS_OFF {
+            Some(false)
+        } else {
+            value.ends_with("sigma)").then_some(true)
+        }
+    }
+
     /// ダーク・フラットを当てられる画像なら、今当てているか。
     pub fn calibration_on(&self) -> Option<bool> {
         let state = self

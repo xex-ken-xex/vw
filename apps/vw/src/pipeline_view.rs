@@ -74,6 +74,8 @@ pub enum Command {
     Delete(String),
     /// アクティブなスロットの FITS の、ダーク・フラットを当てるかを切り替える。
     ToggleCalibration,
+    /// アクティブなスロットの FITS の、ホットピクセルを埋めるかを切り替える。
+    ToggleHotPixels,
     /// アクティブなスロットの FITS のフォルダで、`role` のマスターに `file` を使う。`None` は自動。
     ChooseCalibration {
         role: vw_fits::calibration::Role,
@@ -2155,11 +2157,13 @@ fn plain_body(
             let stage = stages.get(i)?;
             if let Some(mut on) = stage.switch {
                 // 押した印はすぐ変え、読み直した画像が届くと段の状態がそれに追いつく。
-                if ui
-                    .checkbox(&mut on, tr(lang, "Apply dark and flat"))
-                    .clicked()
-                {
-                    command = Some(Command::ToggleCalibration);
+                let (label, toggle) = if stage.switch_hot_pixels {
+                    ("Fill hot pixels", Command::ToggleHotPixels)
+                } else {
+                    ("Apply dark and flat", Command::ToggleCalibration)
+                };
+                if ui.checkbox(&mut on, tr(lang, label)).clicked() {
+                    command = Some(toggle);
                 }
             }
             if i == 0 {

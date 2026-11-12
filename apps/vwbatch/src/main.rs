@@ -131,6 +131,11 @@ fn load_fits_settings(args: &Args) -> Result<FitsSettings, String> {
         .settings
         .clone()
         .or_else(|| settings_file::config_path(cfg!(windows), |n| std::env::var_os(n)));
+    // 1 枚ずつの校正画像から作ったマスターは、vw と同じ場所に置いて使い回す。
+    let cache_dir = path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join(vw_fits::calibration::CACHE_FOLDER));
     let mut fits = match path.map(|p| (std::fs::read_to_string(&p), p)) {
         Some((Ok(text), p)) => {
             let (fits, problems) = settings_file::read_fits(&text);
@@ -147,6 +152,10 @@ fn load_fits_settings(args: &Args) -> Result<FitsSettings, String> {
     if args.no_calibrate {
         fits.calibration.apply = false;
     }
+    // 書き出しは 1 枚ずつ進むので、マスターができるまで待ってから当てる（待たないと、
+    // 作っている間に書いた画像だけ校正されずに出てしまう）。
+    fits.calibration.cache_dir = cache_dir;
+    fits.calibration.wait_for_masters = true;
     Ok(fits)
 }
 

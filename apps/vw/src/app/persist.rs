@@ -143,7 +143,7 @@ impl VwApp {
     /// 黒と白や上下、色、校正はデコードのときに決まるので、読み直すほかない。
     pub(super) fn apply_fits_options(&mut self) {
         let options = self.settings().fits.options();
-        let calibration = self.settings().fits.calibration.options();
+        let calibration = self.settings.calibration_options();
         if options == self.fits.get() && calibration == self.calibration.options() {
             return;
         }
@@ -189,6 +189,20 @@ impl VwApp {
     }
 
     /// 表示中の FITS を読み直す。
+    /// 裏でマスターができたら、表示中の FITS を読み直して当てる。作っている間は、できたことに
+    /// 気づけるよう少しずつ描き直す（マウスを動かさなくても反映されるように）。
+    pub(super) fn follow_built_masters(&mut self, ctx: &egui::Context) {
+        let generation = self.calibration.generation();
+        if generation != self.calibration_generation {
+            self.calibration_generation = generation;
+            self.calibration_logged.clear();
+            self.reload_fits_slots();
+        }
+        if self.calibration.is_building() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+    }
+
     pub(super) fn reload_fits_slots(&mut self) {
         self.reload_plugin_slots("FITS");
     }

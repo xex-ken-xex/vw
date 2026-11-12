@@ -148,6 +148,8 @@ impl VwApp {
                         Action::DevelopRaw,
                         Action::SwapRawPreview,
                         Action::ToggleCalibration,
+                        Action::ToggleHotPixels,
+                        Action::ClearCalibrationCache,
                     ],
                     &[Action::NextVariable, Action::PreviousVariable],
                     &[

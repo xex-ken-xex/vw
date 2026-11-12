@@ -595,6 +595,38 @@ impl VwApp {
         self.start_load(index, path, full);
     }
 
+    /// スロットの FITS の、ホットピクセルを埋めるかを切り替えて読み直す。
+    pub(super) fn toggle_hot_pixels(&mut self, index: usize) {
+        if self.slots[index].hot_pixels_on().is_none() {
+            return;
+        }
+        let Some(path) = self.slots[index].shown().map(|s| s.path.clone()) else {
+            return;
+        };
+        let off = self.calibration.toggle_hot_pixels(&frames::file_of(&path));
+        self.log.info(format!(
+            "Hot pixels {} for {}",
+            if off { "left as they are" } else { "filled" },
+            path.display()
+        ));
+        let full = self.cell_needs_full();
+        self.start_load(index, path, full);
+    }
+
+    /// 1 枚ずつの校正画像から作ったマスターを消し、表示中の FITS を読み直す（作り直す）。
+    pub(super) fn clear_calibration_cache(&mut self) {
+        match self.calibration.clear_cache() {
+            Ok(n) => self
+                .log
+                .info(format!("Removed {n} built calibration masters")),
+            Err(e) => self.log.error(format!(
+                "Could not clear the built calibration masters: {e}"
+            )),
+        }
+        self.calibration_logged.clear();
+        self.reload_fits_slots();
+    }
+
     /// スロット `index` の NetCDF の変数を、`step` 個先（負なら前、端は反対の端へ回る）にする。
     /// スロット `index` のデータの範囲が入るように地図を開いて合わせる。
     pub(super) fn show_slot_on_map(&mut self, index: usize) {

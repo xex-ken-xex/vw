@@ -131,7 +131,7 @@ impl Index {
         &self.dirs[dir]
     }
 
-    fn frame(&mut self, path: &Path) -> Option<Frame> {
+    pub fn frame(&mut self, path: &Path) -> Option<Frame> {
         let meta = std::fs::metadata(path).ok()?;
         let modified = meta.modified().ok();
         let len = meta.len();

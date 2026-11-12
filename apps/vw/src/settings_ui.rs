@@ -1153,6 +1153,34 @@ const ITEMS: &[Item] = &[
         widget: calib_synthetic_widget,
     },
     Item {
+        section: Section::Fits,
+        key: "fits.calibration.build_masters",
+        title: "Build masters from single frames",
+        description: "When only single darks, flats, biases or dark flats are found, stack them into a master in the background (sigma-clipped mean) and keep it in the calibration-cache folder next to the settings file. Lights are shown as they are until it is ready. Single frames are never changed.",
+        widget: calib_build_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.master_rejection_sigma",
+        title: "Rejection when building masters",
+        description: "Values further than this many sigma from the median of each pixel (cosmic rays, satellite trails) are left out of the built master.",
+        widget: calib_rejection_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.hot_pixels",
+        title: "Fill hot pixels",
+        description: "Pixels of the master dark brighter than its median by the sigma below are filled with the median of their neighbours (of the same color on a color camera). Needs a dark.",
+        widget: calib_hot_widget,
+    },
+    Item {
+        section: Section::Fits,
+        key: "fits.calibration.hot_pixel_sigma",
+        title: "Hot pixel threshold",
+        description: "How far above the median of the master dark a pixel must be to count as hot, in sigma.",
+        widget: calib_hot_sigma_widget,
+    },
+    Item {
         section: Section::Dicom,
         key: "dicom.probe_extensions",
         title: "Extensions to check for DICOM",
@@ -2965,6 +2993,35 @@ fn calib_normalize_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -
         );
     });
     c.flat_normalize != before
+}
+
+fn calib_build_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.build_masters, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_rejection_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    sigma_widget(&mut s.fits.calibration.master_rejection_sigma, ui)
+}
+
+fn calib_hot_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    ui.checkbox(&mut s.fits.calibration.hot_pixels, tr(lang, "Enabled"))
+        .changed()
+}
+
+fn calib_hot_sigma_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
+    sigma_widget(&mut s.fits.calibration.hot_pixel_sigma, ui)
+}
+
+fn sigma_widget(v: &mut f64, ui: &mut egui::Ui) -> bool {
+    let r = ui.add(
+        egui::DragValue::new(v)
+            .range(FitsCalibration::SIGMA_RANGE)
+            .speed(0.05)
+            .fixed_decimals(1)
+            .suffix(" σ"),
+    );
+    (r.changed() && !r.dragged()) || r.drag_stopped()
 }
 
 fn calib_equalize_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
