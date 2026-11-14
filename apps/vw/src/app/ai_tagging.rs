@@ -173,7 +173,7 @@ impl VwApp {
         let lang = self.lang();
         let mut files = Vec::new();
         for p in paths {
-            let file = crate::frames::file_of(&p).to_path_buf();
+            let file = crate::frames::file_of(&p);
             if let Some(mount) = self.archives.mount_of(&file) {
                 self.log.warn(format!(
                     "AI tags cannot be put on images inside {}",

@@ -343,7 +343,7 @@ impl Calibration {
                             .failed
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .insert(path.clone(), e.clone());
+                            .insert(path, e.clone());
                         notes.push((BUILT, format!("could not build the {what}: {e}")));
                         continue;
                     }
