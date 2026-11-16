@@ -141,7 +141,7 @@ All can be changed in the [settings](#change-key-bindings). Menus show the curre
 | N / Shift+N | Next / previous NetCDF or HDF variable, or FITS HDU |
 | R | Toggle the ROI tool |
 | Delete | Delete the selected cross or ROI |
-| G | Show / hide the color gauge |
+| G | Show / hide the color scale |
 | D | Develop camera RAW from sensor data |
 | J | Switch between the embedded preview of camera RAW and the developed image |
 | A | Auto stretch for viewing / undo |

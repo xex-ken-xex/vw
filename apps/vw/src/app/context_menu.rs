@@ -253,6 +253,29 @@ pub fn availability(action: Action, target: &Target, ai_ready: bool) -> Availabi
 }
 
 /// 選んでいる十字の値か、ROI の統計か、計測線の値。十字・ROI・線の順（消すときも同じ順）。
+/// 上のメニューで使えるか。右クリックでは隠す操作も、上のメニューでは並びが変わらないよう
+/// 灰色で出し、使えない理由をマウスを乗せたときに出す。
+pub fn menu_bar_availability(action: Action, target: &Target, ai_ready: bool) -> Availability {
+    match availability(action, target, ai_ready) {
+        Availability::Hidden => Availability::Disabled(why_not_here(action, target.slot())),
+        other => other,
+    }
+}
+
+/// 上のメニューで灰色にした理由（英語の原文）。
+fn why_not_here(action: Action, slot: Option<&Slot>) -> &'static str {
+    let Some(shown) = slot.and_then(|s| s.shown()) else {
+        return "Show an image in the active slot first";
+    };
+    if shown.info.table.is_some() {
+        "Not for tables"
+    } else if action == Action::ComposeColors {
+        "Only for gray images"
+    } else {
+        "Not for this image"
+    }
+}
+
 pub fn measurement_text(slot: &Slot) -> Option<String> {
     slot.selected_mark_text()
         .or_else(|| slot.selected_roi_text())
@@ -299,7 +322,7 @@ pub fn context_title(action: Action, target: &Target) -> &'static str {
         Action::DeleteProbePoint => "Delete line",
         Action::ToggleLineProfile => "Line profile",
         Action::ToggleRoiGraph => "ROI graph",
-        Action::TogglePointSpectrum => "Spectrum at crosses",
+        Action::TogglePointSpectrum => "Spectrum at cross positions",
         Action::TogglePixelPipeline => "Pixel pipeline...",
         Action::OpenInFileManager => "Open in file manager",
         Action::CloseZip => "Close archive",
@@ -773,6 +796,30 @@ mod tests {
         assert_eq!(
             availability(Action::ComposeColors, &on(&rgb), true),
             Availability::Hidden
+        );
+    }
+
+    #[test]
+    fn the_menu_bar_greys_out_compose_with_the_reason_instead_of_hiding_it() {
+        let rgb = slot_with(test_support::raw_preview());
+        let empty = Slot::new(1);
+        let on = |slot| Target::Slot {
+            index: 0,
+            slot,
+            faces: &[],
+        };
+        assert_eq!(
+            menu_bar_availability(Action::ComposeColors, &on(&rgb), true),
+            Availability::Disabled("Only for gray images")
+        );
+        assert_eq!(
+            menu_bar_availability(Action::ComposeColors, &on(&empty), true),
+            Availability::Disabled("Show an image in the active slot first")
+        );
+        let gray = slot_with(test_support::gray_image());
+        assert_eq!(
+            menu_bar_availability(Action::AlignAndCompare, &on(&gray), true),
+            Availability::Yes
         );
     }
 

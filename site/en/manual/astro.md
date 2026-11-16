@@ -4,7 +4,7 @@ title: "Astrophotography (FITS)"
 
 Make faint images easy to see, then calibrate, select and finish them.
 
-![A faint nebula FITS made visible with a color map and gauge](../../images/en/astro-nebula.png)
+![A faint nebula FITS made visible with a color map and color scale](../../images/en/astro-nebula.png)
 
 ## See what you captured on a sky chart
 
@@ -87,7 +87,7 @@ When you open an astronomy light frame (FITS), vw looks for matching dark, flat 
 
 - Where it looks: the open folder and its parent, and neighboring folders such as `darks` `flats` `biases` `darkflats` `calibration` `masters`. Folders in the **Calibration library** setting are searched too
 - The kind comes from `IMAGETYP` (`DARK`, `Dark Frame`, `Master Flat`, IRAF `zero`...), or else from the folder name. Masters are used (`IMAGETYP` `Master …`, `master` in the name, `NCOMBINE` 2 or more, or inside a `masters` folder)
-- When there are only single calibration frames, frames taken under the same conditions (darks: exposure, temperature, gain, offset; flats: filter and night) are stacked into a master in the background (sigma-clipped mean, which drops cosmic rays and satellite trails). Built masters are kept in the `calibration-cache` folder next to the settings file and rebuilt when frames are added or changed. Lights are shown as they are until the master is ready, then calibrated. **Image → Clear built calibration masters** removes them
+- When there are only single calibration frames, frames taken under the same conditions (darks: exposure, temperature, gain, offset; flats: filter and night) are stacked into a master in the background (sigma-clipped mean, which drops cosmic rays and satellite trails). Stored masters are kept in the `calibration-cache` folder next to the settings file and rebuilt when frames are added or changed. Lights are shown as they are until the master is ready, then calibrated. **Image → Clear stored master darks and flats** removes them
 - With **Fill hot pixels** (off by default), pixels much brighter than their neighbours in the master dark are filled with the median of their neighbours (of the same color on a color camera). It can be switched per image from the right-click menu or the pixel pipeline
 - Darks must match size, binning, `GAIN`, `OFFSET`, exposure (±0.5 s) and temperature (±2 °C); flats must have the same `FILTER`. Flats have the dark flat (or bias) subtracted, then are divided by their median
 - Calibrated images get a mark in the slot header. **Apply dark and flat** in the slot's right-click menu switches to the uncalibrated image to compare (a key can be assigned too)
@@ -132,7 +132,7 @@ Radio images (FITS) can have values crossing 0 and many planes (one per frequenc
 
 FITS files with only one axis (NAXIS=1, or every other axis of length 1) are drawn as a **line graph**. The horizontal axis follows CTYPE1 as **frequency, velocity or wavelength**, in units that fit the values such as GHz, km/s or mm. The vertical unit is BUNIT.
 
-Axis values follow the FITS WCS standard (Paper III): channels spaced in frequency but written as wavelength or velocity (`WAVE-F2W`, `VOPT-F2W`, `FREQ-V2F` and the rest of the 12 forms), logarithmic axes (`-LOG`), grism axes (`-GRI`, `-GRA`), air wavelengths (`AWAV`), energy (`ENER`), wave number (`WAVN`), redshift (`ZOPT`), and the older `FELO-HEL` and `VELO-LSR`. Axes looked up in a table (`-TAB`) take their values from the coordinate column `PSi_1` and the index column `PSi_2` of the table named by `PSi_0`. Cube plane labels (frequency, velocity) and the spectrum at crosses use the same formulas.
+Axis values follow the FITS WCS standard (Paper III): channels spaced in frequency but written as wavelength or velocity (`WAVE-F2W`, `VOPT-F2W`, `FREQ-V2F` and the rest of the 12 forms), logarithmic axes (`-LOG`), grism axes (`-GRI`, `-GRA`), air wavelengths (`AWAV`), energy (`ENER`), wave number (`WAVN`), redshift (`ZOPT`), and the older `FELO-HEL` and `VELO-LSR`. Axes looked up in a table (`-TAB`) take their values from the coordinate column `PSi_1` and the index column `PSi_2` of the table named by `PSi_0`. Cube plane labels (frequency, velocity) and the spectrum at cross positions use the same formulas.
 
 - Hover over the graph to see the axis value, the value and the point number of the nearest point. With a rest frequency (RESTFRQ) or rest wavelength (RESTWAV), the line-of-sight velocity is shown too: the radio definition on a frequency axis, the optical definition on a wavelength axis. The velocity frame (SPECSYS, such as LSRK) is added in brackets
 - The line breaks at points without a value (NaN)
@@ -147,9 +147,9 @@ Contour lines can be drawn over gray images (FITS, 16-bit PNG and so on; not col
 - Lines are traced from the original values, not the display image. On cubes they are traced again for each plane. Images with a long side over 2048 pixels are traced on a thinned grid
 - The color is **Contour color** (`contours.color`, default `#00E5FF`) and the width **Contour line width** (`contours.width`, default 1)
 
-### Spectrum at crosses
+### Spectrum at cross positions
 
-Place a cross with the [pixel probe](check.html) (**V**) on a FITS cube (two or more planes) and the **Spectrum at crosses** window opens, drawing the values of that point on every plane as a line (it can also be opened from the **View** menu).
+Place a cross with the [pixel probe](check.html) (**V**) on a FITS cube (two or more planes) and the **Spectrum at cross positions** window opens, drawing the values of that point on every plane as a line (it can also be opened from the **View** menu).
 
 - Each cross gets one line in the cross's own color. Move a cross and its line follows
 - Crosses on a cube belong to the file, not the plane, so they stay in place as you step through planes
@@ -167,7 +167,7 @@ You can sum the planes of a FITS cube pixel by pixel along its spectral axis. Op
 - **Moment 1 (velocity)**: the value-weighted mean velocity (km/s), shown with the blue-white-red color map, symmetric around the middle velocity
 - **Moment 2 (velocity spread)**: the value-weighted standard deviation of the velocity (km/s)
 - Velocities come from the rest frequency (RESTFRQ) with the radio definition on a frequency axis, and from the rest wavelength with the optical definition on a wavelength axis. Axes that cannot be turned into velocities are used as they are (Hz and so on)
-- Choose the range with **First channel** and **Last channel** (all channels at first). If you dragged a range across the [Spectrum at crosses](#spectrum-at-crosses) graph, the window starts from it. Double-click the graph to clear it
+- Choose the range with **First channel** and **Last channel** (all channels at first). If you dragged a range across the [Spectrum at cross positions](#spectrum-at-cross-positions) graph, the window starts from it. Double-click the graph to clear it
 - **Threshold**: only values above the median plus this many times the noise (1.4826 × the median distance from the median) are summed. 0 sums every value
 - Each chosen map opens in a new slot after the cube's slot. The maps live in memory only; the file is not changed. They keep the sky coordinates (WCS) and the beam, so the sky chart and the sky coordinates at crosses work on them
 - **Save as FITS...** in a map's right-click menu writes it as FITS where you choose (an existing file of the same name is not overwritten)

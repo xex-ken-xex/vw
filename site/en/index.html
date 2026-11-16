@@ -118,7 +118,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       <tr><th>Format</th><th>Specific to the format</th></tr>
       <tr><td>JPEG</td><td>Shown the right way up from EXIF orientation, with camera, lens and exposure info. Photos with GPS appear on the map, and the shooting info is searchable</td></tr>
       <tr><td>Camera RAW</td><td>The camera's embedded preview shows at once, then the sensor data is developed in the background and swapped in. Pairs with the JPEG of the same name for comparison, and <code>vwbatch</code> develops and exports in bulk</td></tr>
-      <tr><td>FITS (astronomy)</td><td>Dark images are stretched (zscale, asinh and more) with a color map and gauge. Darks and flats are applied, the sky chart shows where the image points, and 2–3 grayscale images are aligned and composed into color. Finishing nodes (stretch, noise reduction, deconvolution, star removal and more) are available, and every header keyword is searchable</td></tr>
+      <tr><td>FITS (astronomy)</td><td>Dark images are stretched (zscale, asinh and more) with a color map and color scale. Darks and flats are applied, the sky chart shows where the image points, and 2–3 grayscale images are aligned and composed into color. Finishing nodes (stretch, noise reduction, deconvolution, star removal and more) are available, and every header keyword is searchable</td></tr>
       <tr><td>PNG</td><td>16-bit images stay 16-bit, so you measure the real values, and a 10-bit or 12-bit monitor shows them with that gradation. Text chunks (creating software, descriptions and so on) appear as metadata and are searchable</td></tr>
       <tr><td>WebP / GIF</td><td>All frames of an animation go into one slot and play at the speed written in the file. The wheel steps one frame at a time</td></tr>
       <tr><td>TIFF</td><td>Multi-page files go into one slot and the wheel turns the pages. 32-bit float, CMYK and fax compression are read too. EXIF and tags are searchable</td></tr>
@@ -134,7 +134,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       </div>
       <div class="card">
         <a href="../images/en/astro-nebula.png"><img src="../images/en/astro-nebula.png" alt="A faint nebula FITS made visible with a color map" loading="lazy"></a>
-        <p>Faint FITS images are stretched for viewing automatically, with a color map and gauge</p>
+        <p>Faint FITS images are stretched for viewing automatically, with a color map and color scale</p>
       </div>
       <div class="card">
         <a href="../images/en/astro-skychart.png"><img src="../images/en/astro-skychart.png" alt="Areas captured by FITS files on the sky chart" loading="lazy"></a>

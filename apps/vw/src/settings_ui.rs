@@ -680,7 +680,7 @@ const ITEMS: &[Item] = &[
         section: Section::Reports,
         key: "measure.open_spectrum",
         title: "Open the spectrum after placing a cross on a cube",
-        description: "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at crosses window that shows the values of that point on every plane.",
+        description: "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at cross positions window that shows the values of that point on every plane.",
         widget: open_spectrum_widget,
     },
     Item {
@@ -896,15 +896,15 @@ const ITEMS: &[Item] = &[
     Item {
         section: Section::Pipeline,
         key: "pipeline.gauge_side",
-        title: "Color scale gauge",
-        description: "Where the gauge (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
+        title: "Color scale",
+        description: "Where the color scale (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
         widget: pipeline_gauge_side_widget,
     },
     Item {
         section: Section::Pipeline,
         key: "pipeline.gauge_on_gray",
-        title: "Gauge on gray images",
-        description: "Also show the gauge on gray images without a color map, to read the values of black and white.",
+        title: "Color scale on gray images",
+        description: "Also show the color scale on gray images without a color map, to read the values of black and white.",
         widget: pipeline_gauge_gray_widget,
     },
     Item {

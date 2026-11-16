@@ -1035,7 +1035,7 @@ const JA: &[(&str, &str)] = &[
     ("Color of missing pixels", "欠損の画素の色"),
     (
         "Pixels without a value (BLANK or NaN, such as outside a radio telescope's field) are drawn in this color, which is kept when a color map is applied.",
-        "値のない画素（BLANK や NaN。電波望遠鏡の視野の外など）を、この色で描きます。色の表を当てても、この色のままです。",
+        "値のない画素（BLANK や NaN。電波望遠鏡の視野の外など）を、この色で描きます。カラーマップを当てても、この色のままです。",
     ),
     ("Beam", "ビーム"),
     (
@@ -1152,8 +1152,8 @@ const JA: &[(&str, &str)] = &[
         "マスターダークで周りの画素よりどれだけ明るければホットピクセルとみなすか（σ の倍数）。",
     ),
     (
-        "Clear built calibration masters",
-        "作った校正のマスターを消す",
+        "Clear stored master darks and flats",
+        "作り置きのマスターダーク・フラットを消す",
     ),
     ("Hot pixels", "ホットピクセル"),
     ("Contours", "等高線"),
@@ -1209,8 +1209,8 @@ const JA: &[(&str, &str)] = &[
     ("Last channel", "最後のチャンネル"),
     ("All channels", "全部のチャンネル"),
     (
-        "Drag across the Spectrum at crosses graph to choose them there.",
-        "十字のスペクトルのグラフをドラッグしても選べます。",
+        "Drag across the Spectrum at cross positions graph to choose them there.",
+        "十字の位置のスペクトルのグラフをドラッグしても選べます。",
     ),
     ("x noise", "× 雑音"),
     (" x noise", " × 雑音"),
@@ -1237,10 +1237,10 @@ const JA: &[(&str, &str)] = &[
         "中央値に雑音のこの倍を足した値より大きい値だけを、モーメント図に足します。0 なら全部の値を足します。",
     ),
     (
-        "Show/hide spectrum at crosses",
-        "十字のスペクトルの表示/非表示",
+        "Show/hide spectrum at cross positions",
+        "十字の位置のスペクトルの表示/非表示",
     ),
-    ("Spectrum at crosses", "十字のスペクトル"),
+    ("Spectrum at cross positions", "十字の位置のスペクトル"),
     ("Multiples of the noise", "雑音の倍数"),
     ("Pixel values", "画素の値"),
     (
@@ -1285,8 +1285,8 @@ const JA: &[(&str, &str)] = &[
         "キューブに十字を置いたら、スペクトルを開く",
     ),
     (
-        "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at crosses window that shows the values of that point on every plane.",
-        "画素値の確認で FITS のキューブの面に十字を置いたとき、その点の全部の面の値を出す「十字のスペクトル」の窓を開きます。",
+        "When a cross is placed on a plane of a FITS cube with the pixel probe, open the Spectrum at cross positions window that shows the values of that point on every plane.",
+        "画素値の確認で FITS のキューブの面に十字を置いたとき、その点の全部の面の値を出す「十字の位置のスペクトル」の窓を開きます。",
     ),
     ("Bayer demosaic", "Bayer のデモザイク"),
     (
@@ -1318,8 +1318,8 @@ const JA: &[(&str, &str)] = &[
         "0 を黒、ビット深度でいちばん大きい値を白にします。",
     ),
     (
-        "Only this slot changes. The color map gauge shows the same black and white.",
-        "このスロットだけが変わります。色の表の段のゲージにも同じ黒と白が出ます。",
+        "Only this slot changes. The color scale shows the same black and white.",
+        "このスロットだけが変わります。カラーマップの段のカラースケールにも同じ黒と白が出ます。",
     ),
     (
         "How the slot fills the pixels between the image pixels (Viewer in the settings).",
@@ -1989,13 +1989,10 @@ const JA: &[(&str, &str)] = &[
     ("User guide (web)", "使い方（Web）"),
     ("Maximize slot", "スロットを最大化"),
     ("Fit image to slot", "スロットに合わせる"),
+    ("Reset to initial view", "初期表示に戻す"),
     (
-        "Reset the display to when it was loaded",
-        "表示を読み込んだときに戻す",
-    ),
-    (
-        "Display: back to when it was loaded",
-        "表示: 読み込んだときに戻しました",
+        "Display: back to the initial view",
+        "表示: 初期表示に戻しました",
     ),
     ("Actual size (100%)", "実寸 (100%)"),
     (
@@ -2549,8 +2546,8 @@ const JA: &[(&str, &str)] = &[
     // 重複データ探索
     ("Duplicate finder", "重複データ探索"),
     (
-        "Pin the duplicate finder's origin",
-        "重複データ探索の起点を固定",
+        "Duplicate finder: pin the image to compare against",
+        "重複データ探索で比べる元を固定",
     ),
     (
         "Click a folder in the tree or choose a file in a slot.",
@@ -3104,14 +3101,14 @@ const JA: &[(&str, &str)] = &[
         "画素の位置を使う式があるので、LUT に入れられません。",
     ),
     // 色の表とゲージ
-    ("Color map", "色の表"),
-    ("Color map stage", "色の表の段"),
-    ("Color scale gauge", "色のゲージ"),
-    ("Next color map", "次の色の表"),
+    ("Color map", "カラーマップ"),
+    ("Color map stage", "カラーマップの段"),
+    ("Color scale", "カラースケール"),
+    ("Next color map", "次のカラーマップ"),
     ("As in settings", "設定のとおり"),
     (
         "Settings > Pixel pipeline decides the color map for each kind of image.",
-        "設定の「画素の変換」で、画像の種類ごとに色の表を決めています。",
+        "設定の「画素の変換」で、画像の種類ごとにカラーマップを決めています。",
     ),
     ("Off (gray)", "使わない（グレー）"),
     ("Gray", "グレー"),
@@ -3127,7 +3124,13 @@ const JA: &[(&str, &str)] = &[
     ("Apply", "当てる"),
     ("Reset black and white", "黒と白を元に戻す"),
     ("Only for gray images", "グレーの画像だけで使えます"),
-    ("Use a color map", "色の表を使う"),
+    (
+        "Show an image in the active slot first",
+        "先にアクティブなスロットに画像を出してください",
+    ),
+    ("Not for tables", "表では使えません"),
+    ("Not for this image", "この画像では使えません"),
+    ("Use a color map", "カラーマップを使う"),
     ("Default in settings", "設定の既定"),
     ("Back to the default", "既定に戻す"),
     (
@@ -3135,8 +3138,8 @@ const JA: &[(&str, &str)] = &[
         "変わるのは見た目だけです。十字・ROI・解析の値はファイルの値のままです。",
     ),
     (
-        "Same values as the black and white of the slot's color gauge. Shown only, never written to the file.",
-        "スロットの色のゲージの黒と白と同じ値です。表示だけに使い、ファイルには書きません。",
+        "Same values as the black and white of the slot's color scale. Shown only, never written to the file.",
+        "スロットのカラースケールの黒と白と同じ値です。表示だけに使い、ファイルには書きません。",
     ),
     ("Measurement", "計測"),
     (
@@ -3157,7 +3160,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Black and white, the color map and the nodes do not change these values.",
-        "黒と白、色の表、ノードは、この値を変えません。",
+        "黒と白、カラーマップ、ノードは、この値を変えません。",
     ),
     ("DICOM PT", "DICOM の PT"),
     ("FITS images", "FITS の画像"),
@@ -3167,48 +3170,48 @@ const JA: &[(&str, &str)] = &[
     ("Right", "右"),
     ("Top", "上"),
     ("Bottom", "下"),
-    ("Gauge on gray images", "グレーの画像のゲージ"),
+    ("Color scale on gray images", "グレーの画像のカラースケール"),
     ("Supplemental Palette colors", "補助のパレットの色を出す"),
     (
         "Some gray DICOM images carry a color table for part of their values (Supplemental Palette, such as overlays of fused or functional images). Show those values in the table's colors; the other values stay gray and still follow the window. The probe shows both the value and its color. The key for it is unassigned by default (Key bindings).",
         "グレーの DICOM の画像には、一部の値だけに色を当てる表（Supplemental Palette。重ね合わせた画像や機能画像の色など）を持つものがあります。その値を表の色で出します。ほかの値はグレーのままで、WW/WL も効きます。十字には値と色の両方を出します。キーは初めは割り当てていません（キー割り当て）。",
     ),
-    ("Custom color maps", "自分で足す色の表"),
+    ("Custom color maps", "自分で足すカラーマップ"),
     (
         "Insert the color map stage into the pixel pipeline of gray images from the start, for the kinds of images turned on below. The stage turns brightness into colors and also changes the slot; probe, ROI and analysis values stay the file values. Each slot can still turn it on or off and pick another color map (right-click, Image menu, or the stage in the pixel pipeline).",
-        "グレーの画像の画素の変換に、色の表の段を初めから入れます。入れるのは、下で「初めから入れる」にした種類の画像です。この段は明るさを色にし、スロットの表示も変えます。十字・ROI・解析の値はファイルの値のままです。スロットごとに、段を外したり別の色の表を選んだりもできます（右クリック、「画像」メニュー、画素の変換の段）。",
+        "グレーの画像の画素の変換に、カラーマップの段を初めから入れます。入れるのは、下で「初めから入れる」にした種類の画像です。この段は明るさを色にし、スロットの表示も変えます。十字・ROI・解析の値はファイルの値のままです。スロットごとに、段を外したり別のカラーマップを選んだりもできます（右クリック、「画像」メニュー、画素の変換の段）。",
     ),
     (
         "Astronomy images: insert the color map stage from the start, and its color map.",
-        "天体の画像: 色の表の段を初めから入れるかと、その色の表。",
+        "天体の画像: カラーマップの段を初めから入れるかと、そのカラーマップ。",
     ),
     (
         "Gray DICOM images other than the subtypes below (CT, MR, X-ray and so on): insert the color map stage from the start, and its color map.",
-        "下の種類以外のグレーの DICOM（CT、MR、X 線など）: 色の表の段を初めから入れるかと、その色の表。",
+        "下の種類以外のグレーの DICOM（CT、MR、X 線など）: カラーマップの段を初めから入れるかと、そのカラーマップ。",
     ),
     (
         "PET images (Modality PT): insert the color map stage from the start, and its color map. Hot Iron, PET and Hot Metal Blue are the palettes defined by the DICOM standard.",
-        "PET の画像（Modality が PT）: 色の表の段を初めから入れるかと、その色の表。Hot Iron・PET・Hot Metal Blue は DICOM の規格が決めている色の表です。",
+        "PET の画像（Modality が PT）: カラーマップの段を初めから入れるかと、そのカラーマップ。Hot Iron・PET・Hot Metal Blue は DICOM の規格が決めているカラーマップです。",
     ),
     (
         "Gray images in other formats (16-bit PNG, TIFF and so on): insert the color map stage from the start, and its color map.",
-        "ほかの形式のグレーの画像（16bit の PNG、TIFF など）: 色の表の段を初めから入れるかと、その色の表。",
+        "ほかの形式のグレーの画像（16bit の PNG、TIFF など）: カラーマップの段を初めから入れるかと、そのカラーマップ。",
     ),
     (
-        "Where the gauge (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
-        "ゲージ（色と、黒・白とその間の値の目盛り）をスロットの中のどこに出すか。出す・出さないは、左のツールの列のボタンか G キーで切り替えます。ゲージの両端をドラッグすると、そのスロットの黒と白の値が変わります。",
+        "Where the color scale (the colors with the values of black, white and between) is shown inside the slot. Show or hide it with the button in the left tool column or the G key. Drag its ends to change the black and white values of that slot.",
+        "カラースケール（色と、黒・白とその間の値の目盛り）をスロットの中のどこに出すか。出す・出さないは、左のツールの列のボタンか G キーで切り替えます。カラースケールの両端をドラッグすると、そのスロットの黒と白の値が変わります。",
     ),
     (
-        "Also show the gauge on gray images without a color map, to read the values of black and white.",
-        "色の表を当てていないグレーの画像にもゲージを出します。黒と白の値を読むのに使えます。",
+        "Also show the color scale on gray images without a color map, to read the values of black and white.",
+        "カラーマップを当てていないグレーの画像にもカラースケールを出します。黒と白の値を読むのに使えます。",
     ),
     (
         "Your own color maps, one per line: a name, =, then colors as position (0 to 1) and #rrggbb separated by ;. Colors between are blended. Example: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
-        "自分の色の表を 1 行に 1 つ書きます。名前、=、そのあとに「位置（0〜1） #rrggbb」を ; で区切って並べます。間の色はなめらかにつなぎます。例: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
+        "自分のカラーマップを 1 行に 1 つ書きます。名前、=、そのあとに「位置（0〜1） #rrggbb」を ; で区切って並べます。間の色はなめらかにつなぎます。例: Ice = 0 #000000; 0.5 #0080ff; 1 #ffffff",
     ),
     (
         "Write each line as name = position #rrggbb; position #rrggbb, with a different name that is not a built-in color map.",
-        "1 行ずつ「名前 = 位置 #rrggbb; 位置 #rrggbb」の形で、組み込みの色の表とも重ならない別々の名前にしてください。",
+        "1 行ずつ「名前 = 位置 #rrggbb; 位置 #rrggbb」の形で、組み込みのカラーマップとも重ならない別々の名前にしてください。",
     ),
     // 画素の変換の図の見出しの色
     ("Can be changed", "変えられる"),
@@ -3406,8 +3409,8 @@ const JA: &[(&str, &str)] = &[
     ("accepts {}-bit (EDID)", "{}bit まで受けられる（EDID）"),
     ("max bpc {}", "max bpc {}"),
     ("System information", "システム情報"),
-    ("Display gradation test...", "表示の階調テスト..."),
-    ("Display gradation test", "表示の階調テスト"),
+    ("High bit depth display test...", "高階調表示のテスト..."),
+    ("High bit depth display test", "高階調表示のテスト"),
     ("OS", "OS"),
     ("Renderer", "描画の方法"),
     ("Surface", "描画先"),
@@ -3576,7 +3579,7 @@ const JA: &[(&str, &str)] = &[
     ("color", "カラー"),
     (
         "Values along each measure line from its start to its end. The values are those of the file, before the conversion for display (black and white, color map).",
-        "各計測線の始点から終点までの値。値はファイルの値で、表示のための変換（黒と白、色の表）の前のもの。",
+        "各計測線の始点から終点までの値。値はファイルの値で、表示のための変換（黒と白、カラーマップ）の前のもの。",
     ),
     (
         "The upper graph shows the pixel values stored in the file, the lower graph the measured values converted with the formula in the file.",
@@ -3681,7 +3684,7 @@ const JA: &[(&str, &str)] = &[
     ("NetCDF data", "NetCDF のデータ"),
     (
         "Grids of earth science data (weather, climate, ocean): insert the color map stage from the start, and its color map.",
-        "地球科学の格子のデータ（気象・気候・海洋）: 色の表の段を初めから入れるかと、その色の表。",
+        "地球科学の格子のデータ（気象・気候・海洋）: カラーマップの段を初めから入れるかと、そのカラーマップ。",
     ),
     (
         "How the black and white points are chosen when a variable opens, from its values after scale_factor and add_offset. Percentiles uses the percentiles below; Symmetric around zero puts zero in the middle, for anomalies and winds.",
@@ -3705,7 +3708,7 @@ const JA: &[(&str, &str)] = &[
     ("Anomalies around zero", "偏差は 0 を真ん中に"),
     (
         "Show anomaly variables (\"anom\" in the name, \"anomaly\" in standard_name or long_name, or a valid_range symmetric around zero) with zero in the middle and the blue-white-red color map (coolwarm).",
-        "偏差の変数（名前に「anom」、standard_name か long_name に「anomaly」や「偏差」が入るか、valid_range が 0 をはさんで対称なもの）を、0 を真ん中にして、青・白・赤の色の表（coolwarm）で出します。",
+        "偏差の変数（名前に「anom」、standard_name か long_name に「anomaly」や「偏差」が入るか、valid_range が 0 をはさんで対称なもの）を、0 を真ん中にして、青・白・赤のカラーマップ（coolwarm）で出します。",
     ),
     (
         "Turn data whose latitudes go from south to north upside down, so that north is at the top. Data without coordinates are shown in the order of the file.",
@@ -3713,7 +3716,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "Pixels without a value (_FillValue, missing_value or outside valid_range, such as land in sea data) are drawn in this color, which is kept when a color map is applied.",
-        "値のない画素（_FillValue、missing_value、valid_range の外。海のデータの陸など）を、この色で描きます。色の表を当てても、この色のままです。",
+        "値のない画素（_FillValue、missing_value、valid_range の外。海のデータの陸など）を、この色で描きます。カラーマップを当てても、この色のままです。",
     ),
     (
         "Statistics of the means of all frames",
@@ -3729,7 +3732,7 @@ const JA: &[(&str, &str)] = &[
     ),
     (
         "The values are those of the file, before the conversion for display (black and white, color map).",
-        "値はファイルの値で、表示のための変換（黒と白、色の表）の前のもの。",
+        "値はファイルの値で、表示のための変換（黒と白、カラーマップ）の前のもの。",
     ),
     (
         "This slot shows one image. Open a file with frames, a DICOM series or a folder slot to see the mean per frame.",

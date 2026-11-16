@@ -29,9 +29,9 @@ These lay marks over the slot's image to check it. They go in as **Check** nodes
 
 The values used when adding with keys (clipping level, peaking threshold, kind of color vision) can be changed in the **Pixel pipeline** settings.
 
-## Color gauge
+## Color scale
 
-Images with a color map applied (**C** key) show a **gauge** in the slot (the colors with a scale of black, white and the values between). **G** or the button in the tool column shows or hides it. Drag the ends of the gauge to change the black and white values of that slot. With the **Gauge on gray images** setting, it shows on gray images without a color map too.
+Images with a color map applied (**C** key) show a **color scale** in the slot (the colors with a scale of black, white and the values between). **G** or the button in the tool column shows or hides it. Drag the ends of the gauge to change the black and white values of that slot. With the **Gauge on gray images** setting, it shows on gray images without a color map too.
 
 ## Read QR codes
 

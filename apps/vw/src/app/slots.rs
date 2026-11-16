@@ -622,9 +622,9 @@ impl VwApp {
         match self.calibration.clear_cache() {
             Ok(n) => self
                 .log
-                .info(format!("Removed {n} built calibration masters")),
+                .info(format!("Removed {n} stored master darks and flats")),
             Err(e) => self.log.error(format!(
-                "Could not clear the built calibration masters: {e}"
+                "Could not clear the stored master darks and flats: {e}"
             )),
         }
         self.calibration_logged.clear();
@@ -908,7 +908,7 @@ impl VwApp {
             self.reload_slot(index);
         }
         self.log
-            .info(tr(self.lang(), "Display: back to when it was loaded"));
+            .info(tr(self.lang(), "Display: back to the initial view"));
     }
 
     /// スロット `index` のライトのフォルダで、`role` のマスターを `file` に替える（`None` は自動）。

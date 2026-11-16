@@ -265,7 +265,7 @@ impl VwApp {
             }
             let mut open = true;
             let mut start = false;
-            egui::Window::new(tr(lang, "Display gradation test"))
+            egui::Window::new(tr(lang, "High bit depth display test"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
@@ -298,7 +298,7 @@ impl VwApp {
                     .monitor(chosen.as_ref().map_or("", |d| &d.id));
                 let mode = deep::mode(&monitor, surface);
                 self.log.info(format!(
-                    "Display gradation test: {}, drawn {}",
+                    "High bit depth display test: {}, drawn {}",
                     chosen.as_ref().map_or_else(String::new, Display::label),
                     deep::title(mode, surface)
                 ));
@@ -550,7 +550,7 @@ fn show_test(ctx: &egui::Context, s: &mut Showing, surface: Surface, lang: Langu
     // あるモニタで開くので、拡大率の換算で少しずれても選んだモニタで開く。全画面を受けない
     // 環境（ウインドウマネージャのない X11 など）でも、モニタを覆うので見られる。
     let mut builder = egui::ViewportBuilder::default()
-        .with_title(tr(lang, "Display gradation test"))
+        .with_title(tr(lang, "High bit depth display test"))
         .with_decorations(false)
         .with_inner_size([640.0, 480.0]);
     if let Some(d) = &s.display {
