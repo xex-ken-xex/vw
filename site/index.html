@@ -118,7 +118,7 @@ footer a { color: var(--muted); text-decoration: underline; }
       <tr><th>形式</th><th>その形式ならではのこと</th></tr>
       <tr><td>JPEG</td><td>EXIF の向きで正しく表示し、カメラ・レンズ・露出などの撮影情報を出します。GPS があれば地図に出し、撮影情報で検索できます</td></tr>
       <tr><td>カメラ RAW</td><td>まずカメラの埋め込みプレビューをすぐ出し、裏でセンサーのデータから現像して差し替えます。同じ名前の JPEG と組にして比べられ、<code>vwbatch</code> で現像して書き出せます</td></tr>
-      <tr><td>FITS（天体の画像）</td><td>暗い画像を見やすく伸ばし（zscale・asinh など）、色の表とゲージを付けます。ダーク・フラットを当て、星図に写した範囲を出し、白黒の画像 2〜3 枚を位置合わせして色を合成します。伸縮・ノイズ除去・デコンボリューション・星の除去などの仕上げもでき、ヘッダの全項目で検索できます</td></tr>
+      <tr><td>FITS（天体の画像）</td><td>暗い画像を見やすく伸ばし（zscale・asinh など）、カラーマップとカラースケールを付けます。ダーク・フラットを当て、星図に写した範囲を出し、白黒の画像 2〜3 枚を位置合わせして色を合成します。伸縮・ノイズ除去・デコンボリューション・星の除去などの仕上げもでき、ヘッダの全項目で検索できます</td></tr>
       <tr><td>PNG</td><td>16bit の画像を 8bit に落とさずに読み、元の値のまま測れます。10bit・12bit のモニタではその階調で描けます。テキストのチャンク（作成ソフトや説明など）をメタデータに出し、検索できます</td></tr>
       <tr><td>WebP / GIF</td><td>アニメーションの全コマを 1 つのスロットに並べ、ファイルに書かれた速さで再生します。ホイールで 1 コマずつ送れます</td></tr>
       <tr><td>TIFF</td><td>複数ページを 1 つのスロットに並べてホイールで送ります。32bit の実数や CMYK、FAX 圧縮も読みます。EXIF とタグで検索できます</td></tr>
@@ -133,8 +133,8 @@ footer a { color: var(--muted); text-decoration: underline; }
         <p class="credit">Photo: NASA (public domain)</p>
       </div>
       <div class="card">
-        <a href="images/astro-nebula.png"><img src="images/astro-nebula.png" alt="暗い星雲の FITS を色の表で見やすくしたところ" loading="lazy"></a>
-        <p>暗い FITS を自動で見やすく伸ばし、色の表とゲージを付けます</p>
+        <a href="images/astro-nebula.png"><img src="images/astro-nebula.png" alt="暗い星雲の FITS をカラーマップで見やすくしたところ" loading="lazy"></a>
+        <p>暗い FITS を自動で見やすく伸ばし、カラーマップとカラースケールを付けます</p>
       </div>
       <div class="card">
         <a href="images/astro-skychart.png"><img src="images/astro-skychart.png" alt="FITS の写した範囲を星図に出したところ" loading="lazy"></a>

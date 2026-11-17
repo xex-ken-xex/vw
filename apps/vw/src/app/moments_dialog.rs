@@ -125,7 +125,7 @@ impl VwApp {
                             }
                             ui.weak(tr(
                                 lang,
-                                "Drag across the Spectrum at crosses graph to choose them there.",
+                                "Drag across the Spectrum at cross positions graph to choose them there.",
                             ));
                         });
                     }

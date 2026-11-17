@@ -153,7 +153,7 @@ pub(super) fn pane_name(pane: &str) -> &'static str {
         DUPLICATES => "Duplicate finder",
         LINE_PROFILE => "Line profile",
         ROI_GRAPH => "ROI graph",
-        POINT_SPECTRUM => "Spectrum at crosses",
+        POINT_SPECTRUM => "Spectrum at cross positions",
         DATASETS => "Datasets",
         _ => "Log",
     }
@@ -208,7 +208,7 @@ impl Panes for AppPanes<'_> {
             }
             POINT_SPECTRUM => crate::sub_window::title(
                 lang,
-                "Spectrum at crosses",
+                "Spectrum at cross positions",
                 self.app.active_image().as_deref(),
             ),
             // 絞り込み中は、ファイルが隠れていることに気づけるよう名前に条件を添える。

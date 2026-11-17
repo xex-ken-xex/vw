@@ -62,7 +62,7 @@ What a left drag on the image does depends on the tool column. **Hand** (the def
 | **+** / **-** | Zoom in / out |
 | **0** / ⛶ in the header | Fit to slot |
 | **Ctrl+0** / 1:1 in the header | Actual size (100%) |
-| **Home** | Reset the display of the selected slot to when it was loaded (zoom and position, black and white, color map, added nodes and check views; probe crosses and ROIs stay) |
+| **Home** | Reset the selected slot to its initial view (zoom and position, black and white, color map, added nodes and check views; probe crosses and ROIs stay) |
 | Right-click the image | **Fit image to slot**, **Copy**, **Develop RAW from sensor data** (for camera RAW) |
 | **Ctrl+C** | Copy the image of the selected slot to the clipboard (paste it into other apps) |
 
@@ -98,7 +98,7 @@ When a slot is maximized, the **play bar** appears below the image area. GIF and
 
 ![Slideshow setup](../../images/en/view-slideshow-setup.png)
 
-**F5** (or **View → Fullscreen slideshow...**) opens the setup screen. Choose a start folder and press **Start** to show images one at a time on the whole screen. Images are not loaded into slots, so even folders with tens of thousands of images start at once.
+**F5** (or **Tools → Fullscreen slideshow...**) opens the setup screen. Choose a start folder and press **Start** to show images one at a time on the whole screen. Images are not loaded into slots, so even folders with tens of thousands of images start at once.
 
 - **Mode**: show the folders with images under the start folder in order, and the images in each in order / show the newest file under the start folder and switch when a new file arrives (for tethered shooting)
 - **Sort order**: order and descending for folders and files
@@ -189,7 +189,7 @@ Bands in smooth gradients (skies, faint parts of nebulae) become 4 times finer a
 The monitor, cable, GPU and OS settings must all support the depth.
 
 - **Help → System information** shows the OS, renderer, drawing surface, and each monitor's signal bits (Windows) or EDID bits (Linux). **Copy** it for a support request
-- **Help → Display gradation test...** fills the chosen monitor with gray bands made inside vw (8, 10, 12 and 14-bit steps, smooth, dithered). No image file is needed. **← →** switch between dark, middle and bright, and **Esc** closes. When n bits reach the screen, the bands get finer down to the n-bit step and deeper bands look the same as the n-bit one. Each band also shows the expected look from vw's drawing depth and the monitor's signal bits. If a monitor set to 10-bit receives a deeper signal, vw suggests 12-bit or more
+- **Help → High bit depth display test...** fills the chosen monitor with gray bands made inside vw (8, 10, 12 and 14-bit steps, smooth, dithered). No image file is needed. **← →** switch between dark, middle and bright, and **Esc** closes. When n bits reach the screen, the bands get finer down to the n-bit step and deeper bands look the same as the n-bit one. Each band also shows the expected look from vw's drawing depth and the monitor's signal bits. If a monitor set to 10-bit receives a deeper signal, vw suggests 12-bit or more
 - If a deep surface cannot be made, vw restarts with 8 bits (OpenGL) as before and logs the reason
 - Quality values (PSNR, SSIM...) are measured from the 16-bit display values without rounding to 8 bits (the scale stays 0 to 255)
 

@@ -118,13 +118,6 @@ impl VwApp {
                 {
                     chosen = Some(action);
                 }
-                ui.separator();
-                if self.menu_item(ui, Action::FullscreenSlideshow, None) {
-                    chosen = Some(Action::FullscreenSlideshow);
-                }
-                if self.menu_item(ui, Action::ToggleDatasets, Some(self.show_datasets)) {
-                    chosen = Some(Action::ToggleDatasets);
-                }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Labels"), |ui| {
                 if let Some(action) = self.labels_menu(ui) {
@@ -196,6 +189,11 @@ impl VwApp {
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Tools"), |ui| {
+                for action in [Action::AlignAndCompare, Action::ComposeColors] {
+                    if self.active_slot_menu_item(ui, action) {
+                        chosen = Some(action);
+                    }
+                }
                 let stitch = self.stitch.open;
                 if self.menu_item(ui, Action::StitchImages, Some(stitch)) {
                     chosen = Some(Action::StitchImages);
@@ -203,6 +201,13 @@ impl VwApp {
                 let duplicates = self.duplicates.open;
                 if self.menu_item(ui, Action::ToggleDuplicateFinder, Some(duplicates)) {
                     chosen = Some(Action::ToggleDuplicateFinder);
+                }
+                ui.separator();
+                if self.menu_item(ui, Action::ToggleDatasets, Some(self.show_datasets)) {
+                    chosen = Some(Action::ToggleDatasets);
+                }
+                if self.menu_item(ui, Action::FullscreenSlideshow, None) {
+                    chosen = Some(Action::FullscreenSlideshow);
                 }
             });
             vw_ui::menu::bar_menu(ui, tr(lang, "Settings"), |ui| {
@@ -493,7 +498,27 @@ impl VwApp {
             .clicked()
     }
 
-    /// 「画像」メニューの、アクティブなスロットの色の表を選ぶ小メニュー。
+    /// アクティブなスロットの画像に行う項目。使えないときは灰色にして理由を出す。
+    fn active_slot_menu_item(&self, ui: &mut egui::Ui, action: Action) -> bool {
+        let target = self
+            .slots
+            .get(self.active)
+            .map(|slot| context_menu::Target::Slot {
+                index: self.active,
+                slot,
+                faces: &[],
+            });
+        let availability = match &target {
+            Some(t) => context_menu::menu_bar_availability(action, t, self.ai_ready()),
+            None => context_menu::Availability::Disabled("Show an image in the active slot first"),
+        };
+        match availability {
+            context_menu::Availability::Disabled(why) => self.menu_item_if(ui, action, false, why),
+            _ => self.menu_item(ui, action, None),
+        }
+    }
+
+    /// 「画像」メニューの、アクティブなスロットのカラーマップを選ぶ小メニュー。
     fn color_map_menu(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let index = self.active;
@@ -578,7 +603,7 @@ impl VwApp {
                 let i = self.active;
                 self.slots[i].contours ^= true;
             }
-            let tip = self.with_key(tr(lang, "Color scale gauge"), Action::ToggleColorGauge);
+            let tip = self.with_key(tr(lang, "Color scale"), Action::ToggleColorGauge);
             if tool_button(ui, self.show_gauge, true, big(icon::GRADIENT))
                 .on_hover_text(tip)
                 .clicked()

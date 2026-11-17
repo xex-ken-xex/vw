@@ -22,7 +22,7 @@ A file usually holds several variables, such as temperature, precipitation and w
 
 Pixels hold the file values with `scale_factor` and `add_offset` applied (with the `units`, such as K).
 
-- The [pixel probe](check.html) (V), ROIs, the line profile graph and the color gauge use those values and units. For variables with a `scale_factor`, the line profile graph also shows the values stored in the file
+- The [pixel probe](check.html) (V), ROIs, the line profile graph and the color scale use those values and units. For variables with a `scale_factor`, the line profile graph also shows the values stored in the file
 - Pixels without a value (`_FillValue`, `missing_value` or outside `valid_range`, such as land in sea data) are drawn in the **Color of missing pixels** setting, which is kept when a color map is applied
 - Data whose latitudes go from south to north are turned upside down so that north is at the top (the **North up** setting turns this off)
 
@@ -32,7 +32,7 @@ Pixels hold the file values with `scale_factor` and `add_offset` applied (with t
 - Black and white are chosen once per variable from all its times and levels, so planes keep the same coloring and can be compared. Variables such as temperature and precipitation have different units, so each has its own
 - Variables whose name (such as `sst_anom`), `standard_name` or `long_name` says anomaly (differences from normal) automatically get black and white symmetric around zero and a color map with zero in the middle (coolwarm). Turn this off with **Anomalies around zero**
 - For other data around zero, such as winds, set **First black and white** to **Symmetric around zero** to put zero in the middle of the color map
-- Black and white changed by hand on the gauge go back when you switch variables
+- Black and white changed by hand on the color scale go back when you switch variables
 
 ## Latitude, longitude, time and level
 

@@ -2029,7 +2029,7 @@ fn gray_body(
             if (p.center, p.width) != (in_file.center, in_file.width) {
                 ui.weak(tr(
                     lang,
-                    "Same values as the black and white of the slot's color gauge. Shown only, never written to the file.",
+                    "Same values as the black and white of the slot's color scale. Shown only, never written to the file.",
                 ));
             }
             if v.center.is_none() {
@@ -2324,7 +2324,7 @@ fn levels_body(
     }
     ui.weak(tr(
         lang,
-        "Only this slot changes. The color map gauge shows the same black and white.",
+        "Only this slot changes. The color scale shows the same black and white.",
     ));
     command
 }

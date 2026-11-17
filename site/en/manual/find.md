@@ -67,7 +67,7 @@ After adding or deleting images, **Update**. Until then, the search catalog keep
 
 ## Find datasets
 
-**Ctrl+D** or **View → Datasets** opens the Datasets window. **Ctrl+D** again closes it.
+**Ctrl+D** or **Tools → Datasets** opens the Datasets window. **Ctrl+D** again closes it.
 
 - Each time it opens, vw looks again for search catalogs under the **Dataset folders**. Catalogs removed or added outside vw show up after reopening
 - The **Reload** button looks again at any time

@@ -144,7 +144,7 @@ If you flagged by mistake, you can clear flags in bulk instead of one by one. Bo
 
 Line up images of the same scene (RAW and JPEG, retakes, other lenses or settings) so they overlap, and measure where and how much they differ.
 
-1. Show the images in slots, right-click the reference image → **Align and compare...**
+1. Show the images in slots, right-click the reference image → **Align and compare...** (or select the reference image's slot and choose **Tools → Align and compare...**)
 2. Check the images to compare and press **Compare**. The others are moved, rotated and scaled to overlap the reference (different sizes and orientations are handled)
 3. Compare them in the **Compare images** window
    - **Side by side**: all images next to each other; zoom and pan move together

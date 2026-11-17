@@ -1684,7 +1684,7 @@ fn menu_title(action: Action) -> &'static str {
         Action::ToggleZoomMap => "Zoom map",
         Action::ToggleLineProfile => "Line profile",
         Action::ToggleRoiGraph => "ROI graph",
-        Action::TogglePointSpectrum => "Spectrum at crosses",
+        Action::TogglePointSpectrum => "Spectrum at cross positions",
         Action::ToggleMap => "Map",
         Action::ToggleSkyChart => "Sky chart",
         Action::ToggleSubframes => "Subframes",
