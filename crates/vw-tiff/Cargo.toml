@@ -10,7 +10,7 @@ license.workspace = true
 vw-core.workspace = true
 tiff = { version = "0.11", features = ["webp"] }
 # tar.xz・tar.zst を読むアプリと同じもの（新しい依存を足さないため）。
-lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz"] }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 ruzstd = "0.9"
 
 [lints]
