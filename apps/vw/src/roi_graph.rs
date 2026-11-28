@@ -46,6 +46,45 @@ pub enum Direction {
     Vertical,
 }
 
+/// 帯のプロファイルで、ROI の 1 列（縦の帯なら 1 行）を 1 点にまとめる方法（設定 `measure.band_stat`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BandStat {
+    #[default]
+    Mean,
+    Max,
+    Min,
+}
+
+impl BandStat {
+    pub const ALL: [BandStat; 3] = [BandStat::Mean, BandStat::Max, BandStat::Min];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            BandStat::Mean => "Mean",
+            BandStat::Max => "Max",
+            BandStat::Min => "Min",
+        }
+    }
+
+    /// CSV の値（言語によらない）。
+    pub fn key(self) -> &'static str {
+        match self {
+            BandStat::Mean => "mean",
+            BandStat::Max => "max",
+            BandStat::Min => "min",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            BandStat::Mean => BandStat::Max,
+            BandStat::Max => BandStat::Min,
+            BandStat::Min => BandStat::Mean,
+        }
+    }
+}
+
 /// グラフにする ROI。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Area {
@@ -94,6 +133,43 @@ impl Mean {
     }
 }
 
+/// 帯の 1 列（1 行）を [`BandStat`] で 1 つの値にまとめる入れ物。欠損（NaN）は数えない。
+#[derive(Clone)]
+struct Reduce {
+    stat: BandStat,
+    mean: Mean,
+    extreme: Option<f64>,
+}
+
+impl Reduce {
+    fn new(stat: BandStat) -> Self {
+        Self {
+            stat,
+            mean: Mean::default(),
+            extreme: None,
+        }
+    }
+
+    fn add(&mut self, v: f64) {
+        if !v.is_finite() {
+            return;
+        }
+        self.mean.add(v);
+        self.extreme = Some(match (self.extreme, self.stat) {
+            (None, _) => v,
+            (Some(e), BandStat::Max) => e.max(v),
+            (Some(e), _) => e.min(v),
+        });
+    }
+
+    fn get(&self) -> f64 {
+        match self.stat {
+            BandStat::Mean => self.mean.get(),
+            BandStat::Max | BandStat::Min => self.extreme.unwrap_or(f64::NAN),
+        }
+    }
+}
+
 /// 画素の値と計測の値（モノクロで 2 種類あるときだけ）に直した、ひと組の値。
 /// `read` はチャンネルごとの読んだ値。
 fn split(read: &[f64], values: &Values) -> (Vec<f64>, Option<f64>) {
@@ -111,9 +187,10 @@ fn split(read: &[f64], values: &Values) -> (Vec<f64>, Option<f64>) {
 pub struct Band {
     pub area: Area,
     pub direction: Direction,
+    pub stat: BandStat,
     /// 横なら x、縦なら y（画素の番号）。
     pub positions: Vec<u32>,
-    /// 色ごとの画素の値の平均。
+    /// 色ごとの画素の値を、列（行）ごとに `stat` でまとめたもの。
     pub pixel: Vec<Vec<f64>>,
     pub measured: Option<Vec<f64>>,
 }
@@ -123,6 +200,7 @@ pub fn band(
     meta: &Metadata,
     area: Area,
     direction: Direction,
+    stat: BandStat,
     values: &Values,
 ) -> Band {
     let channels = channel_names(img.color).len();
@@ -135,22 +213,27 @@ pub fn band(
             Direction::Vertical => (r.y..r.bottom(), r.x..r.right()),
         };
         for p in along {
-            let mut means = vec![Mean::default(); channels];
+            // 画素の値と計測の値を 1 画素ずつ直してからまとめる。読んだ値をまとめてから直すと、
+            // 傾きが負の変換で最大と最小が入れ替わるため。
+            let mut px_reduce = vec![Reduce::new(stat); channels];
+            let mut ms_reduce = Reduce::new(stat);
             for q in across.clone() {
                 let (x, y) = match direction {
                     Direction::Horizontal => (p, q),
                     Direction::Vertical => (q, p),
                 };
-                for (m, v) in means.iter_mut().zip(read(img, meta, x, y, channels)) {
-                    m.add(v);
+                let (px, ms) = split(&read(img, meta, x, y, channels), values);
+                for (r, v) in px_reduce.iter_mut().zip(px) {
+                    r.add(v);
+                }
+                if let Some(m) = ms {
+                    ms_reduce.add(m);
                 }
             }
-            let read: Vec<f64> = means.iter().map(Mean::get).collect();
-            let (px, ms) = split(&read, values);
-            for (column, v) in pixel.iter_mut().zip(px) {
-                column.push(v);
+            for (column, r) in pixel.iter_mut().zip(&px_reduce) {
+                column.push(r.get());
             }
-            measured.extend(ms);
+            measured.push(ms_reduce.get());
             positions.push(p);
         }
     }
@@ -158,6 +241,7 @@ pub fn band(
     Band {
         area,
         direction,
+        stat,
         positions,
         pixel,
         measured: two.then_some(measured),
@@ -304,6 +388,9 @@ pub struct Labels<'a> {
     pub position_y: &'a str,
     pub pixel_value: &'a str,
     pub measured_value: &'a str,
+    /// 帯のプロファイルの縦軸。[`BandStat::ALL`] の順。
+    pub band_pixel: [&'a str; 3],
+    pub band_measured: [&'a str; 3],
     pub mean_pixel: &'a str,
     pub mean_measured: &'a str,
     pub count: &'a str,
@@ -416,6 +503,7 @@ pub fn band_chart(
         })
         .collect();
     let direction = bands.first().map_or(Direction::Horizontal, |b| b.direction);
+    let stat = bands.first().map_or(BandStat::Mean, |b| b.stat) as usize;
     Chart {
         x_label: format!(
             "{} (px)",
@@ -431,7 +519,7 @@ pub fn band_chart(
             values,
             labels,
             theme,
-            (labels.pixel_value, labels.measured_value),
+            (labels.band_pixel[stat], labels.band_measured[stat]),
         ),
     }
 }
@@ -731,7 +819,12 @@ pub fn band_rows(bands: &[Band], color: ColorModel, values: &Values, separator: 
     let measured = values.two_kinds() && channel_names(color).len() == 1;
     let mut w = Writer::new(
         separator,
-        &head(&["roi", "direction", "position_px"], color, measured, &[]),
+        &head(
+            &["roi", "direction", "stat", "position_px"],
+            color,
+            measured,
+            &[],
+        ),
     );
     for b in bands {
         let direction = match b.direction {
@@ -742,6 +835,7 @@ pub fn band_rows(bands: &[Band], color: ColorModel, values: &Values, separator: 
             let mut row = vec![
                 kind_key(b.area.kind).to_owned(),
                 direction.to_owned(),
+                b.stat.key().to_owned(),
                 p.to_string(),
             ];
             row.extend(b.pixel.iter().map(|c| value(c[i])));
@@ -884,6 +978,16 @@ mod tests {
         position_y: "Position y",
         pixel_value: "Pixel value",
         measured_value: "Measured value",
+        band_pixel: [
+            "Pixel value (mean)",
+            "Pixel value (max)",
+            "Pixel value (min)",
+        ],
+        band_measured: [
+            "Measured value (mean)",
+            "Measured value (max)",
+            "Measured value (min)",
+        ],
         mean_pixel: "Mean pixel value",
         mean_measured: "Mean measured value",
         count: "Pixels",
@@ -917,11 +1021,142 @@ mod tests {
             &m,
             target(0, 0, 3, 2),
             Direction::Horizontal,
+            BandStat::Mean,
             &Values::of(&m),
         );
         assert_eq!(b.positions, [0, 1, 2]);
         assert_eq!(b.pixel, vec![vec![50.0, 60.0, 70.0]]);
         assert_eq!(b.measured, None);
+    }
+
+    #[test]
+    fn a_band_can_take_the_max_or_min_of_each_column_instead_of_the_mean() {
+        let m = Metadata::default();
+        let at = |stat| {
+            band(
+                &small(),
+                &m,
+                target(0, 0, 3, 2),
+                Direction::Horizontal,
+                stat,
+                &Values::of(&m),
+            )
+        };
+        assert_eq!(at(BandStat::Max).pixel, vec![vec![100.0, 110.0, 120.0]]);
+        assert_eq!(at(BandStat::Min).pixel, vec![vec![0.0, 10.0, 20.0]]);
+    }
+
+    #[test]
+    fn widening_the_roi_over_background_keeps_the_band_max() {
+        // 細い ROI では列の平均が山の高さになるが、背景の行まで広げると平均は下がる。最大は変わらない。
+        let img = VwImage::new(
+            1,
+            3,
+            ColorModel::Gray,
+            PixelData::U16(vec![55426, 1000, 1000]),
+        )
+        .unwrap();
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let peak = |h, stat| {
+            band(
+                &img,
+                &m,
+                target(0, 0, 1, h),
+                Direction::Horizontal,
+                stat,
+                &v,
+            )
+            .pixel[0][0]
+        };
+        assert_eq!(peak(1, BandStat::Mean), 55426.0);
+        assert!(peak(3, BandStat::Mean) < 55426.0);
+        assert_eq!(peak(3, BandStat::Max), 55426.0);
+    }
+
+    #[test]
+    fn missing_pixels_are_left_out_of_the_band_max_and_min() {
+        let img = VwImage::new(
+            1,
+            3,
+            ColorModel::Gray,
+            PixelData::F32(vec![f32::NAN, 4.0, 2.0]),
+        )
+        .unwrap();
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let at = |stat| {
+            band(
+                &img,
+                &m,
+                target(0, 0, 1, 3),
+                Direction::Horizontal,
+                stat,
+                &v,
+            )
+            .pixel
+        };
+        assert_eq!(at(BandStat::Max), vec![vec![4.0]]);
+        assert_eq!(at(BandStat::Min), vec![vec![2.0]]);
+    }
+
+    #[test]
+    fn a_column_with_no_value_gives_no_band_max() {
+        let img = VwImage::new(1, 1, ColorModel::Gray, PixelData::F32(vec![f32::NAN])).unwrap();
+        let m = Metadata::default();
+        let v = Values::of(&m);
+        let b = band(
+            &img,
+            &m,
+            target(0, 0, 1, 1),
+            Direction::Horizontal,
+            BandStat::Max,
+            &v,
+        );
+        assert!(b.pixel[0][0].is_nan());
+    }
+
+    #[test]
+    fn the_band_graph_and_csv_say_which_value_of_each_column_they_show() {
+        let m = meta(
+            "DICOM",
+            &[
+                ("Modality", "CT"),
+                ("Rescale slope", "1"),
+                ("Rescale intercept", "-1024"),
+            ],
+        );
+        let img =
+            VwImage::new(1, 2, ColorModel::Gray, PixelData::F32(vec![-1000.0, 40.0])).unwrap();
+        let v = Values::of(&m);
+        let b = band(
+            &img,
+            &m,
+            target(0, 0, 1, 2),
+            Direction::Horizontal,
+            BandStat::Max,
+            &v,
+        );
+        assert_eq!(b.pixel, vec![vec![1064.0]]);
+        assert_eq!(b.measured, Some(vec![40.0]));
+        let c = band_chart(
+            std::slice::from_ref(&b),
+            ColorModel::Gray,
+            &v,
+            &LABELS,
+            Theme::Lab,
+        );
+        assert_eq!(c.panels[0].y_label, "Pixel value (max)");
+        assert_eq!(c.panels[1].y_label, "Measured value (max) (HU)");
+        let csv = band_rows(&[b], ColorModel::Gray, &v, '\t');
+        assert_eq!(csv.lines().nth(1), Some("target\tx\tmax\t0\t1064\t40\tHU"));
+    }
+
+    #[test]
+    fn band_stats_cycle_mean_max_min() {
+        assert_eq!(BandStat::Mean.next(), BandStat::Max);
+        assert_eq!(BandStat::Max.next(), BandStat::Min);
+        assert_eq!(BandStat::Min.next(), BandStat::Mean);
     }
 
     #[test]
@@ -932,6 +1167,7 @@ mod tests {
             &m,
             target(0, 0, 3, 2),
             Direction::Vertical,
+            BandStat::Mean,
             &Values::of(&m),
         );
         assert_eq!(b.positions, [0, 1]);
@@ -946,6 +1182,7 @@ mod tests {
             &m,
             target(2, 0, 5, 5),
             Direction::Horizontal,
+            BandStat::Mean,
             &Values::of(&m),
         );
         assert_eq!(b.positions, [2]);
@@ -962,6 +1199,7 @@ mod tests {
             &m,
             target(0, 0, 1, 2),
             Direction::Horizontal,
+            BandStat::Mean,
             &Values::of(&m),
         );
         assert_eq!(b.pixel, vec![vec![4.0]]);
@@ -980,7 +1218,14 @@ mod tests {
         let img =
             VwImage::new(2, 1, ColorModel::Gray, PixelData::F32(vec![-1000.0, 40.0])).unwrap();
         let v = Values::of(&m);
-        let b = band(&img, &m, target(0, 0, 2, 1), Direction::Horizontal, &v);
+        let b = band(
+            &img,
+            &m,
+            target(0, 0, 2, 1),
+            Direction::Horizontal,
+            BandStat::Mean,
+            &v,
+        );
         assert_eq!(b.pixel, vec![vec![24.0, 1064.0]]);
         assert_eq!(b.measured, Some(vec![-1000.0, 40.0]));
         let c = band_chart(
@@ -991,15 +1236,15 @@ mod tests {
             Theme::Lab,
         );
         assert_eq!(c.panels.len(), 2);
-        assert_eq!(c.panels[1].y_label, "Measured value (HU)");
+        assert_eq!(c.panels[1].y_label, "Measured value (mean) (HU)");
         assert_eq!(c.x_label, "Position x (px)");
         let csv = band_rows(&[b], ColorModel::Gray, &v, ',');
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "roi,direction,position_px,pixel_value,measured_value,measured_unit"
+            "roi,direction,stat,position_px,pixel_value,measured_value,measured_unit"
         );
-        assert_eq!(lines[1], "target,x,0,24,-1000,HU");
+        assert_eq!(lines[1], "target,x,mean,0,24,-1000,HU");
     }
 
     #[test]
@@ -1013,7 +1258,14 @@ mod tests {
         .unwrap();
         let m = Metadata::default();
         let v = Values::of(&m);
-        let b = band(&img, &m, target(0, 0, 1, 2), Direction::Horizontal, &v);
+        let b = band(
+            &img,
+            &m,
+            target(0, 0, 1, 2),
+            Direction::Horizontal,
+            BandStat::Mean,
+            &v,
+        );
         assert_eq!(b.pixel, vec![vec![20.0], vec![30.0], vec![40.0]]);
         let c = band_chart(&[b], ColorModel::Rgb, &v, &LABELS, Theme::Lab);
         let names: Vec<&str> = c.panels[0].series.iter().map(|s| s.name.as_str()).collect();

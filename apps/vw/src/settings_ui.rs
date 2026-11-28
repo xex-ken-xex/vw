@@ -691,6 +691,13 @@ const ITEMS: &[Item] = &[
         widget: roi_bins_widget,
     },
     Item {
+        section: Section::Reports,
+        key: "measure.band_stat",
+        title: "Value of each column in the ROI band profile",
+        description: "Which value of each column (each row for a top-to-bottom band) of the ROI the band profile draws: the mean, the max or the min. Mean shows the level of the whole width; max and min show peaks and dips that a wide ROI would average away. The buttons in the ROI graph window change this setting too.",
+        widget: band_stat_widget,
+    },
+    Item {
         section: Section::Quality,
         key: "quality.psnr",
         title: "PSNR verdict",
@@ -3750,6 +3757,16 @@ fn moment_clip_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bo
 fn roi_bins_widget(s: &mut Settings, ui: &mut egui::Ui, _lang: Language) -> bool {
     ui.add(egui::DragValue::new(&mut s.measure.roi_bins).range(4..=4096))
         .changed()
+}
+
+fn band_stat_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
+    let before = s.measure.band_stat;
+    ui.horizontal(|ui| {
+        for stat in crate::roi_graph::BandStat::ALL {
+            ui.radio_value(&mut s.measure.band_stat, stat, tr(lang, stat.title()));
+        }
+    });
+    s.measure.band_stat != before
 }
 
 fn roi_color_widget(s: &mut Settings, ui: &mut egui::Ui, lang: Language) -> bool {
