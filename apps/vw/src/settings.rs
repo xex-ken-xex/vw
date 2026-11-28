@@ -589,6 +589,8 @@ pub struct MeasureSettings {
     pub open_spectrum: bool,
     /// ROI のヒストグラムの区間の数（値の幅がこれ以下の整数なら、1 つの値に 1 区間）。
     pub roi_bins: usize,
+    /// ROI の帯のプロファイルで、1 列（1 行）を 1 点にまとめる方法。
+    pub band_stat: crate::roi_graph::BandStat,
 }
 
 impl Default for MeasureSettings {
@@ -597,6 +599,7 @@ impl Default for MeasureSettings {
             open_profile: true,
             open_spectrum: true,
             roi_bins: 64,
+            band_stat: crate::roi_graph::BandStat::Mean,
         }
     }
 }
@@ -612,6 +615,7 @@ impl MeasureSettings {
                 .get::<usize>("roi_bins")
                 .filter(|n| (4..=4096).contains(n))
                 .unwrap_or(d.roi_bins),
+            band_stat: r.get("band_stat").unwrap_or(d.band_stat),
         }
     }
 }
@@ -3696,6 +3700,23 @@ mod tests {
         let (back, problems) = Settings::from_toml(&s.to_toml()).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(back.slot_bar, s.slot_bar);
+    }
+
+    #[test]
+    fn roi_band_stat_round_trips_and_an_unknown_name_falls_back_to_mean() {
+        use crate::roi_graph::BandStat;
+        let mut s = Settings::default();
+        assert_eq!(s.measure.band_stat, BandStat::Mean);
+        s.measure.band_stat = BandStat::Max;
+        let text = s.to_toml();
+        assert!(text.contains("band_stat = \"max\""), "{text}");
+        let (back, problems) = Settings::from_toml(&text).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.measure.band_stat, BandStat::Max);
+        let (broken, problems) =
+            Settings::from_toml("[measure]\nband_stat = \"median\"\n").unwrap();
+        assert_eq!(broken.measure.band_stat, BandStat::Mean);
+        assert!(!problems.is_empty());
     }
 
     #[test]

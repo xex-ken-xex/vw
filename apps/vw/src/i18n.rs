@@ -3740,6 +3740,52 @@ const JA: &[(&str, &str)] = &[
     ),
     ("Top to bottom", "上から下"),
     (
+        "ROI band profile: switch mean, max and min",
+        "ROI の帯のプロファイル: 平均・最大・最小を切り替える",
+    ),
+    ("Pixel value (mean)", "画素の値（平均）"),
+    ("Pixel value (max)", "画素の値（最大）"),
+    ("Pixel value (min)", "画素の値（最小）"),
+    ("Measured value (mean)", "計測の値（平均）"),
+    ("Measured value (max)", "計測の値（最大）"),
+    ("Measured value (min)", "計測の値（最小）"),
+    (
+        "Value of each column in the ROI band profile",
+        "ROI の帯のプロファイルの 1 列の値",
+    ),
+    (
+        "Which value of each column (each row for a top-to-bottom band) of the ROI the band profile draws: the mean, the max or the min. Mean shows the level of the whole width; max and min show peaks and dips that a wide ROI would average away. The buttons in the ROI graph window change this setting too.",
+        "帯のプロファイルで、ROI の 1 列（上から下の帯では 1 行）のどの値を描くか。平均・最大・最小から選びます。平均は幅全体の高さを、最大と最小は幅の広い ROI では平均でならされてしまう山や谷を見せます。ROI のグラフの窓のボタンでも、この設定が変わります。",
+    ),
+    (
+        "Each point is the mean of one column (row) of the ROI.",
+        "1 点は ROI の 1 列（1 行）の平均。",
+    ),
+    (
+        "Each point is the max of one column (row) of the ROI.",
+        "1 点は ROI の 1 列（1 行）の最大。",
+    ),
+    (
+        "Each point is the min of one column (row) of the ROI.",
+        "1 点は ROI の 1 列（1 行）の最小。",
+    ),
+    (
+        "Values from the left of each ROI to its right; each point is the max of one column of the ROI.",
+        "各 ROI の左から右への値。1 点は ROI の 1 列の最大。",
+    ),
+    (
+        "Values from the left of each ROI to its right; each point is the min of one column of the ROI.",
+        "各 ROI の左から右への値。1 点は ROI の 1 列の最小。",
+    ),
+    (
+        "Values from the top of each ROI to its bottom; each point is the max of one row of the ROI.",
+        "各 ROI の上から下への値。1 点は ROI の 1 行の最大。",
+    ),
+    (
+        "Values from the top of each ROI to its bottom; each point is the min of one row of the ROI.",
+        "各 ROI の上から下への値。1 点は ROI の 1 行の最小。",
+    ),
+    (
         "Values from the left of each ROI to its right; each point is the mean of one column of the ROI.",
         "各 ROI の左から右への値。1 点は ROI の 1 列の平均。",
     ),

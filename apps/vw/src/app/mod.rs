@@ -1187,6 +1187,7 @@ impl VwApp {
             Action::ToggleZoomMap => self.zoom_map.open = !self.zoom_map.open,
             Action::ToggleLineProfile => self.line_profile.open = !self.line_profile.open,
             Action::ToggleRoiGraph => self.roi_graph.open = !self.roi_graph.open,
+            Action::CycleRoiBandStat => self.cycle_roi_band_stat(ctx),
             Action::TogglePointSpectrum => {
                 self.point_spectrum.open = !self.point_spectrum.open;
             }

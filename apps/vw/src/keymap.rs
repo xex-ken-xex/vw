@@ -123,6 +123,7 @@ pub enum Action {
     ToggleZoomMap,
     ToggleLineProfile,
     ToggleRoiGraph,
+    CycleRoiBandStat,
     TogglePointSpectrum,
     ToggleMap,
     ShowSlotOnMap,
@@ -315,6 +316,7 @@ impl Action {
         Action::ToggleZoomMap,
         Action::ToggleLineProfile,
         Action::ToggleRoiGraph,
+        Action::CycleRoiBandStat,
         Action::TogglePointSpectrum,
         Action::ToggleMap,
         Action::ShowSlotOnMap,
@@ -490,6 +492,7 @@ impl Action {
             Action::ToggleZoomMap => "toggle_zoom_map",
             Action::ToggleLineProfile => "toggle_line_profile",
             Action::ToggleRoiGraph => "toggle_roi_graph",
+            Action::CycleRoiBandStat => "cycle_roi_band_stat",
             Action::TogglePointSpectrum => "toggle_point_spectrum",
             Action::ToggleMap => "toggle_map",
             Action::ShowSlotOnMap => "show_slot_on_map",
@@ -643,6 +646,7 @@ impl Action {
             Action::ToggleZoomMap => "Show/hide zoom map",
             Action::ToggleLineProfile => "Show/hide line profile",
             Action::ToggleRoiGraph => "Show/hide ROI graph",
+            Action::CycleRoiBandStat => "ROI band profile: switch mean, max and min",
             Action::TogglePointSpectrum => "Show/hide spectrum at cross positions",
             Action::ToggleMap => "Show/hide map",
             Action::ShowSlotOnMap => "Show the slot's data on the map",
@@ -784,6 +788,7 @@ impl Action {
             | Action::ToggleMeasureTool
             | Action::DeleteProbePoint
             | Action::CopyMeasurement
+            | Action::CycleRoiBandStat
             | Action::UndoPosition => KeyGroup::Tools,
             Action::ToggleTagging
             | Action::FlagGood
@@ -1073,6 +1078,7 @@ impl Action {
             Action::ToggleZoomMap => vec![],
             Action::ToggleLineProfile => vec![KeyCombo::ctrl(L)],
             Action::ToggleRoiGraph => vec![KeyCombo::ctrl(L).with(true, true, false)],
+            Action::CycleRoiBandStat => vec![],
             Action::TogglePointSpectrum => vec![],
             Action::ToggleMap => vec![KeyCombo::ctrl(M)],
             Action::ShowSlotOnMap => vec![],

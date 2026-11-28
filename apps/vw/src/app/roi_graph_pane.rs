@@ -13,7 +13,7 @@ use vw_report::{Block, Chart, Face, Sheet, Theme};
 use crate::i18n::tr;
 use crate::line_profile::Values;
 use crate::roi::{Kind, Region};
-use crate::roi_graph::{self, Area, Bins, Direction, FrameMean, Mode, Pixels};
+use crate::roi_graph::{self, Area, BandStat, Bins, Direction, FrameMean, Mode, Pixels};
 use crate::settings::Language;
 
 use super::VwApp;
@@ -50,6 +50,7 @@ struct CacheKey {
     areas: Vec<Area>,
     mode: Mode,
     direction: Direction,
+    stat: BandStat,
     bins: usize,
 }
 
@@ -94,6 +95,16 @@ fn labels(lang: Language) -> roi_graph::Labels<'static> {
         position_y: tr(lang, "Position y"),
         pixel_value: tr(lang, "Pixel value"),
         measured_value: tr(lang, "Measured value"),
+        band_pixel: [
+            tr(lang, "Pixel value (mean)"),
+            tr(lang, "Pixel value (max)"),
+            tr(lang, "Pixel value (min)"),
+        ],
+        band_measured: [
+            tr(lang, "Measured value (mean)"),
+            tr(lang, "Measured value (max)"),
+            tr(lang, "Measured value (min)"),
+        ],
         mean_pixel: tr(lang, "Mean pixel value"),
         mean_measured: tr(lang, "Mean measured value"),
         count: tr(lang, "Pixels"),
@@ -172,16 +183,14 @@ impl Gathered {
 
     fn caption(&self, lang: Language) -> String {
         let mut text = match &self.body {
-            Body::Band(b) => match b.first().map(|b| b.direction) {
-                Some(Direction::Vertical) => tr(
+            Body::Band(b) => {
+                let first = b.first();
+                let direction = first.map_or(Direction::Horizontal, |b| b.direction);
+                tr(
                     lang,
-                    "Values from the top of each ROI to its bottom; each point is the mean of one row of the ROI.",
-                ),
-                _ => tr(
-                    lang,
-                    "Values from the left of each ROI to its right; each point is the mean of one column of the ROI.",
-                ),
-            },
+                    band_caption(direction, first.map_or(BandStat::Mean, |b| b.stat)),
+                )
+            }
             Body::Histogram(_) => tr(
                 lang,
                 "Number of pixels of each value in each ROI. All ROIs share the same bins.",
@@ -409,6 +418,7 @@ impl VwApp {
             areas: areas.clone(),
             mode,
             direction: self.roi_graph.direction,
+            stat: self.settings.settings.measure.band_stat,
             bins: self.settings.settings.measure.roi_bins,
         };
         if mode != Mode::Frames
@@ -429,7 +439,16 @@ impl VwApp {
             Mode::Band => Body::Band(
                 areas
                     .iter()
-                    .map(|&a| roi_graph::band(&img, &meta, a, self.roi_graph.direction, &values))
+                    .map(|&a| {
+                        roi_graph::band(
+                            &img,
+                            &meta,
+                            a,
+                            self.roi_graph.direction,
+                            self.settings.settings.measure.band_stat,
+                            &values,
+                        )
+                    })
                     .collect(),
             ),
             Mode::Histogram => {
@@ -564,11 +583,25 @@ impl VwApp {
         });
     }
 
+    /// キーの操作。帯のプロファイルを見ているときだけ平均・最大・最小を回し、そうでなければ
+    /// まず帯のプロファイルを出す（見えていない値を変えても、何が変わったか分からないため）。
+    pub(super) fn cycle_roi_band_stat(&mut self, ctx: &egui::Context) {
+        if self.roi_graph.open && self.roi_graph.mode == Mode::Band {
+            let m = &mut self.settings.settings.measure;
+            m.band_stat = m.band_stat.next();
+            self.settings_changed(ctx);
+        } else {
+            self.roi_graph.open = true;
+            self.roi_graph.mode = Mode::Band;
+        }
+    }
+
     pub(super) fn roi_graph_pane(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang();
         let theme = self.settings.settings.report.theme.theme();
         let mut mode = self.roi_graph.mode;
         let mut direction = self.roi_graph.direction;
+        let mut stat = self.settings.settings.measure.band_stat;
         ui.horizontal_wrapped(|ui| {
             for m in Mode::ALL {
                 ui.selectable_value(&mut mode, m, tr(lang, m.title()));
@@ -585,8 +618,17 @@ impl VwApp {
                     Direction::Vertical,
                     tr(lang, "Top to bottom"),
                 );
+                ui.separator();
+                for s in BandStat::ALL {
+                    ui.selectable_value(&mut stat, s, tr(lang, s.title()))
+                        .on_hover_text(tr(lang, band_stat_hint(s)));
+                }
             }
         });
+        if stat != self.settings.settings.measure.band_stat {
+            self.settings.settings.measure.band_stat = stat;
+            self.settings_changed(ui.ctx());
+        }
         self.roi_graph.mode = mode;
         self.roi_graph.direction = direction;
         if mode != Mode::Frames {
@@ -847,6 +889,37 @@ impl VwApp {
 }
 
 /// グラフの色の番号（[`roi_graph`] と同じく、対象が 1 本目、背景が 2 本目）。
+fn band_caption(direction: Direction, stat: BandStat) -> &'static str {
+    match (direction, stat) {
+        (Direction::Horizontal, BandStat::Mean) => {
+            "Values from the left of each ROI to its right; each point is the mean of one column of the ROI."
+        }
+        (Direction::Horizontal, BandStat::Max) => {
+            "Values from the left of each ROI to its right; each point is the max of one column of the ROI."
+        }
+        (Direction::Horizontal, BandStat::Min) => {
+            "Values from the left of each ROI to its right; each point is the min of one column of the ROI."
+        }
+        (Direction::Vertical, BandStat::Mean) => {
+            "Values from the top of each ROI to its bottom; each point is the mean of one row of the ROI."
+        }
+        (Direction::Vertical, BandStat::Max) => {
+            "Values from the top of each ROI to its bottom; each point is the max of one row of the ROI."
+        }
+        (Direction::Vertical, BandStat::Min) => {
+            "Values from the top of each ROI to its bottom; each point is the min of one row of the ROI."
+        }
+    }
+}
+
+fn band_stat_hint(stat: BandStat) -> &'static str {
+    match stat {
+        BandStat::Mean => "Each point is the mean of one column (row) of the ROI.",
+        BandStat::Max => "Each point is the max of one column (row) of the ROI.",
+        BandStat::Min => "Each point is the min of one column (row) of the ROI.",
+    }
+}
+
 fn roi_index(kind: Kind) -> usize {
     match kind {
         Kind::Target => 0,
